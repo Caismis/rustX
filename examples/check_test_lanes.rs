@@ -653,7 +653,7 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                 ("working-directory", &step["working-directory"]),
                 ("shell", &step["shell"]),
             ] {
-                if !value.is_null() && !(shard && key == "strategy") {
+                if !(value.is_null() || shard && key == "strategy") {
                     errors.push(located(format!(
                         "`{key}` makes the cargo test step conditional or relocated; \
                          the lane check cannot interpret it"
@@ -747,16 +747,13 @@ fn shard_steps(run: &str, targets: &[Target]) -> Result<Vec<Step>, String> {
             name: String::new(),
             platform: Platform::Linux,
             executes: true,
-            features: entry["features"]
-                .as_array()
-                .map(|features| {
-                    features
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            features: entry["features"].as_array().map_or_default(|features| {
+                features
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            }),
             targets: Vec::new(),
             filters: Vec::new(),
             skips: Vec::new(),
@@ -784,8 +781,7 @@ fn shard_steps(run: &str, targets: &[Target]) -> Result<Vec<Step>, String> {
         }
         let libtest: Vec<&str> = entry["libtest_args"]
             .as_array()
-            .map(|args| args.iter().filter_map(serde_json::Value::as_str).collect())
-            .unwrap_or_default();
+            .map_or_default(|args| args.iter().filter_map(serde_json::Value::as_str).collect());
         parse_libtest_arguments(&mut step, &libtest)?;
         if step.targets.is_empty() {
             return Err(format!(
@@ -1637,12 +1633,12 @@ fn parse_member_artifact_build(
                 );
             }
             Some("compiler-artifact") => {
-                if let Some((member, path)) = match_member_harness_artifact(&record, identities)? {
-                    if harnesses.insert(member.clone(), path).is_some() {
-                        return Err(format!(
-                            "Cargo emitted two lib harness executables for member `{member}`"
-                        ));
-                    }
+                if let Some((member, path)) = match_member_harness_artifact(&record, identities)?
+                    && harnesses.insert(member.clone(), path).is_some()
+                {
+                    return Err(format!(
+                        "Cargo emitted two lib harness executables for member `{member}`"
+                    ));
                 }
             }
             _ => {}
