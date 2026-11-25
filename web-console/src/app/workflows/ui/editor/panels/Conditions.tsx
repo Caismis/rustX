@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import clsx from 'clsx';
 import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
@@ -257,8 +257,8 @@ function SimpleCondition({
           placeholder={tx('workflows:branch.select-variable')}
         />
         <span className={css.branchOperatorDivider} aria-hidden />
-        <Menu.Root modal={false}>
-          <Menu.Trigger
+        <Menu modal={false}>
+          <MenuTrigger
             className={css.branchOperator}
             aria-label={tx('workflows:branch.operator')}
             title={tx(`workflows:branch.${operator}`)}
@@ -266,19 +266,15 @@ function SimpleCondition({
           >
             {(kind === 'number' && comparisonSymbols[operator]) || tx(`workflows:branch.${operator}`)}
             <IconChevronDownOutline14 />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
-              <Menu.Popup className={css.branchOperatorPopup}>
+          </MenuTrigger>
+          <MenuPopup side="bottom" align="end" sideOffset={4} className={css.branchOperatorPopup}>
                 {options.map((type) => (
-                  <Menu.Item key={type} className={css.branchOperatorItem} onClick={() => setOperator(type)}>
+                  <MenuItem key={type} className={css.branchOperatorItem} onClick={() => setOperator(type)}>
                     {tx(`workflows:branch.${type}`)}
-                  </Menu.Item>
+                  </MenuItem>
                 ))}
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+              </MenuPopup>
+        </Menu>
       </div>
       {!valueFree && (
         <div className={css.branchConditionValue}>

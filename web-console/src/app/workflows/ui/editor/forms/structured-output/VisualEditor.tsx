@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import { useTranslation } from '../../../../../../locale/react';
 import { Switch } from '../../../../../../presentation/primitives/Switch';
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconEditOutline16, IconTrashOutline16 } from '../../../../../../presentation/primitives/icons';
@@ -107,9 +107,9 @@ function FieldCard({ document, parent, name, onCancel, onConfirm }: {
 
 function TypeSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const tx = useTranslation();
-  return <Menu.Root modal={false}><Menu.Trigger className={css.typeTrigger} aria-label={tx('workflows:schema.type')}>{value}<IconChevronDownOutline14 /></Menu.Trigger>
-    <Menu.Portal><Menu.Positioner className={css.menuPositioner} sideOffset={4} align="start"><Menu.Popup className={css.typeMenu}>
-      {(types.includes(value) ? types : [...types, value]).map(type => <Menu.Item key={type} className={css.typeItem} onClick={() => onChange(type)}>{type}</Menu.Item>)}
-    </Menu.Popup></Menu.Positioner></Menu.Portal>
-  </Menu.Root>;
+  return <Menu modal={false}><MenuTrigger className={css.typeTrigger} aria-label={tx('workflows:schema.type')}>{value}<IconChevronDownOutline14 /></MenuTrigger>
+    <MenuPopup side="bottom" align="start" sideOffset={4} className={css.typeMenu}>
+      {(types.includes(value) ? types : [...types, value]).map(type => <MenuItem key={type} className={css.typeItem} onClick={() => onChange(type)}>{type}</MenuItem>)}
+    </MenuPopup>
+  </Menu>;
 }

@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState } from 'react';
-import { Tabs } from '@base-ui/react/tabs';
+import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { useTranslation } from '../../../../../../locale/react';
 import { Button } from '../../../../../../presentation/primitives/Button';
 import { JsonCodeEditor } from '../../../../../../presentation/primitives/JsonCodeEditor';
@@ -77,20 +77,20 @@ export function StructuredOutputDialog({ document: original, address, root, edit
   };
   return <Modal open headless title={tx('workflows:structured.title')} onClose={onClose} className={css.dialog}>
     <div className={css.header}><h2>{tx('workflows:structured.title')}</h2><button type="button" className={css.iconButton} aria-label={tx('workflows:dialog.close')} onClick={onClose}><IconCloseOutline16 /></button></div>
-    <Tabs.Root className={css.tabs} value={view} onValueChange={switchView} inert={saving}>
+    <Tabs className={css.tabs} value={view} onValueChange={switchView} inert={saving}>
       <div className={css.toolbar}>
-        <Tabs.List className={css.tabList} aria-label={tx('workflows:structured.title')}>
-          <Tabs.Tab className={css.tab} value="visual"><IconListPenOutline16 />{tx('workflows:structured.visual')}</Tabs.Tab>
-          <Tabs.Tab className={css.tab} value="json"><IconBraces />{/* i18n-raw: JSON Schema format name */ 'JSON Schema'}</Tabs.Tab>
-        </Tabs.List>
+        <TabsList className={css.tabList} aria-label={tx('workflows:structured.title')}>
+          <TabsTab className={css.tab} value="visual"><IconListPenOutline16 />{tx('workflows:structured.visual')}</TabsTab>
+          <TabsTab className={css.tab} value="json"><IconBraces />{/* i18n-raw: JSON Schema format name */ 'JSON Schema'}</TabsTab>
+        </TabsList>
         <button type="button" className={css.importButton} onClick={() => { if (editing) setError(tx('workflows:structured.finish-field')); else setImporting(true); }}>{tx('workflows:structured.import-json')}</button>
       </div>
-      <Tabs.Panel className={css.workspace} value="visual"><VisualEditor document={staged.document} address={address} root={root} change={change} editing={editing} setEditing={value => { setEditing(value); setError(''); }} /></Tabs.Panel>
-      <Tabs.Panel className={css.workspace} value="json"><JsonCodeEditor panel label="JSON" value={json} onChange={value => { setJson(value); setError(''); }} allowEmpty={false}
+      <TabsPanel className={css.workspace} value="visual"><VisualEditor document={staged.document} address={address} root={root} change={change} editing={editing} setEditing={value => { setEditing(value); setError(''); }} /></TabsPanel>
+      <TabsPanel className={css.workspace} value="json"><JsonCodeEditor panel label="JSON" value={json} onChange={value => { setJson(value); setError(''); }} allowEmpty={false}
         headerActions={<button type="button" aria-label={tx(copied === json ? 'workflows:structured.copied' : 'workflows:structured.copy')} onClick={async () => {
           try { await navigator.clipboard.writeText(json); setCopied(json); } catch { setError(tx('workflows:structured.copy-failed')); }
-        }}>{copied === json ? <IconCheckOutline16 /> : <IconCopyOutline16 />}</button>} /></Tabs.Panel>
-    </Tabs.Root>
+        }}>{copied === json ? <IconCheckOutline16 /> : <IconCopyOutline16 />}</button>} /></TabsPanel>
+    </Tabs>
     {error && <p className={css.error} role="alert">{error}</p>}
     <div className={css.footer}>
       <Button variant="outline" size="sm" disabled={saving} onClick={() => { setEditing(undefined); change(replaceSchema(address, emptySchema())); setJson(JSON.stringify(emptySchema(), null, 2)); }}>{tx('workflows:structured.clear')}</Button>

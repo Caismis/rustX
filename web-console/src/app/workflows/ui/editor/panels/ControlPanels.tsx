@@ -1,4 +1,4 @@
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, WorkflowWriteMode } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
@@ -104,16 +104,14 @@ export function IterationPanel(props: PanelProps) {
     </section>
     <section className={css.group} aria-label={tx('workflows:iteration.error-method')}>
       <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.error-method')}</span>
-        <Menu.Root modal={false}>
-          <Menu.Trigger className={css.strategyTrigger} aria-label={tx('workflows:iteration.error-method')}>{tx(`workflows:iteration.error-${mode}`)}<IconChevronDownOutline14 /></Menu.Trigger>
-          <Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
-            <Menu.Popup className={css.strategyPopup}>
-              {ITERATION_ERRORS.map(type => <Menu.Item key={type} className={css.strategyItem} onClick={() => update(({ error_handle_mode: _, ...current }) => type === 'terminated' ? current : { ...current, error_handle_mode: type }, at('error_handle_mode'))}>
+        <Menu modal={false}>
+          <MenuTrigger className={css.strategyTrigger} aria-label={tx('workflows:iteration.error-method')}>{tx(`workflows:iteration.error-${mode}`)}<IconChevronDownOutline14 /></MenuTrigger>
+          <MenuPopup side="bottom" align="end" sideOffset={4} className={css.strategyPopup}>
+              {ITERATION_ERRORS.map(type => <MenuItem key={type} className={css.strategyItem} onClick={() => update(({ error_handle_mode: _, ...current }) => type === 'terminated' ? current : { ...current, error_handle_mode: type }, at('error_handle_mode'))}>
                 <b>{tx(`workflows:iteration.error-${type}`)}</b>
-              </Menu.Item>)}
-            </Menu.Popup>
-          </Menu.Positioner></Menu.Portal>
-        </Menu.Root>
+              </MenuItem>)}
+            </MenuPopup>
+        </Menu>
       </h3>
     </section>
     <section className={css.group} aria-label={tx('workflows:iteration.flatten')}>
