@@ -31,7 +31,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored|bench: .*)$")
+TEST_LINE = re.compile(
+    r"^test (\S+) \.\.\. (ok|FAILED|ignored|bench: .*)(?: in ([0-9.]+)s)?$"
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -141,6 +143,7 @@ def run_shard(
         by_harness.setdefault(harness, []).append(name)
 
     results: dict[str, str] = {}
+    durations: dict[str, float] = {}
     failed = False
     for harness_rel, names in sorted(by_harness.items()):
         harness = prepared / harness_rel
@@ -158,6 +161,7 @@ def run_shard(
             batch = names[offset:offset + batch_size]
             command = [
                 str(harness), "--exact", *batch, "--format", "pretty",
+                "--report-time",
             ]
             result = subprocess.run(command, capture_output=True, text=True)
             sys.stdout.write(result.stdout)
@@ -165,7 +169,10 @@ def run_shard(
             for line in result.stdout.splitlines():
                 match = TEST_LINE.match(line)
                 if match:
-                    results[f"{harness_rel}::{match.group(1)}"] = match.group(2)
+                    key = f"{harness_rel}::{match.group(1)}"
+                    results[key] = match.group(2)
+                    if match.group(3) is not None:
+                        durations[key] = float(match.group(3))
             if result.returncode != 0 or "FAILED" in results.values():
                 failed = True
 
@@ -182,8 +189,23 @@ def run_shard(
     report_path.write_text(json.dumps({
         "shard": shard_index,
         "results": results,
+        "durations": durations,
     }, indent=2, sort_keys=True))
     return 1 if failed else 0
+
+
+def collect_weights(runs_dir: Path) -> dict[str, float]:
+    """The measured per-test durations of one completed run, for the next
+    run's LPT assignment. Harness-qualified keys win; a bare-name
+    fallback in load_weights covers renamed harnesses."""
+    weights: dict[str, float] = {}
+    for report_path in sorted(runs_dir.glob("*/report.json")):
+        report = json.loads(report_path.read_text())
+        for key, seconds in report.get("durations", {}).items():
+            name = key.split("::", 1)[1]
+            weights[key] = float(seconds)
+            weights[name] = max(float(seconds), weights.get(name, 0.0))
+    return weights
 
 
 def verify(inventory: dict, runs_dir: Path) -> int:
@@ -322,6 +344,10 @@ def main() -> int:
     p.add_argument("--shard", type=int, required=True)
     p.add_argument("--report", type=Path, required=True)
 
+    p = sub.add_parser("weights")
+    p.add_argument("--runs", type=Path, required=True)
+    p.add_argument("--out", type=Path, required=True)
+
     p = sub.add_parser("verify")
     p.add_argument("--inventory", type=Path, required=True)
     p.add_argument("--runs", type=Path, required=True)
@@ -424,6 +450,11 @@ def main() -> int:
         return run_shard(
             args.prepared, inventory, args.shard, args.report,
         )
+
+    if args.command == "weights":
+        weights = collect_weights(args.runs)
+        args.out.write_text(json.dumps(weights, indent=2, sort_keys=True) + "\n")
+        return 0
 
     if args.command == "verify":
         inventory = json.loads(args.inventory.read_text())
