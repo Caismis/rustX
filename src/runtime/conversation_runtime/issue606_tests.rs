@@ -495,8 +495,13 @@ async fn attempt_task_panic_publishes_a_failed_settlement_for_terminal_waiters()
     // both child-role terminal drivers consume. It fabricates no Attempt
     // terminal and overwrites no committed history.
     let dir = tempfile::tempdir().expect("temp dir");
+    let (release_tx, release_rx) = test_support::model_release();
     let script = vec![
         test_support::FakeStep::Emit(crate::model::event::ModelEvent::Started),
+        // The panic is fenced behind this release: the unwind cannot begin
+        // before the test observes the live Attempt owner, so no legal
+        // interleaving can complete the whole lifecycle unseen.
+        test_support::FakeStep::ParkUntilReleased(release_rx),
         test_support::FakeStep::Panic,
     ];
     let (runtime, model) = test_support::headless_runtime(&dir, vec![script], None, None).await;
@@ -504,25 +509,26 @@ async fn attempt_task_panic_publishes_a_failed_settlement_for_terminal_waiters()
     runtime
         .submit_inbound(test_support::text_content("panic the attempt"))
         .expect("inbound accepted");
-    // Wait until the attempt physically owns the slot.
-    let attempt_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            let attempt = {
-                let state = runtime.inner.lock_state();
-                state
-                    .foreground
-                    .slot
-                    .as_attempt()
-                    .map(|current| current.attempt_id.clone())
-            };
-            if let Some(attempt_id) = attempt {
-                break attempt_id;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    // The model reaching the park proves the attempt task is live and holds
+    // the slot: the stream only parks inside the running invocation.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut parks = model.parks();
+        while *parks.borrow_and_update() < 1 {
+            parks.changed().await.expect("park frontier observed");
         }
     })
     .await
-    .expect("the admitted attempt owns the slot");
+    .expect("the attempt invocation reaches the pre-panic barrier");
+    let attempt_id = {
+        let state = runtime.inner.lock_state();
+        state
+            .foreground
+            .slot
+            .as_attempt()
+            .map(|current| current.attempt_id.clone())
+            .expect("the parked attempt owns the slot")
+    };
+    release_tx.send_replace(true);
     // The unwind — not test code — invokes the guard's poison handoff:
     // `RuntimeFailed` is published for every terminal waiter, and the slot
     // converges to `Poisoned` instead of staying a live `Attempt` forever.
@@ -944,26 +950,53 @@ async fn manual_compaction_worker_panic_settles_through_the_join_error_path() {
     );
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread")]
 async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
     // Issue #606 (P2 matrix): while a reaper holds the `JoinHandle` with
     // `Joining` published, every admission path that consults the unreaped
-    // tail — Attempt, Scheduled, ManualCompaction, idle claim — is
-    // refused. `joined` publication is the frontier: after it, the same
-    // work proceeds.
+    // tail — Attempt, Scheduled, ManualCompaction, idle probe, catalog
+    // publication, staged configuration commit — is refused. Every leg
+    // prepares work whose ONLY refuser is the tail, and after `joined`
+    // publishes the same work proceeds: that differential is what detects
+    // a missing tail check.
+    use crate::runtime::configuration_commit::{
+        ConfigurationChangeReason, DesiredApplication, StagedConfiguration, StagedOutcome,
+    };
     let joining_gate = Arc::new(probe::Gate::default());
-    joining_gate.arm();
+    // Scoped release: if an assertion fails while the reaper is parked, the
+    // guard drops during unwind and releases the barrier instead of
+    // deadlocking the runtime shutdown behind the panic report.
+    let _joining_guard = joining_gate.arm_scoped();
     let coordinator_probe = probe::CoordinatorProbe {
         manual_tail_joining_gate: Some(joining_gate.clone()),
         ..Default::default()
     };
-    let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
+    let fixture = scheduled_fixture_with(
+        vec![
+            test_support::one_turn_script(),
+            test_support::one_turn_script(),
+            test_support::one_turn_script(),
+        ],
+        Some(coordinator_probe),
+    )
+    .await;
     let runtime = fixture.runtime.clone();
+    // A real catalog observation and a real staged configuration candidate
+    // wait behind the fence: both must be consumed after the join, not
+    // before it.
     let handle = runtime.admit_compaction(None).expect("compaction admitted");
-    runtime
-        .submit_inbound(test_support::text_content("held behind Joining"))
-        .expect("inbound queued");
-    joining_gate.wait_entered_async().await;
+    // No inbound is needed to drive the reap: `finish_manual_compaction`
+    // and `ManualTailExit::drop` each notify the admission worker, whose
+    // level-triggered pass reaps the physically exited worker. Keeping the
+    // mailbox empty is what makes the idle leg below separable — the
+    // unreaped tail is its only blocker.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        joining_gate.wait_entered_async(),
+    )
+    .await
+    .expect("the reaper claims the JoinHandle and publishes Joining");
     assert!(
         matches!(
             runtime.inner.lock_state().foreground.manual_tail,
@@ -971,30 +1004,83 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         ),
         "the reaper published Joining while holding the JoinHandle"
     );
+    // Idle probe: no inbound is queued yet, so the unreaped tail is the
+    // only refuser (its retained lifecycle admission closes the epoch).
+    // `claim_idle` is not separable here: every admission — compaction
+    // included — advances the activity epoch, so any pre-captured epoch is
+    // stale for a reason unrelated to the tail.
+    assert!(
+        runtime.idle_epoch().is_err(),
+        "idle epoch is fenced while the unreaped tail retains its admission"
+    );
+
+    // Every remaining leg's work item is prepared only now — with the
+    // barrier already holding — so nothing could have been consumed before
+    // the fence existed, and the tail is each item's only refuser.
+    runtime.install_runtime_catalog_preparer(Arc::new(|_candidate, _resources| {
+        Err("test: catalog candidate intentionally unprepared".to_owned())
+    }));
+    runtime.capability().notify_catalog_change_for_test();
+    let observed = runtime.capability().catalog_revision();
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
+    let desired_current = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let prepared = runtime
+        .prepare_context_configuration(|configuration| crate::runtime::resources::ContextBinding {
+            configuration: configuration.clone(),
+            project_context_files: Vec::new(),
+            skills: Arc::new(crate::skills::SkillSnapshot::new(Vec::new())),
+        })
+        .expect("context candidate");
+    runtime.stage_configuration(StagedConfiguration {
+        prepared,
+        desired: DesiredApplication::new(desired_current.clone(), 1),
+        reason: ConfigurationChangeReason::Source,
+        retain: Box::new(|_revision| {}),
+        settled: Box::new(move |outcome| {
+            let _ = settled_tx.send(outcome);
+            Box::pin(async {})
+        }),
+    });
     // ManualCompaction: refused Busy, not deferred.
     let rejected = runtime.admit_compaction(None);
     assert!(
         matches!(rejected, Err(ManualCompactionError::Busy)),
         "a second compaction is fenced by the unreaped tail"
     );
-    // Scheduled: the atomic reservation refuses before reading the
-    // pending set at all.
+    // Scheduled: a valid binding with an Accepted start is pending — the
+    // tail is the only refuser of the atomic reservation.
     assert!(
         runtime.inner.reserve_scheduled_start(|_| true).is_none(),
         "scheduled reservation is fenced by the unreaped tail"
     );
-    // Idle claim: the epoch probe and the claim itself both refuse.
-    assert!(
-        runtime.idle_epoch().is_err(),
-        "idle epoch is fenced by the unreaped tail"
-    );
-    assert!(
-        !runtime.claim_idle(0),
-        "idle claim is fenced by the unreaped tail"
-    );
-    // Attempt: the queued inbound cannot lend the slot while the tail is
-    // unreaped — the admission pass that parked in `Reap::Work` has
-    // already fenced it.
+    // Catalog publication: a real observation waits. Driven through the
+    // locked entry point under `Joining`, it is not consumed.
+    {
+        let mut state = runtime.inner.lock_state();
+        runtime.inner.publish_runtime_catalogs_locked(&mut state);
+        assert!(
+            state.config.catalog_revision < observed,
+            "the catalog observation is fenced by the unreaped tail"
+        );
+    }
+    // Staged configuration: a real candidate waits. Driven through the
+    // locked entry point under `Joining`, it neither commits nor settles.
+    {
+        let mut state = runtime.inner.lock_state();
+        runtime.inner.commit_staged_configuration_locked(&mut state);
+        assert!(
+            state.config.staged_configuration.is_some(),
+            "the staged candidate survives the fenced commit pass"
+        );
+    }
+    // Attempt: queue the real work item, then drive the admission pass
+    // directly — a competing caller, not the reaper-parked worker. With the
+    // conversation restored by the finished compaction, the tail fence is
+    // the only thing that can refuse it.
+    runtime
+        .submit_inbound(test_support::text_content("held behind Joining"))
+        .expect("inbound queued");
+    runtime.inner.admit_next_attempt();
     assert!(
         !runtime
             .inner
@@ -1002,29 +1088,17 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
             .foreground
             .slot
             .is_foreground_active(),
-        "the queued attempt stays unadmitted while Joining holds"
+        "a directly-driven admission pass is fenced by the unreaped tail"
     );
-    // Catalog publication and the staged configuration commit consult the
-    // same unreaped-tail fence: driven through their locked entry points
-    // under `Joining`, they publish nothing and commit nothing.
-    {
-        let mut state = runtime.inner.lock_state();
-        runtime.inner.publish_runtime_catalogs_locked(&mut state);
-        runtime.inner.commit_staged_configuration_locked(&mut state);
-        assert!(
-            state.config.pending_runtime_catalog.is_none(),
-            "catalog publication is fenced by the unreaped tail"
-        );
-        assert!(
-            state.config.staged_configuration.is_none(),
-            "staged configuration commit is fenced by the unreaped tail"
-        );
-    }
-    // Release the join: `joined` publishes, the tail is reaped, and the
-    // fenced work proceeds — the deferred attempt is admitted and the
-    // second compaction is no longer refused at admission.
+    // Release the join: `joined` publishes, the tail is reaped, and every
+    // fenced work item — the same instances prepared above — proceeds
+    // through the real consumer path: the admission worker's own pass
+    // reaps, publishes, commits, reserves and admits in order.
     joining_gate.release();
-    let _ = handle.wait().await;
+    tokio::time::timeout(std::time::Duration::from_secs(30), handle.wait())
+        .await
+        .expect("the parked join completes after the barrier releases")
+        .expect_err("the fixture compaction history cannot satisfy the summary budget");
     assert!(
         !runtime
             .inner
@@ -1034,6 +1108,62 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
             .is_unreaped(),
         "the reaped tail is gone after joined publishes"
     );
+    // Scheduled: the same pending start is claimed by the real admission
+    // worker — the durable row leaving `Accepted` is the unfenced proof.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let view = fixture
+                .store
+                .scheduled_workflow_get(&fixture.start.id)
+                .unwrap()
+                .unwrap();
+            if !matches!(
+                view.head.state,
+                crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Accepted {
+                    ..
+                }
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the real admission worker claims the fenced scheduled start after the join");
+    // Catalog + staged configuration: the same observation and candidate
+    // are consumed by the consumer's repeated-pass pattern.
+    for _ in 0..10 {
+        {
+            let mut state = runtime.inner.lock_state();
+            runtime.inner.publish_runtime_catalogs_locked(&mut state);
+            runtime.inner.commit_staged_configuration_locked(&mut state);
+            if state.config.catalog_revision >= observed
+                && state.config.staged_configuration.is_none()
+            {
+                break;
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    {
+        let state = runtime.inner.lock_state();
+        assert!(
+            state.config.catalog_revision >= observed,
+            "the fenced catalog observation publishes after the join"
+        );
+        assert!(
+            state.config.staged_configuration.is_none(),
+            "the fenced candidate commits after the join"
+        );
+    }
+    assert!(
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), settled_rx).await,
+            Ok(Ok(StagedOutcome::Committed)),
+        ),
+        "the deferred candidate settles Committed after the join"
+    );
+    // Attempt: the same queued inbound is admitted and settles.
     let settlement = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         runtime.attempt_settlement(0),
@@ -1045,12 +1175,28 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         "{:?}",
         settlement.outcome
     );
+    // Idle probe: with the mailbox empty and no active owner, the same
+    // probe that errored under `Joining` now succeeds.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if runtime.idle_epoch().is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the idle epoch opens once the tail is reaped and the attempt settled");
+    // ManualCompaction: admitted again.
     let second = runtime.admit_compaction(None);
     assert!(
         !matches!(second, Err(ManualCompactionError::Busy)),
         "the fenced compaction admits after the join"
     );
-    runtime.shutdown().await.expect("fixture shutdown");
+    tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("shutdown timeout")
+        .expect("fixture shutdown");
 }
 
 // ---- Issue #606 acceptance-matrix: scheduled-workflow shared fixture ----
@@ -1066,8 +1212,15 @@ struct ScheduledFixture {
     start: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowHead,
 }
 
-#[allow(clippy::too_many_lines, clippy::items_after_statements)]
 async fn scheduled_fixture() -> ScheduledFixture {
+    scheduled_fixture_with(Vec::new(), None).await
+}
+
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+async fn scheduled_fixture_with(
+    scripts: Vec<Vec<test_support::FakeStep>>,
+    probe: Option<probe::CoordinatorProbe>,
+) -> ScheduledFixture {
     use crate::runtime::workflow::scheduled::{
         ScheduledWorkflowPreparation, lifecycle::ScheduledWorkflowState,
     };
@@ -1101,9 +1254,9 @@ async fn scheduled_fixture() -> ScheduledFixture {
     );
     let (runtime, model) = test_support::headless_runtime_with_options(
         &dir,
-        Vec::new(),
+        scripts,
         None,
-        None,
+        probe,
         test_support::HeadlessRuntimeOptions {
             workflow_catalog: workflows,
             root_workflows: BTreeSet::from([workflow_id.clone()]),
@@ -1336,10 +1489,31 @@ async fn a_scheduled_owner_defers_catalog_and_staged_config_but_not_policy() {
     }
     drop(release);
     let _ = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
-    // The deferred observation publishes once the owner settles. One pass
-    // can end at the `Busy` or superseded-rebase seam without consuming the
-    // observation; the runtime's consumer repeats the pass on every wake,
-    // so the test drives it the same way until the cut is covered.
+    // The durable `Settled` row is only step one of the settlement: the
+    // runner then calls `finish_scheduled`, which is what releases the
+    // native foreground slot. Wait for that slot-release signal — the real
+    // publication fence lifting — before driving the publish pass.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if runtime
+                .inner
+                .lock_state()
+                .foreground
+                .slot
+                .as_scheduled()
+                .is_none()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner releases the slot owner after settlement");
+    // With the fence provably lifted, drive the consumer the way the
+    // runtime does: repeat the publish pass until the observed cut is
+    // covered (a `Busy` capability commit is a transient seam, not a
+    // terminal state).
     for _ in 0..10 {
         {
             let mut state = runtime.inner.lock_state();
@@ -1367,6 +1541,7 @@ async fn a_scheduled_owner_defers_catalog_and_staged_config_but_not_policy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
 async fn the_title_publication_tail_blocks_the_drain_after_the_call_settles() {
     // Title Publication Tail (Issue #606): the REAL title path — durable
     // human source → admitted auxiliary Call → Call settles — then parks
@@ -1386,6 +1561,8 @@ async fn the_title_publication_tail_blocks_the_drain_after_the_call_settles() {
     store.initialize(&[]).expect("initialize store");
     let gate = Arc::new(probe::Gate::default());
     gate.arm();
+    let drain_gate = Arc::new(probe::Gate::default());
+    drain_gate.arm();
     let (runtime, model) = test_support::headless_runtime_over_store_with(
         &dir,
         conversation.as_ref(),
@@ -1396,6 +1573,7 @@ async fn the_title_publication_tail_blocks_the_drain_after_the_call_settles() {
         ],
         Some(probe::CoordinatorProbe {
             title_publication_gate: Some(gate.clone()),
+            drain_host_task_gate: Some(drain_gate.clone()),
             ..Default::default()
         }),
     )
@@ -1429,33 +1607,48 @@ async fn the_title_publication_tail_blocks_the_drain_after_the_call_settles() {
         *model.streams_exited().borrow() >= 2,
         "the attempt stream and the title Call stream both exited"
     );
-    // The drain commits Draining eagerly and then must wait on the parked
-    // publication tail — it cannot mark Quiescent.
+    // The drain commits Draining eagerly; it must then wait on the parked
+    // publication tail. The exact proof point is the host-task wait
+    // boundary: auxiliary drain complete, the supervisor parked immediately
+    // before awaiting the title owner — with the tail still open.
     let drain = tokio::spawn({
         let runtime = runtime.clone();
         async move { runtime.shutdown().await }
     });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        drain_gate.wait_entered_async(),
+    )
+    .await
+    .expect("the drain reaches the host-task wait boundary behind the parked tail");
+    assert!(
+        !drain.is_finished(),
+        "the drain is parked at the host-task boundary, not past it"
+    );
+    assert!(
+        catalog
+            .lock()
+            .await
+            .summary(&session_id)
+            .unwrap()
+            .generated_title
+            .is_none(),
+        "the title catalog publication is still fenced at this point"
+    );
+    // Let the supervisor consume the boundary and enter the host-task await;
+    // the tail still holds it — the drain cannot finish.
+    drain_gate.release();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            if matches!(
-                runtime.inner.lifecycle.state(),
-                ConversationLifecycleState::Draining
-            ) {
-                break;
-            }
+        for _ in 0..20 {
             assert!(
-                !matches!(
-                    runtime.inner.lifecycle.state(),
-                    ConversationLifecycleState::Quiescent
-                ),
-                "the drain cannot quiesce behind the parked title tail"
+                !drain.is_finished(),
+                "the drain waits on the still-parked title tail"
             );
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("the drain reaches Draining behind the parked tail");
-    assert!(!drain.is_finished(), "the drain waits on the title tail");
+    .expect("the drain stays parked on the publication tail");
     gate.release();
     drain.await.expect("drain task").expect("shutdown");
     assert!(
@@ -1537,54 +1730,38 @@ async fn a_mutated_generation_between_prep_and_claim_refuses_the_stale_claim() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn awaiting_native_proof_retains_the_slot_and_lease_until_finish() {
-    // AwaitingNativeProof retention (Issue #606): after the graph finished
-    // but before the native settlement proof arrives, the extracted
-    // executor's reconciliation seam (`reconcile_scheduled`) keeps the
-    // slot owner — and with it the capability lease the task still holds —
-    // instead of running the ownerless durable submission or replaying the
-    // graph. `finish_scheduled` is the only release.
-    use crate::runtime::conversation_runtime::scheduled::{ScheduledClaim, ScheduledSnapshot};
-    use crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState;
-    let fixture = scheduled_fixture().await;
+async fn the_runner_owns_settlement_after_the_graph_finishes() {
+    // Real-runner settlement ownership (Issue #606): the admitted
+    // `ScheduledExecutor` task — never test code — runs the graph, keeps the
+    // exact slot owner, the capability lease and the Claim through the
+    // settlement boundary, and only then releases them. The runner is
+    // parked at the real settlement-entry barrier (after
+    // `mark_scheduled_graph_finished`, before the settlement loop), where
+    // the test proves retention; after the barrier the runner itself
+    // commits the durable settlement, releases the slot through
+    // `finish_scheduled` and drops the lease — no `finish_scheduled` call
+    // in this test.
+    use crate::runtime::workflow::scheduled::lifecycle::{
+        ScheduledWorkflowOutcome, ScheduledWorkflowState,
+    };
+    let gate = Arc::new(probe::Gate::default());
+    gate.arm();
+    let coordinator_probe = probe::CoordinatorProbe {
+        scheduled_settlement_gate: Some(gate.clone()),
+        ..Default::default()
+    };
+    let fixture = scheduled_fixture_with(Vec::new(), Some(coordinator_probe)).await;
     let runtime = fixture.runtime.clone();
-    let reservation = runtime
-        .inner
-        .reserve_scheduled_start(|_| true)
-        .expect("the admitted start is reserved");
-    let snapshot = ScheduledSnapshot {
-        resources: reservation.resources.clone(),
-        model: reservation.model.clone(),
-        approval: reservation.approval,
-    };
-    let lease_resources = reservation.resources.clone();
-    let claim = runtime
-        .inner
-        .claim_scheduled_start(
-            &reservation.start.head.id,
-            &fixture.contract,
-            &snapshot,
-            &reservation.owner,
-            &reservation.cancellation,
-            || {
-                runtime
-                    .capability()
-                    .acquire_attempt_lease_for(lease_resources.capability().clone())
-            },
-        )
-        .expect("claim answers");
-    let ScheduledClaim::Claimed { claim, lease, .. } = claim else {
-        panic!("a fresh reservation claims cleanly")
-    };
-    let claimed = claim;
-    // The graph is physically done; the durable settlement proof is not yet
-    // observed. The reconciliation seam must keep this exact owner.
-    runtime
-        .inner
-        .mark_scheduled_graph_finished(&reservation.owner);
+    assert!(
+        runtime.inner.scheduled_executor.admit_next(),
+        "the admitted start is reserved"
+    );
+    // The runner reached the settlement-entry barrier: the graph physically
+    // finished, the settlement loop has not started.
+    gate.wait_entered_async().await;
     let (owner_probe, ownerless) = runtime
         .inner
-        .reconcile_scheduled(&reservation.start.head.id, || 1_u8);
+        .reconcile_scheduled(&fixture.start.id, || 1_u8);
     let owner_probe = owner_probe.expect("the live owner is still probed");
     assert!(owner_probe.graph_finished);
     assert!(
@@ -1599,11 +1776,15 @@ async fn awaiting_native_proof_retains_the_slot_and_lease_until_finish() {
             .slot
             .as_scheduled()
             .is_some(),
-        "the slot owner is retained while the proof is missing"
+        "the slot owner is retained across the settlement boundary"
+    );
+    assert!(
+        runtime.capability().active_attempts() >= 1,
+        "the capability lease is still held by the parked runner"
     );
     let view = fixture
         .store
-        .scheduled_workflow_get(&reservation.start.head.id)
+        .scheduled_workflow_get(&fixture.start.id)
         .unwrap()
         .unwrap();
     assert!(
@@ -1611,27 +1792,38 @@ async fn awaiting_native_proof_retains_the_slot_and_lease_until_finish() {
         "the durable row stays Claimed — no ownerless retirement, no replay: {:?}",
         view.head.state
     );
-    drop(lease);
-    drop(owner_probe);
-    drop(claimed);
-    // The settlement handoff is the only release: after it, the slot is
-    // free and the reconcile seam runs the ownerless submission.
-    runtime.inner.finish_scheduled(&reservation.owner);
+    // Release the barrier: the runner itself commits the durable settlement,
+    // releases the slot and drops the lease. `finish_scheduled` is never
+    // called from this test.
+    gate.release();
+    let outcome = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
+    assert!(
+        matches!(outcome, ScheduledWorkflowOutcome::Completed),
+        "the runner commits the Completed settlement itself: {outcome:?}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let slot_free = runtime
+                .inner
+                .lock_state()
+                .foreground
+                .slot
+                .as_scheduled()
+                .is_none();
+            if slot_free && runtime.capability().active_attempts() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner releases the slot owner and the capability lease after settlement");
+    // With the owner gone, the reconciliation seam runs the ownerless
+    // submission — the exact post-release frontier.
     let (owner_probe, ownerless) = runtime
         .inner
-        .reconcile_scheduled(&reservation.start.head.id, || 7_u8);
+        .reconcile_scheduled(&fixture.start.id, || 7_u8);
     assert!(owner_probe.is_none());
     assert_eq!(ownerless, Some(7_u8));
-    assert!(
-        runtime
-            .inner
-            .lock_state()
-            .foreground
-            .slot
-            .as_scheduled()
-            .is_none(),
-        "the slot owner released only at finish_scheduled"
-    );
-    drop(reservation);
     runtime.shutdown().await.expect("fixture shutdown");
 }

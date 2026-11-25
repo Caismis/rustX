@@ -571,10 +571,25 @@ impl RuntimeInner {
         }
         self.external_auxiliary.drain().await;
         let title_task = self.host_task.lock().expect("Session title owner").take();
-        if let Some(task) = title_task
-            && task.await.is_err()
-        {
-            tracing::warn!("Session title owner exited without publishing its optional label");
+        if let Some(task) = title_task {
+            #[cfg(test)]
+            {
+                // Test barrier: the auxiliary drain is complete and the
+                // supervisor is about to wait on the host task — the exact
+                // boundary a parked title-publication tail must hold open.
+                let host_task_gate = self
+                    .probe
+                    .lock()
+                    .expect("coordinator probe lock poisoned")
+                    .as_ref()
+                    .and_then(|probe| probe.drain_host_task_gate.clone());
+                if let Some(gate) = host_task_gate {
+                    gate.enter();
+                }
+            }
+            if task.await.is_err() {
+                tracing::warn!("Session title owner exited without publishing its optional label");
+            }
         }
         self.reap_manual_tail(true).await;
         loop {

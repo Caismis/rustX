@@ -96,6 +96,11 @@ pub(crate) struct CoordinatorProbe {
     /// transaction — the real title-publication tail a drain must wait
     /// on (Issue #606).
     pub(crate) title_publication_gate: Option<Arc<Gate>>,
+    /// Parks the drain supervisor after the auxiliary drain has completed
+    /// and immediately before it awaits the host task — proving the drain
+    /// reached the host-task wait boundary while a parked publication tail
+    /// still holds that task open (Issue #606).
+    pub(crate) drain_host_task_gate: Option<Arc<Gate>>,
     /// Panics the manual-compaction worker task after `run_manual_compaction`
     /// returns — a real task unwind that resolves the `JoinHandle` with a
     /// `JoinError`, exercising the reaper's panic path (Issue #606).
