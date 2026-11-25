@@ -31,6 +31,7 @@
   background: var(--dsw-alias-bg-layer-2);
   box-shadow: var(--dsw-elevation-prominent);
 }
+.panel > [data-slot=popover-viewport] { padding: 0; }
 .panel input {
   padding: 6px 10px;
   border: 0;

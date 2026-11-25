@@ -12,6 +12,8 @@ export function PickerPopover({ open, anchorRef, label, className, onClose, chil
   return <Popover open={open} onOpenChange={next => { if (!next) onClose(); }}>
     <PopoverPopup
       anchor={anchorRef}
+      positionMethod="fixed"
+      collisionPadding={12}
       side="bottom"
       align="start"
       sideOffset={4}

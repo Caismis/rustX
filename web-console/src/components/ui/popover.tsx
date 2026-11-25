@@ -35,6 +35,8 @@ export function PopoverPopup({
   tooltipStyle = false,
   anchor,
   portalProps,
+  positionMethod,
+  collisionPadding,
   ...props
 }: PopoverPrimitive.Popup.Props & {
   portalProps?: PopoverPrimitive.Portal.Props;
@@ -44,6 +46,8 @@ export function PopoverPopup({
   alignOffset?: PopoverPrimitive.Positioner.Props["alignOffset"];
   tooltipStyle?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
+  positionMethod?: PopoverPrimitive.Positioner.Props["positionMethod"];
+  collisionPadding?: PopoverPrimitive.Positioner.Props["collisionPadding"];
 }): React.ReactElement {
   return (
     <PopoverPrimitive.Portal {...portalProps}>
@@ -51,6 +55,8 @@ export function PopoverPopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        collisionPadding={collisionPadding}
+        positionMethod={positionMethod}
         className="z-50 h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none"
         data-slot="popover-positioner"
         side={side}
