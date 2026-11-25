@@ -1662,7 +1662,11 @@ fn read_directory(
                 .and_then(|offset| u32::try_from(offset).ok()),
         },
         Err(error) => ClientReply::Error {
-            kind: read_error(&error),
+            kind: if error.kind() == std::io::ErrorKind::FileTooLarge {
+                ReadError::DirectoryEntryLimit
+            } else {
+                read_error(&error)
+            },
         },
     }
 }

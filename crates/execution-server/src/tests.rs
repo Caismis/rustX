@@ -535,7 +535,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v8"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -691,11 +691,11 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 
-    assert_eq!(PROTOCOL_VERSION, 8);
+    assert_eq!(PROTOCOL_VERSION, 9);
     let (binding, credential) = Binding::reserve(reservation()).unwrap();
     let hello = valid_hello(&credential);
     let mut old = hello.clone();
-    old.version = 7;
+    old.version = 8;
     let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
     write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
     write_record(
@@ -3290,7 +3290,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v8"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {

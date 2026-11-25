@@ -20,7 +20,7 @@
 //!
 //! Supported endpoint forms are deliberately narrow: `ws://IP:PORT` is
 //! accepted only for a literal loopback IP, `wss://IP:PORT` accepts any
-//! literal IP, the path must be exactly `/execution/v8`, and userinfo,
+//! literal IP, the path must be exactly `/execution/v9`, and userinfo,
 //! query, and fragment are rejected. Hostnames are unsupported — numeric
 //! IPs keep resolution inside the bounded connect budget and pair with
 //! IP-SAN certificates. `wss` certificate and hostname verification can

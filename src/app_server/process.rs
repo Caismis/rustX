@@ -94,7 +94,7 @@ pub(crate) struct AppServerArgs {
     /// Deliver it out of band and keep it outside the Client environment.
     #[arg(long, requires = "execution_bootstrap_out")]
     execution_settlement_grant_out: Option<PathBuf>,
-    /// The public `wss://…/execution/v8` ingress endpoint published in
+    /// The public `wss://…/execution/v9` ingress endpoint published in
     /// the bundle instead of the loopback address.
     #[arg(long, requires = "execution_ws_listen")]
     execution_public_url: Option<String>,

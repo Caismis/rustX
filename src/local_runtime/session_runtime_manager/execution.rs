@@ -345,7 +345,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v8`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v9`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -3842,8 +3842,9 @@ impl SessionRuntimeManager {
     }
 
     /// Selects the authority for a read-only configuration catalog.
-    /// An unclaimed Workspace can describe authored sources. Once reserved,
-    /// its catalog requires the exact Session and pins that generation.
+    /// Workspaces managed by the local composition require Client authority
+    /// even between bindings. A reserved Workspace with an exact Session
+    /// pins that binding's generation.
     pub(crate) fn source_catalog_scope(
         &self,
         session: Option<&SessionId>,
@@ -3888,6 +3889,13 @@ impl SessionRuntimeManager {
             return Err(error("the reserved Workspace requires its exact Session"));
         }
         drop(slots);
+        if workspace
+            .is_some_and(|workspace| self.local_workspace_catalog_requires_client(workspace))
+        {
+            return Err(error(
+                "the selected Workspace execution binding is unavailable",
+            ));
+        }
         if let Some(session) = session {
             self.require_unclaimed_workspace(session)?;
         }

@@ -192,9 +192,10 @@ impl PackageDirectory {
                 continue;
             }
             if names.len() == limit {
-                return Err(io::Error::other(format!(
-                    "package directory exceeds {limit} entries"
-                )));
+                return Err(io::Error::new(
+                    io::ErrorKind::FileTooLarge,
+                    format!("package directory exceeds {limit} entries"),
+                ));
             }
             names.push(PathBuf::from(OsStr::from_bytes(name)));
         }

@@ -44,7 +44,11 @@ The release-script regression exercises a child that writes more than the
 PTY buffer while handling termination. The Web and TUI are launched through
 an external symlink to the installed binary. The stdio product regression
 lists and reads Workspace Skills without enabling the Web picker, and the
-picker test separately refuses a directory above the 4,096-entry limit.
+picker test separately refuses a directory above the 4,096-entry limit. The
+physical directory reply distinguishes entry overflow from permission or
+revision errors. After a descendant grant retires, the settled slot is
+removed and Session-scoped Skill and MCP catalogs remain unavailable. A
+renewed grant can serve unscoped Skills through a private Client.
 
 The in-crate `installed_resume` tests run real sibling Clients through the
 installed composition owner. Eight invalid saved Sessions release their

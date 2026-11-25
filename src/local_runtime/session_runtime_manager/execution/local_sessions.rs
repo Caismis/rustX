@@ -308,14 +308,19 @@ impl SessionRuntimeManager {
         })
     }
 
+    pub(super) fn local_workspace_catalog_requires_client(&self, workspace: &Path) -> bool {
+        self.execution
+            .local
+            .roots
+            .get()
+            .is_some_and(|roots| roots.iter().any(|root| workspace.starts_with(root)))
+    }
+
     pub(crate) fn local_workspace_skill_grant(
         &self,
         workspace: &Path,
     ) -> Option<CancellationSignal> {
-        self.execution
-            .reserves_workspace(workspace)
-            .then(|| self.local_workspace_grant(workspace).ok().flatten())
-            .flatten()
+        self.local_workspace_grant(workspace).ok().flatten()
     }
 
     pub(in crate::local_runtime::session_runtime_manager) async fn discard_local_session(

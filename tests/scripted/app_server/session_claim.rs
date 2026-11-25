@@ -700,6 +700,19 @@ async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{
+            ErrorData, JsonRpcVersion, Method, MethodResult, Request, RequestId, Response,
+            WorkspaceCatalogAuthority,
+        },
+    };
+    use crate::local_runtime::{
+        configuration::settings::SourceTarget, skill_management::SkillContentKind,
+    };
+    use crate::runtime::identity::McpServerId;
+    use crate::tools::mcp::catalog::CatalogKind;
+
     Box::pin(bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
         let session = &f.sessions[0].id;
@@ -710,6 +723,9 @@ async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
         f.manager
             .environment
             .configure(std::slice::from_ref(workspace));
+        let skill = workspace.join(".agents/skills/retired-guide");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), b"---\nname: retired-guide\ndescription: Workspace guide.\n---\nWorkspace instructions.\n").unwrap();
         let capacity = f.manager.available_local_client_slots();
         let runtime = f.load(0).await.unwrap().unwrap();
         assert!(f.manager.execution.reserves_workspace(workspace));
@@ -727,6 +743,44 @@ async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
                 .unwrap()
                 .is_none()
         );
+        let route = || f.manager.source_catalog_scope(Some(session), Some(workspace));
+        assert!(route().is_err());
+        let target = SourceTarget::Workspace { directory: workspace.clone() };
+        let list = |execution_session| Method::SkillsList {
+            target: target.clone(), execution_session, offset: 0, limit: 32, expected_revision: None,
+        };
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        for method in [
+            list(Some(session.clone())),
+            list(None),
+            Method::SkillsRead {
+                target: target.clone(), execution_session: Some(session.clone()), name: "retired-guide".into(),
+                kind: SkillContentKind::Instructions, offset: 0, max_bytes: 1024, expected_revision: None,
+            },
+            Method::McpSourceRead {
+                target: target.clone(), execution_session: session.clone(),
+            },
+            Method::McpCatalog {
+                target: target.clone(), execution_session: Some(session.clone()),
+                id: McpServerId::new("inventory"), expected_revision: "prior revision".into(), kind: CatalogKind::Tools,
+            },
+        ] {
+            let Response::Failure(failure) = connection.handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(60), call: method,
+            }).await else { panic!("a local catalog cannot use Server authoring after the grant retires"); };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
+        f.manager.environment.configure(std::slice::from_ref(workspace));
+        assert!(route().is_err(), "restoring a grant does not bind a Session");
+        let MethodResult::Skills { page, authority } = super::protocol::call(&connection, 61, list(None)).await else {
+            panic!("an unscoped catalog with a valid grant can use a private Client");
+        };
+        assert_eq!(authority, WorkspaceCatalogAuthority::Client);
+        let [skill] = page.data.as_slice() else { panic!("one Workspace Skill: {page:?}"); };
+        assert_eq!(skill.catalog.name, "retired-guide");
+        assert!(!f.manager.execution.reserves_workspace(workspace));
+        assert!(!rustx_execution_server::RecoveryFence::workspace_pending(&f.archive_root, workspace).unwrap());
         drop(runtime);
         assert_eq!(f.host.drain().await, Vec::<String>::new());
         assert_eq!(f.provider.request_bodies(), Vec::<String>::new());

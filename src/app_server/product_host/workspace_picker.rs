@@ -5,7 +5,7 @@ use crate::app_server::{RequestLane, host::AppServerHost, transport::MAX_MESSAGE
 use crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint;
 use futures_util::{SinkExt, StreamExt};
 use rustx_execution_protocol::{
-    MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES, is_normalized_absolute_path,
+    MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES, ReadError, is_normalized_absolute_path,
 };
 use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf};
@@ -28,6 +28,28 @@ struct Listing {
     folders: Vec<String>,
     identity: String,
     revision: String,
+}
+
+fn directory_entry_limit() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        format!("Cannot browse the folder (limit {MAX_DIRECTORY_NAMES} directory entries)"),
+    )
+}
+
+fn picker_page_error(error: io::Error) -> io::Error {
+    let physical = error
+        .get_ref()
+        .and_then(|failure| failure.downcast_ref::<rustx_execution_server::PhysicalError>());
+    if matches!(
+        physical,
+        Some(rustx_execution_server::PhysicalError(
+            ReadError::DirectoryEntryLimit
+        ))
+    ) {
+        return directory_entry_limit();
+    }
+    error
 }
 
 fn list(
@@ -57,21 +79,18 @@ fn list(
             if !active() {
                 return Err(io::Error::other("Folder selection cancelled"));
             }
-            let page = endpoint.directory_page(
-                &request.directory,
-                offset,
-                u32::try_from(MAX_DIRECTORY_PAGE_ENTRIES).expect("directory page fits u32"),
-                Some(&before.revision),
-            ).map_err(|error| io::Error::new(
-                error.kind(),
-                format!("Cannot browse the folder (limit {MAX_DIRECTORY_NAMES} directory entries): {error}"),
-            ))?;
+            let page = endpoint
+                .directory_page(
+                    &request.directory,
+                    offset,
+                    u32::try_from(MAX_DIRECTORY_PAGE_ENTRIES).expect("directory page fits u32"),
+                    Some(&before.revision),
+                )
+                .map_err(picker_page_error)?;
             for entry in page.entries {
                 if entry.metadata.is_directory && !entry.metadata.is_symlink {
                     if folders.len() == MAX_DIRECTORY_NAMES {
-                        return Err(io::Error::other(format!(
-                            "Folder selection supports at most {MAX_DIRECTORY_NAMES} folders"
-                        )));
+                        return Err(directory_entry_limit());
                     }
                     folders.push(entry.file_name);
                 }
@@ -106,7 +125,7 @@ async fn browse(
     let _slot = host
         .local_workspace_probes()
         .try_acquire()
-        .map_err(|_| "Another folder selection is still settling")?;
+        .map_err(|_| "Another local Workspace probe is still settling")?;
     let _operation = host
         .admit_request(RequestLane::Ordinary, |owner| owner)
         .map_err(|_| "Folder selection is unavailable while the Server drains or is at capacity")?;
@@ -190,4 +209,28 @@ where
     )
     .await?
     .map_err(io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picker_reports_the_entry_limit_only_for_a_confirmed_overflow() {
+        for (kind, diagnostic) in [
+            (io::ErrorKind::PermissionDenied, "physical access denied"),
+            (io::ErrorKind::AlreadyExists, "physical revision conflict"),
+            (io::ErrorKind::Other, "physical operation unavailable"),
+        ] {
+            let result = picker_page_error(io::Error::new(kind, diagnostic));
+            assert_eq!(result.kind(), kind);
+            assert_eq!(result.to_string(), diagnostic);
+        }
+        let result = picker_page_error(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            rustx_execution_server::PhysicalError(ReadError::DirectoryEntryLimit),
+        ));
+        assert_eq!(result.kind(), io::ErrorKind::FileTooLarge);
+        assert!(result.to_string().contains("limit 4096 directory entries"));
+    }
 }
