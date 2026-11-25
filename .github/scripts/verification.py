@@ -147,6 +147,8 @@ def selected_jobs(profile, surfaces):
         "rust-contracts-shard": full,
         "rust-contracts-report": full,
         "rust-boundaries": full,
+        "rust-boundaries-shard": full,
+        "rust-boundaries-report": full,
         "rust-platform-core": not full and rust,
         "rust-platform-boundaries": full,
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
