@@ -7116,15 +7116,15 @@
       "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "./DialogSurface",
         "./ImageLightbox.module.css",
         "./icons/index.tsx",
-        "react",
-        "react-dom"
+        "react"
       ],
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "8a1a5ded2e1a562ba04372042dc91282c27dcdbab8ee2a421dfede73f5b5798d"
+      "local_sha256": "8a5dccf3157b6abe07e0cf5e050e3ea6bb1a3ba2c27be40e76722431665e89d4"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
