@@ -154,6 +154,45 @@ class ShardToolCase(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Cargo.lock changed", result.stderr)
 
+    def test_feature_config_mismatch_is_rejected(self) -> None:
+        self.make_inventory()
+        manifest = json.loads(self.manifest.read_text())
+        manifest["features"] = "default-features"
+        self.manifest.write_text(json.dumps(manifest))
+        result = self.run_shard(0, self.tmp / "runs")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("different features", result.stderr)
+
+    def test_cross_platform_artifact_is_rejected(self) -> None:
+        # A manifest minted on macOS must be refused on Linux (and vv).
+        self.make_inventory()
+        manifest = json.loads(self.manifest.read_text())
+        manifest["runner_os"] = (
+            "Darwin" if __import__("platform").system() == "Linux" else "Linux"
+        )
+        self.manifest.write_text(json.dumps(manifest))
+        result = self.run_shard(0, self.tmp / "runs")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("different OS", result.stderr)
+
+    def test_package_selection_change_is_rejected(self) -> None:
+        # A spec that names a harness absent from the packed artifact must
+        # fail inventory discovery rather than silently covering nothing.
+        self.spec.write_text(json.dumps([
+            {"name": "lib", "harness": "lib-harness", "libtest_args": []},
+            {"name": "removed", "harness": "test:removed-target",
+             "libtest_args": []},
+        ]))
+        result = self.tool(
+            "inventory",
+            "--manifest", str(self.manifest),
+            "--prepared", str(self.prepared),
+            "--spec", str(self.spec),
+            "--shards", "2",
+            "--out", str(self.inventory_dir),
+        )
+        self.assertEqual(result.returncode, 1)
+
     def test_tampered_harness_is_rejected(self) -> None:
         self.make_inventory()
         write_harness(self.prepared, "lib-harness", WRITING_FAIL_HARNESS)

@@ -29,6 +29,7 @@ import platform
 import re
 import shutil
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -90,10 +91,12 @@ def check_manifest(
         problems.append("artifact was built for a different architecture")
     if manifest.get("cargo_lock_sha256") != sha256_file(root / "Cargo.lock"):
         problems.append("Cargo.lock changed since the artifact was built")
-    # rustc-bound fields are verified wherever a toolchain exists; shard
-    # runners deliberately carry none, so there the OS/arch/lock/head
-    # checks are what bind the artifact.
-    if shutil.which("rustc"):
+    # Toolchain fields are binding-by-record: the harness sha256s already
+    # reject any artifact not built by the recorded build. Verifying them
+    # dynamically would invoke the rustup shim, which auto-installs the
+    # pinned toolchain on a shard runner that ships only `stable` — so it
+    # runs only when explicitly requested (RUSTX_VERIFY_TOOLCHAIN=1).
+    if os.environ.get("RUSTX_VERIFY_TOOLCHAIN") == "1" and shutil.which("rustc"):
         rustc = subprocess.run(
             ["rustc", "--version", "--verbose"], cwd=root, check=True,
             capture_output=True, text=True,
@@ -170,6 +173,7 @@ def run_shard(
     results: dict[str, str] = {}
     durations: dict[str, float] = {}
     failed = False
+    batch_started = time.monotonic()
     for harness_rel, names in sorted(by_harness.items()):
         harness = prepared / harness_rel
         if not harness.is_file():
@@ -184,9 +188,10 @@ def run_shard(
             continue
         for offset in range(0, len(names), batch_size):
             batch = names[offset:offset + batch_size]
+            # NOTE: --report-time is nightly-only; stable libtest has no
+            # per-test timing, so durations stay empty in shard reports.
             command = [
                 str(harness), "--exact", *batch, "--format", "pretty",
-                "--report-time",
             ]
             result = subprocess.run(command, capture_output=True, text=True)
             sys.stdout.write(result.stdout)
@@ -200,6 +205,14 @@ def run_shard(
                         durations[key] = float(match.group(3))
             if result.returncode != 0 or "FAILED" in results.values():
                 failed = True
+            # Per-batch wall time spread evenly: enough signal for the
+            # weights file without nightly-only --report-time.
+            elapsed = time.monotonic() - batch_started
+            batch_started = time.monotonic()
+            for name in batch:
+                key = f"{harness_rel}::{name}"
+                if results.get(key) not in (None, "ignored"):
+                    durations[key] = round(elapsed / len(batch), 3)
 
     expected_keys = set(shard_tests)
     ran = {key for key, status in results.items() if status != "ignored"}

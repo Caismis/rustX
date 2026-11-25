@@ -88,7 +88,8 @@ runners. We evaluated it and chose native libtest execution for this lane:
 
 ## Duration weights
 
-`run` passes `--report-time` and records each test's seconds in the report.
+`run` records per-batch wall time in the report's `durations` map
+(stable libtest has no per-test timing; `--report-time` is nightly-only).
 Regenerate the weights file after a full run with:
 
 ```

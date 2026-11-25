@@ -433,7 +433,7 @@ jobs:
       # deterministic tests ran above as part of `--examples`.
       # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -623,7 +623,7 @@ jobs:
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries --job rust-boundaries-shard
 
   # Three shard runners, each executing its assigned slice of the packed
   # boundaries inventory by exact test name. All shards always finish so

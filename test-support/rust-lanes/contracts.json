@@ -1,13 +1,45 @@
 [
-  {"name": "unit-and-contract-suites", "harness": "lib:rustx",
-   "features": ["--all-features", "--locked"],
-   "libtest_args": ["--skip", "boundary_suites::"]},
-  {"name": "bins", "harness": "bin:*",
-   "features": ["--all-features", "--locked"], "libtest_args": []},
-  {"name": "examples", "harness": "example:*",
-   "features": ["--all-features", "--locked"], "libtest_args": []},
-  {"name": "contracts", "harness": "test:contracts",
-   "features": ["--all-features", "--locked"], "libtest_args": []},
-  {"name": "provider", "harness": "test:provider",
-   "features": ["--all-features", "--locked"], "libtest_args": []}
+  {
+    "name": "unit-and-contract-suites",
+    "harness": "lib:rustx",
+    "features": [
+      "--all-features"
+    ],
+    "libtest_args": [
+      "--skip",
+      "boundary_suites::"
+    ]
+  },
+  {
+    "name": "bins",
+    "harness": "bin:*",
+    "features": [
+      "--all-features"
+    ],
+    "libtest_args": []
+  },
+  {
+    "name": "examples",
+    "harness": "example:*",
+    "features": [
+      "--all-features"
+    ],
+    "libtest_args": []
+  },
+  {
+    "name": "contracts",
+    "harness": "test:contracts",
+    "features": [
+      "--all-features"
+    ],
+    "libtest_args": []
+  },
+  {
+    "name": "provider",
+    "harness": "test:provider",
+    "features": [
+      "--all-features"
+    ],
+    "libtest_args": []
+  }
 ]
