@@ -7,12 +7,13 @@ use nix::{
     unistd::Pid,
 };
 use rustx::app_server::host_upload::{MAX_CHUNK_BYTES, canonical_digest};
+use rustx::runtime::identity::SessionId;
 use rustx::tools::{ManagedOutputContinuation, limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
 use rustx_execution_protocol::{
     Admission, Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, ControlHelloReply,
     DataHelloReply, PeerHello,
     save::{SaveReply, SaveRequest},
-    transport::{MAX_RECORD_BYTES, read_record, write_record},
+    transport::{LOCAL_HANDSHAKE_TIMEOUT, MAX_RECORD_BYTES, read_record, write_record},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -458,6 +459,53 @@ async fn reject_save_replay(mut client: UnixStream, mut server: UnixStream) {
     }
 }
 
+async fn assert_replacement_reads_workspace(peer: &mut Peer, session: &SessionId, probe: &Path) {
+    // The wire Hello can arrive before the Server stores the paired data
+    // connection. A successful read is the readiness witness for the new
+    // generation. Source observation can temporarily hold the same writer.
+    tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, async {
+        loop {
+            let response = peer
+                .response(Method::FsReadFile {
+                    session_id: session.clone(),
+                    path: probe.display().to_string(),
+                    offset: 0,
+                    max_bytes: 64,
+                    expected_revision: None,
+                })
+                .await;
+            match response {
+                Response::Success(success) => {
+                    let MethodResult::FileChunk { chunk } = success.result else {
+                        panic!("the replacement must read the original Workspace");
+                    };
+                    assert_eq!(
+                        STANDARD.decode(chunk.data_base64).unwrap(),
+                        b"original Workspace"
+                    );
+                    break;
+                }
+                Response::Failure(failure)
+                    if matches!(
+                        failure.error.data,
+                        Some(
+                            ErrorData::ExecutionUnavailable
+                                | ErrorData::EnvironmentCapacityOrConflict
+                        )
+                    ) =>
+                {
+                    tokio::task::yield_now().await;
+                }
+                other @ Response::Failure(_) => {
+                    panic!("replacement Workspace read failed: {other:?}")
+                }
+            }
+        }
+    })
+    .await
+    .expect("paired replacement did not publish a usable data lane");
+}
+
 fn config(root: &Path, workspace: &Path, provider: &ProviderEmulator) {
     std::fs::create_dir(workspace).unwrap();
     std::fs::create_dir(root.join("home")).unwrap();
@@ -807,38 +855,7 @@ async fn crash_during_output(cut: CrashCut) {
                 );
             }
         }
-        let chunk = loop {
-            let response = peer
-                .response(Method::FsReadFile {
-                    session_id: session.clone(),
-                    path: probe.display().to_string(),
-                    offset: 0,
-                    max_bytes: 64,
-                    expected_revision: None,
-                })
-                .await;
-            match response {
-                Response::Success(success) => {
-                    let MethodResult::FileChunk { chunk } = success.result else {
-                        panic!("the replacement reads the original Workspace");
-                    };
-                    break chunk;
-                }
-                Response::Failure(failure)
-                    if failure.error.data == Some(ErrorData::EnvironmentCapacityOrConflict) =>
-                {
-                    // Source observation may own the new data writer just after pairing.
-                    tokio::task::yield_now().await;
-                }
-                other @ Response::Failure(_) => {
-                    panic!("replacement Workspace read failed: {other:?}")
-                }
-            }
-        };
-        assert_eq!(
-            STANDARD.decode(chunk.data_base64).unwrap(),
-            b"original Workspace"
-        );
+        assert_replacement_reads_workspace(&mut peer, &session, &probe).await;
         assert_eq!(
             provider.requests().await.len(),
             2,
