@@ -56,9 +56,11 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
   const exactFinalFocus = finalFocus ? () => {
     const target = finalFocus();
     if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) {
-      target.focus({ preventScroll: true });
+      const document = target.ownerDocument;
       setTimeout(() => {
-        if (target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')) target.focus({ preventScroll: true });
+        const active = document.activeElement;
+        if (target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')
+          && (active === document.body || active === target)) target.focus({ preventScroll: true });
       }, 0);
     }
     return false;

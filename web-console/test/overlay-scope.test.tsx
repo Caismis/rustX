@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useEffect, useRef, useState } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DialogSurface, OverlayScope } from '../src/presentation/primitives/DialogSurface';
 
@@ -36,4 +36,21 @@ it('hiding a page does not mount the bodies of confirmations it never opened', (
   ui.rerender(page(false));
   expect(mounted).not.toHaveBeenCalled();
   expect(screen.queryByText('Confirm removal')).toBeNull();
+});
+
+it('does not steal focus that moved elsewhere after a dialog closes', async () => {
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    const target = useRef<HTMLButtonElement>(null), other = useRef<HTMLButtonElement>(null);
+    return <><button ref={target}>Settlement target</button><button ref={other}>Newer focus</button>
+      <DialogSurface open={open} onClose={() => setOpen(false)} title="Confirm" overlayClassName="overlay" finalFocus={() => target.current ?? false}>
+        <button onClick={() => setOpen(false)}>Close</button>
+      </DialogSurface></>;
+  }
+  render(<Harness/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Close' }));
+  const other = screen.getByRole('button', { name: 'Newer focus' });
+  other.focus();
+  await act(async () => new Promise(resolve => setTimeout(resolve, 20)));
+  expect(document.activeElement).toBe(other);
 });
