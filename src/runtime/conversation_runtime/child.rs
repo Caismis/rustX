@@ -2,8 +2,9 @@
 //! settlement observation, and the child's physical lifetime.
 
 use super::{
-    ConversationRuntime, DrainTrigger, DurableOperation, InboundAdmission, InboundAdmissionError,
-    NativeAttemptSettlement, SemanticInboundClass, UserContentBlock, UserSource,
+    ConversationRole, ConversationRuntime, DrainTrigger, DurableOperation, InboundAdmission,
+    InboundAdmissionError, NativeAttemptSettlement, SemanticInboundClass, UserContentBlock,
+    UserSource,
 };
 
 /// The result of one child-conversation terminal seal evaluation (Issue
@@ -28,7 +29,33 @@ pub(crate) enum ParentGuidanceSeal {
     },
 }
 
-impl ConversationRuntime {
+/// The child's explicit control handle (Issue #606): every child-scoped
+/// API lives here, off the generic `ConversationRuntime` surface. It is
+/// obtainable at composition while the runtime is `Inactive` — it does not
+/// depend on activation, host binding, or route installation.
+pub struct ChildControl {
+    runtime: ConversationRuntime,
+}
+
+impl ChildControl {
+    pub(crate) fn new(runtime: ConversationRuntime) -> Self {
+        Self { runtime }
+    }
+}
+
+impl ChildControl {
+    fn inner(&self) -> &std::sync::Arc<super::RuntimeInner> {
+        &self.runtime.inner
+    }
+
+    /// Parent guidance and the terminal seal exist only on a
+    /// `SubagentChild`; a `WorkflowAgentRun` role can never consult them.
+    fn require_subagent_child(&self) {
+        assert!(
+            matches!(self.inner().role, ConversationRole::SubagentChild),
+            "parent guidance and terminal seal are SubagentChild-only"
+        );
+    }
     /// Submits one **parent-authored in-flight guidance** message into this
     /// child conversation (Issue #193).
     ///
@@ -82,7 +109,9 @@ impl ConversationRuntime {
         source: UserSource,
         content: Vec<UserContentBlock>,
     ) -> Result<InboundAdmission, InboundAdmissionError> {
-        self.admit_sourced_inbound(source, content, SemanticInboundClass::ParentGuidance)
+        self.require_subagent_child();
+        self.runtime
+            .admit_sourced_inbound(source, content, SemanticInboundClass::ParentGuidance)
     }
 
     /// Commits this child conversation's **terminal seal** for
@@ -143,68 +172,44 @@ impl ConversationRuntime {
     /// execution. The isolation is decided from the child's frozen terminal
     /// mode (explicit ownership), never from incidental timing.
     pub(crate) fn gate_child_turns(&self) {
-        let mut state = self.inner.lock_state();
-        state.parent_turn_permits = Some(0);
+        let mut state = self.inner().lock_state();
+        state.child_mut().parent_turn_permits = Some(0);
     }
 
     pub(crate) fn child_activity(
         &self,
     ) -> tokio::sync::watch::Receiver<crate::runtime::subagent::activity::SubagentObservation> {
-        self.inner
+        self.inner()
             .pending
             .get()
             .expect("native observation bridge")
             .child_activity()
     }
 
-    /// Test capture of the existing retained execution receipt; no display cursor.
-    #[cfg(test)]
-    pub(crate) fn settlement_ordinal_for_test(&self) -> u64 {
-        self.inner
-            .lock_state()
-            .latest_settlement
-            .as_ref()
-            .map_or(0, |receipt| receipt.ordinal)
-    }
-
     /// Waits for the native execution handoff independently of display publication.
     /// Only the child driver uses this receipt: its existing turn permit/seal
     /// protocol prevents a later admission from overwriting an unconsumed result.
     pub(crate) async fn child_attempt_settlement(&self, after: u64) -> NativeAttemptSettlement {
-        loop {
-            let notified = self.inner.settlement.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(receipt) = self
-                .inner
-                .lock_state()
-                .latest_settlement
-                .as_ref()
-                .filter(|receipt| receipt.ordinal > after)
-                .cloned()
-            {
-                return receipt;
-            }
-            notified.await;
-        }
+        self.runtime.attempt_settlement(after).await
     }
 
     pub(crate) fn release_child_turn(&self) {
-        let mut state = self.inner.lock_state();
-        if let Some(permits) = &mut state.parent_turn_permits {
+        let mut state = self.inner().lock_state();
+        if let Some(permits) = state.child_mut().parent_turn_permits.as_mut() {
             *permits = permits.saturating_add(1);
         }
-        self.inner.wake.notify.notify_one();
+        self.inner().wake.notify.notify_one();
     }
 
     pub(crate) async fn seal_parent_guidance(&self, observed_terminals: u64) -> ParentGuidanceSeal {
+        self.require_subagent_child();
         // Test-only gate: parked before the coordinator lock, so a competing
         // guidance submission can still take that lock and durably accept
         // while the seal is provably pending. The gate handle is extracted
         // before the park so the probe mutex is not held while parked.
         #[cfg(test)]
         let seal_gate = self
-            .inner
+            .inner()
             .probe
             .lock()
             .expect("coordinator probe lock poisoned")
@@ -217,20 +222,23 @@ impl ConversationRuntime {
         loop {
             // Armed before the state is read, so a settlement that fires
             // while the lock is held is never missed.
-            let settled = self.inner.settlement.notified();
+            let settled = self.inner().settlement.notified();
             tokio::pin!(settled);
             settled.as_mut().enable();
             {
-                let mut state = self.inner.lock_state();
-                if state.parent_guidance_sealed {
+                let mut state = self.inner().lock_state();
+                if state
+                    .child()
+                    .is_some_and(|child| child.parent_guidance_sealed)
+                {
                     return ParentGuidanceSeal::Sealed;
                 }
-                if state.admitted_attempts > observed_terminals {
+                if state.foreground.admitted_attempts > observed_terminals {
                     // An attempt exists whose terminal the caller has not
                     // consumed: accepted guidance may still be running.
                     return ParentGuidanceSeal::Open;
                 }
-                if state.current_attempt.is_none() {
+                if state.foreground.slot.as_attempt().is_none() {
                     // Accepted guidance still pending means the ordinary
                     // coordinator will admit the attempt that adopts it, so
                     // the child owes one more terminal observation.
@@ -240,7 +248,7 @@ impl ConversationRuntime {
                     // read as "nothing pending": the runtime enters its
                     // absorbing durability-failure state and the caller is
                     // told the seal did not commit.
-                    match self.inner.mailbox.has_pending() {
+                    match self.inner().mailbox.has_pending() {
                         Ok(true) => return ParentGuidanceSeal::Open,
                         Ok(false) => {}
                         Err(error) => {
@@ -248,14 +256,14 @@ impl ConversationRuntime {
                                 "the child terminal seal could not verify the pending inbound inbox: {error}"
                             );
                             drop(state);
-                            self.inner.commit_failure_and_observe(
+                            self.inner().commit_failure_and_observe(
                                 DurableOperation::ParentGuidanceSeal,
                                 diagnostic.clone(),
                             );
                             return ParentGuidanceSeal::DurabilityFailed { diagnostic };
                         }
                     }
-                    state.parent_guidance_sealed = true;
+                    state.child_mut().parent_guidance_sealed = true;
                     return ParentGuidanceSeal::Sealed;
                 }
             }
@@ -277,7 +285,7 @@ impl ConversationRuntime {
     /// must never enter the generic-steering terminal protocol).
     #[cfg(test)]
     pub(crate) fn seal_probe_calls(&self) -> usize {
-        self.inner.mailbox.pending_probe_calls()
+        self.inner().mailbox.pending_probe_calls()
     }
 
     /// Arms `count` consecutive durable failures of the terminal seal's
@@ -289,7 +297,7 @@ impl ConversationRuntime {
     /// admission loop would race for.
     #[cfg(test)]
     pub(crate) fn arm_seal_probe_failures(&self, count: usize) {
-        self.inner.mailbox.arm_pending_probe_failures(count);
+        self.inner().mailbox.arm_pending_probe_failures(count);
     }
 
     /// The child's physical lifetime joins the one native drain and consumes
@@ -301,7 +309,7 @@ impl ConversationRuntime {
         &self,
         parent_lost: bool,
     ) -> Result<(), Vec<String>> {
-        let trigger = if !self.is_activated() {
+        let trigger = if !self.runtime.is_activated() {
             DrainTrigger::PreparationRollback
         } else if parent_lost {
             DrainTrigger::ParentLost
@@ -309,7 +317,7 @@ impl ConversationRuntime {
             DrainTrigger::RuntimeShutdown
         };
         let completion = self
-            .inner
+            .inner()
             .begin_drain_internal(trigger)
             .map_err(|error| vec![format!("{error:?}")])?;
         completion.wait_outcome().await.physical

@@ -307,7 +307,7 @@ impl Log {
             .clone()
             .expect("bound fixture runtime");
         runtime
-            .child_attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
+            .attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
             .await;
     }
 }
@@ -783,7 +783,7 @@ async fn compose_session_child(
                     source,
                 ));
             }
-            crate::local_runtime::session_title::arm(catalog, title_session, runtime);
+            crate::local_runtime::session_title::arm(catalog, &title_session, runtime);
             if scenario == SESSION_TITLE_RECOVER_INERT {
                 rendezvous("title-reopen:recovered-before-activation");
             }

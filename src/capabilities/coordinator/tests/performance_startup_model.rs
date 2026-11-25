@@ -71,7 +71,7 @@ async fn measure(servers: usize, profile: Profile, order: ConversationOrder) -> 
     use crate::message::types::{ContentBlockIndex, UserContentBlock};
     use crate::model::{ModelEvent, ModelFinishReason};
     use crate::runtime::conversation_runtime::{
-        ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
+        ConversationContextConfig, ConversationRole, ConversationRuntime, RuntimeConversationConfig,
     };
     use crate::scripted_suites::support::fake::{FakeStep, fake_model};
 
@@ -249,7 +249,7 @@ async fn measure(servers: usize, profile: Profile, order: ConversationOrder) -> 
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .unwrap();
     runtime.activate();
@@ -259,7 +259,7 @@ async fn measure(servers: usize, profile: Profile, order: ConversationOrder) -> 
             text: "Reply once without calling a tool.".into(),
         })])
         .unwrap();
-    runtime.child_attempt_settlement(after).await;
+    runtime.attempt_settlement(after).await;
     let attempt_settled_ms = milliseconds(start.elapsed());
     let (requested, first_request_tools) = model.first_request.lock().unwrap().clone().unwrap();
     let model_request_count = model.inner.requests().len();
