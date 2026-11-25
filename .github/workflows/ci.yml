@@ -413,6 +413,31 @@ jobs:
       # target also carries the #[ignore]d opt-in live smoke tests, which
       # never run here.
 
+  # The contracts lane's non-artifact tail — doctests, extracted member
+  # unit tests, and the lane coverage check — runs in parallel with the
+  # shards instead of delaying their start. It rebuilds on its own runner;
+  # the shards are the critical path.
+  rust-contracts-post:
+    name: Deterministic contracts (doctests + members)
+    needs: [plan, rust-contracts]
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts-post']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-contracts
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
       # Doctests (both positive API counterparts and `compile_fail` encapsulation
       # proofs) are not executed by `--all-targets`; execute them explicitly
       # here against the compiled `--all-features` library.
@@ -431,7 +456,6 @@ jobs:
       # step that selects them: an unassigned target, a stale filter or
       # --skip, or a Linux test no lane executes fails here. The checker's own
       # deterministic tests ran above as part of `--examples`.
-      # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard
 
@@ -1537,6 +1561,7 @@ jobs:
       - rust-contracts
       - rust-contracts-shard
       - rust-contracts-report
+      - rust-contracts-post
       - rust-boundaries
       - rust-boundaries-shard
       - rust-boundaries-report

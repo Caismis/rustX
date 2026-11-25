@@ -91,25 +91,27 @@ def check_manifest(
         problems.append("artifact was built for a different architecture")
     if manifest.get("cargo_lock_sha256") != sha256_file(root / "Cargo.lock"):
         problems.append("Cargo.lock changed since the artifact was built")
-    # Toolchain fields are binding-by-record: the harness sha256s already
-    # reject any artifact not built by the recorded build. Verifying them
-    # dynamically would invoke the rustup shim, which auto-installs the
-    # pinned toolchain on a shard runner that ships only `stable` — so it
-    # runs only when explicitly requested (RUSTX_VERIFY_TOOLCHAIN=1).
-    if os.environ.get("RUSTX_VERIFY_TOOLCHAIN") == "1" and shutil.which("rustc"):
-        rustc = subprocess.run(
-            ["rustc", "--version", "--verbose"], cwd=root, check=True,
-            capture_output=True, text=True,
-        ).stdout
-        triple = next(
-            (line.split(":", 1)[1].strip() for line in rustc.splitlines()
-             if line.startswith("host:")),
-            f"{platform.system()}-{platform.machine()}",
+    # Toolchain binding without invoking rustc (the rustup shim would
+    # auto-install the pinned toolchain on a shard runner that ships only
+    # `stable`): compare the manifest against the checkout's own pin in
+    # rust-toolchain.toml and this runner's architecture.
+    toolchain_file = root / "rust-toolchain.toml"
+    channel = None
+    if toolchain_file.is_file():
+        match = re.search(
+            r'channel\s*=\s*"([^"]+)"', toolchain_file.read_text()
         )
-        if manifest.get("target_triple") != triple:
-            problems.append("artifact was built for a different target triple")
-        if manifest.get("rustc_version") != rustc.splitlines()[0].strip():
-            problems.append("artifact was built with a different toolchain")
+        channel = match.group(1) if match else None
+    if channel and channel not in manifest.get("rustc_version", ""):
+        problems.append(
+            f"artifact toolchain does not match pinned channel {channel}"
+        )
+    machine_alias = {"arm64": "aarch64", "amd64": "x86_64"}.get(
+        platform.machine().lower(), platform.machine().lower()
+    )
+    triple = str(manifest.get("target_triple", ""))
+    if triple and not triple.lower().startswith(machine_alias):
+        problems.append("artifact was built for a different target triple")
     if manifest.get("features") != expected_features:
         problems.append("artifact was built with different features")
     if manifest.get("profile") != expected_profile:
@@ -173,7 +175,6 @@ def run_shard(
     results: dict[str, str] = {}
     durations: dict[str, float] = {}
     failed = False
-    batch_started = time.monotonic()
     for harness_rel, names in sorted(by_harness.items()):
         harness = prepared / harness_rel
         if not harness.is_file():
@@ -189,11 +190,14 @@ def run_shard(
         for offset in range(0, len(names), batch_size):
             batch = names[offset:offset + batch_size]
             # NOTE: --report-time is nightly-only; stable libtest has no
-            # per-test timing, so durations stay empty in shard reports.
+            # per-test timing. Only the harness subprocess is timed, so
+            # verification work never inflates the weights.
             command = [
                 str(harness), "--exact", *batch, "--format", "pretty",
             ]
+            batch_started = time.monotonic()
             result = subprocess.run(command, capture_output=True, text=True)
+            elapsed = time.monotonic() - batch_started
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
             for line in result.stdout.splitlines():
@@ -207,8 +211,6 @@ def run_shard(
                 failed = True
             # Per-batch wall time spread evenly: enough signal for the
             # weights file without nightly-only --report-time.
-            elapsed = time.monotonic() - batch_started
-            batch_started = time.monotonic()
             for name in batch:
                 key = f"{harness_rel}::{name}"
                 if results.get(key) not in (None, "ignored"):

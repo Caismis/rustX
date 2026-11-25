@@ -146,6 +146,7 @@ def selected_jobs(profile, surfaces):
         "rust-contracts": full,
         "rust-contracts-shard": full,
         "rust-contracts-report": full,
+        "rust-contracts-post": full,
         "rust-boundaries": full,
         "rust-boundaries-shard": full,
         "rust-boundaries-report": full,
