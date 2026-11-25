@@ -357,6 +357,42 @@ jobs:
       - name: Compile the contracts harnesses and stage the real executables
         run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
+      # Build-once/test-many: the compiled harnesses plus the staged real
+      # executables are packed with their repo-relative layout (the tests'
+      # compile-time CARGO_BIN_EXE_* paths still resolve on a shard runner),
+      # inventoried by libtest discovery under this lane's own filters, and
+      # split across the shard jobs by duration weight. rust-contracts-shard
+      # executes the assigned tests; rust-contracts-report proves every
+      # inventoried test ran exactly once.
+      - name: Bind the prepared artifacts to this checkout
+        run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/contracts-manifest/manifest.json"
+      - name: Pack the harnesses and staged executables
+        run: |
+          cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider --message-format json > "$RUNNER_TEMP/contracts-artifacts.json"
+          python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/contracts-artifacts.json" --out "$RUNNER_TEMP/contracts-prepared"
+      - name: Discover the contracts inventory and assign the shards
+        run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/contracts-manifest/manifest.json" --prepared "$RUNNER_TEMP/contracts-prepared" --spec test-support/rust-lanes/contracts.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/contracts-inventory"
+      - name: Package the prepared artifacts
+        run: tar -C "$RUNNER_TEMP/contracts-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/contracts-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-prepared
+          path: ${{ runner.temp }}/contracts-prepared.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-inventory
+          path: |
+            ${{ runner.temp }}/contracts-inventory/
+            ${{ runner.temp }}/contracts-manifest/
+          retention-days: 14
+          if-no-files-found: error
+
+      # The tests these steps used to run in this job now execute on the
+      # rust-contracts-shard runners against the packed artifact above; the
+      # shard reports prove the same coverage this lane asserted before.
       # Source-module unit tests + the scripted contract suites
       # (`scripted_suites::`) + the App Server scripted contracts compiled
       # under the session runtime manager's private test module
@@ -370,16 +406,12 @@ jobs:
       # discovery, so a test added to a bin or an example is picked up here
       # automatically — which is simpler than a second repository policy
       # saying those targets must stay test-free forever.
-      - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
       # normalization over the in-process FixtureServer. The provider
       # target also carries the #[ignore]d opt-in live smoke tests, which
       # never run here.
-      - name: Run the pure contract targets
-        run: cargo test --test contracts --test provider --all-features --locked
 
       # Doctests (both positive API counterparts and `compile_fail` encapsulation
       # proofs) are not executed by `--all-targets`; execute them explicitly
@@ -410,6 +442,73 @@ jobs:
   # step that runs a uv-dependent boundary (the emulator and the managed
   # FastMCP children): RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing
   # toolchain into a hard failure instead of a silent skip.
+  # Three shard runners, each executing its assigned slice of the packed
+  # contracts inventory by exact test name. All shards always finish so one
+  # failure never hides the others; rust-contracts-report owns the verdict.
+  rust-contracts-shard:
+    name: Deterministic contracts (shard ${{ matrix.shard }}/3)
+    needs: [plan, rust-contracts]
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts-shard']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the provider emulator used by contract tests
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-prepared
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-inventory
+          path: ${{ runner.temp }}/inventory
+      - name: Restore the packed artifacts at their compile-time paths
+        run: tar -C . -xf "$RUNNER_TEMP/rust-contracts-prepared.tar.zst"
+      - name: Execute shard ${{ matrix.shard }}
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+      - name: Shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-shard-${{ matrix.shard }}
+          path: shard-report/
+          if-no-files-found: ignore
+
+  # The one contracts verdict: every inventoried test ran exactly once and
+  # every selected shard succeeded.
+  rust-contracts-report:
+    name: Deterministic contracts coverage
+    needs: [plan, rust-contracts, rust-contracts-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['rust-contracts-report'] }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-inventory
+          path: ${{ runner.temp }}/inventory
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rust-contracts-shard-*
+          path: ${{ runner.temp }}/runs
+      - name: Verify complete coverage across shards
+        run: python3 test-support/rust_test_shards.py verify --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --runs "$RUNNER_TEMP/runs"
+      - name: All selected shards succeeded
+        run: test "${{ needs.rust-contracts-shard.result }}" = success
+
   rust-boundaries:
     name: Boundary suites (Linux)
     needs: plan
@@ -1350,6 +1449,8 @@ jobs:
       - rust-fast
       - documentation-contracts
       - rust-contracts
+      - rust-contracts-shard
+      - rust-contracts-report
       - rust-boundaries
       - rust-platform-core
       - rust-platform-boundaries

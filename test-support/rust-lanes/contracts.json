@@ -1,0 +1,8 @@
+[
+  {"name": "unit-and-contract-suites", "harness": "lib:rustx",
+   "libtest_args": ["--skip", "boundary_suites::"]},
+  {"name": "bins", "harness": "bin:*", "libtest_args": []},
+  {"name": "examples", "harness": "example:*", "libtest_args": []},
+  {"name": "contracts", "harness": "test:contracts", "libtest_args": []},
+  {"name": "provider", "harness": "test:provider", "libtest_args": []}
+]

@@ -228,6 +228,70 @@ def verify(inventory: dict, runs_dir: Path) -> int:
     return 0
 
 
+def pack(root: Path, target_dir: Path, cargo_json: Path, out: Path) -> int:
+    """Stage every test-bearing artifact under `out`, preserving the
+    artifact's repo-relative layout so compile-time baked paths
+    (CARGO_BIN_EXE_*) still resolve on a shard runner."""
+    harness_index: dict[str, str] = {}
+    copied = 0
+    for line in cargo_json.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        record = json.loads(line)
+        if record.get("reason") != "compiler-artifact":
+            continue
+        if not (record.get("profile") or {}).get("test"):
+            continue
+        executable = record.get("executable")
+        target = record.get("target") or {}
+        kinds = target.get("kind") or []
+        name = target.get("name")
+        if not executable or not kinds or not name:
+            continue
+        source = Path(executable)
+        if not source.is_file():
+            print(f"artifact executable missing: {source}", file=sys.stderr)
+            return 1
+        key = f"{kinds[0]}:{name}"
+        rel = source.relative_to(root)
+        if key in harness_index:
+            print(f"two harnesses for target {key}", file=sys.stderr)
+            return 1
+        harness_index[key] = str(rel)
+        dest = out / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(source.read_bytes())
+        dest.chmod(dest.stat().st_mode | 0o755)
+        copied += 1
+
+    # Real executables the harnesses exec (staged siblings and top-level
+    # target/debug binaries), keeping the repo-relative layout.
+    for candidate in sorted(target_dir.rglob("*")):
+        if not candidate.is_file():
+            continue
+        rel = candidate.relative_to(root)
+        if (out / rel).exists():
+            continue
+        executable = os.access(candidate, os.X_OK)
+        shared_lib = candidate.suffix == ".so" or ".so." in candidate.name
+        if not executable and not shared_lib:
+            continue
+        if candidate.suffix in {".d", ".rlib", ".rmeta"}:
+            continue
+        dest = out / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(candidate.read_bytes())
+        dest.chmod(dest.stat().st_mode | 0o755)
+        copied += 1
+
+    (out / "harnesses.json").write_text(
+        json.dumps(harness_index, indent=2, sort_keys=True)
+    )
+    print(f"packed {copied} file(s), {len(harness_index)} harness(es)")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -259,6 +323,12 @@ def main() -> int:
     p.add_argument("--inventory", type=Path, required=True)
     p.add_argument("--runs", type=Path, required=True)
 
+    p = sub.add_parser("pack")
+    p.add_argument("--root", type=Path, default=Path("."))
+    p.add_argument("--target-dir", type=Path, required=True)
+    p.add_argument("--cargo-json", type=Path, required=True)
+    p.add_argument("--out", type=Path, required=True)
+
     args = parser.parse_args()
 
     if args.command == "manifest":
@@ -270,28 +340,45 @@ def main() -> int:
     if args.command == "inventory":
         spec = json.loads(args.spec.read_text())
         weights = load_weights(args.weights)
+        index = json.loads(
+            (args.prepared / "harnesses.json").read_text()
+        ) if (args.prepared / "harnesses.json").is_file() else {}
         harnesses: dict[str, dict] = {}
         runnable: list[str] = []
         for step in spec:
-            harness = args.prepared / step["harness"]
-            if not harness.is_file():
-                print(f"missing harness {harness}", file=sys.stderr)
+            selector = step["harness"]
+            if "*" in selector:
+                matched = sorted(
+                    rel for key, rel in index.items()
+                    if key.startswith(selector[:-1])
+                )
+            elif selector in index:
+                matched = [index[selector]]
+            else:
+                matched = [selector]
+            if not matched:
+                print(f"spec selector {selector} matched no harness",
+                      file=sys.stderr)
                 return 1
-            rel = step["harness"]
-            listed = list_harness_tests(
-                harness, step.get("libtest_args", []), ignored=False
-            )
-            ignored = list_harness_tests(
-                harness, step.get("libtest_args", []), ignored=True
-            )
-            entry = harnesses.setdefault(rel, {
-                "sha256": sha256_file(harness),
-                "runnable": [],
-                "ignored": [],
-            })
-            entry["runnable"].extend(listed)
-            entry["ignored"].extend(ignored)
-            runnable.extend(f"{rel}::{name}" for name in listed)
+            for rel in matched:
+                harness = args.prepared / rel
+                if not harness.is_file():
+                    print(f"missing harness {harness}", file=sys.stderr)
+                    return 1
+                listed = list_harness_tests(
+                    harness, step.get("libtest_args", []), ignored=False
+                )
+                ignored = list_harness_tests(
+                    harness, step.get("libtest_args", []), ignored=True
+                )
+                entry = harnesses.setdefault(rel, {
+                    "sha256": sha256_file(harness),
+                    "runnable": [],
+                    "ignored": [],
+                })
+                entry["runnable"].extend(listed)
+                entry["ignored"].extend(ignored)
+                runnable.extend(f"{rel}::{name}" for name in listed)
         weighted = [
             (key, weights.get(key, weights.get(key.split("::", 1)[1], 1.0)))
             for key in runnable
@@ -335,6 +422,9 @@ def main() -> int:
     if args.command == "verify":
         inventory = json.loads(args.inventory.read_text())
         return verify(inventory, args.runs)
+
+    if args.command == "pack":
+        return pack(args.root, args.target_dir, args.cargo_json, args.out)
 
     return 2
 

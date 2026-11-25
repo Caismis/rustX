@@ -144,6 +144,8 @@ def selected_jobs(profile, surfaces):
         # FULL's rust-contracts lane already runs the `contracts` target.
         "documentation-contracts": not full and "documentation" in s,
         "rust-contracts": full,
+        "rust-contracts-shard": full,
+        "rust-contracts-report": full,
         "rust-boundaries": full,
         "rust-platform-core": not full and rust,
         "rust-platform-boundaries": full,
