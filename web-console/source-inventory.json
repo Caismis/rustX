@@ -6627,7 +6627,7 @@
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "e71e5b4b596f6695eb5008cde7b2d08daf76cc8b7a20366f2d63b128e8db5984",
+      "local_sha256": "a707ac4be03fae9e4ff28a8d86010c498a54013378b8e790f0322417638c2e3f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
@@ -7966,7 +7966,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "b8e2a52ff79fe89121dc4520d7accdd6e32fe90f820dee95896ea67694d0cf4c"
+      "local_sha256": "749f29b658e0a4a0a30228c938ff2a8b3825165572e9d4170ba916b0a0e71ed0"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

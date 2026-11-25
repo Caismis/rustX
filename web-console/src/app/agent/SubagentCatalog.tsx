@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Catalog tree and hover/focus behavior adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
 import type { RuntimeClientAgent } from '../../../../protocol/app-server/v80';
 import type { WorkflowChild } from '../../bindings/workflow-children';
 import { useTranslation } from '../../locale/react';
@@ -34,7 +34,11 @@ export function SubagentMenu({ agents, workflowChildren = [], limited, selected,
   const items = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role=treeitem]:not([aria-disabled="true"])') ?? [])];
   const focusAt = (index: number) => { const rows = items(); if (rows.length) rows[(index + rows.length) % rows.length].focus({ preventScroll: true }); };
   useEffect(() => () => { cancelOpen(); cancelClose(); }, []);
-  useLayoutEffect(() => { if (open && pinned.current) focusAt(0); }, [open]);
+  useEffect(() => {
+    if (!open || !pinned.current) return undefined;
+    const frame = requestAnimationFrame(() => focusAt(0));
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
   useEffect(() => {
     if (!open || !inventory.some(agentRunning)) return;
     setNow(Date.now()); const clock = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(clock);

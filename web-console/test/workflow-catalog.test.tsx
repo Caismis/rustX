@@ -92,6 +92,17 @@ it('lists three settled workflow children before inspection; opening, closing an
   expect(reopened.getByRole('button', { name: 'Subagents' }).textContent).toContain('3 subagents');
 });
 
+it('moves keyboard focus to the first popup row before Enter can select it', async () => {
+  const server = await setup(), ui = render(surface(server));
+  const trigger = ui.getByRole('button', { name: 'Subagents' });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const rows = await ui.findAllByRole('treeitem');
+  await waitFor(() => expect(document.activeElement).toBe(rows[0]));
+  fireEvent.keyDown(rows[0], { key: 'Enter' });
+  await waitFor(() => expect(ui.getByTestId('selection').textContent).toBe('explore:true'));
+});
+
 it('mixes normal and workflow children without double counting inspected records and updates native states', async () => {
   const value = workflowCatalogSnapshot(); value.agents = [{ ...workflowChildHeader(9), agent_id: 'normal', title: 'Normal agent' }];
   value.workflows.runs[0].instances[0].state = { type: 'running' };
