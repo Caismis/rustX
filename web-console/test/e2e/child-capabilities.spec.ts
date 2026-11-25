@@ -49,14 +49,21 @@ test('native child live cuts, independent title, active and file-only resume upl
     await fixture.release(`child-second-${childGate}`);
     await expect(child).toHaveAttribute('data-agent-state', 'inactive');
     await expect(child.getByText('Canonical child final report.', { exact: true })).toBeVisible();
-    // Settlement places earlier replies behind the completed Turn disclosure.
+    // The retained checkpoint can place the committed streaming message before
+    // the loaded tail. Read its older page through the same control as a user.
+    const retained = () => wire.responses.find(row => row.method === 'agent/observe'
+      && row.result?.observation?.type === 'checkpoint' && row.result.observation.source === 'durable_only'
+      && row.result.observation.agent_id === id)?.result.observation;
+    await expect.poll(() => !!retained()).toBe(true);
     const process = child.locator('[data-turn-process][aria-expanded]').last();
     if (await process.isVisible() && await process.getAttribute('aria-expanded') === 'false') await process.click();
-    // The initial reply can fall outside the latest native transcript page.
-    const settledReply = child.getByText('Live child first chunk. Second live chunk.', { exact: true });
-    const earlier = child.getByRole('button', { name: 'Load earlier', exact: true });
-    if (await earlier.isVisible() && await settledReply.count() === 0) await earlier.click();
-    await expect(settledReply).toHaveCount(1);
+    const committed = child.getByText('Live child first chunk. Second live chunk.', { exact: true });
+    if (retained()!.checkpoint.snapshot.transcript.next_cursor != null) {
+      const earlier = child.getByRole('button', { name: 'Load earlier', exact: true });
+      await expect(earlier.or(committed).first()).toBeAttached();
+      if (await earlier.isVisible()) await earlier.click();
+    }
+    await expect(committed).toHaveCount(1);
     const card = child.locator('[data-delivery-card]').filter({ has: page.locator('[data-presented-name]', { hasText: 'child-report.md' }) }).first();
     await card.getByRole('button', { name: 'Preview child-report.md in sidebar', exact: true }).click();
     const preview = page.getByRole('complementary', { name: 'Previews', exact: true });

@@ -4641,7 +4641,7 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v63 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
+      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v63 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved. Add source-owned preview operation open/read/close plumbing with FIFO admission for each physical page and final validation; keep idle operation owners outside the physical read budget.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../client/preview-policy",
@@ -4676,7 +4676,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "1784e060b7a9d1f06d9158afc24b79258aeb403818a6957cb3530f74edaf5853",
+      "local_sha256": "6f2371038310ba1b9a4d640014d01092fa3f12362134aa33c2b149b374af9510",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4982,7 +4982,7 @@
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "52ac73a7a921b9702096331c29dd4a8b7f559da6e9d92ea3a225a62f826f52ee",
-      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope. Sampled STEP envelope plumbing removed; existing native read authority unchanged.",
+      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope. Read geometry through bound private source operations and provide single-consume STL streams to the content owner; require final source validation before publishing a completed geometry source. Suppress retained raw cache byte props while a stream source is present so EOF cache publication preserves the mounted import and its copy identity.",
       "destination": "web-console/src/app/components/WorkbenchFiles.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5037,7 +5037,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "d1a98b481a5db30b91eb6f7a488eef30d2a69a8fd63b2413c78bccc46338a00c"
+      "local_sha256": "b7886a5381dad2696d6ef6d49fc5887c8f6a9cd88ef6c0291a183fa4b67772f0"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5980,7 +5980,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "a737f15db56ff0f0d051d4314ea30a28a6f66e3866801e4a212219fc8934d8ae",
-      "treatment": "Harness Markdown/frontmatter, image zoom and document composition adapted to native bounded bytes and renderer lifetimes. Workspace-relative assets use existing workspace authority, bounded dependency observation and shared read admission; delivery HTML retains its stricter sandbox.",
+      "treatment": "Harness Markdown/frontmatter, image zoom and document composition adapted to native bounded bytes and renderer lifetimes. Workspace-relative assets use existing workspace authority, bounded dependency observation and shared read admission; delivery HTML retains its stricter sandbox. Pass the content owner single-consume STL source into GeometryDocument, keep a stable source/copy identity through EOF version publication, and authorize current or retired geometry by exact source identity; complete byte inputs retain version/data identity. Suppress retained raw cache byte props while a stream source is present so EOF cache publication preserves the mounted import and its copy identity.",
       "destination": "web-console/src/app/components/workbench-documents/DocumentBody.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -6006,7 +6006,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "fb297e7bd868ff4d2d2e5991a3b373950a7e497adeae4766b35a791b5f7b0ab4"
+      "local_sha256": "a354c78e096671524eca789d7fbc2eae0115339616a707454ac1627a84cd64bc"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

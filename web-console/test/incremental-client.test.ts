@@ -49,6 +49,28 @@ it('an explicit snapshot overlapping events installs its cut then replays only l
   expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks?.[0]).toMatchObject({ text: 'xx' });
   expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
 });
+it('a refresh requested during subscription preserves the handoff and obtains a newer checkpoint', async () => {
+  const s = await create();
+  s.held.add('session/checkpoint'); s.held.add('session/subscribe');
+  const first = s.client.refresh('A');
+  const checkpointA = await s.waitFor('session/checkpoint', 1);
+  s.socket.success(checkpointA, { type: 'checkpoint', checkpoint: checkpoint(s.snapshots.get('A')!, '1') });
+  const subscriptionA = await s.waitFor('session/subscribe', 1);
+
+  expect(s.client.refresh('A')).toBe(first);
+  s.socket.success(subscriptionA, { type: 'subscribed', after_cursor: '1' });
+  const checkpointB = await Promise.race([
+    s.waitFor('session/checkpoint', 2),
+    first.then(() => { throw new Error('Refresh settled before acquiring the requested checkpoint.'); }),
+  ]);
+  expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: '1', attachment: 'resynchronizing' });
+  s.socket.success(checkpointB, { type: 'checkpoint', checkpoint: checkpoint(s.snapshots.get('A')!, '2') });
+  const subscriptionB = await s.waitFor('session/subscribe', 2);
+  expect(subscriptionB.params).toMatchObject({ after_cursor: '2' });
+  s.socket.success(subscriptionB, { type: 'subscribed', after_cursor: '2' });
+  await first;
+  expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: '2', attachment: 'attached', observationState: 'following' });
+});
 it('canonical commitment retires streaming and late suffixes cannot reopen it', async () => {
   const s = await create(); emit(s, '1', started); emit(s, '2', open); emit(s, '3', delta());
   const window = s.client.getSnapshot().views.A.snapshot!.transcript;

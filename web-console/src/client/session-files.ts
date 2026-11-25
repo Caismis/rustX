@@ -10,7 +10,7 @@ import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../workspac
 import { settlementFailureKind } from '../workspaces/host';
 import type { WorkspaceAuthority } from '../workspaces/authority';
 import { PREVIEW_POLICY } from './preview-policy';
-import { FILE_PREVIEW_LIMITS, isFileData, type FileReadOptions } from '../../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, isFileData, type FileReadOptions, type FilePreviewOperation } from '../../shared/file-preview.ts';
 import type { DeliveryBytes } from '../workspaces/host';
 import { PreviewContentCache, PreviewContentOwner, type PreviewTextPage, type PreviewBytes } from './preview-content';
 import { readGeometrySource } from './geometry-source';
@@ -141,7 +141,9 @@ export class FilePreviewCoordinator {
     return new PreviewContentOwner({ current: () => this.sourceCurrent(source), immutable: source.kind === 'artifact',
       page: (offset, signal) => this.readPage(source, offset, signal),
       bytes: (signal, mode) => mode === 'geometry' && source.kind === 'session_file'
-        ? readGeometrySource((options, signal) => this.readSession(source, options, signal), signal) : this.read(source, signal),
+        ? readGeometrySource(signal => this.openSessionPreview(source, signal), signal) : this.read(source, signal),
+      geometry: source.kind === 'session_file' && source.file.name.toLowerCase().endsWith('.stl')
+        ? (signal, consumer) => readGeometrySource(signal => this.openSessionPreview(source, signal), signal, consumer) : undefined,
       document: (extension, signal) => this.derive(source, extension, signal), probe,
       observe: source.kind === 'session_file' && this.host.observeDelivery ? (signal, changed) => this.demand.privateReads.run(signal, async () => {
         const observation = this.authority.capture();
@@ -202,6 +204,28 @@ export class FilePreviewCoordinator {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(result.data);
     if (text.includes('\0')) throw new Error('File is not text');
     return { text, version: result.version, offset, lines: result.lines!, eof: result.eof };
+  }
+  private async openSessionPreview(source: Extract<PreviewSource, { kind: 'session_file' }>, signal: AbortSignal): Promise<FilePreviewOperation> {
+    const lifetime = new AbortController(), reading = AbortSignal.any([signal, lifetime.signal]);
+    if (!this.host.openDeliveryPreview) throw new Error('Product Host preview operation unavailable');
+    const authority = this.authority.capture();
+    if (!authority || !this.sourceCurrent(source)) throw new Error('Obsolete file view');
+    const check = () => { signal.throwIfAborted(); if (!this.sourceCurrent(source) || !authority.current()) throw new Error('Obsolete file response'); };
+    const operation = await this.demand.privateReads.run(signal, () => this.host.openDeliveryPreview!(authority.scope,
+      { target: this.target, locator: source.locator, delivery_index: source.index, agent_id: source.agentId }, reading));
+    try { check(); if (!sameSessionFile(operation.file, source.file)) throw new Error('Delivery identity changed'); }
+    catch (error) { lifetime.abort(error); await operation.close(); throw error; }
+    return { ...operation,
+      read: (range, active = signal) => this.demand.privateReads.run(active, async () => {
+        check(); const result = await operation.read(range, active); check();
+        if (result.version !== operation.version || result.bytes !== operation.bytes || !isFileData(result.data)) throw new Error('Delivery identity changed');
+        return result;
+      }),
+      close: async () => {
+        if (reading.aborted) return operation.close();
+        await this.demand.privateReads.run(signal, () => operation.close()); check();
+      },
+    };
   }
   private async readSession(source: Extract<PreviewSource, { kind: 'session_file' }>, read: FileReadOptions, signal: AbortSignal): Promise<DeliveryBytes> {
     return this.demand.privateReads.run(signal, async () => {

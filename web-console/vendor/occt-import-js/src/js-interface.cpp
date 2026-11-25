@@ -4,57 +4,51 @@
 #include "importer-step.hpp"
 #include "importer-iges.hpp"
 #include "importer-brep.hpp"
+#include "importer-utils.hpp"
+#include "native-profile.hpp"
 #include <emscripten/bind.h>
 
 #include <array>
 
-// Bounded streaming copy through public Embind and JavaScript array APIs.
-// One fixed stack chunk avoids a second mesh-sized native output allocation.
+// JS owns the complete double buffers. Only this fixed stack chunk is exposed
+// transiently; TypedArray.set copies it before the next allocation/heap growth.
 class NumericArrayWriter
 {
 public:
-    explicit NumericArrayWriter (emscripten::val& array) :
-        mArray (array),
-        mPush (emscripten::val::global ("Array")["prototype"]["push"]),
-        mSize (0)
-    {
-        // Initialize the generic invoker before creating a memory view.
-        mPush.call<void> ("apply", mArray, emscripten::val::array ());
+    NumericArrayWriter (emscripten::val& array) : mArray (array), mSize (0), mOffset (0) {
+        // Initialize the Embind invoker before exposing a WASM memory view.
+        mArray.call<void> ("set", emscripten::val::global ("Float64Array").new_ (0), 0);
     }
-    void Append (double value)
-    {
+    void Append (double value) {
         mValues[mSize++] = value;
-        if (mSize == mValues.size ()) {
-            Flush ();
-        }
+        if (mSize == mValues.size ()) Flush ();
     }
-    void Flush ()
-    {
-        if (mSize == 0) {
-            return;
-        }
+    void Flush () {
+        if (!mSize) return;
         emscripten::val view (emscripten::typed_memory_view (mSize, mValues.data ()));
-        mPush.call<void> ("apply", mArray, view);
-        mSize = 0;
+        mArray.call<void> ("set", view, mOffset);
+        mOffset += mSize; mSize = 0;
     }
 private:
     emscripten::val& mArray;
-    emscripten::val mPush;
-    size_t mSize;
+    size_t mSize, mOffset;
     std::array<double, 4096> mValues;
 };
+
+struct CadOutputLimitExceeded {};
 
 class HierarchyWriter
 {
 public:
     HierarchyWriter (emscripten::val& meshesArr) :
         mMeshesArr (meshesArr),
-        mMeshCount (0)
+        mMeshCount (0), mVertices (0), mTriangles (0), mOutputBytes (0), mNodes (0), mFaces (0)
     {
     }
 
     void WriteNode (const NodePtr& node, emscripten::val& nodeObj)
     {
+        if (++mNodes > 512) throw CadOutputLimitExceeded ();
         nodeObj.set ("name", node->GetName ());
 
         emscripten::val nodeMeshesArr (emscripten::val::array ());
@@ -89,9 +83,31 @@ private:
             int triangleCount = 0;
             int brepFaceCount = 0;
 
-            emscripten::val positionArr (emscripten::val::array ());
-            emscripten::val normalArr (emscripten::val::array ());
-            emscripten::val indexArr (emscripten::val::array ());
+            // Count and admit before allocating JS-owned output; no native
+            // mesh-sized temporary and no boxed numeric arrays are retained.
+            size_t positionsSize = 0, normalsSize = 0, indicesSize = 0;
+            mesh.EnumerateFaces ([&](const Face& face) {
+                if (++mFaces > 1000000) throw CadOutputLimitExceeded ();
+                // Admit before arithmetic: size_t is 32-bit in this WASM.
+                // Repeated/shared topology can expose huge logical streams
+                // without requiring a correspondingly huge native shape.
+                const size_t vertices = face.VertexCount (), normals = face.NormalCount (), triangles = face.TriangleCount ();
+                if (vertices > 13000000 - mVertices - positionsSize / 3
+                    || normals > 13000000 - normalsSize / 3
+                    || triangles > 5000000 - mTriangles - indicesSize / 3)
+                    throw CadOutputLimitExceeded ();
+                positionsSize += vertices * 3;
+                normalsSize += normals * 3;
+                indicesSize += triangles * 3;
+            });
+            mVertices += positionsSize / 3; mTriangles += indicesSize / 3;
+            mOutputBytes += (positionsSize + normalsSize + indicesSize) * sizeof (double);
+            if (mMeshCount >= 256 || mVertices > 13000000 || mTriangles > 5000000 || mOutputBytes > 1024ULL * 1024 * 1024)
+                throw CadOutputLimitExceeded ();
+            emscripten::val float64 = emscripten::val::global ("Float64Array");
+            emscripten::val positionArr = float64.new_ (positionsSize);
+            emscripten::val normalArr = float64.new_ (normalsSize);
+            emscripten::val indexArr = float64.new_ (indicesSize);
             emscripten::val brepFaceArr (emscripten::val::array ());
             NumericArrayWriter positions (positionArr), normals (normalArr), indices (indexArr);
 
@@ -111,9 +127,9 @@ private:
                     normalCount += 1;
                 });
                 face.EnumerateTriangles ([&](int v0, int v1, int v2) {
-                    indices.Append (vertexOffset + v0);
-                    indices.Append (vertexOffset + v1);
-                    indices.Append (vertexOffset + v2);
+                    indices.Append (static_cast<double> (vertexOffset) + static_cast<double> (v0));
+                    indices.Append (static_cast<double> (vertexOffset) + static_cast<double> (v1));
+                    indices.Append (static_cast<double> (vertexOffset) + static_cast<double> (v2));
                     triangleCount += 1;
                 });
                 emscripten::val brepFaceObj (emscripten::val::object ());
@@ -173,6 +189,7 @@ private:
 
     emscripten::val& mMeshesArr;
     int mMeshCount;
+    size_t mVertices, mTriangles, mOutputBytes, mNodes, mFaces;
 };
 
 // Admission happens before any JavaScript mesh arrays are allocated. Exceeding
@@ -186,10 +203,14 @@ public:
 
     void AddBytes (size_t amount)
     {
+        if (amount > 8 * 1024 * 1024 - bytes) throw LodBudgetExceeded ();
         bytes += amount;
-        if (bytes > 8 * 1024 * 1024) {
-            throw LodBudgetExceeded ();
-        }
+    }
+
+    void AddName (size_t overhead, size_t length)
+    {
+        if (length > (8 * 1024 * 1024 - bytes) / 4) throw LodBudgetExceeded ();
+        AddBytes (overhead + length * 4);
     }
 
     void Check (const NodePtr& node)
@@ -197,25 +218,22 @@ public:
         if (++nodes > 512) {
             throw LodBudgetExceeded ();
         }
-        AddBytes (256 + node->GetName ().size () * 4);
+        AddName (256, node->GetName ().size ());
         if (node->IsMeshNode ()) {
             node->EnumerateMeshes ([&](const Mesh& mesh) {
                 if (++meshes > 256) {
                     throw LodBudgetExceeded ();
                 }
-                AddBytes (512 + mesh.GetName ().size () * 4);
+                AddName (512, mesh.GetName ().size ());
                 mesh.EnumerateFaces ([&](const Face& face) {
                     AddBytes (128);
-                    face.EnumerateVertices ([&](double, double, double) {
-                        // Positions plus normals, including generated normals.
-                        AddBytes (6 * sizeof (double));
-                    });
-                    face.EnumerateTriangles ([&](int, int, int) {
-                        if (++triangles > 65536) {
-                            throw LodBudgetExceeded ();
-                        }
-                        AddBytes (3 * sizeof (double));
-                    });
+                    // Count without transforming every vertex a second time.
+                    const size_t vertexCount = face.VertexCount (), triangleCount = face.TriangleCount ();
+                    if (vertexCount > (8 * 1024 * 1024 - bytes) / (6 * sizeof (double))
+                        || triangleCount > 65536 - triangles) throw LodBudgetExceeded ();
+                    AddBytes (vertexCount * 6 * sizeof (double));
+                    triangles += triangleCount;
+                    AddBytes (triangleCount * 3 * sizeof (double));
                 });
             });
         }
@@ -233,11 +251,16 @@ private:
 
 static emscripten::val WriteResult (const NodePtr& rootNode)
 {
+    NativeSpan span (NativePhase::Export);
     emscripten::val result (emscripten::val::object ());
     emscripten::val root (emscripten::val::object ());
     emscripten::val meshes (emscripten::val::array ());
     HierarchyWriter writer (meshes);
-    writer.WriteNode (rootNode, root);
+    try {
+        writer.WriteNode (rootNode, root);
+    } catch (const CadOutputLimitExceeded&) {
+        result.set ("success", false); result.set ("error", "limit"); return result;
+    }
     result.set ("success", true);
     result.set ("root", root);
     result.set ("meshes", meshes);
@@ -251,14 +274,28 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& 
         onLod = options["onLod"];
     }
     bool reportLod = onLod.typeOf ().as<std::string> () == "function";
+    emscripten::val onProfile (emscripten::val::undefined ());
+    if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("onNativeProfile")) onProfile = options["onNativeProfile"];
+    NativeProfile profile;
+    struct ProfileLifetime { ~ProfileLifetime () { CurrentNativeProfile () = nullptr; } } profileLifetime;
+    const bool profiling = onProfile.typeOf ().as<std::string> () == "function";
+    CurrentNativeProfile () = profiling ? &profile : nullptr;
+    const double nativeStart = profiling ? emscripten_get_now () : 0;
     ImportParams params = finalParams;
+    params.shapeSizes = std::make_shared<ShapeSizeCache> ();
+    const std::shared_ptr<ShapeSizeCache> shapeSizes = params.shapeSizes;
+    int lodCount = 2;
+    if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("lodTiers")) lodCount = options["lodTiers"].as<int> ();
+    if (lodCount != 1 && lodCount != 2) reportLod = false;
+
     if (reportLod) {
         params.linearDeflectionType = ImportParams::LinearDeflectionType::BoundingBoxRatio;
         params.linearDeflection = 0.02;
         params.angularDeflection = 1.0;
     }
 
-    std::vector<uint8_t> bufferArr = emscripten::convertJSArrayToNumberVector<std::uint8_t> (buffer);
+    std::vector<uint8_t> bufferArr;
+    { NativeSpan span (NativePhase::InputCopy); bufferArr = emscripten::convertJSArrayToNumberVector<std::uint8_t> (buffer); }
     if (!options.isNull () && !options.isUndefined () && options.hasOwnProperty ("onInputCopied")) {
         emscripten::val copied = options["onInputCopied"];
         if (copied.typeOf ().as<std::string> () == "function") {
@@ -282,7 +319,8 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& 
     }
 
     if (reportLod) {
-        for (int level = 0; level < 2; level++) {
+        for (int level = 0; level < lodCount; level++) {
+            profile.tier = level;
             if (level == 1) {
                 params.linearDeflection = 0.005;
                 params.angularDeflection = 0.75;
@@ -290,11 +328,13 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& 
             NodePtr rootNode = importer->GetRootNode ();
             try {
                 LodBudget budget;
-                budget.Check (rootNode);
+                { NativeSpan span (NativePhase::LodPreflight); budget.Check (rootNode); }
                 // Preflight has tessellated every root. Reusing those native
                 // triangulations during export avoids rebuilding the tier.
                 params.resetTriangulation = false;
-                onLod (level, WriteResult (rootNode));
+                emscripten::val lod = WriteResult (rootNode);
+                if (profiling && level == 0) profile.Add (NativePhase::FirstCoarse, emscripten_get_now () - nativeStart);
+                onLod (level, lod);
             } catch (const LodBudgetExceeded&) {
                 // The final full result remains available even when a preview
                 // cannot fit the independently bounded optional output.
@@ -302,9 +342,30 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& 
             params.resetTriangulation = true;
         }
         params = finalParams;
+        params.shapeSizes = shapeSizes;
         params.resetTriangulation = true;
     }
-    return WriteResult (importer->GetRootNode ());
+    profile.tier = 2;
+    emscripten::val result = WriteResult (importer->GetRootNode ());
+    if (profiling) {
+        profile.Add (NativePhase::Final, emscripten_get_now () - nativeStart);
+        static const char* names[] = { "input-copy", "file-parse", "document-transfer-healing", "bounding-box", "tessellation", "lod-preflight", "export", "first-complete-coarse", "complete-final" };
+        emscripten::val spans = emscripten::val::array ();
+        int index = 0;
+        for (size_t phase = 0; phase < static_cast<size_t>(NativePhase::Count); ++phase) for (int tier = 0; tier < 3; ++tier) {
+            const NativeMetric& metric = profile.metrics[phase][tier];
+            if (!metric.calls) continue;
+            emscripten::val span = emscripten::val::object ();
+            span.set ("phase", phase == static_cast<size_t>(NativePhase::FileParse) && brep != nullptr ? "file-parse-topology" : names[phase]); span.set ("tier", phase <= static_cast<size_t>(NativePhase::TransferHealing) ? -1 : tier); span.set ("durationMs", metric.milliseconds); span.set ("calls", metric.calls);
+            span.set ("inclusive", phase == static_cast<size_t>(NativePhase::LodPreflight) || phase == static_cast<size_t>(NativePhase::Export) || phase >= static_cast<size_t>(NativePhase::FirstCoarse));
+            span.set ("wasmCommittedBytes", metric.committed); span.set ("allocatorLiveSamples", metric.liveSamples);
+            if (metric.liveSamples) span.set ("allocatorLiveSampledMaximumBytes", metric.liveSampledMaximum);
+            else span.set ("allocatorLiveSampledMaximumBytes", emscripten::val::null ());
+            spans.set (index++, span);
+        }
+        onProfile (spans);
+    }
+    return result;
 }
 
 static ImportParams GetImportParams (const emscripten::val& paramsVal)

@@ -4,6 +4,7 @@ import { modelScene, disposeScene } from './scene-resources';
 import type { GeometryFormat } from './format';
 import { geometryStageObserver, type GeometryImportStage } from './stages';
 import { cadCode } from './cad-code';
+import type { GeometrySource } from '../../../../../shared/geometry-source';
 import { lodAdmission, type GeometryLodLevel } from './lod-data';
 
 let active = 0;
@@ -19,18 +20,31 @@ export function parseGeometry(bytes: Uint8Array<ArrayBuffer>, format: Exclude<Ge
   return admittedGeometry(bytes, format, signal, performance.now() + (format === 'stl' ? L.timeoutMs : L.cadTimeoutMs), onStage, takeBytes, onLod);
 }
 
+/** Starts the deadline before the source is opened, including read, decode and
+ * final source validation. Only acknowledged pages enter the disposable Worker. */
+export function parseGeometryStream(source: GeometrySource, signal: AbortSignal, onStage?: (stage: GeometryImportStage) => void): Promise<PreparedGeometry> {
+  signal.throwIfAborted();
+  if (active >= L.owners) return Promise.reject(new GeometryError('capacity'));
+  active++;
+  return admittedGeometry(undefined, 'stl', signal, performance.now() + L.timeoutMs, onStage, undefined, undefined, source);
+}
+
 // This mutable input is the continuation's only source reference. Cancellation
 // clears it while immutable code compilation may continue for another body.
-function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Exclude<GeometryFormat, 'glb'>, signal: AbortSignal | undefined, deadline: number, onStage?: (stage: GeometryImportStage) => void, takeBytes?: () => Uint8Array<ArrayBuffer> | undefined, onLod?: (lod: GeometryLod) => void): Promise<PreparedGeometry> {
+function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Exclude<GeometryFormat, 'glb'>, signal: AbortSignal | undefined, deadline: number, onStage?: (stage: GeometryImportStage) => void, takeBytes?: () => Uint8Array<ArrayBuffer> | undefined, onLod?: (lod: GeometryLod) => void, source?: GeometrySource): Promise<PreparedGeometry> {
   return new Promise((resolve, reject) => {
     let worker: Worker | undefined, dispatched = false, delivered = false, prepared: ReturnType<typeof modelScene> | undefined;
     let previewTimer: ReturnType<typeof setTimeout> | undefined, settleReady!: () => void;
     const ready = new Promise<void>(resolve => { settleReady = resolve; });
     const stage = geometryStageObserver(format, value => onStage?.(value));
     let finished = false;
+    const streamController = new AbortController();
+    let acknowledgement: { offset: number; resolve(): void; reject(error: unknown): void } | undefined;
+    let sourceComplete = false;
     const lods = lodAdmission();
     const finish = () => {
       if (finished) return; finished = true;
+      streamController.abort(); acknowledgement?.reject(new DOMException('Geometry preview closed', 'AbortError')); acknowledgement = undefined; source = undefined;
       clearTimeout(timer); clearTimeout(previewTimer); signal?.removeEventListener('abort', abort);
       prepared?.finishPreviews(); settleReady();
       input = undefined; signal = undefined; onStage = undefined; takeBytes = undefined; onLod = undefined;
@@ -51,6 +65,10 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
     worker.onmessage = event => {
       if (finished || signal?.aborted || !dispatched) return;
       if (performance.now() > deadline) { fail('timeout'); return; }
+      if (event.data?.kind === 'stream-ack') {
+        if (!source || !acknowledgement || event.data.offset !== acknowledgement.offset) { fail('invalid'); return; }
+        const pending = acknowledgement; acknowledgement = undefined; pending.resolve(); return;
+      }
       if (event.data?.kind === 'preview') {
         if (!delivered || !prepared) { fail('invalid'); return; }
         try {
@@ -84,6 +102,7 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
           const code = event.data?.code;
           fail(['invalid', 'limit', 'external', 'unsupported', 'empty'].includes(code) ? code : 'worker'); return;
         }
+        if (source && !sourceComplete) { fail('invalid'); return; }
         const prepareStart = performance.now(), result = modelScene(event.data.model as GeometryModel);
         prepared = result;
         let disposed = false;
@@ -112,7 +131,36 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
       try { const copy = takeBytes?.() ?? input.slice(); input = undefined; takeBytes = undefined; dispatched = true; worker.postMessage({ bytes: copy, format, deadline: performance.timeOrigin + deadline, preparePreview: true, lod: !!onLod, ...(module ? { module } : {}) }, [copy.buffer]); }
       catch { fail('worker'); }
     };
-    if (format === 'stl') start();
+    if (source) {
+      dispatched = true;
+      const streaming = source;
+      const sourceFailed = (error: unknown) => {
+        if (finished) return;
+        finish(); reject(error);
+      };
+      try { void streaming.consume({
+        start: metadata => {
+          if (finished) throw new GeometryError('invalid');
+          try { worker!.postMessage({ kind: 'stream-start', ...metadata, deadline: performance.timeOrigin + deadline }); }
+          catch { throw new GeometryError('worker'); }
+        },
+        chunk: (data, offset) => new Promise<void>((resolve, reject) => {
+          if (finished || acknowledgement || data.byteLength > 2 * 1024 * 1024) { reject(new GeometryError('invalid')); return; }
+          acknowledgement = { offset, resolve, reject };
+          try {
+            // A range may be a subview of an owner's retained source. Transfer
+            // only an exact page buffer; never detach or send its whole owner.
+            const owned = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength ? data : data.slice();
+            worker!.postMessage({ kind: 'stream-chunk', data: owned, offset }, [owned.buffer]);
+          }
+          catch { acknowledgement = undefined; reject(new GeometryError('worker')); }
+        }),
+      }, streamController.signal).then(() => {
+        if (finished) return;
+        sourceComplete = true;
+        try { worker!.postMessage({ kind: 'stream-end' }); } catch { fail('worker'); }
+      }, sourceFailed); } catch (error) { sourceFailed(error); }
+    } else if (format === 'stl') start();
     else {
       try {
         stage('initializing');

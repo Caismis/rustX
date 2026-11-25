@@ -93,7 +93,7 @@ test('approximately 200 MB STEP has an admitted whole-model first picture throug
 test('delivery CAD occupies the existing document sidebar without clipping on a short window', async ({ page }, info) => {
   await instrument(page); await observeResidency(page);
   let sourceReads = 0;
-  page.on('request', request => { if (/\/(?:file-read|workbench-preview)$/.test(new URL(request.url()).pathname)) sourceReads++; });
+  page.on('request', request => { if (/\/(?:file-read|workbench-preview|preview-read)$/.test(new URL(request.url()).pathname)) sourceReads++; });
   const fixture = await deliveredModel(page); let passed = false;
   await observeGeometryLatency(page);
   const timings: { entry: string; name: string; phase: string; displayMs: number; firstFrameReadyProxyMs?: number }[] = [];
@@ -212,7 +212,7 @@ test('delivery CAD occupies the existing document sidebar without clipping on a 
 test('Workbench CAD uses the shared document body and defaults to revealing the original file', async ({ page }, info) => {
   await instrument(page); await observeResidency(page);
   let sourceReads = 0;
-  page.on('request', request => { if (/\/(?:file-read|workbench-preview)$/.test(new URL(request.url()).pathname)) sourceReads++; });
+  page.on('request', request => { if (/\/(?:file-read|workbench-preview|preview-read)$/.test(new URL(request.url()).pathname)) sourceReads++; });
   const fixture = await deliveredModel(page); let passed = false;
   try {
     await page.locator('[data-preview-toggle]').click();

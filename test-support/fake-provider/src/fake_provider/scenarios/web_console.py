@@ -521,6 +521,19 @@ def web_geometry_previews() -> Scenario:
 SCENARIOS['web_geometry_previews'] = web_geometry_previews
 
 
+def web_geometry_streams() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Inspect the geometry sources',))
+    files = [{'path': name} for name in ['cube.stl', 'cube.glb', 'cube.step', 'cube.iges', 'cube.brep', 'notes.md']]
+    return Scenario('web_geometry_streams',
+        Step(expected, Stream(ToolCall('geometry-stream-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
+        Step(expected, Stream(Text('The geometry sources are ready to inspect.'), Finish())),
+    )
+
+
+SCENARIOS['web_geometry_streams'] = web_geometry_streams
+
+
+
 SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')
 
 

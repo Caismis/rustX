@@ -6,6 +6,8 @@ import { PreviewContext } from '../../src/app/components/ArtifactPreview';
 import { PreviewWorkspace } from '../../src/app/components/PreviewWorkspace';
 import { PreviewWorkspaceOwner } from '../../src/app/preview-workspace';
 import { WorkspaceFile, fileTabView, type WorkbenchCall } from '../../src/app/components/WorkbenchFiles';
+import { previewDemands } from '../../src/client/session-files';
+import type { FilePreviewOperation } from '../../shared/file-preview';
 import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../../src/workspaces/host';
 import { localeController } from '../../src/locale/controller';
@@ -22,12 +24,37 @@ const files = new Map<string, { data: Uint8Array<ArrayBuffer>; version: number }
 const hints = new Set<() => void>(), reads: { name: string; version: number; probe: boolean }[] = [];
 let available = true, hostId = 'geometry-host';
 function file(name: string): SessionFileReference { return { scope: { conversation_id: 'original', device: '1', inode: String(names.indexOf(name) + 1) }, path: name, name, mime_type: 'application/octet-stream' }; }
-async function source(name: string, range?: { offset: number; length: number }) {
+async function source(name: string, range?: { offset: number; length: number }, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (!available) throw new WorkspaceHostError('revoked', 'authorization_revoked');
-  if (!files.has(name)) { const response = await fetch(`/test/fixtures/geometry/${name}`); if (!response.ok) throw new Error('Fixture missing'); files.set(name, { data: new Uint8Array(await response.arrayBuffer()), version: 1 }); }
+  if (!files.has(name)) { const response = await fetch(`/test/fixtures/geometry/${name}`, { signal }); if (!response.ok) throw new Error('Fixture missing'); files.set(name, { data: new Uint8Array(await response.arrayBuffer()), version: 1 }); }
+  signal?.throwIfAborted();
   const value = files.get(name)!; reads.push({ name, version: value.version, probe: range?.length === 1 });
   const offset = range?.offset ?? 0, data = value.data.slice(offset, range ? offset + range.length : undefined);
   return { data, version: String(value.version), bytes: value.data.length, offset, eof: offset + data.length >= value.data.length };
+}
+const operations: { identity: string; name: string; kind: 'open' | 'read' | 'close'; version: string; offset?: number }[] = [];
+async function openSource(name: string, signal: AbortSignal): Promise<FilePreviewOperation> {
+  const metadata = await source(name, { offset: 0, length: 1 }, signal), bound = files.get(name)!, authority = hostId, identity = crypto.randomUUID();
+  let closing: Promise<void> | undefined;
+  const pending = new Set<Promise<Awaited<ReturnType<typeof source>>>>();
+  const check = () => {
+    signal.throwIfAborted();
+    if (!available || authority !== hostId) throw new WorkspaceHostError('revoked', 'authorization_revoked');
+    if (files.get(name) !== bound || String(bound.version) !== metadata.version || bound.data.length !== metadata.bytes) throw new WorkspaceHostError('changed', 'source_changed');
+  };
+  check(); operations.push({ identity, name, kind: 'open', version: metadata.version });
+  return { version: metadata.version, bytes: metadata.bytes, file: file(name),
+    read(range, active = signal) {
+      if (closing || pending.size >= 2) return Promise.reject(new Error('Obsolete or full fixture operation'));
+      const task = (async () => {
+        active.throwIfAborted(); check(); const value = await source(name, range, AbortSignal.any([signal, active])); check(); active.throwIfAborted();
+        operations.push({ identity, name, kind: 'read', version: value.version, offset: range.offset }); return value;
+      })();
+      pending.add(task); void task.finally(() => pending.delete(task)).catch(() => {}); return task;
+    },
+    close() { return closing ??= (async () => { await Promise.allSettled([...pending]); check(); await source(name, { offset: 0, length: 1 }, signal); check(); operations.push({ identity, name, kind: 'close', version: metadata.version }); })(); },
+  };
 }
 function observe(changed: () => void) {
   hints.add(changed); let resolve!: () => void; const done = new Promise<void>(finish => { resolve = finish; });
@@ -36,6 +63,10 @@ function observe(changed: () => void) {
 const server = new Server(); await server.attached('A', 'B');
 const host: ProductHostWorkspaces = { ...server.workspaceHost,
   listWorkspaces: async () => ({ ...await server.workspaceHost.listWorkspaces(), authorityId: hostId }),
+  openDeliveryPreview: async (_scope, read, signal) => {
+    if (read.locator.type !== 'by_message_id') throw new Error('Wrong fixture source');
+    return openSource(read.locator.message_id.replace('geometry:', ''), signal);
+  },
   readDelivery: async (_scope, read) => {
     if (read.locator.type !== 'by_message_id') throw new Error('Wrong fixture source');
     const name = read.locator.message_id.replace('geometry:', '');
@@ -52,7 +83,14 @@ const workspaceViews = new Map(names.map(name => [name, fileTabView(undefined, (
 const call: WorkbenchCall = Object.assign(async (request: Parameters<WorkbenchCall>[0]) => {
   if (request.kind === 'preview') return { cwd: '/workspace', preview: await source(request.path, request.read.kind === 'bytes' ? request.read.range : undefined) };
   return {};
-}, { observe: async (_path: string, changed: () => void) => observe(changed) });
+}, {
+  openPreview: async (path: string, signal: AbortSignal) => {
+    const demand = previewDemands(host, authority.capture()!.scope).privateReads;
+    const operation = await demand.run(signal, () => openSource(path, signal));
+    return { ...operation, read: (range: { offset: number; length: number }, active = signal) => demand.run(active, () => operation.read(range, active)), close: () => signal.aborted ? operation.close() : demand.run(signal, () => operation.close()) };
+  },
+  observe: async (_path: string, changed: () => void) => observe(changed),
+});
 
 function Fixture() {
   const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
@@ -74,7 +112,7 @@ function Fixture() {
   </PreviewContext.Provider>;
 }
 Object.assign(window, { geometryContract: {
-  reads, activity, source: (name: string) => [...files.get(name)!.data],
+  reads, operations, activity, source: (name: string) => [...files.get(name)!.data],
   async loadLargeStep() {
     const response = await fetch('/test/fixtures/large-step.step');
     if (!response.ok) throw new Error(`Large STEP fixture response: ${response.status}`);

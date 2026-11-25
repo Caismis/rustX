@@ -23,6 +23,11 @@ class GatedSocket extends EventTarget {
   close() { this.closed = true; this.closeCalls++; }
   open() { this.dispatchEvent(new Event('open')); }
   acknowledge(wasClean = true) { this.dispatchEvent(Object.assign(new Event('close'), { wasClean, code: wasClean ? 1000 : 1006 })); }
+  completePreviewOpen() {
+    this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+      jsonrpc: '2.0', id: 0, result: { identity: randomUUID(), file: {}, version: 'v1', bytes: 2 },
+    }) }));
+  }
   complete() {
     const data = new TextEncoder().encode('hi');
     this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ jsonrpc: '2.0', id: 0, result: { type: 'session_file_bytes', file: {}, version: 'v1', bytes: data.length, length: data.length, offset: 0, eof: true } }) }));
@@ -64,6 +69,32 @@ it.each(['registration removal', 'host close', 'caller abort'] as const)('%s ret
   else if (action === 'host close') host.close(); else abort.abort();
   expect(socket.closed).toBe(true); socket.complete(); await rejected;
   host.close();
+});
+it('joins a successful native preview open when post-open Workspace validation fails', async () => {
+  const { host, read, root } = fixture(), scope = await host.listWorkspaces();
+  let finished = false;
+  const work = host.openDeliveryPreview(scope, read, new AbortController().signal);
+  const outcome = work.then(() => undefined, error => error).finally(() => { finished = true; });
+  const socket = GatedSocket.instances[0];
+  socket.open();
+  expect(socket.payload).toMatchObject({ operation: 'open', request: { roots: [root, expect.any(String)] } });
+  rmSync(root, { recursive: true });
+  socket.completePreviewOpen();
+  try {
+    await expect.poll(() => socket.closed, { timeout: 1_000 }).toBe(true);
+    expect(finished).toBe(false);
+    let stopped = false;
+    const closing = host.close().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    socket.acknowledge();
+    expect(await outcome).toMatchObject({ code: 'ENOENT' });
+    await closing;
+    expect(socket.closeCalls).toBe(1);
+  } finally {
+    socket.acknowledge();
+    await host.close();
+  }
 });
 it('browser paths/root lists and replaced scopes fail before socket admission', async () => {
   const { host, read } = fixture(); const scope = await host.listWorkspaces();

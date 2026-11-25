@@ -32,7 +32,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
   const owner = resources.content!, content = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   const [image, setImage] = useState<{ url?: string; error?: string }>({});
   const saveViewState: PreviewViewStateProps['onViewStateChange'] = patch => { if (resources.current()) onViewStateChange(patch); };
-  const sameGeometryCopy = () => owner.getSnapshot().revision === content.revision && owner.getSnapshot().version === content.version && owner.getSnapshot().data === content.data;
+  const sameGeometryCopy = () => owner.getSnapshot().revision === content.revision && (content.source ? owner.getSnapshot().source === content.source : owner.getSnapshot().version === content.version && owner.getSnapshot().data === content.data);
   useEffect(() => { if (mode === 'geometry') preloadGeometry(artifact.name); if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : office ? kind : paged ? 'pages' : 'bytes', viewState.textLoadedLines); }, [owner, kind, office, paged, mode, artifact.name]);
   useEffect(() => {
     if (content.text !== undefined) saveViewState({ textLoadedLines: content.loadedLines });
@@ -46,7 +46,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
       return () => resources.release(url);
     } catch { setImage({ error: tx('artifacts:document.malformed') }); }
   }, [resources, content.data, mode, artifact.mimeType]);
-  const initialLoading = content.loading && content.text === undefined && content.data === undefined;
+  const initialLoading = content.loading && content.text === undefined && content.data === undefined && content.source === undefined;
   const retry = () => owner.retry();
   const decodeError = () => setImage(value => ({ ...value, error: tx('artifacts:copy.image-could-not-be-decoded') }));
   const failure = content.error === undefined ? undefined : documentFailure(content.error);
@@ -59,7 +59,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}
     viewState={viewState} onViewStateChange={saveViewState} onDownload={() => { if (resources.current()) onDownload(); }}
     refresh={() => owner.refresh()} retry={retry}>
-    {mode === 'geometry' ? <GeometryDocument visible={visible} bytes={content.data} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} takeSource={() => content.data && sameGeometryCopy() ? owner.takeGeometryBytes(content.data) : undefined} releaseSource={() => { if (content.data && sameGeometryCopy()) owner.releaseGeometryBytes(content.data); }} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
+    {mode === 'geometry' ? <GeometryDocument visible={visible} bytes={content.source ? undefined : content.data} source={content.source} name={artifact.name} copyId={`${content.revision}:${content.source ? 'stream' : content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} takeSource={() => content.data && sameGeometryCopy() ? owner.takeGeometryBytes(content.data) : undefined} releaseSource={() => { if (content.data && sameGeometryCopy()) owner.releaseGeometryBytes(content.data); }} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
       : mode === 'image' ? image.url && !error ? <ImagePreview url={image.url} name={artifact.name} signal={resources.signal} decodeError={decodeError} viewState={viewState} onViewStateChange={saveViewState}/> : undefined
       : kind && content.data ? <DocumentPreview kind={kind === 'docx' || kind === 'pptx' ? 'pdf' : kind} derived={office} bytes={content.data} resources={resources} viewState={viewState} onViewStateChange={saveViewState} retry={retry}/> : undefined}
   </Preview>;
