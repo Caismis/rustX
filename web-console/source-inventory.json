@@ -3917,7 +3917,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "b9adeda7a274a9a8f808c48ed0c221ba4f021dba557031c8fce16c214f68dba6"
+      "local_sha256": "e8806f9e8084358f14a66610c6949d5d65c3185f0d13340097ae0c325505174e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

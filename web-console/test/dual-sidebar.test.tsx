@@ -212,7 +212,7 @@ it('cancelling a Workflow leave retires its callback even without a replacement 
   expect(f.workflows.getSnapshot().context.editor).toBe(f.editor);
 });
 
-it('Settings drafts and a held exact-CAS write survive primary navigation without replay or a new read', async () => {
+it('Settings drafts survive a cancelled navigation guard, and a held exact-CAS write survives leaving without replay or a new read', async () => {
   const source = cfg3Source();
   server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
   server.handlers.set('configuration/sourceWrite', request => {
@@ -229,7 +229,9 @@ it('Settings drafts and a held exact-CAS write survive primary navigation withou
   fireEvent.change(field, { target: { value: 'https://retained.example/' } });
   const reads = server.requests.filter(row => row.request.method === 'configuration/sourcesRead').length;
   await act(async () => fireEvent.click(primary('Home')));
-  await act(async () => fireEvent.click(primary('Settings')));
+  const firstGuard = screen.getByRole('dialog', { name: 'Discard unsaved changes?' });
+  await act(async () => fireEvent.click(within(firstGuard).getByRole('button', { name: 'Keep editing' })));
+  expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
   expect(screen.getByLabelText('Base URL')).toBe(field);
   expect(field.value).toBe('https://retained.example/');
   expect(server.requests.filter(row => row.request.method === 'configuration/sourcesRead')).toHaveLength(reads);

@@ -91,7 +91,7 @@ function CodeEditor(props:PanelProps) {
   };
   return <div ref={expand.anchor} style={expand.expanded?{height:expand.collapsedHeight}:undefined}>
     <section className={clsx(styles.editor,expand.expanded&&styles.expanded)} style={expand.expanded?expand.bounds:undefined} aria-label={tx('workflows:code.editor')} data-code-expanded={expand.expanded||undefined} onKeyDown={event=>{if(expand.expanded&&event.key==='Escape'&&!event.defaultPrevented){event.preventDefault();event.stopPropagation();expand.setExpanded(false);}}}>
-      <header><EnumSelect label={tx('workflows:code.language')} value={node.code_language} onChange={changeLanguage} options={[{value:'python3',label:'Python3'},{value:'javascript',label:'JavaScript'}]}/><div>
+      <header><EnumSelect label={tx('workflows:code.language')} value={node.code_language} onChange={changeLanguage} options={[{value:'python3',label:/* i18n-raw: programming language name */ 'Python3'},{value:'javascript',label:/* i18n-raw: programming language name */ 'JavaScript'}]}/><div>
         <button type="button" className={css.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
         <button type="button" className={css.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} title={tx('workflows:prompt.expand')} onClick={expand.toggle}><IconFullscreenOutline16/></button>
       </div></header>

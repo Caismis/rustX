@@ -135,6 +135,6 @@ export function BooleanInput({ value, address, edit, label, onChange }: {
     {variable ? <ReferencePicker token address={address} path={value.path} edit={edit} />
       : <EnumSelect className={css.input} label={label} value={String(value.value)}
         onChange={next => onChange({ type: 'literal', value: next === 'true' })}
-        options={[{ value: 'true', label: 'True' }, { value: 'false', label: 'False' }]} />}
+        options={[{ value: 'true', label:/* i18n-raw: boolean literal */ 'True' }, { value: 'false', label:/* i18n-raw: boolean literal */ 'False' }]} />}
   </div>;
 }
