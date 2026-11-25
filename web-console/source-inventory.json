@@ -2723,7 +2723,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "0409cac74b968266d1dfd2c463ccf197bb69e1ceedfb89db072becd7d5e40c65",
+      "local_sha256": "4bd3f4b3e2792179367fd129358391db00a0365ea000d555c560a82f7304ae4b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2792,7 +2792,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "ebbedf176ac50102ce84dccf779a2d08996c85500956cb3f229a51414e31c93d",
+      "local_sha256": "2b8f13f631b9eba3baa0e7b52f6965e26f50db03294baa1cb7df2b92fbc2bc83",
       "classification": "B"
     },
     {

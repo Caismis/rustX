@@ -119,6 +119,20 @@ export function WorkspaceFollowGlobal({
 
   if (scope !== 'workspace') return <>{children}</>;
 
+  const groupRef = useRef<HTMLDivElement>(null);
+  const wasConfirming = useRef(false);
+  useEffect(() => {
+    if (confirmingReset && !wasConfirming.current) {
+      groupRef.current?.querySelector<HTMLElement>('[data-confirm-cancel]')?.focus();
+    }
+    if (!confirmingReset && wasConfirming.current) {
+      // The confirmation row unmounts with the keyboard inside it: the switch
+      // the intent started from takes the keyboard back.
+      groupRef.current?.querySelector<HTMLElement>('[role="switch"]')?.focus();
+    }
+    wasConfirming.current = confirmingReset;
+  }, [confirmingReset]);
+
   const following = !customized;
   const description = following
     ? hasOverrides
@@ -128,6 +142,7 @@ export function WorkspaceFollowGlobal({
 
   return (
     <>
+      <div ref={groupRef}>
       <SettingsGroup>
         <SettingsRow
           label={tx('settings:workspace.follow-global.title')}
@@ -155,7 +170,7 @@ export function WorkspaceFollowGlobal({
             label={tx('settings:workspace.follow-global.confirm-reset')}
             control={
               <>
-                <Button variant="ghost" size="sm" onClick={() => setConfirmingReset(false)}>{tx('settings:aria.cancel')}</Button>
+                <Button variant="ghost" size="sm" data-confirm-cancel onClick={() => setConfirmingReset(false)}>{tx('settings:aria.cancel')}</Button>
                 <Button variant="danger" size="sm" onClick={() => {
                   setConfirmingReset(false);
                   page?.discardDrafts();
@@ -192,6 +207,7 @@ export function WorkspaceFollowGlobal({
           />
         )}
       </SettingsGroup>
+      </div>
       {customized ? children : null}
     </>
   );

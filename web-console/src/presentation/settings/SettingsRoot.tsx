@@ -52,7 +52,7 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
           <Tabs className={css.tabsRoot} orientation="vertical" value={activeId} onValueChange={key => { onSelect(String(key)); }}>
             <nav className={css.nav} aria-label={tx('settings:navigation.rail')} data-settings-navigation="">
               <div className={css.navTitle}>{tx('settings:settings.settings')}</div>
-              <TabsList className={clsx(css.navList, workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
+              <TabsList activateOnFocus className={clsx(css.navList, workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
                 {pages.map(page => (
                   <TabsTab key={page.id} value={page.id} className={clsx(css.navCell, workflow.pageTab)}>
                     <span className={css.navIcon} aria-hidden="true">{page.icon}</span>

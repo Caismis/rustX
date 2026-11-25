@@ -167,7 +167,9 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
       panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}
       finalFocus={() => {
         const targets = closing.current === 'confirmed' ? [settle.current] : [trigger.current, settle.current];
-        return targets.find(target => target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) ?? false;
+        // A trigger hidden out of layout (e.g. a responsive navigation swap)
+        // cannot take the keyboard: viability includes being rendered.
+        return targets.find(target => target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && target.getClientRects().length > 0) ?? false;
       }}>
       <h2>{title}</h2>
       {description}
@@ -186,7 +188,7 @@ export function FilterTabs<T extends string>({ label, value, onChange, options, 
   options: readonly (readonly [T, string])[]; children: ReactNode;
 }) {
   return <CossTabs value={value} onValueChange={next => onChange(String(next) as T)}>
-    <TabsList className={css.filterTabs} aria-label={label}>
+    <TabsList activateOnFocus className={css.filterTabs} aria-label={label}>
       {options.map(([key, text]) => <TabsTab key={key} value={key} className={css.filterTab}>{text}</TabsTab>)}
     </TabsList>
     <TabsContent value={value} className={css.filterTabPanel}>{children}</TabsContent>

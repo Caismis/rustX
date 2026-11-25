@@ -207,9 +207,10 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   expect(await writes()).toBe(1);
   await expectStableScreenshot(settings, 'settings-workspace-override-light.png');
 
-  // Turning Follow global settings ON commits clearing workspace overrides
-  // immediately — no footer, no staging.
+  // Turning Follow global settings ON while overrides exist confirms the
+  // destructive clear first; confirming commits it — no footer, no staging.
   await followAgent.click();
+  await settings.getByRole('button', { name: 'Clear workspace overrides', exact: true }).click();
   await expect(followAgent).toBeChecked();
   await expect(guidance).toHaveCount(0);
   await expect.poll(writes).toBe(2);
@@ -684,6 +685,8 @@ test('toggling Follow global settings commits the restore of inheritance while t
   // write is held in flight while the switch already reads as following.
   await expect(follow).not.toBeChecked(); await follow.focus(); await expect(follow).toBeFocused();
   await page.keyboard.press('Space');
+  // Restoring inheritance clears workspace overrides, which confirms first.
+  await settings.getByRole('button', { name: 'Clear workspace overrides', exact: true }).click();
   await expect(follow).toBeChecked();
   await expect(unit).toHaveCount(0);
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
@@ -732,10 +735,11 @@ test('reduced motion removes Settings transitions', async ({ page }) => {
   await openUserSettings(page);
   await openSettingsPage(page, 'Extensions');
   await settingsPage(page).getByRole('tab', { name: 'Built-in', exact: true }).click();
-  const track = settingsPage(page).getByRole('switch').first().locator('xpath=ancestor::label[1]').locator('[class*="switchTrack"]');
+  // The coss switch root is the track; duration-200 is the design motion.
+  const track = settingsPage(page).getByRole('switch').first();
   await expect(track).toHaveCSS('transition-duration', '0s');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await expect(track).toHaveCSS('transition-duration', '0.15s');
+  await expect(track).toHaveCSS('transition-duration', '0.2s');
   expect(errors).toEqual([]);
 });
 
@@ -864,7 +868,8 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const capability = model.getByRole('switch', { name: 'Structured output', exact: true });
     await expect(capability).toHaveCount(1);
     await expect(capability).not.toBeChecked();
-    await capability.locator('xpath=ancestor::label').click();
+    // The settings row itself is the click target that actuates the toggle.
+    await capability.locator('xpath=..').click();
     await expect(capability).toBeChecked();
     await expect(model.getByRole('button', { name: `Save Model ${longModel}`, exact: true })).toBeEnabled();
     await expectNoHorizontalOverflow(page);

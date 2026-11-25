@@ -74,6 +74,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Restoring inheritance is controlled by the workspace Follow global switch,
     // which commits the restore itself.
     await followGlobal.click();
+    // Restoring inheritance clears workspace overrides, which confirms first.
+    await settings.getByRole('button', { name: 'Clear workspace overrides', exact: true }).click();
     await expect(followGlobal).toBeChecked();
     await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 

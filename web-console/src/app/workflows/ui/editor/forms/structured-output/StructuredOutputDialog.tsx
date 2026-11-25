@@ -79,7 +79,7 @@ export function StructuredOutputDialog({ document: original, address, root, edit
     <div className={css.header}><h2>{tx('workflows:structured.title')}</h2><button type="button" className={css.iconButton} aria-label={tx('workflows:dialog.close')} onClick={onClose}><IconCloseOutline16 /></button></div>
     <Tabs className={css.tabs} value={view} onValueChange={switchView} inert={saving}>
       <div className={css.toolbar}>
-        <TabsList className={css.tabList} aria-label={tx('workflows:structured.title')}>
+        <TabsList activateOnFocus className={css.tabList} aria-label={tx('workflows:structured.title')}>
           <TabsTab className={css.tab} value="visual"><IconListPenOutline16 />{tx('workflows:structured.visual')}</TabsTab>
           <TabsTab className={css.tab} value="json"><IconBraces />{/* i18n-raw: JSON Schema format name */ 'JSON Schema'}</TabsTab>
         </TabsList>

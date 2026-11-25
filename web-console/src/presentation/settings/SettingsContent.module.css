@@ -10,6 +10,8 @@
 .hint, .settings dt { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .card { border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg); background: var(--settings-card-bg, var(--dsw-alias-bg-layer-1)); padding: 14px 16px; min-width: 0; overflow-wrap: anywhere; transition: border-color 0.14s ease, background-color 0.14s ease; }
 .rowHead > strong { font-size: 14px; font-weight: 500; flex: 1; }
+/* Long identity labels truncate instead of pushing the row past the panel. */
+.rowHead > strong, .rowHead > button { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { display: inline-flex; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l3); border-radius: 4px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
 /* A toned badge keeps full-contrast text: the word carries the meaning, and the
    state color is a border and a leading marker, never the text itself. */
