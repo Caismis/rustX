@@ -3899,18 +3899,27 @@ impl SessionRuntimeManager {
         if let Some(session) = session {
             self.require_unclaimed_workspace(session)?;
         }
-        if let Some(workspace) = workspace
-            && rustx_execution_server::RecoveryFence::workspace_pending(
-                self.configuration.runtime_root(),
-                workspace,
-            )
-            .map_err(error)?
+        if let Some(workspace) = workspace {
+            self.require_workspace_settled(workspace)?;
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn require_workspace_settled(
+        &self,
+        workspace: &Path,
+    ) -> Result<(), RuntimeManagerError> {
+        if rustx_execution_server::RecoveryFence::workspace_pending(
+            self.configuration.runtime_root(),
+            workspace,
+        )
+        .map_err(error)?
         {
             return Err(error(
                 "the selected Workspace has an unsettled execution binding",
             ));
         }
-        Ok(None)
+        Ok(())
     }
 }
 

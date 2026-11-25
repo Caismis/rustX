@@ -50,6 +50,19 @@ revision errors. After a descendant grant retires, the settled slot is
 removed and Session-scoped Skill and MCP catalogs remain unavailable. A
 renewed grant can serve unscoped Skills through a private Client.
 
+Without a selected Session, a granted Workspace uses that same private Client
+capacity for MCP Test Connection, the MCP tool catalog, and Workflow Tools.
+These operations can launch configured stdio MCP and Managed Python processes.
+One private Client runs at a time. The Host request cap bounds the waiting
+queue, and requests begin their own handshake and listing budgets after
+acquiring the slot. The installed WebSocket test holds the first of two
+Workflow sources past the former five-second queue deadline, then checks
+that both sources list and all private recovery records are cleared. The
+strong-kill test restarts with a local Workspace grant, confirms the prior
+recovery record is still pending, and requires unscoped MCP and Workflow
+catalog requests to return `ExecutionUnavailable` without reaching the
+configured MCP peer.
+
 The in-crate `installed_resume` tests run real sibling Clients through the
 installed composition owner. Eight invalid saved Sessions release their
 Client slots and recovery records, a healthy Session can still be created,

@@ -97,9 +97,21 @@ navigation. Browsing and registering descendants additionally require an
 `app_server.environment_roots` grant. The picker uses a private minimal
 binding, verifies the selected directory revision, and settles its temporary
 Client before returning. The picker starts no Agent or Conversation. Home
-Skills on an already claimed Workspace uses this private Client capacity for
-read-only catalog and instruction requests. It reports Client authority. An
-explicitly selected Session continues to use only that Session's binding.
+Skills uses the same private Client capacity for read-only catalog and
+instruction requests and reports Client authority.
+
+Before a Session is selected, an authorized local Workspace can also use a
+private Client for MCP Test Connection, the MCP tool catalog, and Workflow
+Tools discovery. Tool discovery can start configured stdio MCP processes
+and prepare and run Managed Python packages. These requests require the
+Workspace to have no pending execution recovery record. An explicitly
+selected Session uses only that Session's binding.
+
+Each Server allows one private Workspace Client at a time across these
+requests and the picker. Catalog requests already admitted by the Server wait
+in order for that slot. Their handshake and listing deadlines start after
+admission to the slot. Grant revocation or Server shutdown cancels the wait.
+The picker reports busy immediately if the slot is occupied.
 
 Web and TUI need Node.js 24 on `PATH`. Run `rustx app-server --help` for
 headless startup with the installed binaries. On Linux, local recovery

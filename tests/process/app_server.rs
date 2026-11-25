@@ -3494,7 +3494,7 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
-    use rustx::app_server::protocol::{Method, MethodResult};
+    use rustx::app_server::protocol::{Method, MethodResult, Response};
     use rustx::local_runtime::{
         configuration::settings::SourceTarget, mcp_probe::McpProbeOutcome,
         workflow_tools::WorkflowToolSourceState,
@@ -3531,12 +3531,30 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (entered, mut first_request) = tokio::sync::watch::channel(false);
+        let (allow, release) = tokio::sync::watch::channel(false);
+        let slow = axum::Router::new()
+            .nest_service("/slow", service.clone())
+            .route_layer(axum::middleware::from_fn(
+                move |request, next: axum::middleware::Next| {
+                    let mut release = release.clone();
+                    entered.send_replace(true);
+                    async move {
+                        release.wait_for(|ready| *ready).await.unwrap();
+                        next.run(request).await
+                    }
+                },
+            ));
         let _peer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+            let router = axum::Router::new().nest_service("/mcp", service).merge(slow);
+            axum::serve(listener, router)
                 .await
                 .unwrap();
         }));
-        let document = format!("[mcp_servers.inventory]\nurl = \"http://{address}/mcp\"\n");
+        let document = format!(
+            "[mcp_servers.inventory]\nurl = \"http://{address}/mcp\"\n\
+             [mcp_servers.slow_inventory]\nurl = \"http://{address}/slow\"\n"
+        );
         std::fs::write(resources.join("mcp.toml"), &document).unwrap();
         let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
         let target = SourceTarget::Workspace {
@@ -3614,30 +3632,48 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
         else {
             panic!("Workflow sources")
         };
-        let [source] = catalog.sources.as_slice() else {
-            panic!("one source: {catalog:?}")
-        };
-        assert_eq!(source.source_id, "inventory");
-        assert_eq!(source.scope, SourceScope::Workspace);
-        assert_eq!(source.state, WorkflowToolSourceState::Pending);
+        assert_eq!(catalog.sources.len(), 2);
+        for (source, expected) in catalog.sources.iter().zip(["inventory", "slow_inventory"]) {
+            assert_eq!(source.source_id, expected);
+            assert_eq!(source.scope, SourceScope::Workspace);
+            assert_eq!(source.state, WorkflowToolSourceState::Pending);
+        }
         assert_eq!(catalog_reads(), 2, "source discovery does not connect");
         assert!(!pending());
 
-        let MethodResult::WorkflowToolCatalog { catalog } = result(
-            &client,
-            workflow_tools(Some(source.source_id.clone()), Some(source.scope)),
-        )
-        .await
-        else {
-            panic!("Workflow tools for the discovered source")
+        let list = |id, name: &str| {
+            rpc(&client, id, workflow_tools(Some(name.into()), Some(SourceScope::Workspace)))
         };
-        let [source] = catalog.sources.as_slice() else {
-            panic!("one listed source: {catalog:?}")
-        };
-        assert_eq!(source.state, WorkflowToolSourceState::Listed);
-        assert_eq!(source.scope, SourceScope::Workspace);
-        assert!(source.tools.iter().any(|tool| tool.name == "echo"));
-        assert_eq!(catalog_reads(), 3);
+        let mut first = Box::pin(list(101, "slow_inventory"));
+        tokio::select! {
+            reply = &mut first => panic!("slow source completed before reaching its peer: {reply:?}"),
+            entered = first_request.wait_for(|started| *started) => { entered.unwrap(); }
+        }
+        let mut second = Box::pin(list(102, "inventory"));
+        let queue_witness = rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT
+            + std::time::Duration::from_secs(1);
+        assert!(
+            tokio::time::timeout(queue_witness, &mut second).await.is_err(),
+            "the second request must stay queued past the former five-second cutoff"
+        );
+        assert!(pending());
+        assert_eq!(catalog_reads(), 2, "the queued source has not connected");
+        allow.send_replace(true);
+        let (first, second) = tokio::join!(first, second);
+        for (reply, expected) in [(first, "slow_inventory"), (second, "inventory")] {
+            let Response::Success(response) = reply else { panic!("{expected} failed: {reply:?}") };
+            let MethodResult::WorkflowToolCatalog { catalog } = response.result else {
+                panic!("Workflow tools for {expected}");
+            };
+            let [source] = catalog.sources.as_slice() else {
+                panic!("one listed source: {catalog:?}")
+            };
+            assert_eq!(source.source_id, expected);
+            assert_eq!(source.state, WorkflowToolSourceState::Listed);
+            assert_eq!(source.scope, SourceScope::Workspace);
+            assert!(source.tools.iter().any(|tool| tool.name == "echo"));
+        }
+        assert_eq!(catalog_reads(), 4);
         assert!(!pending());
 
         client.close().await;
@@ -7169,6 +7205,39 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             "{diagnostic}"
         );
 
+        let document = format!("[mcp_servers.decoy]\nurl = {:?}\n", provider.url("/mcp"));
+        let resources = workspace.join(".agents");
+        std::fs::create_dir(&resources).unwrap();
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
+        let target = rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let catalogs = |execution_session: Option<SessionId>| {
+            let id = rustx::runtime::identity::McpServerId::new("decoy");
+            [
+                Method::WorkflowToolCatalog {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    source: None,
+                    cursor: None,
+                    expected_scope: None,
+                },
+                Method::McpProbe {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    id: id.clone(),
+                    expected_revision: revision.clone(),
+                },
+                Method::McpCatalog {
+                    target: target.clone(),
+                    execution_session,
+                    id,
+                    expected_revision: revision.clone(),
+                    kind: rustx::tools::mcp::catalog::CatalogKind::Tools,
+                },
+            ]
+        };
         let mut composed = Command::new(&executable)
             .current_dir(fixture.root.path())
             .env_clear()
@@ -7209,10 +7278,6 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         );
         assert!(execution.0.try_wait().unwrap().is_none());
         assert_eq!(provider.request_bodies(), [] as [String; 0]);
-        composed_driver.close().await;
-        detach_then_shutdown(&mut composed).await;
-        assert!(composed.wait().await.unwrap().success());
-
         // Physical Client death without a settlement grant is still insufficient.
         execution.0.kill().unwrap();
         let death = execution.0.wait().unwrap();
@@ -7220,6 +7285,35 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             std::os::unix::process::ExitStatusExt::signal(&death),
             Some(libc::SIGKILL)
         );
+        let pending = || {
+            rustx_execution_server::RecoveryFence::workspace_pending(
+                &fixture.root.path().join("runtime"),
+                &workspace,
+            )
+            .unwrap()
+        };
+        assert!(pending());
+        for method in catalogs(None)
+            .into_iter()
+            .chain([Method::WorkflowToolCatalog {
+                target: target.clone(),
+                execution_session: None,
+                source: Some("decoy".into()),
+                cursor: None,
+                expected_scope: None,
+            }])
+        {
+            let Response::Failure(refused) = rpc(&composed_driver, 72, method).await else {
+                panic!("the local Workspace grant cannot bypass its pending physical owner");
+            };
+            assert_eq!(refused.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
+        assert!(pending());
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        composed_driver.close().await;
+        detach_then_shutdown(&mut composed).await;
+        assert!(composed.wait().await.unwrap().success());
+
         let rejected_after_death =
             local_exec_command(&executable, &fixture, session.as_str(), &workspace)
                 .output()
@@ -7247,11 +7341,6 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         assert!(matches!(cold_history, MethodResult::SessionHistory { .. }));
         assert_eq!(serde_json::to_value(cold_history).unwrap(), history_before);
 
-        let document = format!("[mcp_servers.decoy]\nurl = {:?}\n", provider.url("/mcp"));
-        let resources = workspace.join(".agents");
-        std::fs::create_dir(&resources).unwrap();
-        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
-        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
         let MethodResult::SessionTransition {
             session: alternate, ..
         } = result(
@@ -7269,33 +7358,8 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         else {
             panic!("another unbound Session in the same Workspace");
         };
-        let target = rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
-            directory: workspace.clone(),
-        };
         for execution_session in [Some(session.clone()), Some(alternate.id), None] {
-            let id = rustx::runtime::identity::McpServerId::new("decoy");
-            for method in [
-                Method::WorkflowToolCatalog {
-                    target: target.clone(),
-                    execution_session: execution_session.clone(),
-                    source: None,
-                    cursor: None,
-                    expected_scope: None,
-                },
-                Method::McpProbe {
-                    target: target.clone(),
-                    execution_session: execution_session.clone(),
-                    id: id.clone(),
-                    expected_revision: revision.clone(),
-                },
-                Method::McpCatalog {
-                    target: target.clone(),
-                    execution_session: execution_session.clone(),
-                    id,
-                    expected_revision: revision.clone(),
-                    kind: rustx::tools::mcp::catalog::CatalogKind::Tools,
-                },
-            ] {
+            for method in catalogs(execution_session) {
                 let Response::Failure(refused) = rpc(&driver, 80, method).await else {
                     panic!("a prior physical owner bars the Server-authored Workspace catalog");
                 };

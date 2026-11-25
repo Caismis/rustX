@@ -19,6 +19,12 @@ use crate::local_runtime::{
     },
 };
 
+#[derive(Clone, Copy)]
+enum PrivateCatalogAccess {
+    ReadOnly,
+    Tools,
+}
+
 fn workspace_catalog_endpoint(
     manager: &SessionRuntimeManager,
     target: &SourceTarget,
@@ -85,6 +91,7 @@ impl AppServerConnection {
         target: SourceTarget,
         session: Option<SessionId>,
         owner: ServerOperation,
+        access: PrivateCatalogAccess,
         read: impl FnOnce(
             SessionRuntimeManager,
             SourceTarget,
@@ -118,22 +125,29 @@ impl AppServerConnection {
             )
             .await;
         };
-        let host = self.host.clone();
-        // The request lease covers the Client's entire lifetime, including
-        // reaping after a detached observer or a failed catalog read.
+        let unavailable = || domain(ErrorData::ExecutionUnavailable);
+        let stop = self.host.environment_stop();
+        let capacity = self.host.local_workspace_probes().clone();
+        // The Host request limit bounds the queue. A queued catalog does not
+        // spend its handshake or listing budget waiting for a prior probe.
+        let slot = tokio::select! {
+            biased;
+            () = grant.cancelled() => return Err(unavailable()),
+            () = stop.cancelled() => return Err(unavailable()),
+            slot = capacity.acquire_owned() => slot.map_err(|_| unavailable())?,
+        };
+        // Once admitted, the request and probe permits cover the Client
+        // through shutdown even if the observer disconnects.
         tokio::spawn(async move {
             let _owner = owner;
-            let unavailable = || domain(ErrorData::ExecutionUnavailable);
-            let stop = host.environment_stop();
-            let capacity = host.local_workspace_probes();
-            let _slot = tokio::select! {
-                () = grant.cancelled() => return Err(unavailable()),
-                () = stop.cancelled() => return Err(unavailable()),
-                slot = tokio::time::timeout(
-                    rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT,
-                    capacity.acquire(),
-                ) => slot.map_err(|_| unavailable())?.map_err(|_| unavailable())?,
-            };
+            let _slot = slot;
+            if matches!(access, PrivateCatalogAccess::Tools) {
+                let (manager, workspace) = (manager.clone(), workspace.clone());
+                tokio::task::spawn_blocking(move || manager.require_workspace_settled(&workspace))
+                    .await
+                    .map_err(|_| unavailable())?
+                    .map_err(|_| unavailable())?;
+            }
             if grant.is_cancelled() || stop.is_cancelled() {
                 return Err(unavailable());
             }
@@ -187,6 +201,7 @@ impl AppServerConnection {
             target,
             session,
             owner,
+            PrivateCatalogAccess::ReadOnly,
             move |manager, target, execution, owner| async move {
                 let endpoint = workspace_catalog_endpoint(&manager, &target, &execution)?;
                 let authority = if endpoint.is_some() {
@@ -217,6 +232,7 @@ impl AppServerConnection {
                 target,
                 session,
                 owner,
+                PrivateCatalogAccess::Tools,
                 move |manager, target, execution, owner| async move {
                     manager
                         .inspect_mcp_source(target, execution, id, revision, kind, owner)
@@ -626,6 +642,7 @@ impl AppServerConnection {
                         target,
                         execution_session,
                         request_owner,
+                        PrivateCatalogAccess::Tools,
                         move |manager, target, execution, owner| async move {
                             let _owner = owner;
                             manager
