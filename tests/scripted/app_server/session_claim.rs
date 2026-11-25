@@ -446,3 +446,297 @@ async fn session_claim_survives_replacement_handoff_and_clears_on_failed_loading
     })
     .await;
 }
+
+fn pending_execution(f: &Fixture, session: &SessionId) -> bool {
+    rustx_execution_server::RecoveryFence::session_pending(
+        &f.archive_root,
+        &rustx_execution_protocol::SessionId::new(session.as_str()),
+    )
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_reaps_eight_rejected_clients_and_allows_same_session_retry() {
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 16).await;
+        f.manager
+            .configure_local_sessions(f.workspaces.to_vec())
+            .unwrap();
+        let invalid = f.workspaces[0].join("rustx.toml");
+        let valid = std::fs::read(&invalid).unwrap();
+        std::fs::write(&invalid, "[environment\n").unwrap();
+        for session in f.sessions.iter().step_by(2) {
+            let failure = f.manager.load(&session.id, None).await.unwrap_err();
+            assert!(failure.to_string().contains("rustx.toml"), "{failure}");
+            assert!(
+                f.manager
+                    .execution
+                    .configuration_endpoint(&session.id)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!pending_execution(&f, &session.id));
+            assert!(
+                !f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .contains_key(&session.id)
+            );
+        }
+        let healthy = f
+            .manager
+            .create_session(SessionPersistentState::from_input(
+                &SessionConfigInput::new(f.workspaces[1].clone()),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            f.manager
+                .execution_endpoint(&healthy.session.id)
+                .unwrap()
+                .control()
+                .is_some()
+        );
+
+        std::fs::write(&invalid, valid).unwrap();
+        let original = &f.sessions[0];
+        let resumed = f.manager.load(&original.id, None).await.unwrap();
+        assert_eq!(resumed.conversation_id(), &original.active_conversation_id);
+        assert!(
+            f.manager
+                .execution_endpoint(&original.id)
+                .unwrap()
+                .control()
+                .is_some()
+        );
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+        assert_eq!(f.host.drain().await, Vec::<String>::new());
+        f.manager.join_local_sessions().await.unwrap();
+        assert!(!pending_execution(&f, &original.id));
+        assert!(!pending_execution(&f, &healthy.session.id));
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_shares_client_admission_across_cold_nodes() {
+    Box::pin(bounded(async {
+        for reject in [true, false] {
+            let f = Fixture::with_session_count(None, 1).await;
+            let branch = second_node(&f).await;
+            let root = &f.sessions[0];
+            f.manager
+                .configure_local_sessions(f.workspaces.to_vec())
+                .unwrap();
+            let (entered, waiting) = tokio::sync::oneshot::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            f.manager.configuration.test_hooks.insert(
+                "before_resumed_client_preparation",
+                move || {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                },
+            );
+            let root_probe = f.manager.probe(&root.active_conversation_id);
+            root_probe.before_recovery_inspection.arm();
+            if reject {
+                f.manager
+                    .configuration
+                    .test_hooks
+                    .fail_once("after_initial_runtime_configuration");
+            }
+            let loading = f.load(0);
+            waiting.await.unwrap();
+            assert!(
+                f.manager
+                    .execution
+                    .configuration_endpoint(&root.id)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("preparation in progress")
+            );
+            let contender = f.manager.probe(&branch.active_conversation_id);
+            let start_branch = || {
+                let manager = f.manager.clone();
+                let session = branch.id.clone();
+                let node = branch.active_node.clone();
+                tokio::spawn(async move { manager.load(&session, Some(&node)).await })
+            };
+            let early = start_branch();
+            contender.joined(1).await;
+            release.send(()).unwrap();
+            root_probe.before_recovery_inspection.entered().await;
+            let provisional = f.manager.execution_endpoint(&root.id).unwrap();
+            let pair = provisional.control().expect("real provisional Client");
+            assert!(pending_execution(&f, &root.id));
+            assert!(
+                !f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .contains_key(&root.id)
+            );
+            let later = start_branch();
+            contender.joined(2).await;
+            root_probe.before_recovery_inspection.release();
+            let first = loading.await.unwrap();
+            let early = early.await.unwrap().unwrap_err();
+            let later = later.await.unwrap().unwrap_err();
+            if reject {
+                let failure = first.unwrap_err();
+                assert!(
+                    failure
+                        .to_string()
+                        .contains("injected composition failure after configuration"),
+                    "{failure}"
+                );
+                assert_eq!(early, failure);
+                assert_eq!(later, failure);
+                assert!(provisional.control().is_none());
+                assert!(
+                    f.manager
+                        .execution
+                        .configuration_endpoint(&root.id)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(!pending_execution(&f, &root.id));
+                assert!(
+                    !f.manager
+                        .sessions
+                        .configuration_bindings
+                        .lock()
+                        .unwrap()
+                        .contains_key(&root.id)
+                );
+            } else {
+                let first = first.unwrap();
+                let expected = RuntimeManagerError::SessionAlreadyResident {
+                    session_id: root.id.clone(),
+                    resident_conversation: root.active_conversation_id.clone(),
+                    requested_conversation: branch.active_conversation_id.clone(),
+                };
+                assert_eq!(early, expected);
+                assert_eq!(later, expected);
+                let assert_same_client = || {
+                    let endpoint = f.manager.execution_endpoint(&root.id).unwrap();
+                    assert!(Arc::ptr_eq(&provisional, &endpoint));
+                    assert!(endpoint.control().unwrap().same_pair(&pair));
+                };
+                assert_same_client();
+                f.manager.unload(first.conversation_id()).await.unwrap();
+                f.manager
+                    .configuration
+                    .test_hooks
+                    .fail_once("after_initial_runtime_configuration");
+                let failure = start_branch().await.unwrap().unwrap_err();
+                assert!(
+                    failure.to_string().contains("injected composition failure"),
+                    "{failure}"
+                );
+                assert_same_client();
+                assert_eq!(
+                    f.load(0).await.unwrap().unwrap().conversation_id(),
+                    first.conversation_id()
+                );
+                assert_same_client();
+            }
+            assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+            assert_eq!(f.host.drain().await, Vec::<String>::new());
+            f.manager.join_local_sessions().await.unwrap();
+            assert!(!pending_execution(&f, &root.id));
+        }
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let session = &f.sessions[0];
+        f.manager
+            .configure_local_sessions(f.workspaces.to_vec())
+            .unwrap();
+        let probe = f.manager.probe(&session.active_conversation_id);
+        probe.before_recovery_inspection.arm();
+        f.manager
+            .configuration
+            .test_hooks
+            .fail_once("after_initial_runtime_configuration");
+        let loading = f.load(0);
+        probe.before_recovery_inspection.entered().await;
+        let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
+        assert!(endpoint.control().is_some());
+        endpoint.cut_pair();
+        probe.before_recovery_inspection.release();
+        let failure = loading.await.unwrap().unwrap_err();
+        assert!(
+            failure.to_string().contains("injected composition failure"),
+            "{failure}"
+        );
+        assert!(pending_execution(&f, &session.id));
+        let replacement = f.load(0).await.unwrap().unwrap_err();
+        assert!(
+            replacement
+                .to_string()
+                .contains("execution binding is closed; recovery is required"),
+            "{replacement}"
+        );
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+        let failures = f.host.drain().await;
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("revocation is unconfirmed")),
+            "{failures:?}"
+        );
+        f.manager.join_local_sessions().await.unwrap();
+        assert!(pending_execution(&f, &session.id));
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_pending_client_is_settled_when_host_drains() {
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let session = &f.sessions[0];
+        f.manager
+            .configure_local_sessions(f.workspaces.to_vec())
+            .unwrap();
+        let probe = f.manager.probe(&session.active_conversation_id);
+        probe.before_recovery_inspection.arm();
+        let loading = f.load(0);
+        probe.before_recovery_inspection.entered().await;
+        let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
+        assert!(endpoint.control().is_some());
+        assert!(pending_execution(&f, &session.id));
+        f.host.begin_drain();
+        let host = f.host.clone();
+        let draining = tokio::spawn(async move { host.drain().await });
+        probe.before_recovery_inspection.release();
+        assert_eq!(
+            loading.await.unwrap().unwrap_err(),
+            RuntimeManagerError::Draining
+        );
+        assert_eq!(draining.await.unwrap(), Vec::<String>::new());
+        f.manager.join_local_sessions().await.unwrap();
+        assert!(endpoint.control().is_none());
+        assert!(!pending_execution(&f, &session.id));
+        assert!(f.manager.is_empty());
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+        assert!(
+            !f.manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()
+                .contains_key(&session.id)
+        );
+    }))
+    .await;
+}

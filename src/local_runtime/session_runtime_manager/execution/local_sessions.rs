@@ -45,7 +45,19 @@ pub(in crate::local_runtime::session_runtime_manager) struct PendingClient {
     slot: OwnedSemaphorePermit,
 }
 
+impl std::fmt::Debug for PendingClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingClient")
+            .field("session", &self.session)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PendingClient {
+    pub fn endpoint(&self) -> &Arc<LocalExecutionEndpoint> {
+        &self.client.endpoint
+    }
+
     pub fn admit(&self) -> Result<(), SessionError> {
         if self.grant.is_cancelled()
             || self
@@ -156,11 +168,11 @@ impl SessionRuntimeManager {
         }
     }
 
-    /// Live runtime composition is the first execution demand for a resumed
-    /// or copied Session. Cold catalog and committed history reads do not call
-    /// this path. A loaded branch shares the existing Session reservation.
-    pub(in crate::local_runtime::session_runtime_manager) async fn ensure_local_session(
+    /// The residency owner gets the newly launched Client until runtime
+    /// admission. A previously admitted Client stays with its existing owner.
+    pub(in crate::local_runtime::session_runtime_manager) async fn prepare_resumed_local_session(
         &self,
+        flight: &super::super::Flight,
         session: &SessionId,
         cwd: &Path,
     ) -> Result<(), RuntimeManagerError> {
@@ -174,6 +186,10 @@ impl SessionRuntimeManager {
         {
             return Ok(());
         }
+        flight
+            .local_admission
+            .starting
+            .store(true, std::sync::atomic::Ordering::Release);
         let Some(grant) = self.local_workspace_grant(cwd).map_err(error)? else {
             return Ok(());
         };
@@ -184,16 +200,31 @@ impl SessionRuntimeManager {
         let Claim::Create(claim) = claim else {
             return Ok(());
         };
+        #[cfg(test)]
+        {
+            let hooks = self.configuration.test_hooks.clone();
+            tokio::task::block_in_place(move || hooks.reach("before_resumed_client_preparation"));
+        }
         let pending = self
             .start_claimed_local_client(session.clone(), claim, grant, slot)
             .await
             .map_err(error)?;
-        if let Err(refused) = pending.admit() {
-            self.discard_local_session(pending).await;
-            return Err(error(refused));
-        }
-        self.keep_local_session(pending);
+        let mut owned = flight
+            .local_admission
+            .pending
+            .lock()
+            .expect("local runtime admission");
+        *owned = Some(Box::new(super::super::lifecycle::PendingLocalRuntime {
+            client: pending,
+            configuration: None,
+        }));
         Ok(())
+    }
+
+    pub(in crate::local_runtime::session_runtime_manager) fn local_sessions_configured(
+        &self,
+    ) -> bool {
+        self.execution.local.roots.get().is_some()
     }
 
     fn local_client_slot(&self) -> Result<OwnedSemaphorePermit, SessionError> {
@@ -273,6 +304,22 @@ impl SessionRuntimeManager {
         self.reap_local_client(pending.client, &pending.session)
             .await;
         self.execution.retire(&pending.session);
+    }
+
+    /// A terminal residency failure is published only after the new Client
+    /// settles. The Host also joins this task if the initiating load vanished.
+    pub(in crate::local_runtime::session_runtime_manager) fn settle_failed_local_load(
+        &self,
+        pending: PendingClient,
+        publish: impl FnOnce() + Send + 'static,
+    ) {
+        // Close admission before handing the physical wait off to another task.
+        self.execution.close_session_admission(&pending.session);
+        let owner = self.clone();
+        self.execution.local.tasks.spawn(async move {
+            owner.discard_local_session(pending).await;
+            publish();
+        });
     }
 
     pub(in crate::local_runtime::session_runtime_manager) fn keep_local_session(

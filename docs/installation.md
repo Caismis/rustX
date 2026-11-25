@@ -75,13 +75,22 @@ Each new Session in the installed Web or self-hosted TUI starts a sibling
 Client over the same paired Unix Execution Protocol. The Server reserves a
 Session identity, authenticates the Client, and reads the bound configuration
 before admitting the Session. A clean restart or a fork uses the same
-admission when requested as a live Session. Cold history and Session
-management reads do not start a Client. A durable physical fence must settle
-before the same Session identity can be admitted again. The launcher grants each exact Workspace passed
-at startup. Deleting the Session or draining its Server revokes execution and
-settles the owned Client. If all eight local Session Client slots are active,
-new Sessions receive an explicit capacity error. The standalone Server does
-not launch Clients for ordinary Session creation.
+admission when requested as a live Session. When restoring a Session, the
+load owns the new Client until the runtime is admitted. A failed load
+reaps that Client and releases its slot before reporting the result. When
+settlement is unconfirmed, the recovery fence stays in place.
+Concurrent requests for different conversations in that Session share the
+first admission outcome and the Session still allows one resident
+conversation at a time. A failed conversation load leaves a previously
+admitted Client available to the Session.
+
+Cold history and Session management reads do not start a Client. A durable
+physical fence must settle before the same Session identity can be admitted
+again. The launcher grants each exact Workspace passed at startup. Deleting
+the Session or draining its Server revokes execution and settles the owned
+Client. If all eight local Session Client slots are active, new Sessions
+receive an explicit capacity error. The standalone Server can create
+ordinary Sessions without launching Clients.
 
 Web can re-register a configured exact root after it is removed from the
 navigation. Browsing and registering descendants additionally require an

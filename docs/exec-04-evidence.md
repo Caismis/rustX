@@ -37,8 +37,20 @@ same bundle forks an existing Session, checks its independent execution
 identity, and starts a fresh owner on a clean restart of the original
 Session. The installed strong-kill case confirms that cold history stays
 readable and live composition refuses an unresolved physical domain. The
-normal and negative picker cases use
-the same extracted Web distribution.
+normal and negative picker cases use the same extracted Web distribution.
+
+The in-crate `installed_resume` tests run real sibling Clients through the
+installed composition owner. Eight invalid saved Sessions release their
+Client slots and recovery records, a healthy Session can still be created,
+and repairing the first Workspace allows the original Session to resume.
+The Root/Branch race pauses both before reservation publication and after
+authentication. Both requests observe the same failed admission, or the
+first load admits one Client and the other receives the existing
+single-resident refusal. A later branch failure leaves the admitted pair
+available to the root. Separate cases cut the provisional pair to check
+unconfirmed revocation and the surviving fence, and begin Host drain while
+the load is paused to check that the runtime never becomes resident and the
+Client settles.
 
 The four evidence ledgers cover all 73 test IDs by number. The release requires receipts for the same head from the independent native macOS job and the stacked PR's FULL and Merge verification. The measurement samples below identify their distinct baselines.
 
