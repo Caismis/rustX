@@ -347,6 +347,37 @@ it('keeps an empty explicit summary limit local until a valid replacement is typ
   }));
 });
 
+it('withdraws a pending summary token edit when the input becomes fractional', async () => {
+  const subject = cfg3Client();
+  subject.source.user.authored!.context = { summary_output_cap: { mode: 'limit', tokens: 2048 } };
+  await open(subject, 'Advanced', 'User');
+  const input = screen.getByLabelText('Summary token limit') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: '1' } });
+  fireEvent.change(input, { target: { value: '1.5' } });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 450)); });
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+  expect(input.value).toBe('1.5');
+  fireEvent.change(input, { target: { value: '2' } });
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({
+    params: { mutation: { kind: 'config', mutation: { unit: 'context', authored: { summary_output_cap: { mode: 'limit', tokens: 2 } } } } },
+  }));
+});
+
+it('preserves unrelated context edits when withdrawing a fractional summary token edit', async () => {
+  const subject = cfg3Client();
+  subject.source.user.authored!.context = { reserve_tokens: '4096', summary_output_cap: { mode: 'limit', tokens: 2048 } };
+  await open(subject, 'Advanced', 'User');
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '8192' } });
+  const input = screen.getByLabelText('Summary token limit') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: '1' } });
+  fireEvent.change(input, { target: { value: '1.5' } });
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({
+    params: { mutation: { kind: 'config', mutation: { unit: 'context', authored: {
+      reserve_tokens: '8192', summary_output_cap: { mode: 'limit', tokens: 2048 },
+    } } } },
+  }));
+});
+
 it('process state comes from native classification, outside the Session commit', async () => {
  const subject = cfg3Client(); subject.source.application = cfg3Application(); subject.source.application.units.process_bindings = { status: 'process_restart' };
  await open(subject, 'Advanced', 'User');

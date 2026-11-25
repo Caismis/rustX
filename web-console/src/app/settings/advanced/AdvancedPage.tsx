@@ -103,13 +103,19 @@ export function AdvancedPage({
 /** Explicit token cap editing keeps the empty intermediate string local:
  * an incomplete edit authors nothing, while a valid positive integer commits
  * through the surrounding immediate unit. */
-function SummaryTokenLimit({ value, onChange }: { value: number; onChange: (tokens: number) => void }) {
+function SummaryTokenLimit({ context, value, change, restore }: {
+  context: ContextLayer; value: number;
+  change: (value: ContextLayer) => void; restore: (update: (clean: ContextLayer) => ContextLayer) => void;
+}) {
   const tx = useTranslation();
   const [text, setText] = useState(String(value));
+  const fallbackValue = useRef(value);
   const lastValue = useRef(value);
+  const skipResync = useRef(false);
   useEffect(() => {
     if (lastValue.current === value) return;
     lastValue.current = value;
+    if (skipResync.current) { skipResync.current = false; return; }
     setText(current => Number(current) === value ? current : String(value));
   }, [value]);
   return (
@@ -123,7 +129,19 @@ function SummaryTokenLimit({ value, onChange }: { value: number; onChange: (toke
           const raw = event.target.value;
           setText(raw);
           const tokens = Number(raw);
-          if (raw.trim() !== '' && Number.isInteger(tokens) && tokens >= 1) onChange(tokens);
+          const summary = { mode: 'limit' as const, tokens };
+          if (raw.trim() !== '' && Number.isInteger(tokens) && tokens >= 1) change({ ...context, summary_output_cap: summary });
+          else {
+            skipResync.current = true;
+            restore(clean => ({
+              ...context,
+              summary_output_cap: {
+                mode: 'limit',
+                tokens: clean.summary_output_cap?.mode === 'limit' ? clean.summary_output_cap.tokens : fallbackValue.current,
+              },
+            }));
+          }
+
         }}
       />
     </label>
@@ -165,7 +183,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           revision={revision}
           mutation={authored => ({ kind: 'config', mutation: { unit: 'context', authored } })}
         >
-          {(value, change) => (
+          {(value, change, restore) => (
             <div className={css.grid}>
               {(['reserve_tokens', 'keep_recent_tokens'] as const).map(key => (
                 <TextField
@@ -182,7 +200,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
                 onChange={mode => change({ ...value, summary_output_cap: mode === 'limit' ? { mode: 'limit', tokens: 2048 } : mode === 'model_limit' ? { mode: 'model_limit' } : null })}
               />
               {value.summary_output_cap?.mode === 'limit' && (
-                <SummaryTokenLimit value={value.summary_output_cap.tokens} onChange={tokens => change({ ...value, summary_output_cap: { mode: 'limit', tokens } })} />
+                <SummaryTokenLimit context={value} value={value.summary_output_cap.tokens} change={change} restore={restore} />
               )}
             </div>
           )}

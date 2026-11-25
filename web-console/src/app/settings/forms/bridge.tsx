@@ -619,6 +619,10 @@ export interface UnitEditing<T> {
   readonly displayed: T;
   /** Reflect a new authored value into the transaction actor. */
   readonly edit: (value: T) => void;
+  /** Restore a superseded local edit: if the whole value is back at the
+   * authoritative/inherited one the draft withdraws; otherwise the restored
+   * value replaces the draft while preserving unrelated edits. */
+  readonly restore: (value: (clean: T) => T) => void;
   /** One explicit quick-setting gesture, refused while another draft needs review. */
   readonly apply: (value: T) => void;
   /** Immediate-write commit for auto-save surfaces: identical to `apply` but
@@ -797,11 +801,11 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // inherited one, or the neutral seed — and sends nothing until the page
   // saves. Editing again silently unstages it.
   const page = useContext(PageTransactionContext);
-  const displayed: T = draft ? draft.value
-    : redacted ? blank
-      : authored !== undefined ? authored
-        : inheritedValue !== undefined ? inheritedValue
-          : definition === 'inherited' ? overrideSeed : blank;
+  const cleanValue: T = redacted ? blank
+    : authored !== undefined ? authored
+      : inheritedValue !== undefined ? inheritedValue
+        : definition === 'inherited' ? overrideSeed : blank;
+  const displayed: T = draft ? draft.value : cleanValue;
   const writable = definition !== 'inherited' && !awaitingObservation;
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   const submit = (value: T | null) => {
@@ -821,6 +825,12 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, awaitingObservation, writable,
     edit: (value: T) => { if (writable) begin(value); },
+    restore: (update: (clean: T) => T) => {
+      if (!writable) return;
+      const value = update(cleanValue);
+      if (sameValue(value, cleanValue)) { setPending(undefined); actor.send({ type: 'UNIT.DISCARD', identity }); }
+      else begin(value);
+    },
     apply: (value: T) => {
       if (!writable || !admitted || busy || draft || (snapshot && requiresReview(snapshot))) return;
       begin(value);
@@ -1015,7 +1025,7 @@ function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
  * Used where the unit is a single scalar or a small closed choice, so a typed
  * form layer would add mechanics without removing any. */
 export function UnitForm<T>({ title, children, removable = true, removalNotice, saveLabel, presentation, legendHidden, immediate = false, ...options }: UnitOptions<T> & {
-  title: string; children: (value: T, change: (value: T) => void) => ReactNode;
+  title: string; children: (value: T, change: (value: T) => void, restore: (update: (clean: T) => T) => void) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode; saveLabel?: string;
   /** 'dialog' gives the unit its own Save inside the card; a structured
    * editor uses it where no page footer exists. */
@@ -1034,7 +1044,7 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
   useImmediateCommit(unit, autosave);
   return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} saveLabel={saveLabel} presentation={presentation} legendHidden={legendHidden}
     explicitSave={immediate && !!options.redacted ? () => unit.commit(unit.displayed) : undefined}>
-    {children(unit.displayed, unit.edit)}
+    {children(unit.displayed, unit.edit, unit.restore)}
   </UnitShell>;
 }
 
