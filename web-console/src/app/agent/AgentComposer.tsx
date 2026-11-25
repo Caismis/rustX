@@ -27,6 +27,7 @@ import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
+import { Textarea } from '@/components/ui/textarea';
 const emptyContent: UserInputBlock[] = [];
 export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, submitPending = false, busy, active, hasQueuedMessages = false, onSteerQueue, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
@@ -208,7 +209,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         onRetry={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(true); else void intake.upload(id, port); }}
         onReconcile={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(false); else void intake.reconcile(id, port); }}/>
       <div className={css.editor}>
-        <textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
+        <Textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
           value={draft} disabled={disabled && !cancellationEditor} readOnly={busy || cancellationEditor} rows={1} onChange={event => { if (cancellationEditor) return; setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
           onPaste={event => {

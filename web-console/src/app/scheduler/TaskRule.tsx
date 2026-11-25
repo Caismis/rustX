@@ -11,6 +11,7 @@ import css from './TaskManager.module.css';
 import extra from './scheduler.module.css';
 import { hasUnrepresentableProperty, readJson } from '../../../shared/json-numbers';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 
 export function TaskRule({ value, record, model, connected, reload }: {
   value: ScheduleSnapshot; record: ScheduleHeader; model: SchedulerModel; connected: boolean; reload: () => Promise<void>;
@@ -79,7 +80,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
     {instant && <div className={css.nextRun}><span>{t('detail.nextRun')}</span><span>{instant.absolute} <span className={css.nextRunRelative}>({instant.relative})</span></span></div>}
     <div className={css.ruleCard}>
       <label className={extra.instructionLabel} htmlFor={'task-content-' + record.id.ordinal}>{t(value.target.type === 'workflow' ? 'content.arguments' : 'content.label')}</label>
-      {finished ? <pre className={css.readonlyPrompt}>{readOnlyArguments ? t('content.unsafe-saved') : draft.content}</pre> : <textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={readOnlyArguments ? '' : draft.content} disabled={disabled || readOnlyArguments} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
+      {finished ? <pre className={css.readonlyPrompt}>{readOnlyArguments ? t('content.unsafe-saved') : draft.content}</pre> : <Textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={readOnlyArguments ? '' : draft.content} disabled={disabled || readOnlyArguments} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
     </div>
     {readOnlyArguments && !finished && <p className={css.detailNotice} role="status">{t('content.unsafe-saved')}</p>}
     {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('target.workflow-name', { name: record.target.workflow_id })}</p>}

@@ -253,6 +253,7 @@
         "../composer/stop-sequence",
         "../composer/submission-policy",
         "../new-conversation/first-submit",
+        "@/components/ui/textarea",
         "react"
       ],
       "excluded_dependencies": [
@@ -261,7 +262,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "4f1806f54960054b985ee19eafc05243aad93aa528144a145421c3570f39e7e0",
+      "local_sha256": "5107fdc506e835b09e5ae22d43489e69f5416a47c9ec3d62dded5d1366d6c697",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -301,6 +302,7 @@
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
+        "@/components/ui/textarea",
         "clsx",
         "react"
       ],
@@ -310,7 +312,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b1a658cb26a1d89e165e536d6b62df17a91a40876e719a2f7eaf6ec2d5ec5ecf",
+      "local_sha256": "09718d2077c5c82ef842bbcfae5254204feac4f6b581bdf91ed98c4c6287b7ac",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -526,6 +528,7 @@
         "../../presentation/primitives/icons",
         "../components/Artifact",
         "./QueueDock.module.css",
+        "@/components/ui/textarea",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -536,7 +539,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "abb33c54394450b88a889547406fe13fe88510e02d99c6787917214ff146dab3"
+      "local_sha256": "97e537a4aba0438a887691104892dfcea6be0316b8a646200965388f757ff31e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -2543,7 +2546,7 @@
         "@/components/ui/tooltip",
         "react"
       ],
-      "local_sha256": "65a8037aa570274939f29ee20318521753586b91bde7bfeb83c95383c3c5344b",
+      "local_sha256": "49a080e3005dca294ab14c12b7351606705613cccbdab3f1337819ddaebc1c85",
       "classification": "A",
       "additional_sources": [
         {
@@ -7924,6 +7927,7 @@
         "./model",
         "./scheduler.module.css",
         "./timing",
+        "@/components/ui/textarea",
         "@/presentation/primitives/Input",
         "react"
       ],
@@ -7932,7 +7936,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "a61e8a3de28dbeabce8c2e473229db292abb181fdf6175241e3870d95fa83325"
+      "local_sha256": "d7f774924e51d16fedc806aebc0717e5424c1eefa85bf256917b6a61fcf4f86a"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

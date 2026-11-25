@@ -18,6 +18,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { IconCheckOutline14, IconChevronDownOutline14, IconChevronLeftOutline14, IconChevronRightOutline14, IconChevronUpOutline14, IconCloseOutline16, IconEditOutline16 } from '../../presentation/primitives/icons';
 import css from '../../presentation/agent/Question.module.css';
+import { Textarea } from '@/components/ui/textarea';
 
 export function parseRecommendedLabel(label: string) {
   const suffix = /\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$/i;
@@ -42,7 +43,7 @@ function AnswerField({ variant, value, disabled, autoFocus, onChange, onKeyDown,
   // sizes an empty final line, so it never passes through the locale.
   return <div className={clsx(css.field, variant === 'inline' ? css.customInline : css.customBlock)}>
     <div aria-hidden className={css.fieldMirror}>{`${value}\n`}</div>
-    <textarea className={css.fieldInput} value={value} disabled={disabled} rows={1} autoFocus={autoFocus} aria-label={placeholder} placeholder={placeholder} onChange={onChange} onKeyDown={onKeyDown} />
+    <Textarea className={css.fieldInput} value={value} disabled={disabled} rows={1} autoFocus={autoFocus} aria-label={placeholder} placeholder={placeholder} onChange={onChange} onKeyDown={onKeyDown} />
   </div>;
 }
 /** Composer takeover for one pending native questionnaire. `status` is shown

@@ -20,6 +20,7 @@ import {
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { ArtifactContext } from '../components/Artifact';
 import css from './QueueDock.module.css';
+import { Textarea } from '@/components/ui/textarea';
 
 type OperationKind = 'edit' | 'remove' | 'steer';
 
@@ -289,7 +290,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const discardDisabled = pendingOperation;
   const editor = draft ? <div className={css.editPanel}>
     <div className={css.editorField}>
-      <textarea ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
+      <Textarea ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
         onChange={event => {
           const text = event.currentTarget.value;
           clearCopyState();

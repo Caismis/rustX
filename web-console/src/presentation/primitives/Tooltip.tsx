@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 // Tooltip: coss ui/Base UI tooltip behind rustX's single-anchor contract.
 
-import type { ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { Tooltip as CossTooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 import { ShortcutKeys } from './ShortcutKeys'
 
@@ -31,9 +31,27 @@ export function Tooltip({ label, shortcutKeys, side = 'right', delayMs = 0, disa
   children: ReactElement
 }) {
   const resolvedLabel = typeof label === 'function' ? label() : label
+  const [open, setOpen] = useState(false)
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelOpenTimer = () => {
+    if (openTimer.current !== null) clearTimeout(openTimer.current)
+    openTimer.current = null
+  }
+  useEffect(() => cancelOpenTimer, [])
   return (
-    <CossTooltip disabled={disabled}>
-      <TooltipTrigger render={children} delay={delayMs} closeOnClick />
+    <CossTooltip disabled={disabled} open={open} onOpenChange={(next, details) => {
+      if (next && delayMs > 0 && details.reason === 'trigger-hover' && details.event.type === 'mouseenter') {
+        cancelOpenTimer()
+        openTimer.current = setTimeout(() => {
+          openTimer.current = null
+          setOpen(true)
+        }, delayMs)
+        return
+      }
+      if (!next) cancelOpenTimer()
+      setOpen(next)
+    }}>
+      <TooltipTrigger render={children} delay={0} closeOnClick />
       <TooltipPopup role="tooltip" side={side} sideOffset={side === 'right' ? 10 : 8} style={maxWidth === undefined ? undefined : { maxWidth }}>
         {resolvedLabel && <span>{resolvedLabel}</span>}
         {!!shortcutKeys?.length && <ShortcutKeys keys={shortcutKeys} variant="tooltip" />}

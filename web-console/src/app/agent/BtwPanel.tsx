@@ -10,6 +10,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import composerCss from '../../presentation/agent/Composer.module.css';
 import css from './BtwPanel.module.css';
+import { Textarea } from '@/components/ui/textarea';
 const states = {
   submitting: 'agent:btw.submitting', uncertain: 'agent:btw.uncertain', preparing: 'agent:btw.preparing', running: 'agent:btw.running', retrying: 'agent:btw.retrying', settling: 'agent:btw.settling', complete: 'agent:btw.complete', cancelled: 'agent:btw.cancelled', failed: 'agent:btw.failed', incomplete: 'agent:btw.incomplete', unavailable: 'agent:btw.unavailable', notAdmitted: 'agent:btw.notAdmitted',
 } as const satisfies Record<BtwPhase, TranslationKey>;
@@ -54,7 +55,7 @@ export function BtwPanel({ client, sessionId, visible, close }: { client: AppSer
         {question?.diagnostic && question.diagnostic !== 'cancelled' && <p className={css.error} role="alert">{failures[question.diagnostic] ? tx(failures[question.diagnostic]) : question.diagnostic}</p>}
         {error && <p className={css.error} role="alert">{error}</p>}
         <div className={composerCss.card}>
-          <div className={composerCss.editor}><textarea className={composerCss.input} aria-label={tx('agent:btw.question')} aria-describedby={hintId} placeholder={tx('agent:btw.question')} value={active ? '' : draft} disabled={!!active || !available} maxLength={16_384} rows={1} onChange={event => { try { client.auxiliary.setDraft(sessionId, event.target.value); setError(undefined); } catch (cause) { setError(String(cause).slice(0, 512)); } }} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); submit(); } }}/></div>
+          <div className={composerCss.editor}><Textarea className={composerCss.input} aria-label={tx('agent:btw.question')} aria-describedby={hintId} placeholder={tx('agent:btw.question')} value={active ? '' : draft} disabled={!!active || !available} maxLength={16_384} rows={1} onChange={event => { try { client.auxiliary.setDraft(sessionId, event.target.value); setError(undefined); } catch (cause) { setError(String(cause).slice(0, 512)); } }} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); submit(); } }}/></div>
           <div className={composerCss.row}>
             <div className={composerCss.trailing}>
               {cancellable ? <button type="button" className={composerCss.primary} aria-label={tx('agent:btw.cancel')} title={tx('agent:btw.cancel')} disabled={!available || question?.cancelling} onClick={() => run(() => client.auxiliary.cancel(sessionId))}><IconStopFill16/></button>

@@ -8,6 +8,7 @@ import { StateDot } from '../../presentation/primitives/StateDot';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import actionCss from './TurnTail.module.css';
 import css from './UserMessageVersions.module.css';
+import { Textarea } from '@/components/ui/textarea';
 
 export interface UserMessageVersionLabels {
   edit: string;
@@ -118,7 +119,7 @@ export function UserMessageEditor({
         if (canRetry && !event.repeat) event.currentTarget.requestSubmit();
       }
     }}>
-      <textarea className={css.input} aria-label={labels.input} value={editing.text}
+      <Textarea className={css.input} aria-label={labels.input} value={editing.text}
         rows={Math.max(3, editing.text.split('\n', 10).length)}
         disabled={unavailable} autoFocus onChange={event => editing.onText(event.target.value)} />
       <div className={css.editorActions}>

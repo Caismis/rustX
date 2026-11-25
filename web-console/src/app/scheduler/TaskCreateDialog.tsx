@@ -21,6 +21,7 @@ import { useTaskCopy, type TaskManagerKey } from './copy';
 import { browserZone, timingDraft, timingValue, TimingInputError } from './timing';
 import { TimingEditor } from './TimingEditor';
 import css from './TaskCreateDialog.module.css';
+import { Textarea } from '@/components/ui/textarea';
 
 const initialTiming = () => timingDraft({ type: 'cron', expression: '0 9 * * *', time_zone: browserZone() });
 const restoreTiming = (timing?: ScheduleTiming) => !timing ? initialTiming()
@@ -103,7 +104,7 @@ export function TaskCreateDialog({ client, host, authority, creation, open, clos
       footer={<><Button disabled={pending} onClick={dismiss}>{t('action.cancel')}</Button>{state.phase === 'failed' && state.locked && state.retryable && <Button onClick={() => creation.reset()}>{t('create.edit')}</Button>}{state.errorKind === 'create_uncertain' && <Button onClick={() => creation.reset()}>{t('create.start-over')}</Button>}<Button variant="primary" disabled={!connected || pending || (state.locked ? !state.retryable : !ready || !text.trim())} onClick={() => void submit()}>{t(pending ? 'create.pending' : state.locked ? 'create.retry' : 'create.confirm')}</Button></>}>
       <div className={css.form}>
         <label className={css.instructionLabel} htmlFor={id + '-instruction'}>{t('create.instruction')}</label>
-        <textarea data-modal-autofocus="" id={id + '-instruction'} className={css.instruction} placeholder={t('create.placeholder')} value={text} disabled={disabled} onChange={event => { setText(event.target.value); setValidation(undefined); }}/>
+        <Textarea data-modal-autofocus="" id={id + '-instruction'} className={css.instruction} placeholder={t('create.placeholder')} value={text} disabled={disabled} onChange={event => { setText(event.target.value); setValidation(undefined); }}/>
         <div className={css.timing}><TimingEditor value={timing} change={value => { setTiming(value); setValidation(undefined); }} disabled={disabled} t={t} locale={locale}/></div>
         <button className={css.advancedToggle} type="button" aria-expanded={advanced} aria-controls={id + '-advanced'} onClick={() => setAdvanced(value => !value)}>{t('create.advanced')}<IconChevronDownOutline14 className={advanced ? css.expanded : undefined}/></button>
         {advanced && <div id={id + '-advanced'} className={css.advanced}>
