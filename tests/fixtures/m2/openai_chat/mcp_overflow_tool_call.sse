@@ -1,0 +1,5 @@
+data: {"id":"mcp-overflow","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"overflow-call","type":"function","function":{"name":"echo","arguments":"{\"arguments\":{}}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+: end of fixture

@@ -9,13 +9,10 @@
 //! sandbox.
 
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use super::environment::{PreparedCommand, ToolEnvironment};
+use super::environment::ToolEnvironment;
 use super::workspace::Workspace;
 use super::workspace_python::{self, PythonSelection};
 
@@ -79,14 +76,6 @@ impl std::fmt::Debug for ExecutionHost {
 }
 
 impl ExecutionHost {
-    pub(crate) fn entries(&self) -> &BTreeMap<String, String> {
-        &self.entries
-    }
-
-    pub(crate) fn closed(&self) -> Option<&'static str> {
-        self.closed
-    }
-
     fn from_unicode(
         entries: BTreeMap<String, String>,
         omitted_non_unicode: u32,
@@ -110,12 +99,6 @@ pub(crate) fn current() -> Arc<ExecutionHost> {
     Arc::clone(host_slot().get_or_init(|| Arc::new(capture_process())))
 }
 
-/// Installs a parent snapshot before any child capture. An unavailable snapshot
-/// closes native Bash rather than recapturing the child process environment.
-pub(crate) fn install_child_snapshot(runtime_root: Option<&Path>) -> Result<(), String> {
-    install_child_snapshot_into(host_slot(), runtime_root)
-}
-
 fn install_child_snapshot_into(
     slot: &OnceLock<Arc<ExecutionHost>>,
     runtime_root: Option<&Path>,
@@ -133,22 +116,6 @@ fn install_child_snapshot_into(
     slot.set(Arc::new(host)).map_err(|_| {
         "the child host was captured before its parent snapshot was installed".to_owned()
     })
-}
-
-/// Writes the parent snapshot into the child runtime root before spawn.
-pub(crate) fn publish_child_snapshot(runtime_root: &Path) -> Result<(), String> {
-    let host = current();
-    let bytes = encode_snapshot(&host)?;
-    let path = runtime_root.join(SNAPSHOT_FILE);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(|error| format!("could not store the child host snapshot: {error}"))?;
-    file.write_all(&bytes)
-        .map_err(|error| format!("could not store the child host snapshot: {error}"))?;
-    Ok(())
 }
 
 fn capture_process() -> ExecutionHost {
@@ -241,31 +208,16 @@ fn excluded_from_bootstrap(key: &str) -> bool {
         || key.starts_with("RUSTX_TEST_")
 }
 
-/// Freezes native Bash before approval. The returned value is an invocation clone.
-pub(crate) fn freeze_bash(base: &ToolEnvironment, workspace: &Workspace) -> ToolEnvironment {
-    let selection = workspace_python::observe(workspace.root());
-    match compose(current().as_ref(), base, &selection) {
-        Ok(entries) => base
-            .clone()
-            .with_prepared_command(PreparedCommand::Entries(Arc::new(entries))),
-        Err(reason) => base
-            .clone()
-            .with_prepared_command(PreparedCommand::Closed(reason)),
-    }
-}
-
 /// Resolves the command environment the Bash supervisor will apply.
 pub(crate) fn command_entries(
     environment: &ToolEnvironment,
     workspace: &Workspace,
 ) -> Result<Vec<(String, String)>, String> {
+    #[cfg(test)]
     if let Some(prepared) = environment.prepared_command() {
-        return match prepared {
-            PreparedCommand::Entries(entries) => Ok(entries.as_ref().clone()),
-            PreparedCommand::Closed(reason) => Err((*reason).to_owned()),
-        };
+        return Ok(prepared.0.as_ref().clone());
     }
-    let selection = workspace_python::observe(workspace.root());
+    let selection = workspace_python::fixture_selection(workspace.root());
     compose(current().as_ref(), environment, &selection).map_err(str::to_owned)
 }
 
@@ -365,7 +317,7 @@ mod tests {
     use super::{
         PYTHON_ACTIVATION, command_entries, compose, excluded_after_overrides, host_from_entries,
     };
-    use crate::tools::environment::{PreparedCommand, ToolEnvironment};
+    use crate::tools::environment::ToolEnvironment;
     use crate::tools::workspace::Workspace;
     use crate::tools::workspace_python::PythonSelection;
     use std::path::PathBuf;
@@ -522,8 +474,9 @@ mod tests {
             ("HOME".to_owned(), "/users/ada".to_owned()),
             ("PATH".to_owned(), "/frozen/bin".to_owned()),
         ];
-        let environment = ToolEnvironment::new()
-            .with_prepared_command(PreparedCommand::Entries(Arc::new(frozen.clone())));
+        let environment = ToolEnvironment::new().with_prepared_command(
+            crate::tools::environment::PreparedCommand(Arc::new(frozen.clone())),
+        );
         let entries = command_entries(&environment, &workspace).expect("entries");
         assert_eq!(entries, frozen);
         assert!(!format!("{environment:?}").contains("/users/ada"));

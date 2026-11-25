@@ -16,8 +16,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio_util::sync::CancellationToken;
-
 use crate::runtime::types::CancellationReason;
 
 /// Cancellation signal for one operation.
@@ -30,8 +28,7 @@ use crate::runtime::types::CancellationReason;
 /// normalized cancelled result.
 #[derive(Clone, Debug, Default)]
 pub struct CancellationSignal {
-    token: CancellationToken,
-    commit_gate: Arc<std::sync::Mutex<()>>,
+    physical: rustx_process_supervisor::signal::ProcessSignal,
 }
 
 impl CancellationSignal {
@@ -39,9 +36,16 @@ impl CancellationSignal {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            token: CancellationToken::new(),
-            commit_gate: Arc::default(),
+            physical: rustx_process_supervisor::signal::ProcessSignal::new(),
         }
+    }
+
+    /// The physical signal family the supervised-process driver consumes.
+    /// The clone shares the token and commit gate, so physical cancellation
+    /// and semantic arbitration stay on one family.
+    #[must_use]
+    pub fn physical(&self) -> rustx_process_supervisor::signal::ProcessSignal {
+        self.physical.clone()
     }
 
     /// Requests cancellation of the associated operation.
@@ -52,17 +56,13 @@ impl CancellationSignal {
     /// Publish the owner's cause and signal under the same checkpoint-grant gate.
     /// No observer can accept cancellation before a concurrently granted commit.
     pub(crate) fn cancel_with<T>(&self, publish_cause: impl FnOnce() -> T) -> T {
-        let _gate = self.commit_gate.lock().expect("cancellation commit gate");
-        let result = publish_cause();
-        self.token.cancel();
-        result
+        self.physical.cancel_with(publish_cause)
     }
 
     /// A short native grant shares the ancestor cancellation boundary. The
     /// closure must not await, write SQL or recursively use this signal.
     pub(crate) fn with_active<T>(&self, grant: impl FnOnce() -> T) -> Option<T> {
-        let _gate = self.commit_gate.lock().expect("cancellation commit gate");
-        (!self.token.is_cancelled()).then(grant)
+        self.physical.with_active(grant)
     }
 
     pub(crate) fn authorize_compaction_commit_with(
@@ -70,7 +70,8 @@ impl CancellationSignal {
         operation_id: crate::runtime::identity::CompactionOperationId,
         eligible: impl FnOnce() -> bool,
     ) -> Option<CompactionCommitGrant> {
-        self.with_active(|| eligible().then_some(CompactionCommitGrant { operation_id }))
+        self.physical
+            .with_active(|| eligible().then_some(CompactionCommitGrant { operation_id }))
             .flatten()
     }
 
@@ -80,8 +81,7 @@ impl CancellationSignal {
     #[must_use]
     pub fn child(&self) -> Self {
         Self {
-            token: self.token.child_token(),
-            commit_gate: self.commit_gate.clone(),
+            physical: self.physical.child(),
         }
     }
 
@@ -94,19 +94,26 @@ impl CancellationSignal {
         &self,
         operation_id: crate::runtime::identity::CompactionOperationId,
     ) -> Option<CompactionCommitGrant> {
-        let _gate = self.commit_gate.lock().expect("cancellation commit gate");
-        (!self.token.is_cancelled()).then_some(CompactionCommitGrant { operation_id })
+        self.physical
+            .with_active(|| CompactionCommitGrant { operation_id })
     }
 
     /// Whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.token.is_cancelled()
+        self.physical.is_cancelled()
     }
 
     /// A future that resolves when cancellation is requested.
     pub async fn cancelled(&self) {
-        self.token.cancelled().await;
+        self.physical.cancelled().await;
+    }
+}
+
+impl From<&CancellationSignal> for rustx_process_supervisor::signal::ProcessSignal {
+    /// Old driver consumers take the physical signal family directly.
+    fn from(signal: &CancellationSignal) -> Self {
+        signal.physical()
     }
 }
 
@@ -163,6 +170,8 @@ pub struct ExecutionCancellation {
     signal: CancellationSignal,
     cause: Arc<dyn CancellationCause>,
     native_cause: Option<Arc<NativeCancellationAuthority>>,
+    /// Fixed hard deadline captured at the native execution frontier.
+    deadline: Option<tokio::time::Instant>,
     /// A process-local failure marker for semantic control paths that can no
     /// longer safely release the owning execution. It is deliberately
     /// separate from cancellation: a broken interaction route must not be
@@ -213,6 +222,7 @@ impl ExecutionCancellation {
             signal,
             cause,
             native_cause: None,
+            deadline: None,
             interaction_failure: InteractionFailureSignal::default(),
         }
     }
@@ -236,6 +246,7 @@ impl ExecutionCancellation {
             signal,
             cause: Arc::new(DetachedCause(reason)),
             native_cause: None,
+            deadline: None,
             interaction_failure: InteractionFailureSignal::default(),
         }
     }
@@ -314,6 +325,18 @@ impl ExecutionCancellation {
         self.signal.child()
     }
 
+    pub(crate) fn hard_deadline(&self) -> Option<tokio::time::Instant> {
+        self.deadline
+    }
+
+    pub(crate) fn with_hard_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        self.deadline = Some(
+            self.deadline
+                .map_or(deadline, |parent| parent.min(deadline)),
+        );
+        self
+    }
+
     /// Derives one per-execution child view together with its owner-side
     /// trigger (Issue #204).
     ///
@@ -333,6 +356,7 @@ impl ExecutionCancellation {
             signal: signal.clone(),
             cause: Arc::clone(&self.cause),
             native_cause: Some(authority.clone()),
+            deadline: self.deadline,
             interaction_failure: self.interaction_failure.clone(),
         };
         (ExecutionCancellationTrigger { signal, authority }, view)

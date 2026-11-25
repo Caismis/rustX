@@ -6,7 +6,7 @@
 //! deliberately outside the child's own process group. Killing the child's
 //! group therefore cannot reach them. This module is the parent half of the
 //! generic anchor protocol described in
-//! [`crate::runtime::nested_containment`]:
+//! [`rustx_process_supervisor::nested_containment`]:
 //!
 //! ```text
 //! child   ProcessUnitAnchorOffered { unit_id, pgid }
@@ -43,7 +43,7 @@
 //! The owner therefore settles every still-retained anchor **after** the
 //! direct child is reaped and before it publishes an outcome. Containment
 //! reuses the one proven primitive
-//! ([`emergency_contain_group`](crate::runtime::supervised_unit::emergency_contain_group)):
+//! ([`emergency_contain_group`](rustx_process_supervisor::supervised_unit::emergency_contain_group)):
 //! retain the adopted anchor with `WNOWAIT`, issue one anchored `SIGKILL`,
 //! and prove the group terminal with a group-scoped `ECHILD`.
 //!
@@ -55,7 +55,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::runtime::identity::ProcessUnitId;
+use rustx_process_supervisor::identity::ProcessUnitId;
 
 /// The exact anchors one child currently has retained in this parent.
 #[derive(Debug, Default)]
@@ -211,7 +211,7 @@ pub(crate) async fn contain_retained(retained: Vec<(ProcessUnitId, i32)>) -> Nes
 
 #[cfg(unix)]
 async fn contain_one(pgid: i32) -> Result<(), String> {
-    use crate::runtime::supervised_unit::{EmergencyContainment, contain_adopted_group};
+    use rustx_process_supervisor::supervised_unit::{EmergencyContainment, contain_adopted_group};
     // The containment primitive blocks on kernel waits, so it runs on the
     // blocking pool.
     match tokio::task::spawn_blocking(move || contain_adopted_group(pgid)).await {
@@ -234,7 +234,7 @@ async fn contain_one(_pgid: i32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{AnchorRefusal, NestedUnitSettlement, RetainedProcessUnits};
-    use crate::runtime::identity::ProcessUnitId;
+    use rustx_process_supervisor::identity::ProcessUnitId;
 
     fn unit(name: &str) -> ProcessUnitId {
         ProcessUnitId::new(name)
@@ -303,7 +303,7 @@ mod tests {
         assert!(retained.is_empty());
         assert_eq!(
             retained.take(),
-            [] as [(crate::runtime::identity::ProcessUnitId, i32); 0]
+            [] as [(rustx_process_supervisor::identity::ProcessUnitId, i32); 0]
         );
     }
 

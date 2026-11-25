@@ -178,9 +178,10 @@ impl ProspectiveSessionConfig {
         }) {
             return false;
         }
-        if demand_a.iter().any(|id| {
-            self.managed_python.packages().get(id) != other.managed_python.packages().get(id)
-        }) {
+        // Runtime generations retain the complete frozen package catalog.
+        // A new snapshot can incorporate an undemanded package without
+        // preparing it, and gives later admissions the current source bytes.
+        if self.managed_python != other.managed_python {
             return false;
         }
         let selected = |source: &Self| {
@@ -548,7 +549,12 @@ impl ProspectiveSessionConfig {
     /// Recheck physical targets immediately before resource preparation. This
     /// never rereads launch documents and is not an execution filesystem sandbox.
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
-        if std::fs::canonicalize(&self.workspace).as_ref().ok() != Some(&self.workspace) {
+        if matches!(
+            self.workspace_resources,
+            super::WorkspaceResourceAuthority::Authored(_)
+        ) && !super::capture::canonical_directory(&self.workspace)
+            .is_ok_and(|current| current == self.workspace)
+        {
             return Err("Workspace physical binding changed after capture".into());
         }
         let agents = self.admitted_agent_dependencies();
@@ -557,6 +563,19 @@ impl ProspectiveSessionConfig {
             .values()
             .filter(|role| agents.contains(&role.identity))
         {
+            if role.layer == "session" {
+                continue;
+            }
+            if role.layer == "workspace"
+                && matches!(
+                    self.workspace_resources,
+                    super::WorkspaceResourceAuthority::Bound
+                )
+            {
+                // The Client fenced these immutable definition bytes. The
+                // Server's path can name an entirely different resource.
+                continue;
+            }
             let boundary = if role.layer == "workspace" {
                 &self.workspace
             } else {
@@ -566,6 +585,17 @@ impl ProspectiveSessionConfig {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// An explicit Doctor plan is authorized for the directory it inspected.
+    /// A Session draft has a separate physical ownership check at transfer.
+    pub(crate) fn validate_probe_authority(&self) -> Result<(), String> {
+        if let super::WorkspaceResourceAuthority::Authored(identity) = self.workspace_resources
+            && super::capture::authored_workspace_identity(&self.workspace).ok() != Some(identity)
+        {
+            return Err("Workspace physical binding changed after capture".into());
+        }
+        self.validate_resource_authority()
     }
     /// The immutable validated settings this launch resolved.
     #[must_use]

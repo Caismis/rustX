@@ -4,7 +4,7 @@ import { createActor } from 'xstate';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
-import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v80';
+import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v81';
 import { mutationOutcome, settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
@@ -165,9 +165,9 @@ export async function newSubagent(name: string) {
 }
 
 /** Navigate to an independent module, using its real resource surface. */
-export async function openResourceModule(module:ResourceModule) {
+export async function openResourceModule(module:ResourceModule, lifecycle: 'ready' | 'failed' = 'ready') {
  await act(async()=>resourceNavigation?.(module));
- await waitFor(()=>expect(document.querySelector(`[data-resource-module="${module}"][data-lifecycle="ready"]`)).toBeTruthy());
+ await waitFor(()=>expect(document.querySelector(`[data-resource-module="${module}"][data-lifecycle="${lifecycle}"]`)).toBeTruthy());
 }
 
 /** Open a detail from a resource list through its actual row, so list/detail

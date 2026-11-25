@@ -17,12 +17,14 @@ pub mod artifacts;
 pub mod background;
 pub mod deadline;
 pub mod environment;
+#[cfg(test)]
 pub mod execution_environment;
 pub mod executor;
 pub mod host;
 pub mod invocation;
 pub mod limits;
 pub mod locator;
+pub(crate) mod managed_import;
 pub mod managed_output;
 pub mod mcp;
 pub mod native;
@@ -34,7 +36,8 @@ pub mod session_files;
 pub mod todo;
 pub mod types;
 pub mod workspace;
-pub mod workspace_python;
+#[cfg(test)]
+pub(crate) use rustx_execution_client::workspace_python;
 
 pub use native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 
@@ -54,7 +57,9 @@ pub use executor::{
     ToolRegistryError, ToolSettlement,
 };
 pub use locator::LocatorError;
-pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
+#[cfg(any(test, feature = "test-support"))]
+pub use managed_output::{BackgroundOutput, ResultSpill};
+pub use managed_output::{ManagedOutputError, ManagedToolOutput};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{
     ARGUMENTS_FIELD, EXECUTION_MODE_DESCRIPTION, EXECUTION_MODE_DESCRIPTION_REMINDER,

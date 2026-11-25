@@ -2,7 +2,7 @@
 import {expect, it} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {gunzipSync} from 'node:zlib';
-import type {Notification, RuntimeClientEvent, RuntimeClientCheckpoint} from '../../protocol/app-server/v80';
+import type {Notification, RuntimeClientEvent, RuntimeClientCheckpoint} from '../../protocol/app-server/v81';
 import {checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, expandRuntimeEvent} from '../../protocol/app-server/projection';
 import {deltaEvent, listDelta, initialLiterals, advanceLiterals} from '../../protocol/app-server/test-support/projection-delta';
 import {ObservationChain} from '../../protocol/app-server/observation';

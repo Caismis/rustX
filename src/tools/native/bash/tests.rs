@@ -1,9 +1,6 @@
-use super::{BashTestControl, BashTool, NAME};
+use super::{BashTestControl, FixtureBashTool, NAME};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
-use crate::runtime::process_runner::{
-    MSG_ALL_CHILDREN_REAPED, SupervisorEvent, SupervisorEventReader,
-};
 use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
@@ -13,6 +10,9 @@ use crate::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
+use rustx_process_supervisor::process_runner::{
+    MSG_ALL_CHILDREN_REAPED, SupervisorEvent, SupervisorEventReader,
+};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -103,7 +103,7 @@ async fn run_with_control(
     workspace: Workspace,
     timeout_seconds: Option<u64>,
 ) -> ToolExecutionResult {
-    let tool = BashTool::with_test_control(control);
+    let tool = FixtureBashTool::with_test_control(control);
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
         stdout_capture: None,
@@ -196,7 +196,7 @@ async fn start_supervisor_loss_fixture(
 ) -> (
     tempfile::TempDir,
     tokio::task::JoinHandle<ToolExecutionResult>,
-    crate::runtime::process_runner::RunnerChannelEofHook,
+    rustx_process_supervisor::process_runner::RunnerChannelEofHook,
     i32,
     i32,
     i32,
@@ -802,7 +802,7 @@ impl Drop for HoldFifoGuard {
 
 #[cfg(target_os = "linux")]
 fn assert_post_shell_exit_cancel_trace(trace: &std::path::Path, anchor_pid: i32) {
-    use super::supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
 
     let evidence = std::fs::read_to_string(trace).unwrap();
     let entries: Vec<Entry> = evidence
@@ -906,8 +906,8 @@ fn verify_post_shell_exit_observations(obs: PostShellExitObservations, trace: &s
 
 #[cfg(target_os = "linux")]
 async fn assert_exact_shell_exit_cancel_case(case_label: &'static str, redirect_stdio: bool) {
-    use super::supervisor::diagnostics::FixtureControl;
     use nix::unistd::{Pid, getpgid};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl;
 
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
@@ -1465,8 +1465,8 @@ async fn control_channel_abandonment_contains_the_owned_tree() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One native failure/containment/output settlement proof.
 async fn fallback_containment_does_not_kill_unrelated_processes() {
-    use super::supervisor::diagnostics::{Entry, Event, FixtureControl};
     use futures_util::FutureExt;
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::AsyncReadExt;
 
     let (dir, artifacts, tool_output, workspace) = fixture();
@@ -1552,7 +1552,7 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
     assert!(process_alive(shell_pid));
     assert_eq!(
         control.recorded_signals(),
-        [] as [crate::runtime::process_runner::RecordedSignal; 0]
+        [] as [rustx_process_supervisor::process_runner::RecordedSignal; 0]
     );
     assert!(
         !std::fs::read_to_string(&trace)
@@ -1606,12 +1606,12 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
     assert_eq!(
         control.recorded_signals(),
         vec![
-            super::executor::RecordedSignal {
+            super::fixture::RecordedSignal {
                 pgid: anchor_pid,
                 signal: "SIGTERM",
                 emitted: false
             },
-            super::executor::RecordedSignal {
+            super::fixture::RecordedSignal {
                 pgid: anchor_pid,
                 signal: "SIGKILL",
                 emitted: true
@@ -2211,7 +2211,7 @@ async fn quiescence_watchdog_cannot_bypass_process_terminality() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One exact native stop/containment/reap scenario.
 async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
-    use super::supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let socket_dir = tempfile::Builder::new()
         .prefix("rx-stop-")
@@ -2764,7 +2764,7 @@ async fn concurrent_supervisor_loss_containment_is_isolated() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bash_catastrophic_containment_does_not_touch_foreign_adopted_child() {
-    crate::runtime::process_supervision::ensure_child_subreaper()
+    rustx_process_supervisor::process_supervision::ensure_child_subreaper()
         .expect("the runtime process is a child subreaper");
     let (dir, _artifacts, _tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();

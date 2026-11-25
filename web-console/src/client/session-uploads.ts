@@ -3,7 +3,7 @@ import { uploadOperationId, type transferUpload } from '../../../protocol/app-se
 import { RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
 import { validateRaster } from './raster';
 import { UploadFailure } from './uploads';
-import type { AttachmentTarget, UploadReceipt, UploadedFile, UploadedFileRef } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, UploadReceipt, UploadedFile, UploadedFileRef } from '../../../protocol/app-server/v81';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
 /** What native uploads read from and write to their client. */

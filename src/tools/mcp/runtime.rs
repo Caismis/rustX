@@ -15,7 +15,7 @@ use rmcp::model::ProtocolVersion;
 use rmcp::service::{RoleClient, RunningService};
 
 use crate::runtime::identity::McpServerId;
-use crate::runtime::interactive_process::SupervisedInteractiveProcess;
+use rustx_process_supervisor::interactive_process::SupervisedInteractiveProcess;
 
 use super::executor::CanonicalMcpTool;
 use super::handler::McpClientHandler;
@@ -44,6 +44,65 @@ pub struct McpDiscoveryOutcome {
     pub tools: Vec<CanonicalMcpTool>,
 }
 
+// A peer can send more than one response frame per discovery. Bound the
+// aggregate before retaining a page, including empty pages with cursors.
+const MAX_TOOL_CATALOG_PAGES: usize = 64;
+const MAX_TOOL_CATALOG_ENTRIES: usize = 1024;
+const MAX_TOOL_CATALOG_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct CatalogPages {
+    tools: Vec<CanonicalMcpTool>,
+    known_cursors: std::collections::BTreeSet<String>,
+    bytes: usize,
+}
+
+impl CatalogPages {
+    fn push(&mut self, page: rmcp::model::ListToolsResult) -> Result<Option<String>, McpError> {
+        if self.tools.len().saturating_add(page.tools.len()) > MAX_TOOL_CATALOG_ENTRIES {
+            return Err(McpError::Discovery(
+                "MCP tool catalog exceeds its entry limit".into(),
+            ));
+        }
+        for tool in page.tools {
+            let canonical = CanonicalMcpTool::try_from(tool)?;
+            let bytes = serde_json::to_vec(&canonical)
+                .map_err(|_| McpError::Discovery("cannot encode MCP tool declaration".into()))?;
+            self.bytes = self.bytes.saturating_add(bytes.len());
+            if self.bytes > MAX_TOOL_CATALOG_BYTES {
+                return Err(McpError::Discovery(
+                    "MCP tool catalog exceeds its byte limit".into(),
+                ));
+            }
+            self.tools.push(canonical);
+        }
+        if let Some(cursor) = &page.next_cursor {
+            if self.known_cursors.len() + 1 == MAX_TOOL_CATALOG_PAGES {
+                return Err(McpError::Discovery(
+                    "MCP tool catalog exceeds its page limit".into(),
+                ));
+            }
+            self.bytes = self.bytes.saturating_add(cursor.len());
+            if self.bytes > MAX_TOOL_CATALOG_BYTES {
+                return Err(McpError::Discovery(
+                    "MCP tool catalog exceeds its byte limit".into(),
+                ));
+            }
+            if !self.known_cursors.insert(cursor.clone()) {
+                return Err(McpError::Discovery(
+                    "MCP tool catalog repeated a cursor".into(),
+                ));
+            }
+        }
+        Ok(page.next_cursor)
+    }
+
+    fn finish(mut self) -> Vec<CanonicalMcpTool> {
+        self.tools.sort_by(|left, right| left.name.cmp(&right.name));
+        self.tools
+    }
+}
+
 /// One shared runtime for every tool exposed by a configured server.
 pub struct McpServerRuntime {
     pub(super) credentials: crate::credentials::SourceCredentials,
@@ -63,6 +122,7 @@ pub struct McpServerRuntime {
         Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, McpClientHandler>>>>,
     pub(super) handler: McpClientHandler,
     pub(super) process: Option<Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
+    pub(super) remote_stdio: Option<Arc<super::stdio::Session>>,
     /// Closed by the owning capability drain before physical process
     /// settlement is awaited. Stale executor handles cannot start another
     /// remote request after the runtime's process boundary closes.
@@ -269,7 +329,7 @@ impl McpServerRuntime {
             return Ok(Vec::new());
         }
         let mut cursor = None;
-        let mut tools = Vec::new();
+        let mut catalog = CatalogPages::default();
         loop {
             let mut params = PaginatedRequestParams::default();
             params.cursor = cursor;
@@ -313,16 +373,9 @@ impl McpServerRuntime {
                     ));
                 }
             };
-            tools.extend(
-                page.tools
-                    .into_iter()
-                    .map(CanonicalMcpTool::try_from)
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
-            cursor = page.next_cursor;
+            cursor = catalog.push(page)?;
             if cursor.is_none() {
-                tools.sort_by(|left, right| left.name.cmp(&right.name));
-                return Ok(tools);
+                return Ok(catalog.finish());
             }
         }
     }
@@ -344,44 +397,32 @@ impl McpServerRuntime {
         if !self.capabilities.tools {
             return Ok(Vec::new());
         }
-        let tools = match self.peer.list_all_tools().await {
-            Ok(tools) => {
-                // Never freeze a catalog from a connection that has already
-                // violated the protocol.
-                if let Some(violation) = self.protocol_violation.violation() {
-                    self.poison_after_protocol_violation().await;
-                    return Err(protocol_violation_error(&self.server_id, &violation));
-                }
-                tools
+        let mut cursor = None;
+        let mut catalog = CatalogPages::default();
+        loop {
+            let mut params = rmcp::model::PaginatedRequestParams::default();
+            params.cursor = cursor;
+            let page = self.peer.list_tools(Some(params)).await;
+            if let Some(violation) = self.protocol_violation.violation() {
+                self.poison_after_protocol_violation().await;
+                return Err(protocol_violation_error(&self.server_id, &violation));
             }
-            Err(error) => {
-                if let Some(violation) = self.protocol_violation.violation() {
-                    self.poison_after_protocol_violation().await;
-                    return Err(protocol_violation_error(&self.server_id, &violation));
+            let page = page.map_err(|error| {
+                let diagnostic = super::diagnostics::service_error(&error, &self.credentials);
+                if matches!(
+                    error,
+                    rmcp::service::ServiceError::TransportClosed
+                        | rmcp::service::ServiceError::TransportSend(_)
+                ) {
+                    self.note_transport_loss(&diagnostic);
                 }
-                // A transport-class catalog failure proves this generation
-                // unusable; a correlated remote `tools/list` error does not
-                // and leaves the transport healthy.
-                if let rmcp::service::ServiceError::TransportClosed
-                | rmcp::service::ServiceError::TransportSend(_) = &error
-                {
-                    self.note_transport_loss(&super::diagnostics::service_error(
-                        &error,
-                        &self.credentials,
-                    ));
-                }
-                return Err(McpError::Discovery(super::diagnostics::service_error(
-                    &error,
-                    &self.credentials,
-                )));
+                McpError::Discovery(diagnostic)
+            })?;
+            cursor = catalog.push(page)?;
+            if cursor.is_none() {
+                return Ok(catalog.finish());
             }
-        };
-        let mut canonical = tools
-            .into_iter()
-            .map(CanonicalMcpTool::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
-        canonical.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(canonical)
+        }
     }
 
     /// Gracefully retires the runtime and its owned stdio process, when any.
@@ -435,6 +476,10 @@ impl McpServerRuntime {
         let process_settlement = match &self.process {
             Some(process) => process.lock().await.wait_for_settlement().await,
             None => Ok(()),
+        };
+        let process_settlement = match &self.remote_stdio {
+            Some(owner) => owner.close().await.map_err(|error| error.to_string()),
+            None => process_settlement,
         };
         let subscription = self.subscription.lock().await.take();
         let subscription_settlement = if let Some(subscription) = subscription {

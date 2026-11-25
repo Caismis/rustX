@@ -747,9 +747,7 @@ impl ClientInner {
                 execution_id: id.clone(),
             })?;
         registry
-            .resources()
-            .tool_output
-            .live_tail(id)
+            .live_output_tail(id)
             .map_err(|error| RuntimeClientError::ObservationUnavailable {
                 message: error.to_string(),
             })

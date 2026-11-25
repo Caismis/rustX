@@ -14,43 +14,13 @@
 //! └── *.py                                 supporting modules
 //! ```
 //!
-//! rustX discovers each package, freezes its code/dependency bytes into a
-//! fingerprint, prepares an isolated uv environment in the runtime-private
-//! store, and synthesizes one [`McpServerBinding`] per package. Authored
-//! resource permissions are captured with the winning package and frozen
-//! onto the prepared handle at prepare time; they are never part of the
-//! fingerprint-keyed env cache, so distinct permission objects cannot be
-//! shared through a code-only prepared state. From there everything —
-//! connect, `tools/list`, `tools/call`, epochs, availability, commit,
-//! leases, subagent crossing — is the generic MCP machinery of
-//! [`crate::tools::mcp`]; this module ends at the launch specification.
-//!
-//! # Store shape and ownership
-//!
-//! ```text
-//! <store-root>/                                     (under the runtime's
-//! ├── packages/<fingerprint>/                        environment store)
-//! │   ├── source/                    # immutable frozen package source copy
-//! │   ├── pyproject.toml             # rustX-generated project stub
-//! │   ├── uv.lock                    # rustX-generated lock
-//! │   ├── venv/                      # UV_PROJECT_ENVIRONMENT target
-//! │   └── manifest.json              # rustX frozen manifest
-//! └── uv-cache/                      # shared uv cache (scratch state)
-//! ```
-//!
-//! The fingerprint covers exactly the material inputs: the package identity
-//! (the synthesized `python:<folder>` MCP server identity), every package
-//! source file (path and bytes, sorted — this includes `requirements.txt`),
-//! the probed Python interpreter identity (path + version), the probed uv
-//! identity (path + version), [`MANAGED_FASTMCP_VERSION`], and OS/arch. No
-//! timestamps and no host paths: the package folder name is the logical
-//! identity, so moving the whole workspace to another host path never
-//! changes a package's prepared identity, while two distinct folders can
-//! never share one prepared environment even when every user-authored byte
-//! is identical. The same fingerprint reuses the prepared state after
-//! validating the manifest and re-hashing the frozen source; a corrupt
-//! state fails closed and is never mutated. A changed fingerprint prepares
-//! a new state directory; the old one is left untouched (no GC exists).
+//! The admitted Execution Client freezes the source, verifies and prepares
+//! the private Store, and launches the virtual environment interpreter over
+//! the generic stdio MCP path. Server snapshots retain the source identity,
+//! digest, and authored permissions for authorization and canonical results.
+//! The Server can also inspect authoring declarations without preparing the
+//! environment. Physical package and environment fixtures compile only for
+//! Rust tests.
 //!
 //! The managed `FastMCP` build is pinned to exactly one version
 //! ([`MANAGED_FASTMCP_VERSION`]) and a package may never declare `fastmcp`
@@ -68,25 +38,27 @@
 //! Python-specific framing, parsing, or recovery.
 
 use std::collections::BTreeMap;
+#[cfg(any(test, feature = "test-support"))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "test-support"))]
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, feature = "test-support"))]
 use sha2::Digest;
 
 use crate::runtime::identity::McpServerId;
-use crate::runtime::process_runner::{
-    ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec, SupervisedProcessRunner,
-};
-use crate::tools::environment::ToolEnvironment;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
 use crate::tools::types::ToolInvocationPolicy;
-#[cfg(test)]
-use crate::tools::workspace::Workspace;
 
+#[cfg(any(test, feature = "test-support"))]
+mod fixture_store;
+#[cfg(any(test, feature = "test-support"))]
 mod requirements;
+#[cfg(any(test, feature = "test-support"))]
+pub use fixture_store::{PreparedPythonPackage, PythonToolStore};
 
 /// The exact `FastMCP` build every managed Python package is prepared with.
 ///
@@ -129,19 +101,6 @@ pub const REQUIREMENTS_FILE: &str = "requirements.txt";
 /// [`ResourcePermissionSet`](crate::runtime::permission::ResourcePermissionSet) under `permissions`, plus exact-tool exceptions
 /// under `tools.<name>.permissions`. Absent means product/matrix defaults.
 pub const PERMISSIONS_FILE: &str = "permissions.toml";
-
-/// The fixed entrypoint every managed server is launched with.
-const ENTRYPOINT: &str = "server.py:mcp";
-const PACKAGES_DIRECTORY: &str = "packages";
-const UV_CACHE_DIRECTORY: &str = "uv-cache";
-const SOURCE_DIRECTORY: &str = "source";
-const VENV_DIRECTORY: &str = "venv";
-const MANIFEST_FILE: &str = "manifest.json";
-const MANIFEST_FORMAT: &str = "rustx-managed-python-package-v1";
-/// Finite deadline of one managed-Python runtime identity probe.
-const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
-/// Finite deadline of one managed-Python uv lock or materialization command.
-const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(10);
 
 /// A package discovery/preparation failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -186,8 +145,9 @@ pub struct PythonToolPackage {
     /// Excludes [`PERMISSIONS_FILE`]: that document is resource metadata
     /// captured onto this package, not frozen server source.
     files: Vec<PathBuf>,
-    source: Arc<PythonSource>,
+    source: PackageSource,
     source_digest: String,
+    pub(crate) watch_directories: Option<Vec<PathBuf>>,
     /// The normalized dependency lines of `requirements.txt` (comments and
     /// blank lines removed), in file order.
     requirements: Vec<String>,
@@ -197,13 +157,102 @@ pub struct PythonToolPackage {
     tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
+#[derive(Debug, Clone)]
+enum PackageSource {
+    #[cfg(any(test, feature = "test-support"))]
+    Local(Arc<PythonSource>),
+    Client(Arc<ClientSource>),
+    #[cfg(not(test))]
+    Unprepared,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl PackageSource {
+    fn local(&self) -> &PythonSource {
+        match self {
+            Self::Local(source) => source,
+            Self::Client(_) => unreachable!("only an explicit fixture uses the local Store"),
+            #[cfg(not(test))]
+            Self::Unprepared => unreachable!("the authoring declaration is not prepared"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ClientSource {
+    pub(crate) runtime: tokio::runtime::Handle,
+    pub(crate) endpoint: Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    pub(crate) key: rustx_execution_protocol::process::ProcessOperationKey,
+}
+
+impl Drop for ClientSource {
+    fn drop(&mut self) {
+        let endpoint = self.endpoint.clone();
+        let key = self.key.clone();
+        self.runtime
+            .spawn(endpoint.release_managed_python_source(key));
+    }
+}
+
+impl ClientSource {
+    async fn prepare(
+        &self,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Result<(), String> {
+        use rustx_execution_protocol::{
+            ReadError,
+            mcp::PythonSourceReply as Reply,
+            transport::{PAGE_REQUEST_TIMEOUT, recoverable_lane_loss},
+        };
+        use std::time::{Duration, Instant};
+        // Each subprocess retains its own legacy hard limit. The waiter
+        // additionally caps the full probe + lock + sync sequence.
+        let cutoff = Instant::now() + Duration::from_mins(22);
+        loop {
+            if cancellation.is_cancelled() || Instant::now() >= cutoff {
+                return Err(
+                    "Managed Python preparation did not finish in the admitted lifetime".into(),
+                );
+            }
+            let endpoint = self.endpoint.clone();
+            let signal = cancellation.clone();
+            let key = self.key.clone();
+            let one_exchange = cutoff.min(Instant::now() + PAGE_REQUEST_TIMEOUT);
+            let result = tokio::task::spawn_blocking(move || {
+                endpoint.prepare_managed_python_source(key, one_exchange, &signal)
+            })
+            .await
+            .map_err(|_| String::from("Managed Python preparation owner failed"))?;
+            match result {
+                Ok(Reply::Prepared) => return Ok(()),
+                Ok(Reply::Capturing | Reply::Preparing | Reply::Refused(ReadError::Busy)) => {}
+                Err(error)
+                    if recoverable_lane_loss(&error)
+                        || error.kind() == std::io::ErrorKind::WouldBlock => {}
+                _ => {
+                    return Err(
+                        "the admitted Client could not prepare the frozen Python environment"
+                            .into(),
+                    );
+                }
+            }
+            tokio::select! {
+                () = cancellation.cancelled() => return Err("Managed Python preparation cancelled".into()),
+                () = tokio::time::sleep(Duration::from_millis(50)) => {},
+            }
+        }
+    }
+}
+
 /// One anonymous backing file, with bounded in-memory file coordinates. Its last
 /// Arc closes the descriptor; the kernel owns cleanup even after cancellation.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 struct PythonSource {
     file: std::fs::File,
     entries: BTreeMap<PathBuf, (u64, u64, std::fs::Permissions)>,
 }
+#[cfg(any(test, feature = "test-support"))]
 impl PythonSource {
     fn copy_to(
         &self,
@@ -249,6 +298,93 @@ impl PythonSource {
 }
 
 impl PythonToolPackage {
+    #[cfg(not(test))]
+    pub(crate) fn inspect_authoring(root: &Path, name: &str) -> Result<Self, PythonToolError> {
+        validate_identifier(name)?;
+        let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
+        for required in [SERVER_FILE, REQUIREMENTS_FILE] {
+            directory.file(Path::new(required)).map_err(|_| {
+                PythonToolError::InvalidPackage(format!(
+                    "package {name:?} has no readable {required}"
+                ))
+            })?;
+        }
+        let (permissions, tool_permissions) = match directory.file(Path::new(PERMISSIONS_FILE)) {
+            Ok(_) => parse_permissions_document(root, &PythonToolError::InvalidPackage)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, BTreeMap::new()),
+            Err(error) => return Err(io_error(error)),
+        };
+        Ok(Self {
+            name: name.to_owned(),
+            root: root.to_path_buf(),
+            files: Vec::new(),
+            source: PackageSource::Unprepared,
+            source_digest: String::new(),
+            watch_directories: None,
+            requirements: Vec::new(),
+            permissions,
+            tool_permissions,
+        })
+    }
+
+    pub(crate) fn from_client(
+        name: String,
+        root: PathBuf,
+        source_digest: String,
+        permissions: Option<&[u8]>,
+        source: Arc<ClientSource>,
+        watch_directories: Option<Vec<PathBuf>>,
+    ) -> Result<Self, PythonToolError> {
+        validate_identifier(&name)?;
+        let (permissions, tool_permissions) = permissions.map_or_else(
+            || Ok((None, BTreeMap::new())),
+            |bytes| {
+                parse_permissions_bytes(bytes, &|reason| PythonToolError::InvalidPackage(reason))
+            },
+        )?;
+        Ok(Self {
+            name,
+            root,
+            files: Vec::new(),
+            source: PackageSource::Client(source),
+            source_digest,
+            watch_directories,
+            requirements: Vec::new(),
+            permissions,
+            tool_permissions,
+        })
+    }
+
+    pub(crate) fn client_binding(&self) -> Option<McpServerBinding> {
+        let PackageSource::Client(source) = &self.source else {
+            return None;
+        };
+        Some(McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            transport: McpTransportConfig::ManagedPython {
+                source: crate::tools::mcp::ManagedPythonSource::retain(source.clone()),
+            },
+            policy: ToolInvocationPolicy::default(),
+            permissions: self.permissions,
+            tool_permissions: self.tool_permissions.clone(),
+        })
+    }
+
+    pub(crate) async fn prepare_on_client(
+        &self,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Option<Result<McpServerBinding, String>> {
+        let PackageSource::Client(owner) = &self.source else {
+            return None;
+        };
+        Some(
+            owner
+                .prepare(cancellation)
+                .await
+                .map(|()| self.client_binding().expect("Client source")),
+        )
+    }
+
     /// Validated package identity, immutable after capture.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -310,6 +446,7 @@ thread_local! {
     pub(crate) static PACKAGE_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn discover_package(
     root: &Path,
     name: &str,
@@ -366,8 +503,9 @@ pub(crate) fn discover_package(
         name: name.to_owned(),
         root: root.to_path_buf(),
         files,
-        source: Arc::new(source),
+        source: PackageSource::Local(Arc::new(source)),
         source_digest,
+        watch_directories: None,
         requirements,
         permissions,
         tool_permissions,
@@ -375,6 +513,7 @@ pub(crate) fn discover_package(
 }
 
 /// Parses optional [`PERMISSIONS_FILE`] and removes it from the frozen source set.
+#[cfg(any(test, feature = "test-support"))]
 fn take_permissions_document(
     files: &mut Vec<PathBuf>,
     root: &Path,
@@ -395,6 +534,7 @@ fn take_permissions_document(
 
 /// Captures package source bytes into an anonymous backing file and parses
 /// `requirements.txt` declarations from the same stream.
+#[cfg(any(test, feature = "test-support"))]
 fn capture_package_source(
     root: &Path,
     files: &[PathBuf],
@@ -460,6 +600,7 @@ impl PartialEq for PythonToolPackage {
             && self.root == other.root
             && self.files == other.files
             && self.source_digest == other.source_digest
+            && self.watch_directories == other.watch_directories
             && self.requirements == other.requirements
             && self.permissions == other.permissions
             && self.tool_permissions == other.tool_permissions
@@ -484,7 +625,20 @@ fn parse_permissions_document(
             "{PERMISSIONS_FILE}: cannot read resource permissions: {error}"
         ))
     })?;
-    let document: ManagedPythonPermissionsDocument = crate::toml_authoring::parse(&bytes)
+    parse_permissions_bytes(&bytes, invalid)
+}
+
+fn parse_permissions_bytes(
+    bytes: &[u8],
+    invalid: &impl Fn(String) -> PythonToolError,
+) -> Result<
+    (
+        Option<crate::runtime::permission::ResourcePermissionSet>,
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ),
+    PythonToolError,
+> {
+    let document: ManagedPythonPermissionsDocument = crate::toml_authoring::parse(bytes)
         .map_err(|error| invalid(format!("{PERMISSIONS_FILE}: {error}")))?;
     let tool_permissions = document
         .tools
@@ -495,6 +649,7 @@ fn parse_permissions_document(
 }
 
 /// Enumerate metadata through anchored directory handles, without opening links.
+#[cfg(any(test, feature = "test-support"))]
 fn collect_files(
     root: &Path,
     cancellation: &crate::runtime::CancellationSignal,
@@ -571,6 +726,7 @@ pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolErro
 /// rustX-pinned, so a package may never declare it. Everything else is
 /// validated only far enough to become a `pyproject.toml` dependency entry;
 /// real dependency semantics (resolution, markers, indexes) belong to uv.
+#[cfg(any(test, feature = "test-support"))]
 fn parse_requirement(line: &str, number: usize) -> Result<String, String> {
     if line.starts_with('-') {
         return Err(format!(
@@ -619,6 +775,7 @@ fn parse_requirements(bytes: &[u8], _package_root: &Path) -> Result<Vec<String>,
 /// expansion directive. Other dollar signs belong to the PEP 508 parser: in
 /// particular, `$TOKEN` is ordinary quoted-marker text rather than pip
 /// expansion syntax.
+#[cfg(any(test, feature = "test-support"))]
 fn contains_environment_variable_reference(line: &str) -> bool {
     line.match_indices("${").any(|(index, _)| {
         let remainder = &line[index + 2..];
@@ -642,10 +799,13 @@ fn contains_environment_variable_reference(line: &str) -> bool {
 /// end and another syntax error. Never format the parser error: its display
 /// form includes the authored token and span, which can disclose URL
 /// credentials.
+#[cfg(any(test, feature = "test-support"))]
 const MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET: usize = 16 * 1024 * 1024;
+#[cfg(any(test, feature = "test-support"))]
 const MAX_REQUIREMENTS_PARSE_REASON_BYTES: usize =
     "unexpected end of dependency declaration near byte 16777216+".len();
 
+#[cfg(any(test, feature = "test-support"))]
 fn safe_pep508_diagnostic(errors: &[chumsky::error::Simple<'_, char>]) -> String {
     let error = errors
         .iter()
@@ -670,6 +830,7 @@ fn safe_pep508_diagnostic(errors: &[chumsky::error::Simple<'_, char>]) -> String
 }
 
 /// The deterministic content digest of the package source bytes alone.
+#[cfg(any(test, feature = "test-support"))]
 fn source_digest(
     root: &Path,
     files: &[PathBuf],
@@ -690,69 +851,7 @@ fn source_digest(
     Ok(format!("sha256:{}", hex_digest(&hash.finalize())))
 }
 
-/// The full preparation fingerprint: the package identity (the synthesized
-/// `python:<folder>` MCP server identity), the source bytes (including
-/// `requirements.txt`), the probed interpreter and uv identities, the
-/// managed `FastMCP` pin, and the platform. No timestamps, no host paths.
-///
-/// The package identity is a first-class input (Issue #174 invariant):
-/// «different Python package identities always have different prepared
-/// environment identities, even when every user-authored source byte is
-/// identical». Two distinct folders must never collapse into one prepared
-/// environment merely because their bytes happen to match — cross-package
-/// environment deduplication is explicitly out of scope. The folder name
-/// (not the absolute path) is the identity, so relocating the workspace
-/// never changes a package's logical identity.
-fn package_fingerprint(
-    package: &PythonToolPackage,
-    python_identity: &str,
-    uv_identity: &str,
-) -> String {
-    // The managed pin is a constant, never a caller-selectable input: the
-    // only production fingerprint is the one derived from
-    // `MANAGED_FASTMCP_VERSION`.
-    package_fingerprint_with(
-        package,
-        python_identity,
-        uv_identity,
-        MANAGED_FASTMCP_VERSION,
-    )
-}
-
-/// The fingerprint derivation with the managed `FastMCP` pin as an explicit
-/// argument.
-///
-/// The argument exists so the pin's materiality is provable — a changed
-/// managed `FastMCP` build must always be a different prepared-state
-/// identity — without making the production pin configurable: the only
-/// non-test caller is [`package_fingerprint`], which always passes
-/// [`MANAGED_FASTMCP_VERSION`].
-fn package_fingerprint_with(
-    package: &PythonToolPackage,
-    python_identity: &str,
-    uv_identity: &str,
-    fastmcp_version: &str,
-) -> String {
-    let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"rustx:managed-python-package:v2\0");
-    append_bytes(
-        &mut canonical,
-        python_server_id(&package.name).as_str().as_bytes(),
-    );
-    append_bytes(&mut canonical, package.source_digest.as_bytes());
-    append_bytes(&mut canonical, python_identity.as_bytes());
-    append_bytes(&mut canonical, uv_identity.as_bytes());
-    append_bytes(&mut canonical, fastmcp_version.as_bytes());
-    append_bytes(&mut canonical, std::env::consts::OS.as_bytes());
-    append_bytes(&mut canonical, std::env::consts::ARCH.as_bytes());
-    format!("sha256:{}", hex_digest(&sha2::Sha256::digest(canonical)))
-}
-
-fn append_bytes(target: &mut Vec<u8>, bytes: &[u8]) {
-    target.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
-    target.extend_from_slice(bytes);
-}
-
+#[cfg(any(test, feature = "test-support"))]
 fn hex_digest(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut result = String::with_capacity(bytes.len() * 2);
@@ -764,2416 +863,4 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 fn io_error(error: impl std::fmt::Display) -> PythonToolError {
     PythonToolError::Storage(error.to_string())
-}
-
-fn resolve_executable(name: &str) -> PathBuf {
-    if let Some(path) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path) {
-            let candidate = directory.join(name);
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-    }
-    // The child environment uses the fixed runtime-approved PATH; resolve
-    // there so the probed identity and the `UV_PYTHON` pin always name the
-    // exact same binary.
-    for directory in ["/usr/local/bin", "/usr/bin", "/bin"] {
-        let candidate = std::path::Path::new(directory).join(name);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(name)
-}
-
-fn shell_quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
-}
-
-fn bounded_output(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned()
-}
-
-/// The rustX-owned frozen manifest of one prepared package state
-/// (`manifest.json`): everything needed to explain the state and to prove
-/// on reopen that it still is what it claims to be.
-///
-/// Authoritative identity fields — verified verbatim by
-/// [`read_prepared_state`] against the live discovery and the probed
-/// runtime identities: `format`, `fingerprint`, `package`, `entrypoint`,
-/// `fastmcp`, `python`, `uv`, `os`, `arch`, `source_digest`. `origin` is
-/// deliberately non-authoritative: it records which workspace folder the
-/// frozen source was read from for diagnostics only, and reuse must not
-/// depend on it (relocating the workspace must not invalidate an
-/// otherwise-identical prepared state).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PreparedManifest {
-    format: String,
-    /// The full preparation fingerprint this state answers to.
-    fingerprint: String,
-    /// The package (folder) name of the preparing discovery.
-    package: String,
-    /// The workspace folder the frozen source was read from.
-    origin: String,
-    /// The fixed managed entrypoint (`server.py:mcp`).
-    entrypoint: String,
-    /// The rustX-pinned `FastMCP` build this environment contains.
-    fastmcp: String,
-    /// The probed Python interpreter identity (path + version).
-    python: String,
-    /// The probed uv identity (path + version).
-    uv: String,
-    os: String,
-    arch: String,
-    /// The content digest of the frozen `source/` copy.
-    source_digest: String,
-}
-
-/// The shared in-flight build state of one fingerprint.
-#[derive(Debug)]
-struct BuildState {
-    result: Mutex<Option<Result<PreparedPythonPackage, PythonToolError>>>,
-    notify: tokio::sync::Notify,
-}
-
-impl BuildState {
-    async fn wait(&self) -> Result<PreparedPythonPackage, PythonToolError> {
-        // The no-lost-wakeup wait: the notified future is registered before
-        // the result check, so a result published between the check and the
-        // registration is observed by the next iteration.
-        let mut notified = Box::pin(self.notify.notified());
-        loop {
-            if let Some(result) = self
-                .result
-                .lock()
-                .expect("Python build result lock")
-                .clone()
-            {
-                return result;
-            }
-            notified.as_mut().enable();
-            if self
-                .result
-                .lock()
-                .expect("Python build result lock")
-                .is_some()
-            {
-                continue;
-            }
-            notified.await;
-            notified = Box::pin(self.notify.notified());
-        }
-    }
-}
-
-/// Completes a process-local build entry if its store-owned task exits
-/// unexpectedly. The guard lives inside that detached owner task, never in a
-/// candidate preparation caller, so caller cancellation cannot release an
-/// in-flight build while its physical materialization is running.
-struct BuildOwnerGuard {
-    in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
-    key: String,
-    state: Arc<BuildState>,
-    completed: bool,
-}
-
-impl BuildOwnerGuard {
-    fn finish(&mut self, result: Result<PreparedPythonPackage, PythonToolError>) {
-        *self.state.result.lock().expect("Python build result lock") = Some(result);
-        let mut in_flight = self.in_flight.lock().expect("Python build lock");
-        if in_flight
-            .get(&self.key)
-            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
-        {
-            in_flight.remove(&self.key);
-        }
-        self.completed = true;
-        drop(in_flight);
-        self.state.notify.notify_waiters();
-    }
-}
-
-impl Drop for BuildOwnerGuard {
-    fn drop(&mut self) {
-        if self.completed {
-            return;
-        }
-        self.finish(Err(PythonToolError::Environment(
-            "the Python build owner exited before terminal publication".to_owned(),
-        )));
-    }
-}
-
-struct PythonToolStoreInner {
-    root: PathBuf,
-    pending_cleanup: Mutex<std::collections::BTreeSet<PathBuf>>,
-    runner: Arc<dyn SupervisedProcessRunner>,
-    uv_binary: PathBuf,
-    python_binary: PathBuf,
-    in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
-    #[cfg(test)]
-    build_join_observer: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>>,
-}
-
-/// The runtime-private prepared-environment store of managed Python tool
-/// packages.
-///
-/// The store is a coordinator-lifetime-stable identity: its in-flight map
-/// is the one process-local coordination domain that coalesces concurrent
-/// preparations of the same fingerprint onto a single physical build.
-#[derive(Clone)]
-pub struct PythonToolStore {
-    inner: Arc<PythonToolStoreInner>,
-}
-
-impl std::fmt::Debug for PythonToolStore {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PythonToolStore")
-            .field("root", &self.inner.root)
-            .finish()
-    }
-}
-
-impl PythonToolStore {
-    /// Creates the production store rooted at `root`
-    /// (`<environment-store>/python-tools`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PythonToolError::Storage`] if the store directories cannot
-    /// be created.
-    pub fn new(root: PathBuf) -> Result<Self, PythonToolError> {
-        #[cfg(test)]
-        crate::local_runtime::static_effects::observe(
-            crate::local_runtime::static_effects::Effect::Preparation,
-        );
-        Self::establish(&root)?;
-        let root = std::fs::canonicalize(root).map_err(io_error)?;
-        Ok(Self {
-            inner: Arc::new(PythonToolStoreInner {
-                root,
-                pending_cleanup: Mutex::default(),
-                runner: Arc::new(RunnerBackedProcessRunner),
-                uv_binary: resolve_executable("uv"),
-                python_binary: resolve_executable("python3"),
-                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
-                #[cfg(test)]
-                build_join_observer: Arc::new(Mutex::new(None)),
-            }),
-        })
-    }
-
-    /// Keep production executable discovery when gating the real process backend.
-    #[cfg(test)]
-    pub(crate) fn with_runner(
-        root: PathBuf,
-        runner: Arc<dyn SupervisedProcessRunner>,
-    ) -> Result<Self, PythonToolError> {
-        Self::with_binaries_and_runner(
-            root,
-            resolve_executable("uv"),
-            resolve_executable("python3"),
-            runner,
-        )
-    }
-
-    /// Test constructor for deterministic recorded process backends.
-    #[cfg(test)]
-    pub(crate) fn with_binaries_and_runner(
-        root: PathBuf,
-        uv_binary: PathBuf,
-        python_binary: PathBuf,
-        runner: Arc<dyn SupervisedProcessRunner>,
-    ) -> Result<Self, PythonToolError> {
-        Self::establish(&root)?;
-        let root = std::fs::canonicalize(root).map_err(io_error)?;
-        Ok(Self {
-            inner: Arc::new(PythonToolStoreInner {
-                root,
-                pending_cleanup: Mutex::default(),
-                runner,
-                uv_binary,
-                python_binary,
-                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
-                build_join_observer: Arc::new(Mutex::new(None)),
-            }),
-        })
-    }
-
-    fn establish(root: &Path) -> Result<(), PythonToolError> {
-        std::fs::create_dir_all(root.join(PACKAGES_DIRECTORY)).map_err(io_error)?;
-        std::fs::create_dir_all(root.join(UV_CACHE_DIRECTORY)).map_err(io_error)?;
-        Ok(())
-    }
-
-    /// The root of this store.
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.inner.root
-    }
-
-    /// Test-only observation of the store identity: distinguishes a reused
-    /// store from a re-initialized one.
-    #[cfg(test)]
-    pub(crate) fn identity_token(&self) -> usize {
-        Arc::as_ptr(&self.inner) as usize
-    }
-
-    /// Observe a caller selecting an existing fingerprint's physical build.
-    #[cfg(test)]
-    pub(crate) fn install_build_join_observer(
-        &self,
-        observer: tokio::sync::mpsc::UnboundedSender<String>,
-    ) {
-        *self
-            .inner
-            .build_join_observer
-            .lock()
-            .expect("build join observer") = Some(observer);
-    }
-
-    async fn settle_pending_cleanup(&self) -> Result<(), PythonToolError> {
-        let cleanup_owner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut pending = cleanup_owner
-                .pending_cleanup
-                .lock()
-                .expect("Python cleanup");
-            let paths: Vec<_> = pending.iter().cloned().collect();
-            for path in paths {
-                match std::fs::remove_dir_all(&path) {
-                    Ok(()) => {
-                        pending.remove(&path);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        pending.remove(&path);
-                    }
-                    Err(error) => {
-                        return Err(PythonToolError::Storage(format!(
-                            "cannot clean retained Python staging {}: {error}",
-                            path.display()
-                        )));
-                    }
-                }
-            }
-            Ok(())
-        })
-        .await
-        .map_err(io_error)??;
-        Ok(())
-    }
-
-    /// Ensures the prepared environment state of one frozen package:
-    /// probes the runtime identities, computes the fingerprint, reuses a
-    /// valid published state, or builds and publishes a new one.
-    ///
-    /// The server is deliberately **not** validate-launched here: the
-    /// generic MCP connect + `tools/list` that immediately follows is the
-    /// validation, and the candidate-generation machinery already
-    /// guarantees a failure leaves the previously committed generation
-    /// intact.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PythonToolError::Environment`] when the runtime identities
-    /// cannot be probed or the uv build fails, and
-    /// [`PythonToolError::Storage`] when existing state claims the
-    /// fingerprint but fails verification (fail closed, never repaired).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the process-internal build coordination lock is poisoned.
-    pub async fn ensure_prepared(
-        &self,
-        package: &PythonToolPackage,
-        cancellation: &crate::runtime::CancellationSignal,
-    ) -> Result<PreparedPythonPackage, PythonToolError> {
-        self.settle_pending_cleanup().await?;
-        let (python_identity, uv_identity) =
-            probe_runtime_identity(&self.inner, cancellation).await?;
-        let fingerprint = package_fingerprint(package, &python_identity, &uv_identity);
-        let state_dir = self.inner.root.join(PACKAGES_DIRECTORY).join(&fingerprint);
-        let verification = (
-            state_dir.clone(),
-            package.clone(),
-            fingerprint.clone(),
-            python_identity.clone(),
-            uv_identity.clone(),
-            cancellation.clone(),
-        );
-        if let Some(prepared) = tokio::task::spawn_blocking(move || {
-            let (directory, package, fingerprint, python, uv, signal) = verification;
-            read_prepared_state(&directory, &package, &fingerprint, &python, &uv, &signal)
-        })
-        .await
-        .map_err(io_error)??
-        {
-            // Env cache is code/dependency only; permissions come from the
-            // current winning resource package, never from the fingerprint
-            // directory itself.
-            return Ok(with_package_permissions(prepared, package));
-        }
-        let key = fingerprint.clone();
-        let (state, owner) = {
-            let mut builds = self.inner.in_flight.lock().expect("Python build lock");
-            if let Some(state) = builds.get(&key) {
-                (state.clone(), false)
-            } else {
-                let state = Arc::new(BuildState {
-                    result: Mutex::new(None),
-                    notify: tokio::sync::Notify::new(),
-                });
-                builds.insert(key.clone(), state.clone());
-                (state, true)
-            }
-        };
-        #[cfg(test)]
-        if !owner
-            && let Some(observer) = &*self
-                .inner
-                .build_join_observer
-                .lock()
-                .expect("build join observer")
-        {
-            let _ = observer.send(fingerprint.clone());
-        }
-        if owner {
-            let owner_guard = BuildOwnerGuard {
-                in_flight: self.inner.in_flight.clone(),
-                key,
-                state: state.clone(),
-                completed: false,
-            };
-            let inner = self.inner.clone();
-            let package = package.clone();
-            let build_fingerprint = fingerprint.clone();
-            let build_dir = state_dir.clone();
-            // The physical build observes the lifecycle cancellation
-            // authority of the caller that established it: cancelling the
-            // owning domain's authority cancels the uv units themselves.
-            let build_cancellation = cancellation.clone();
-            // Dropping a JoinHandle detaches the task; it does not abort it.
-            // The caller therefore cannot become the physical materialization
-            // owner merely by being cancelled while waiting below.
-            std::mem::drop(tokio::spawn(async move {
-                let mut owner_guard = owner_guard;
-                let result = materialize_package(
-                    &inner,
-                    &package,
-                    &build_dir,
-                    &build_fingerprint,
-                    &python_identity,
-                    &uv_identity,
-                    &build_cancellation,
-                )
-                .await;
-                owner_guard.finish(result);
-            }));
-        }
-        let result = state.wait().await;
-        crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
-        Ok(with_package_permissions(result?, package))
-    }
-}
-
-/// Attaches the winning package's authored permissions onto a prepared env
-/// handle. The fingerprint-keyed store never owns these objects.
-fn with_package_permissions(
-    mut prepared: PreparedPythonPackage,
-    package: &PythonToolPackage,
-) -> PreparedPythonPackage {
-    prepared.permissions = package.permissions;
-    prepared.tool_permissions = package.tool_permissions.clone();
-    prepared
-}
-
-/// One prepared managed package: the fingerprint-keyed immutable env state
-/// plus resource permissions frozen from the winning package at prepare time.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedPythonPackage {
-    /// The preparation fingerprint of this state.
-    pub fingerprint: String,
-    /// The state directory (`packages/<fingerprint>/`).
-    pub state_dir: PathBuf,
-    /// Source-default MCP permission object propagated into the synthesized
-    /// binding. Captured from the package resource, not from the env cache.
-    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
-    /// Exact-tool permission exceptions propagated into the synthesized
-    /// binding. Captured from the package resource, not from the env cache.
-    pub tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
-}
-
-impl PreparedPythonPackage {
-    /// The synthesized MCP server binding of this prepared package: a stdio
-    /// launch of the prepared virtualenv's interpreter running the `FastMCP`
-    /// CLI module against the frozen source copy, with the default
-    /// unconfigured-server invocation policy.
-    ///
-    /// The launch never re-resolves dependencies: it names the prepared
-    /// venv's interpreter directly (never `uv run`), and `--skip-env` pins
-    /// that decision inside the CLI. It runs the interpreter with
-    /// `-m fastmcp.cli` rather than the venv's `fastmcp` console script
-    /// because uv writes the script's shebang with the build-time (staging)
-    /// path, which the atomic publication rename invalidates; the
-    /// interpreter itself is a symlink to the probed base runtime and stays
-    /// valid. `cwd` stays `None` (the workspace root, per the generic stdio
-    /// launch rules); the `fastmcp run <file>:<object>` resolution puts the
-    /// frozen source directory on `sys.path` itself, so sibling package
-    /// modules import regardless of cwd. The environment keeps stdout clean
-    /// for the MCP wire (banner and update check silenced, bytecode caches
-    /// disabled).
-    #[must_use]
-    pub fn server_binding(&self) -> McpServerBinding {
-        let program = venv_python(&self.state_dir);
-        let server = self.state_dir.join(SOURCE_DIRECTORY).join(SERVER_FILE);
-        let mut environment = BTreeMap::new();
-        environment.insert("FASTMCP_SHOW_SERVER_BANNER".to_owned(), "false".to_owned());
-        environment.insert("FASTMCP_CHECK_FOR_UPDATES".to_owned(), "off".to_owned());
-        environment.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
-        McpServerBinding {
-            credentials: crate::credentials::SourceCredentials::default(),
-            transport: McpTransportConfig::Stdio {
-                program: program.display().to_string(),
-                args: vec![
-                    "-m".to_owned(),
-                    "fastmcp.cli".to_owned(),
-                    "run".to_owned(),
-                    format!("{}:mcp", server.display()),
-                    "--skip-env".to_owned(),
-                    "--no-banner".to_owned(),
-                ],
-                cwd: None,
-                environment,
-            },
-            policy: ToolInvocationPolicy::default(),
-            permissions: self.permissions,
-            tool_permissions: self.tool_permissions.clone(),
-        }
-    }
-}
-
-/// The prepared virtualenv's interpreter: the launch executable of a
-/// prepared package.
-fn venv_python(state_dir: &Path) -> PathBuf {
-    state_dir.join(VENV_DIRECTORY).join(if cfg!(windows) {
-        "Scripts/python.exe"
-    } else {
-        "bin/python"
-    })
-}
-
-#[cfg(test)]
-mod cached_verification_gate {
-    use super::*;
-    type Gate = (
-        tokio::sync::oneshot::Sender<()>,
-        std::sync::mpsc::Receiver<()>,
-    );
-    fn gates() -> &'static std::sync::Mutex<std::collections::BTreeMap<PathBuf, Gate>> {
-        static GATES: std::sync::OnceLock<
-            std::sync::Mutex<std::collections::BTreeMap<PathBuf, Gate>>,
-        > = std::sync::OnceLock::new();
-        GATES.get_or_init(Default::default)
-    }
-    pub(super) fn register(
-        path: PathBuf,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        std::sync::mpsc::Sender<()>,
-    ) {
-        let (entered, arrival) = tokio::sync::oneshot::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        assert!(
-            gates()
-                .lock()
-                .unwrap()
-                .insert(path, (entered, wait))
-                .is_none()
-        );
-        (arrival, release)
-    }
-    pub(super) fn wait(path: &Path) {
-        let gate = gates().lock().unwrap().remove(path);
-        if let Some((entered, release)) = gate {
-            let _ = entered.send(());
-            let _ = release.recv();
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn gate_cached_verification_for_test(
-    path: PathBuf,
-) -> (
-    tokio::sync::oneshot::Receiver<()>,
-    std::sync::mpsc::Sender<()>,
-) {
-    cached_verification_gate::register(path)
-}
-
-/// Validates a published state against the exact deterministic inputs that
-/// derive it, and returns the handle. A state whose directory exists but
-/// does not verify — missing/invalid manifest, mismatched identity inputs
-/// (fingerprint, package identity, fixed entrypoint, managed `FastMCP` pin,
-/// probed Python/uv identities, OS/arch), frozen source that no longer
-/// hashes to the manifest, missing launch executable — is an explicit
-/// preparation failure, never a silent reuse and never a rebuild.
-///
-/// Every identity-bearing manifest claim is verified: a frozen manifest
-/// must not record semantic claims that reuse does not check. The
-/// `origin` field is the one deliberately non-authoritative record (host
-/// provenance for diagnostics; reuse must not depend on it).
-fn read_prepared_state(
-    state_dir: &Path,
-    package: &PythonToolPackage,
-    fingerprint: &str,
-    python_identity: &str,
-    uv_identity: &str,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> Result<Option<PreparedPythonPackage>, PythonToolError> {
-    if !state_dir.exists() {
-        return Ok(None);
-    }
-    let manifest_path = state_dir.join(MANIFEST_FILE);
-    crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
-    let bytes =
-        crate::bounded_file::read_bounded(&manifest_path).map_err(PythonToolError::Storage)?;
-    let manifest: PreparedManifest = serde_json::from_slice(&bytes).map_err(|error| {
-        PythonToolError::Storage(format!(
-            "invalid prepared-state manifest {}: {error}",
-            manifest_path.display()
-        ))
-    })?;
-    let valid = manifest.format == MANIFEST_FORMAT
-        && manifest.fingerprint == fingerprint
-        && manifest.package == package.name
-        && manifest.entrypoint == ENTRYPOINT
-        && manifest.fastmcp == MANAGED_FASTMCP_VERSION
-        && manifest.python == python_identity
-        && manifest.uv == uv_identity
-        && manifest.os == std::env::consts::OS
-        && manifest.arch == std::env::consts::ARCH;
-    if !valid {
-        return Err(PythonToolError::Storage(format!(
-            "prepared state {} does not match its claimed identity inputs \
-             (fingerprint={fingerprint}, package={:?}, entrypoint={ENTRYPOINT}, \
-             fastmcp={MANAGED_FASTMCP_VERSION}, python={python_identity:?}, \
-             uv={uv_identity:?})",
-            state_dir.display(),
-            package.name
-        )));
-    }
-    #[cfg(test)]
-    cached_verification_gate::wait(state_dir);
-    let source_root = state_dir.join(SOURCE_DIRECTORY);
-    let files = collect_files(&source_root, cancellation)?;
-    if source_digest(&source_root, &files, cancellation)? != manifest.source_digest {
-        return Err(PythonToolError::Storage(format!(
-            "prepared state source {} does not hash back to its manifest",
-            source_root.display()
-        )));
-    }
-    // The reopened package must be the one whose fingerprint this state
-    // answers to: same source digest.
-    if package.source_digest != manifest.source_digest {
-        return Err(PythonToolError::Storage(format!(
-            "prepared state {} source digest does not match the discovered package",
-            state_dir.display()
-        )));
-    }
-    let program = venv_python(state_dir);
-    if !program.is_file() {
-        return Err(PythonToolError::Storage(format!(
-            "prepared state {} has no venv interpreter",
-            state_dir.display()
-        )));
-    }
-    // Permissions stay unset here: the fingerprint directory is env-only.
-    // `ensure_prepared` freezes them from the current package afterward.
-    Ok(Some(PreparedPythonPackage {
-        fingerprint: fingerprint.to_owned(),
-        state_dir: state_dir.to_path_buf(),
-        permissions: None,
-        tool_permissions: BTreeMap::new(),
-    }))
-}
-
-async fn probe_runtime_identity(
-    inner: &PythonToolStoreInner,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> Result<(String, String), PythonToolError> {
-    let environment = ToolEnvironment::new();
-    let child_environment = environment.child_environment(&inner.root);
-    let uv_command = format!("{} --version", shell_quote(&inner.uv_binary));
-    let python_command = format!("{} --version", shell_quote(&inner.python_binary));
-    let run = |command: String| {
-        let runner = inner.runner.clone();
-        let cwd = inner.root.clone();
-        let environment = child_environment.clone();
-        let cancellation = cancellation.clone();
-        async move {
-            runner
-                .run(
-                    SupervisedCommandSpec {
-                        command: command.clone(),
-                        cwd,
-                        command_environment: environment,
-                        timeout: Some(PYTHON_TOOL_PROBE_TIMEOUT),
-                        // The caller's lifecycle authority, never a fresh
-                        // detached signal: a settled preparation physically
-                        // cancels the probe, and the result resolves only
-                        // after the unit's settlement.
-                        cancellation,
-                    },
-                    None,
-                )
-                .await
-                .map_err(PythonToolError::Environment)
-        }
-    };
-    let uv = run(uv_command.clone()).await?;
-    let python = run(python_command.clone()).await?;
-    for (command, result) in [(uv_command, &uv), (python_command, &python)] {
-        let failure = match &result.intent {
-            ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => Some(format!(
-                "{command} exited with code {:?}: {}",
-                result.exit_code,
-                bounded_output(&result.stderr)
-            )),
-            ProcessOutcomeIntent::Completed => None,
-            ProcessOutcomeIntent::Cancelled => Some(format!(
-                "{command} was cancelled during the runtime identity probe"
-            )),
-            ProcessOutcomeIntent::TimedOut => Some(format!(
-                "{command} timed out after {PYTHON_TOOL_PROBE_TIMEOUT:?}"
-            )),
-            ProcessOutcomeIntent::ProcessControlFailed(error) => {
-                Some(format!("{command} failed: {error}"))
-            }
-        };
-        if let Some(failure) = failure {
-            return Err(PythonToolError::Environment(failure));
-        }
-    }
-    // The identity pins path *and* version: a reinstalled interpreter of the
-    // same version at a different path is a different runtime.
-    let uv_version = bounded_output(&uv.stdout).trim().to_owned();
-    let python_version = bounded_output(&python.stdout).trim().to_owned();
-    if uv_version.is_empty() || python_version.is_empty() {
-        return Err(PythonToolError::Environment(
-            "runtime identity probe returned empty output".to_owned(),
-        ));
-    }
-    let uv_identity = format!("{} ({uv_version})", inner.uv_binary.display());
-    let python_identity = format!("{} ({python_version})", inner.python_binary.display());
-    Ok((python_identity, uv_identity))
-}
-
-/// The rustX-generated `pyproject.toml` of one package: the project stub
-/// that lets uv lock/sync, with the package's declared dependencies plus
-/// the rustX-pinned `FastMCP` build.
-fn generated_pyproject(package: &PythonToolPackage, python_identity: &str) -> String {
-    use std::fmt::Write as _;
-    // `python_identity` is `<path> (Python X.Y.Z)`; requires-python tracks
-    // the probed interpreter's minor series, and the interpreter identity
-    // is itself a fingerprint input, so a toolchain change re-prepares.
-    let requires_python = probed_python_series(python_identity).map_or_else(
-        || toml_basic_string(">=3.10"),
-        |series| toml_basic_string(&format!("=={series}.*")),
-    );
-    let mut dependencies = String::new();
-    for requirement in &package.requirements {
-        let _ = writeln!(dependencies, "    {},", toml_basic_string(requirement));
-    }
-    let _ = writeln!(
-        dependencies,
-        "    {},",
-        toml_basic_string(&format!("fastmcp=={MANAGED_FASTMCP_VERSION}"))
-    );
-    format!(
-        "[project]\nname = {}\nversion = \"0.0.0\"\nrequires-python = {requires_python}\ndependencies = [\n{dependencies}]\n",
-        toml_basic_string(&format!("rustx-python-tool-{}", package.name)),
-    )
-}
-
-/// The `<major>.<minor>` series of the probed interpreter identity
-/// (`<path> (Python X.Y.Z)`), when it parses.
-fn probed_python_series(python_identity: &str) -> Option<String> {
-    let version = python_identity
-        .rsplit("(Python ")
-        .next()?
-        .trim_end_matches(')');
-    let mut parts = version.split('.');
-    let major = parts.next()?;
-    let minor = parts.next()?;
-    if major.chars().all(|c| c.is_ascii_digit()) && minor.chars().all(|c| c.is_ascii_digit()) {
-        Some(format!("{major}.{minor}"))
-    } else {
-        None
-    }
-}
-
-fn toml_basic_string(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
-/// Builds one package state in a sibling staging directory and publishes it
-/// with one atomic rename.
-async fn materialize_package(
-    inner: &PythonToolStoreInner,
-    package: &PythonToolPackage,
-    state_dir: &Path,
-    fingerprint: &str,
-    python_identity: &str,
-    uv_identity: &str,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> Result<PreparedPythonPackage, PythonToolError> {
-    let staging =
-        state_dir.with_file_name(format!(".build-{}-{}", fingerprint, uuid::Uuid::now_v7()));
-    // The existing Python store owns any failed cleanup and retries it before
-    // its next preparation. In-flight staging is not in that cleanup set.
-    let result = stage_and_build(
-        inner,
-        package,
-        &staging,
-        fingerprint,
-        python_identity,
-        uv_identity,
-        cancellation,
-    )
-    .await;
-    let owner = inner.root.clone();
-    let package = package.clone();
-    let destination = state_dir.to_path_buf();
-    let fingerprint = fingerprint.to_owned();
-    let python_identity = python_identity.to_owned();
-    let uv_identity = uv_identity.to_owned();
-    let cancellation = cancellation.clone();
-    let (result, residue) = tokio::task::spawn_blocking(move || {
-        let publication = (|| {
-            let manifest = result?;
-            crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
-            std::fs::write(staging.join(MANIFEST_FILE), serde_json::to_vec(&manifest).map_err(io_error)?).map_err(io_error)?;
-            // Verify the complete staged package again after dependency setup,
-            // before making the directory addressable as prepared state.
-            read_prepared_state(&staging, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
-                .ok_or_else(|| PythonToolError::Storage("Python staging did not materialize".into()))?;
-            crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
-            match std::fs::rename(&staging, &destination) {
-                // Env publication is code/dependency only; permissions are
-                // attached by `ensure_prepared` from the winning package.
-                Ok(()) => Ok(PreparedPythonPackage {
-                    fingerprint: fingerprint.clone(),
-                    state_dir: destination.clone(),
-                    permissions: None,
-                    tool_permissions: BTreeMap::new(),
-                }),
-                Err(_) if destination.exists() => read_prepared_state(&destination, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
-                    .ok_or_else(|| PythonToolError::Storage("concurrent Python publication disappeared".into())),
-                Err(error) => Err(io_error(error)),
-            }
-        })();
-        let cleanup = match std::fs::remove_dir_all(&staging) {
-            Ok(()) => None,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => Some(error),
-        };
-        match cleanup {
-            None => (publication, None),
-            Some(error) => (Err(PythonToolError::Storage(format!("Python staging cleanup failed at {} (store {}): {error}; preparation: {publication:?}", staging.display(), owner.display()))), Some(staging)),
-        }
-    }).await.map_err(io_error)?;
-    if let Some(path) = residue {
-        inner
-            .pending_cleanup
-            .lock()
-            .expect("Python cleanup")
-            .insert(path);
-    }
-    result
-}
-
-async fn stage_source(
-    package: &PythonToolPackage,
-    source_root: &Path,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> Result<(), PythonToolError> {
-    // The frozen source copy: the server runs these snapshotted bytes,
-    // never the live workspace files.
-    let snapshot = package.clone();
-    let copy_root = source_root.to_path_buf();
-    let copy_cancellation = cancellation.clone();
-    tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&copy_root).map_err(io_error)?;
-        for relative in &snapshot.files {
-            snapshot
-                .source
-                .copy_to(relative, &copy_root.join(relative), &copy_cancellation)?;
-        }
-        if source_digest(&copy_root, &snapshot.files, &copy_cancellation)? != snapshot.source_digest
-        {
-            return Err(PythonToolError::Storage(
-                "captured Python source changed before installation".into(),
-            ));
-        }
-        Ok(())
-    })
-    .await
-    .map_err(io_error)??;
-    Ok(())
-}
-
-async fn stage_and_build(
-    inner: &PythonToolStoreInner,
-    package: &PythonToolPackage,
-    staging: &Path,
-    fingerprint: &str,
-    python_identity: &str,
-    uv_identity: &str,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> Result<PreparedManifest, PythonToolError> {
-    let source_root = staging.join(SOURCE_DIRECTORY);
-    stage_source(package, &source_root, cancellation).await?;
-    std::fs::write(
-        staging.join("pyproject.toml"),
-        generated_pyproject(package, python_identity),
-    )
-    .map_err(io_error)?;
-
-    let environment = ToolEnvironment::new();
-    let child_environment = environment.child_environment(&inner.root);
-    let commands = [
-        // rustX generates the lock: `--check` would require a package-owned
-        // uv.lock, which the contract deliberately does not have.
-        format!("{} lock --no-config", shell_quote(&inner.uv_binary)),
-        format!(
-            "{} sync --frozen --no-install-project --no-default-groups --no-config",
-            shell_quote(&inner.uv_binary)
-        ),
-    ];
-    for command in commands {
-        let mut environment_entries = child_environment.clone();
-        environment_entries.push((
-            "UV_PROJECT_ENVIRONMENT".to_owned(),
-            staging.join(VENV_DIRECTORY).display().to_string(),
-        ));
-        // The uv cache is store-owned scratch state: without this pin, a
-        // cache lookup could resolve relative to the working directory and
-        // write `.cache/uv` into the staging source.
-        environment_entries.push((
-            "UV_CACHE_DIR".to_owned(),
-            inner.root.join(UV_CACHE_DIRECTORY).display().to_string(),
-        ));
-        // The exact interpreter selection: uv must materialize with the same
-        // runtime whose identity entered the fingerprint. Project-local
-        // interpreter selection and uv heuristics are never permitted to pick
-        // another Python while retaining the probed identity.
-        environment_entries.push((
-            "UV_PYTHON".to_owned(),
-            inner.python_binary.display().to_string(),
-        ));
-        environment_entries.push(("UV_NO_PYTHON_DOWNLOADS".to_owned(), "1".to_owned()));
-        environment_entries.push(("UV_PYTHON_DOWNLOADS".to_owned(), "0".to_owned()));
-        environment_entries.push(("UV_NO_PROGRESS".to_owned(), "1".to_owned()));
-        let result = inner
-            .runner
-            .run(
-                SupervisedCommandSpec {
-                    command: command.clone(),
-                    cwd: staging.to_path_buf(),
-                    command_environment: environment_entries,
-                    timeout: Some(PYTHON_TOOL_UV_TIMEOUT),
-                    // The build-owner domain's lifecycle authority: its
-                    // cancellation physically cancels this uv unit, and the
-                    // result resolves only after the unit settled.
-                    cancellation: cancellation.clone(),
-                },
-                None,
-            )
-            .await
-            .map_err(PythonToolError::Environment)?;
-        let failure = match result.intent {
-            ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => Some(format!(
-                "{command} exited with code {:?}: {}",
-                result.exit_code,
-                bounded_output(&result.stderr)
-            )),
-            ProcessOutcomeIntent::Completed => None,
-            ProcessOutcomeIntent::Cancelled => {
-                Some(format!("{command} was cancelled during materialization"))
-            }
-            ProcessOutcomeIntent::TimedOut => Some(format!(
-                "{command} timed out after {PYTHON_TOOL_UV_TIMEOUT:?}"
-            )),
-            ProcessOutcomeIntent::ProcessControlFailed(error) => {
-                Some(format!("{command} failed: {error}"))
-            }
-        };
-        if let Some(failure) = failure {
-            // uv is the dependency-resolution authority; rustX only has to
-            // make the failure attributable. The diagnostic names the
-            // managed source identity and the phase, and carries uv's own
-            // bounded explanation — a package whose declared dependencies
-            // cannot be resolved against the managed `FastMCP` pin fails
-            // exactly this one source.
-            return Err(PythonToolError::Environment(format!(
-                "{} dependency preparation failed: {failure}",
-                python_server_id(&package.name)
-            )));
-        }
-    }
-    Ok(PreparedManifest {
-        format: MANIFEST_FORMAT.to_owned(),
-        fingerprint: fingerprint.to_owned(),
-        package: package.name.clone(),
-        origin: package.root.display().to_string(),
-        entrypoint: ENTRYPOINT.to_owned(),
-        fastmcp: MANAGED_FASTMCP_VERSION.to_owned(),
-        python: python_identity.to_owned(),
-        uv: uv_identity.to_owned(),
-        os: std::env::consts::OS.to_owned(),
-        arch: std::env::consts::ARCH.to_owned(),
-        source_digest: package.source_digest.clone(),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::CancellationSignal;
-    use crate::runtime::process_runner::CapturedProcessResult;
-
-    fn discover_python_packages(
-        workspace: &Workspace,
-    ) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
-        crate::local_runtime::managed_python_resources::discover(
-            Some(workspace.root()),
-            &workspace.root().join("absent-user/.agents"),
-        )
-        .map(|catalog| {
-            catalog
-                .packages()
-                .iter()
-                .map(|(source, outcome)| DiscoveredPythonPackage {
-                    server_id: McpServerId::new(source.to_string()),
-                    outcome: outcome.clone(),
-                })
-                .collect()
-        })
-        .map_err(|error| PythonToolError::Storage(error.to_string()))
-    }
-
-    type PackageFiles = (&'static str, &'static [u8]);
-
-    fn workspace_with(packages: &[(&str, &[PackageFiles])]) -> (tempfile::TempDir, Workspace) {
-        let directory = tempfile::tempdir().expect("workspace");
-        for (name, files) in packages {
-            let root = directory.path().join(".agents/tools").join(name);
-            std::fs::create_dir_all(&root).expect("package directory");
-            for (relative, bytes) in *files {
-                std::fs::write(root.join(relative), bytes).expect("package file");
-            }
-        }
-        let workspace = Workspace::new(directory.path()).expect("workspace");
-        (directory, workspace)
-    }
-
-    fn valid_package_files() -> Vec<PackageFiles> {
-        vec![
-            (
-                SERVER_FILE,
-                b"from fastmcp import FastMCP\nmcp = FastMCP('demo')\n",
-            ),
-            (REQUIREMENTS_FILE, b"# none\n"),
-        ]
-    }
-
-    fn change_source(package: &mut PythonToolPackage, path: &str, bytes: &[u8]) {
-        let directory = tempfile::tempdir().unwrap();
-        for relative in &package.files {
-            let to = directory.path().join(relative);
-            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
-            package
-                .source
-                .copy_to(relative, &to, &crate::runtime::CancellationSignal::new())
-                .unwrap();
-        }
-        std::fs::write(directory.path().join(path), bytes).unwrap();
-        *package = discover_package(
-            &directory.path().canonicalize().unwrap(),
-            &package.name,
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .unwrap();
-    }
-
-    fn package(name: &str) -> PythonToolPackage {
-        let (_directory, workspace) = workspace_with(&[(name, &valid_package_files())]);
-        let discovered = discover_python_packages(&workspace).expect("discover");
-        discovered
-            .into_iter()
-            .next()
-            .expect("one package")
-            .outcome
-            .expect("valid package")
-    }
-
-    #[test]
-    fn discovery_rejects_a_folder_without_server_py_in_place() {
-        let (_directory, workspace) =
-            workspace_with(&[("demo", &[(REQUIREMENTS_FILE, b"# none\n".as_slice())])]);
-        let discovered = discover_python_packages(&workspace).expect("discover");
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0].server_id, python_server_id("demo"));
-        let Err(PythonToolError::InvalidPackage(message)) = &discovered[0].outcome else {
-            panic!(
-                "missing server.py rejects the package: {:?}",
-                discovered[0].outcome
-            );
-        };
-        assert!(
-            message.contains("\"demo\""),
-            "the diagnostic names the package: {message}"
-        );
-        assert!(
-            message.contains(SERVER_FILE),
-            "the diagnostic names the contract: {message}"
-        );
-    }
-
-    #[test]
-    fn discovery_rejects_a_folder_without_requirements_txt_in_place() {
-        let (_directory, workspace) =
-            workspace_with(&[("demo", &[(SERVER_FILE, b"mcp = None\n".as_slice())])]);
-        let discovered = discover_python_packages(&workspace).expect("discover");
-        let Err(PythonToolError::InvalidPackage(message)) = &discovered[0].outcome else {
-            panic!("missing requirements.txt rejects the package");
-        };
-        assert!(
-            message.contains("\"demo\""),
-            "the diagnostic names the package: {message}"
-        );
-        assert!(
-            message.contains(REQUIREMENTS_FILE),
-            "the diagnostic names the contract: {message}"
-        );
-    }
-
-    #[test]
-    fn package_parser_rejects_invalid_folder_names() {
-        for name in ["Bad", "under_score", "-lead", "trail-", "double--dash"] {
-            let (_directory, workspace) = workspace_with(&[(name, &valid_package_files())]);
-            let result = discover_package(
-                &workspace.root().join(".agents/tools").join(name),
-                name,
-                &crate::runtime::CancellationSignal::new(),
-            );
-            assert!(
-                matches!(result, Err(PythonToolError::InvalidPackage(message))
-                if message.contains("invalid package name")),
-                "{name:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn one_malformed_package_never_suppresses_its_siblings() {
-        let (_directory, workspace) = workspace_with(&[
-            ("alpha", &valid_package_files()),
-            ("broken", &[(SERVER_FILE, b"mcp = None\n".as_slice())]),
-            ("zeta", &valid_package_files()),
-        ]);
-        let discovered = discover_python_packages(&workspace).expect("discover");
-        assert_eq!(
-            discovered
-                .iter()
-                .map(|entry| entry.server_id.as_str().to_owned())
-                .collect::<Vec<_>>(),
-            ["python:alpha", "python:broken", "python:zeta"]
-        );
-        assert!(discovered[0].outcome.is_ok());
-        assert!(discovered[1].outcome.is_err());
-        assert!(discovered[2].outcome.is_ok());
-    }
-
-    #[test]
-    fn requirements_parse_normalizes_comments_and_blank_lines() {
-        let parsed = parse_requirements(
-            b"# heading\n\nsix==1.16.0  # pinned\nrequests[socks]>=2 ; python_version >= '3.10'\n",
-            Path::new("/tmp"),
-        )
-        .expect("valid requirements");
-        assert_eq!(
-            parsed,
-            [
-                "six==1.16.0",
-                "requests[socks]>=2 ; python_version >= '3.10'"
-            ]
-        );
-    }
-
-    #[test]
-    fn requirements_reject_the_managed_fastmcp_dependency() {
-        for line in ["fastmcp", "fastmcp==4.0.0", "FastMCP[cli]>=2"] {
-            let error = parse_requirements(line.as_bytes(), Path::new("/tmp"))
-                .expect_err("fastmcp is managed");
-            assert!(
-                error.contains(MANAGED_FASTMCP_VERSION),
-                "the diagnostic names the managed pin: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn requirements_reject_option_lines_and_unparseable_lines() {
-        let error =
-            parse_requirements(b"-r other.txt\n", Path::new("/tmp")).expect_err("option line");
-        assert!(
-            error.contains("line 1"),
-            "the diagnostic locates the line: {error}"
-        );
-        assert!(error.contains("option lines"), "{error}");
-        let error = parse_requirements(b"\nsix==1.16.0\n=== garbage ===\n", Path::new("/tmp"))
-            .expect_err("unparseable");
-        assert!(
-            error.contains("line 3"),
-            "the diagnostic locates the line: {error}"
-        );
-        let error = parse_requirements(b"\xff\xfe", Path::new("/tmp")).expect_err("not UTF-8");
-        assert!(error.contains("UTF-8"), "{error}");
-    }
-
-    #[test]
-    fn pep508_requirements_corpus_preserves_effective_declarations() {
-        let root = tempfile::tempdir().expect("package root");
-        let declarations = [
-            "requests",
-            "requests[socks]>=2,<3",
-            "requests; python_version >= '3.10'",
-            "demo; python_version === '3.12'",
-            "demo; python_version == '3.12'",
-            "demo; python_version != '3.12'",
-            "demo; python_version < '3.12'",
-            "demo; python_version <= '3.12'",
-            "demo; python_version > '3.12'",
-            "demo; python_version >= '3.12'",
-            "demo; python_version ~= '3.12'",
-            "demo; os_name in 'posix'",
-            "demo; os_name not in 'nt'",
-            "demo @ https://example.invalid/demo-1.whl#sha256=deadbeef",
-            "demo @ git+https://example.invalid/demo.git@main",
-            "demo @ file:///tmp/demo-1.whl",
-            "demo @ ../demo-1.whl",
-        ];
-        let input = declarations.join("\n");
-        assert_eq!(
-            parse_requirements(input.as_bytes(), root.path()).expect("supported corpus"),
-            declarations,
-            "validated declarations remain the original effective text"
-        );
-    }
-
-    #[test]
-    fn pep508_requirements_reject_invalid_grammar_and_file_directives() {
-        for (label, input) in [
-            ("bad name", "bad/name"),
-            ("broken extras", "demo[extra"),
-            ("broken version", "demo >< 1"),
-            ("broken marker", "demo; python_version >< '3.12'"),
-            ("broken URL", "demo @ https://[broken"),
-            ("include", "-r other.txt"),
-            ("long include", "--requirement other.txt"),
-            ("editable", "-e ../demo"),
-            ("long editable", "--editable ../demo"),
-            ("index", "--index-url https://example.invalid/simple"),
-            ("continuation", "demo \\\\"),
-            (
-                "braced expansion",
-                "demo @ https://example.invalid/${TOKEN}.whl",
-            ),
-        ] {
-            let error = parse_requirements(input.as_bytes(), Path::new("/tmp")).expect_err(label);
-            assert!(error.starts_with("line 1:"), "{label}: {error}");
-        }
-    }
-
-    #[test]
-    fn pep508_parser_diagnostics_are_useful_bounded_and_safe() {
-        let cases = [
-            ("name", "bad/name"),
-            ("extra", "demo[extra"),
-            ("specifier", "demo >< 1"),
-            ("marker", "demo; python_version >< '3.12'"),
-            ("URL", "demo @ https://[broken"),
-        ];
-        for (label, declaration) in cases {
-            let error =
-                parse_requirements(declaration.as_bytes(), Path::new("/tmp")).expect_err(label);
-            assert!(error.starts_with("line 1: "), "{label}: {error}");
-            let reason = error.strip_prefix("line 1: ").expect("line prefix");
-            assert!(
-                reason.starts_with("unexpected end of dependency declaration near byte "),
-                "{label}: {error}"
-            );
-            assert!(!reason.contains("version specifier"), "{label}: {error}");
-            assert!(!reason.contains("environment marker"), "{label}: {error}");
-            assert!(!reason.contains("dependency extra"), "{label}: {error}");
-            assert!(!reason.contains("direct-reference URL"), "{label}: {error}");
-            assert!(
-                reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES,
-                "{label} reason is bounded: {error}"
-            );
-        }
-
-        let ambiguous = "demo[broken; python_version >= '3.12'";
-        let error = parse_requirements(ambiguous.as_bytes(), Path::new("/tmp"))
-            .expect_err("ambiguous malformed declaration");
-        let reason = error.strip_prefix("line 1: ").expect("line prefix");
-        assert!(reason.starts_with("unexpected end of dependency declaration near byte "));
-        assert!(!reason.contains("environment marker"), "{error}");
-        assert!(!reason.contains("dependency extra"), "{error}");
-
-        let sentinel = "TOP-SECRET-397";
-        let declaration = format!("demo @ https://user:{sentinel}@example.invalid/[broken");
-        let error = parse_requirements(declaration.as_bytes(), Path::new("/tmp"))
-            .expect_err("malformed URL");
-        assert!(
-            !error.contains(sentinel) && !error.contains("user:") && !error.contains(&declaration),
-            "diagnostic disclosed authored URL content: {error}"
-        );
-
-        let long = format!("demo[{}", "x".repeat(16 * 1024));
-        let error = parse_requirements(long.as_bytes(), Path::new("/tmp"))
-            .expect_err("malformed long declaration");
-        let reason = error.strip_prefix("line 1: ").expect("line prefix");
-        assert!(
-            reason.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES,
-            "diagnostic reason is bounded: {} bytes",
-            reason.len()
-        );
-    }
-
-    #[test]
-    fn discovery_surfaces_safe_pep508_diagnostics_as_invalid_packages() {
-        let (_directory, workspace) = workspace_with(&[(
-            "demo",
-            &[
-                (SERVER_FILE, b"mcp = None\n".as_slice()),
-                (REQUIREMENTS_FILE, b"bad/name\n".as_slice()),
-            ],
-        )]);
-        let package = workspace.root().join(".agents/tools/demo");
-        let error = discover_package(&package, "demo", &crate::runtime::CancellationSignal::new())
-            .expect_err("invalid name");
-        let PythonToolError::InvalidPackage(message) = error else {
-            panic!("PEP 508 parse errors remain package validation errors");
-        };
-        assert!(message.contains(
-            "requirements.txt: line 1: unexpected end of dependency declaration near byte"
-        ));
-        assert!(!message.contains("version specifier"));
-    }
-
-    #[test]
-    fn pep508_diagnostic_reduction_is_order_independent_and_prefers_progress() {
-        use chumsky::{DefaultExpected, error::LabelError, prelude::SimpleSpan, util::MaybeRef};
-
-        fn error_at(start: usize, found: Option<char>) -> chumsky::error::Simple<'static, char> {
-            <chumsky::error::Simple<'static, char> as LabelError<
-                'static,
-                &'static str,
-                DefaultExpected<'static, char>,
-            >>::expected_found(
-                std::iter::empty::<DefaultExpected<'static, char>>(),
-                found.map(MaybeRef::Val),
-                SimpleSpan::new(start, start + usize::from(found.is_some())),
-            )
-        }
-
-        let earlier_found = error_at(3, Some('/'));
-        let later_eof = error_at(8, None);
-        let forward = vec![earlier_found, later_eof];
-        let reverse = vec![later_eof, earlier_found];
-        assert_eq!(
-            safe_pep508_diagnostic(&forward),
-            "unexpected end of dependency declaration near byte 8"
-        );
-        assert_eq!(
-            safe_pep508_diagnostic(&forward),
-            safe_pep508_diagnostic(&reverse)
-        );
-
-        let same_position_eof = error_at(8, None);
-        let same_position_found = error_at(8, Some('!'));
-        let eof_first = vec![same_position_eof, same_position_found];
-        let found_first = vec![same_position_found, same_position_eof];
-        assert_eq!(
-            safe_pep508_diagnostic(&eof_first),
-            "invalid dependency syntax near byte 8"
-        );
-        assert_eq!(
-            safe_pep508_diagnostic(&eof_first),
-            safe_pep508_diagnostic(&found_first)
-        );
-
-        // Equal semantic keys may contain different authored tokens; neither
-        // the token value nor its position in the vector affects the result.
-        let other_found = error_at(8, Some('$'));
-        for errors in [
-            [earlier_found, later_eof, same_position_found, other_found],
-            [other_found, same_position_found, later_eof, earlier_found],
-            [later_eof, other_found, earlier_found, same_position_found],
-        ] {
-            assert_eq!(
-                safe_pep508_diagnostic(&errors),
-                "invalid dependency syntax near byte 8"
-            );
-        }
-        let capped =
-            safe_pep508_diagnostic(&[error_at(MAX_REQUIREMENTS_DIAGNOSTIC_BYTE_OFFSET + 1, None)]);
-        assert_eq!(
-            capped,
-            "unexpected end of dependency declaration near byte 16777216+"
-        );
-        assert!(capped.len() <= MAX_REQUIREMENTS_PARSE_REASON_BYTES);
-    }
-
-    #[test]
-    fn requirements_file_comments_crlf_and_quoted_markers_are_bounded() {
-        let parsed = parse_requirements(
-            b"\r\n# comment\r\ndemo @ https://example.invalid/demo.whl#sha256=deadbeef\r\nrequests; os_name == 'hash # and $ stay' # comment\r\ndemo; os_name == '$TOKEN'\r\ndemo; os_name == '${'\r\n",
-            Path::new("/tmp"),
-        )
-        .expect("comments and CRLF are accepted");
-        assert_eq!(
-            parsed,
-            [
-                "demo @ https://example.invalid/demo.whl#sha256=deadbeef",
-                "requests; os_name == 'hash # and $ stay'",
-                "demo; os_name == '$TOKEN'",
-                "demo; os_name == '${'",
-            ]
-        );
-    }
-
-    #[test]
-    fn managed_fastmcp_uses_pep503_normalized_identity_without_marker_evaluation() {
-        for declaration in [
-            "FastMCP",
-            "fastmcp[cli]>=2",
-            "FASTmcp @ https://example.invalid/fastmcp.whl",
-            "fastmcp; python_version < '0'",
-        ] {
-            let error = parse_requirements(declaration.as_bytes(), Path::new("/tmp"))
-                .expect_err("managed FastMCP declaration");
-            assert!(error.contains("managed by rustX"), "{declaration}: {error}");
-        }
-        assert_eq!(
-            parse_requirements(b"fast_mcp\n", Path::new("/tmp")).expect("distinct package"),
-            ["fast_mcp"]
-        );
-        for (authored, expected) in [
-            ("FastMCP", "fastmcp"),
-            ("fastmcp", "fastmcp"),
-            ("FASTmcp", "fastmcp"),
-            ("fast_mcp", "fast-mcp"),
-            ("fast.mcp", "fast-mcp"),
-            ("fast---mcp", "fast-mcp"),
-        ] {
-            let normalized = uv_normalize::PackageName::from_str(authored)
-                .expect("library-owned normalized package name");
-            assert_eq!(normalized.as_ref(), expected, "{authored}");
-        }
-    }
-
-    #[test]
-    fn the_fingerprint_is_stable_and_tracks_every_material_input() {
-        let package = package("demo");
-        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
-        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
-        let fingerprint = package_fingerprint(&package, python_identity, uv_identity);
-        assert!(fingerprint.starts_with("sha256:"));
-        assert_eq!(
-            fingerprint,
-            package_fingerprint(&package, python_identity, uv_identity),
-            "the fingerprint is deterministic"
-        );
-
-        // The package identity (the synthesized `python:<folder>` server
-        // identity) is a first-class fingerprint input: renaming the folder
-        // is a new environment identity even with byte-identical content.
-        let mut renamed = package.clone();
-        renamed.name = "renamed".to_owned();
-        assert_ne!(
-            fingerprint,
-            package_fingerprint(&renamed, python_identity, uv_identity),
-            "the package identity is a fingerprint input"
-        );
-        // Relocating the workspace on the host is not: the live path is
-        // deliberately excluded so moving the workspace never changes a
-        // package's logical identity.
-        let mut relocated = package.clone();
-        relocated.root = PathBuf::from("/elsewhere/workspace");
-        assert_eq!(
-            fingerprint,
-            package_fingerprint(&relocated, python_identity, uv_identity),
-            "the live host path is not a fingerprint input"
-        );
-
-        let mut changed_bytes = package.clone();
-        change_source(&mut changed_bytes, SERVER_FILE, b"# changed\n");
-        assert_ne!(
-            fingerprint,
-            package_fingerprint(&changed_bytes, python_identity, uv_identity),
-            "a source edit is a new fingerprint"
-        );
-        let mut changed_requirements = package.clone();
-        change_source(
-            &mut changed_requirements,
-            REQUIREMENTS_FILE,
-            b"six==1.16.0\n",
-        );
-        assert_ne!(
-            fingerprint,
-            package_fingerprint(&changed_requirements, python_identity, uv_identity),
-            "a requirements edit is a new fingerprint"
-        );
-        assert_ne!(
-            fingerprint,
-            package_fingerprint(&package, "/usr/bin/python3 (Python 3.13.0)", uv_identity),
-            "the interpreter identity is a fingerprint input"
-        );
-        assert_ne!(
-            fingerprint,
-            package_fingerprint(&package, python_identity, "/usr/bin/uv (uv 0.12.0)"),
-            "the uv identity is a fingerprint input"
-        );
-    }
-
-    /// The managed `FastMCP` build is a material fingerprint input
-    /// (Issue #241): moving the rustX-owned protocol peer to another version
-    /// is always a different prepared-state identity, so a `FastMCP` 3 state
-    /// directory can never be reused — or mutated in place — by a `FastMCP` 4
-    /// preparation of the same package bytes.
-    #[test]
-    fn the_managed_fastmcp_version_is_a_material_prepared_state_input() {
-        let package = package("demo");
-        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
-        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
-        let current = package_fingerprint(&package, python_identity, uv_identity);
-        assert_eq!(
-            current,
-            package_fingerprint_with(
-                &package,
-                python_identity,
-                uv_identity,
-                MANAGED_FASTMCP_VERSION,
-            ),
-            "the production fingerprint is the managed pin's fingerprint"
-        );
-        for other in ["3.4.7", "4.0.2"] {
-            assert_ne!(
-                other, MANAGED_FASTMCP_VERSION,
-                "the counter-example must be a different build"
-            );
-            assert_ne!(
-                current,
-                package_fingerprint_with(&package, python_identity, uv_identity, other),
-                "a different managed FastMCP build is a different prepared identity"
-            );
-        }
-    }
-
-    /// Issue #174 environment-identity invariant: two distinct package
-    /// folders with byte-identical contents must still receive distinct
-    /// fingerprints (and therefore distinct state directories and distinct
-    /// environment identities). Cross-package environment deduplication is
-    /// explicitly out of scope.
-    #[test]
-    fn byte_identical_folders_have_distinct_environment_identities() {
-        let alpha = package("alpha");
-        let beta = package("beta");
-        assert_eq!(
-            alpha.files, beta.files,
-            "the fixture writes byte-identical package contents"
-        );
-        assert_eq!(
-            alpha.requirements, beta.requirements,
-            "byte-identical requirements"
-        );
-        assert_ne!(alpha.name, beta.name);
-        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
-        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
-        let alpha_fingerprint = package_fingerprint(&alpha, python_identity, uv_identity);
-        let beta_fingerprint = package_fingerprint(&beta, python_identity, uv_identity);
-        assert_ne!(
-            alpha_fingerprint, beta_fingerprint,
-            "byte-identical folders never share one environment identity"
-        );
-    }
-
-    #[test]
-    fn the_generated_pyproject_pins_the_probed_series_and_the_managed_fastmcp() {
-        let mut package = package("demo");
-        package.requirements = vec!["six==1.16.0".to_owned()];
-        let pyproject = generated_pyproject(&package, "/usr/bin/python3 (Python 3.12.13)");
-        assert!(
-            pyproject.contains("name = \"rustx-python-tool-demo\""),
-            "{pyproject}"
-        );
-        assert!(
-            pyproject.contains("requires-python = \"==3.12.*\""),
-            "{pyproject}"
-        );
-        assert!(pyproject.contains("\"six==1.16.0\""), "{pyproject}");
-        assert!(
-            pyproject.contains(&format!("\"fastmcp=={MANAGED_FASTMCP_VERSION}\"")),
-            "{pyproject}"
-        );
-        assert_eq!(
-            probed_python_series("/opt/py (not a version)"),
-            None,
-            "an unparseable identity degrades to the fallback bound"
-        );
-    }
-
-    #[test]
-    fn the_server_binding_launches_the_prepared_venv_interpreter_directly() {
-        let prepared = PreparedPythonPackage {
-            fingerprint: "sha256:abc".to_owned(),
-            state_dir: PathBuf::from("/state/sha256:abc"),
-            permissions: None,
-            tool_permissions: BTreeMap::new(),
-        };
-        let binding = prepared.server_binding();
-        let McpTransportConfig::Stdio {
-            program,
-            args,
-            cwd,
-            environment,
-        } = &binding.transport
-        else {
-            panic!("the binding is a stdio launch");
-        };
-        if cfg!(windows) {
-            assert_eq!(program, "/state/sha256:abc/venv/Scripts/python.exe");
-        } else {
-            assert_eq!(program, "/state/sha256:abc/venv/bin/python");
-        }
-        assert_eq!(
-            args,
-            &[
-                "-m".to_owned(),
-                "fastmcp.cli".to_owned(),
-                "run".to_owned(),
-                "/state/sha256:abc/source/server.py:mcp".to_owned(),
-                "--skip-env".to_owned(),
-                "--no-banner".to_owned(),
-            ]
-        );
-        assert!(cwd.is_none());
-        assert_eq!(
-            environment
-                .get("FASTMCP_SHOW_SERVER_BANNER")
-                .map(String::as_str),
-            Some("false")
-        );
-        assert_eq!(
-            environment
-                .get("FASTMCP_CHECK_FOR_UPDATES")
-                .map(String::as_str),
-            Some("off")
-        );
-        assert_eq!(
-            environment
-                .get("PYTHONDONTWRITEBYTECODE")
-                .map(String::as_str),
-            Some("1")
-        );
-        assert_eq!(binding.policy, ToolInvocationPolicy::default());
-        assert_eq!(binding.permissions, None);
-        assert!(binding.tool_permissions.is_empty());
-    }
-
-    fn deny_ask_permissions() -> crate::runtime::permission::ResourcePermissionSet {
-        use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
-        ResourcePermissionSet {
-            plan: ResourcePermissionValue::Deny,
-            automatic: ResourcePermissionValue::Ask,
-            full_access: ResourcePermissionValue::Ask,
-        }
-    }
-
-    fn deny_all_permissions() -> crate::runtime::permission::ResourcePermissionSet {
-        use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
-        ResourcePermissionSet {
-            plan: ResourcePermissionValue::Deny,
-            automatic: ResourcePermissionValue::Deny,
-            full_access: ResourcePermissionValue::Deny,
-        }
-    }
-
-    #[test]
-    fn discovery_captures_permissions_toml_as_package_metadata() {
-        let directory = tempfile::tempdir().expect("workspace");
-        let root = directory.path().join(".agents/tools/demo");
-        std::fs::create_dir_all(&root).unwrap();
-        for (relative, bytes) in &valid_package_files() {
-            std::fs::write(root.join(relative), bytes).unwrap();
-        }
-        std::fs::write(
-            root.join(PERMISSIONS_FILE),
-            r#"
-[permissions]
-plan = "deny"
-automatic = "ask"
-full_access = "ask"
-
-[tools.risky]
-permissions = { plan = "deny", automatic = "deny", full_access = "deny" }
-"#,
-        )
-        .unwrap();
-        let package = discover_package(
-            &root.canonicalize().unwrap(),
-            "demo",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .expect("valid package with permissions");
-        assert_eq!(package.permissions(), Some(deny_ask_permissions()));
-        assert_eq!(
-            package.tool_permissions().get("risky"),
-            Some(&deny_all_permissions())
-        );
-        assert!(
-            !package
-                .files()
-                .iter()
-                .any(|path| path == Path::new(PERMISSIONS_FILE)),
-            "permissions.toml is resource metadata, not frozen source"
-        );
-    }
-
-    #[test]
-    fn authored_deny_ask_permissions_reach_the_synthesized_mcp_binding() {
-        let directory = tempfile::tempdir().expect("workspace");
-        let root = directory.path().join(".agents/tools/demo");
-        std::fs::create_dir_all(&root).unwrap();
-        for (relative, bytes) in &valid_package_files() {
-            std::fs::write(root.join(relative), bytes).unwrap();
-        }
-        std::fs::write(
-            root.join(PERMISSIONS_FILE),
-            r#"
-[permissions]
-plan = "deny"
-automatic = "ask"
-full_access = "ask"
-
-[tools.risky]
-permissions = { plan = "deny", automatic = "deny", full_access = "deny" }
-"#,
-        )
-        .unwrap();
-        let package = discover_package(
-            &root.canonicalize().unwrap(),
-            "demo",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .unwrap();
-        let prepared = with_package_permissions(
-            PreparedPythonPackage {
-                fingerprint: "sha256:abc".to_owned(),
-                state_dir: PathBuf::from("/state/sha256:abc"),
-                permissions: None,
-                tool_permissions: BTreeMap::new(),
-            },
-            &package,
-        );
-        let binding = prepared.server_binding();
-        assert_eq!(binding.permissions, Some(deny_ask_permissions()));
-        assert_eq!(
-            binding.tool_permissions.get("risky"),
-            Some(&deny_all_permissions())
-        );
-    }
-
-    #[test]
-    fn permissions_toml_does_not_enter_the_env_fingerprint() {
-        let directory = tempfile::tempdir().expect("workspace");
-        let root = directory.path().join(".agents/tools/demo");
-        std::fs::create_dir_all(&root).unwrap();
-        for (relative, bytes) in &valid_package_files() {
-            std::fs::write(root.join(relative), bytes).unwrap();
-        }
-        let without = discover_package(
-            &root.canonicalize().unwrap(),
-            "demo",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .unwrap();
-        std::fs::write(
-            root.join(PERMISSIONS_FILE),
-            r#"
-[permissions]
-plan = "deny"
-automatic = "ask"
-full_access = "ask"
-"#,
-        )
-        .unwrap();
-        let with = discover_package(
-            &root.canonicalize().unwrap(),
-            "demo",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .unwrap();
-        assert_ne!(without.permissions(), with.permissions());
-        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
-        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
-        assert_eq!(
-            package_fingerprint(&without, python_identity, uv_identity),
-            package_fingerprint(&with, python_identity, uv_identity),
-            "permissions must not address the shared env cache"
-        );
-        assert_eq!(without.source_digest(), with.source_digest());
-    }
-
-    #[test]
-    fn cached_env_reuse_still_freezes_current_package_permissions() {
-        let directory = tempfile::tempdir().expect("store");
-        let mut package = package("demo");
-        package.permissions = Some(deny_ask_permissions());
-        package
-            .tool_permissions
-            .insert("risky".into(), deny_all_permissions());
-        let (_fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
-        let reopened = read_prepared_state(
-            &state_dir,
-            &package,
-            &package_fingerprint(&package, "py", "uv"),
-            "py",
-            "uv",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .unwrap()
-        .expect("cached env");
-        assert_eq!(reopened.permissions, None);
-        assert!(reopened.tool_permissions.is_empty());
-        let frozen = with_package_permissions(reopened, &package);
-        let binding = frozen.server_binding();
-        assert_eq!(binding.permissions, Some(deny_ask_permissions()));
-        assert_eq!(
-            binding.tool_permissions.get("risky"),
-            Some(&deny_all_permissions())
-        );
-    }
-
-    #[test]
-    fn malformed_permissions_toml_rejects_the_package() {
-        let directory = tempfile::tempdir().expect("workspace");
-        let root = directory.path().join(".agents/tools/demo");
-        std::fs::create_dir_all(&root).unwrap();
-        for (relative, bytes) in &valid_package_files() {
-            std::fs::write(root.join(relative), bytes).unwrap();
-        }
-        std::fs::write(root.join(PERMISSIONS_FILE), "permissions = true\n").unwrap();
-        let error = discover_package(
-            &root.canonicalize().unwrap(),
-            "demo",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .expect_err("malformed permissions reject the package");
-        let PythonToolError::InvalidPackage(message) = error else {
-            panic!("expected InvalidPackage, got {error:?}");
-        };
-        assert!(
-            message.contains(PERMISSIONS_FILE),
-            "diagnostic names the permissions document: {message}"
-        );
-    }
-
-    /// One fully valid on-disk prepared state of `package` under
-    /// `packages/<fingerprint>` (with a stub `venv/bin/python`).
-    fn seed_prepared_state(
-        store_root: &Path,
-        package: &PythonToolPackage,
-        python_identity: &str,
-        uv_identity: &str,
-    ) -> (String, PathBuf) {
-        let fingerprint = package_fingerprint(package, python_identity, uv_identity);
-        let state_dir = store_root
-            .canonicalize()
-            .unwrap()
-            .join(PACKAGES_DIRECTORY)
-            .join(&fingerprint);
-        let source_root = state_dir.join(SOURCE_DIRECTORY);
-        std::fs::create_dir_all(&source_root).expect("source root");
-        for relative in &package.files {
-            package
-                .source
-                .copy_to(
-                    relative,
-                    &source_root.join(relative),
-                    &crate::runtime::CancellationSignal::new(),
-                )
-                .expect("frozen source");
-        }
-        let program = venv_python(&state_dir);
-        std::fs::create_dir_all(program.parent().expect("bin")).expect("venv bin");
-        std::fs::write(&program, b"#!/bin/sh\n").expect("interpreter stub");
-        let manifest = PreparedManifest {
-            format: MANIFEST_FORMAT.to_owned(),
-            fingerprint: fingerprint.clone(),
-            package: package.name.clone(),
-            origin: package.root.display().to_string(),
-            entrypoint: ENTRYPOINT.to_owned(),
-            fastmcp: MANAGED_FASTMCP_VERSION.to_owned(),
-            python: python_identity.to_owned(),
-            uv: uv_identity.to_owned(),
-            os: std::env::consts::OS.to_owned(),
-            arch: std::env::consts::ARCH.to_owned(),
-            source_digest: package.source_digest.clone(),
-        };
-        std::fs::write(
-            state_dir.join(MANIFEST_FILE),
-            serde_json::to_vec(&manifest).expect("manifest"),
-        )
-        .expect("manifest write");
-        (fingerprint, state_dir)
-    }
-
-    #[test]
-    fn a_published_state_reopens_only_when_every_claim_verifies() {
-        let directory = tempfile::tempdir().expect("store");
-        let package = package("demo");
-        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
-
-        let reopened = read_prepared_state(
-            &state_dir,
-            &package,
-            &fingerprint,
-            "py",
-            "uv",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .expect("valid state")
-        .expect("state exists");
-        assert_eq!(reopened.fingerprint, fingerprint);
-        assert_eq!(reopened.state_dir, state_dir);
-
-        // An unknown fingerprint directory is simply absent, not an error.
-        assert_eq!(
-            read_prepared_state(
-                &directory
-                    .path()
-                    .join(PACKAGES_DIRECTORY)
-                    .join("sha256:other"),
-                &package,
-                "sha256:other",
-                "py",
-                "uv",
-                &crate::runtime::CancellationSignal::new()
-            )
-            .expect("absent state"),
-            None
-        );
-    }
-
-    #[test]
-    fn a_tampered_published_state_fails_closed() {
-        let directory = tempfile::tempdir().expect("store");
-        let package = package("demo");
-        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
-
-        // A tampered manifest (a different claimed fingerprint).
-        let manifest_path = state_dir.join(MANIFEST_FILE);
-        let original = std::fs::read(&manifest_path).expect("manifest");
-        let mut manifest: PreparedManifest =
-            serde_json::from_slice(&original).expect("manifest parses");
-        manifest.package = "impostor".to_owned();
-        // The manifest claim check covers the fingerprint/format/platform;
-        // a source-digest-consistent but fingerprint-foreign manifest fails.
-        manifest.fingerprint = "sha256:foreign".to_owned();
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec(&manifest).expect("manifest"),
-        )
-        .expect("tamper");
-        let error = read_prepared_state(
-            &state_dir,
-            &package,
-            &fingerprint,
-            "py",
-            "uv",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .expect_err("a tampered manifest fails closed");
-        assert!(
-            matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
-            "{error}"
-        );
-
-        // Restored manifest, tampered frozen source.
-        std::fs::write(&manifest_path, &original).expect("restore manifest");
-        std::fs::write(
-            state_dir.join(SOURCE_DIRECTORY).join(SERVER_FILE),
-            b"mcp = 'tampered'\n",
-        )
-        .expect("tamper source");
-        let error = read_prepared_state(
-            &state_dir,
-            &package,
-            &fingerprint,
-            "py",
-            "uv",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .expect_err("a tampered source fails closed");
-        assert!(
-            matches!(&error, PythonToolError::Storage(message) if message.contains("does not hash back")),
-            "{error}"
-        );
-
-        // The tampered bytes are never mutated into looking valid.
-        let persisted =
-            std::fs::read(state_dir.join(SOURCE_DIRECTORY).join(SERVER_FILE)).expect("persisted");
-        assert_eq!(persisted, b"mcp = 'tampered'\n");
-    }
-
-    /// Every identity-bearing manifest claim is verified on reopen: a frozen
-    /// manifest must not record semantic claims that reuse does not check.
-    /// A contradicting `package`, `entrypoint`, `python`, or `uv` claim fails
-    /// closed even when the fingerprint itself matches.
-    #[test]
-    fn a_manifest_claiming_identity_inputs_that_reuse_does_not_verify_fails_closed() {
-        let directory = tempfile::tempdir().expect("store");
-        let package = package("demo");
-        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
-        let manifest_path = state_dir.join(MANIFEST_FILE);
-        let original = std::fs::read(&manifest_path).expect("manifest");
-
-        let tamper = |mutate: &dyn Fn(&mut PreparedManifest)| {
-            let mut manifest: PreparedManifest =
-                serde_json::from_slice(&original).expect("manifest parses");
-            mutate(&mut manifest);
-            std::fs::write(
-                &manifest_path,
-                serde_json::to_vec(&manifest).expect("manifest"),
-            )
-            .expect("tamper");
-        };
-        let expect_rejection = |label: &str| {
-            let error = read_prepared_state(
-                &state_dir,
-                &package,
-                &fingerprint,
-                "py",
-                "uv",
-                &crate::runtime::CancellationSignal::new(),
-            )
-            .expect_err(label);
-            assert!(
-                matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
-                "{label}: {error}"
-            );
-        };
-
-        tamper(&|manifest| manifest.package = "other-package".to_owned());
-        expect_rejection("a foreign package claim fails closed");
-
-        tamper(&|manifest| manifest.entrypoint = "tool.py:run".to_owned());
-        expect_rejection("a foreign entrypoint claim fails closed");
-
-        tamper(&|manifest| manifest.fastmcp = "3.4.7".to_owned());
-        expect_rejection("a foreign managed FastMCP claim fails closed");
-
-        tamper(&|manifest| manifest.python = "other-python".to_owned());
-        expect_rejection("a foreign Python identity claim fails closed");
-
-        tamper(&|manifest| manifest.uv = "other-uv".to_owned());
-        expect_rejection("a foreign uv identity claim fails closed");
-
-        // The last tampered claim is never repaired into looking valid: the
-        // on-disk manifest still carries the foreign uv claim.
-        let persisted = std::fs::read_to_string(&manifest_path).expect("persisted manifest");
-        assert!(
-            persisted.contains("\"uv\":\"other-uv\""),
-            "the manifest is never rewritten by validation: {persisted}"
-        );
-    }
-
-    #[test]
-    fn a_published_state_without_the_launch_executable_fails_closed() {
-        let directory = tempfile::tempdir().expect("store");
-        let package = package("demo");
-        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
-        std::fs::remove_file(venv_python(&state_dir)).expect("remove the interpreter");
-        let error = read_prepared_state(
-            &state_dir,
-            &package,
-            &fingerprint,
-            "py",
-            "uv",
-            &crate::runtime::CancellationSignal::new(),
-        )
-        .expect_err("a missing venv interpreter fails closed");
-        assert!(
-            matches!(&error, PythonToolError::Storage(message) if message.contains("no venv interpreter")),
-            "{error}"
-        );
-    }
-
-    /// A recorded process backend: probes succeed with fixed versions, and
-    /// the `uv sync` command materializes the stub `venv/bin/python` launch
-    /// executable inside the staging directory it runs in.
-    #[derive(Debug, Default)]
-    struct FakeRunner {
-        commands: Mutex<Vec<String>>,
-    }
-
-    impl SupervisedProcessRunner for FakeRunner {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            self.commands
-                .lock()
-                .expect("commands")
-                .push(spec.command.clone());
-            if spec.command.contains("sync") {
-                let program = venv_python(&spec.cwd);
-                std::fs::create_dir_all(program.parent().expect("bin")).expect("venv bin");
-                std::fs::write(program, b"#!/bin/sh\n").expect("interpreter stub");
-            }
-            let stdout = if spec.command.contains("python3") {
-                b"Python 3.12.13\n".to_vec()
-            } else if spec.command.contains("uv") && spec.command.contains("--version") {
-                b"uv 0.11.12\n".to_vec()
-            } else {
-                Vec::new()
-            };
-            Box::pin(async move {
-                Ok(CapturedProcessResult {
-                    exit_code: Some(0),
-                    intent: ProcessOutcomeIntent::Completed,
-                    stdout,
-                    stderr: Vec::new(),
-                })
-            })
-        }
-    }
-
-    #[derive(Default)]
-    struct PublicationWake(std::sync::atomic::AtomicBool);
-
-    impl std::task::Wake for PublicationWake {
-        fn wake(self: Arc<Self>) {
-            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    /// Drive both sides of the publication cut by polling, with no runtime
-    /// clock or scheduler delay. A notification is only a wakeup; the stored
-    /// terminal result is the authority for early and late waiters alike.
-    #[test]
-    fn preparation_owner_publishes_to_registered_and_late_waiters() {
-        use futures_util::FutureExt;
-        let state = Arc::new(BuildState {
-            result: Mutex::new(None),
-            notify: tokio::sync::Notify::new(),
-        });
-        let in_flight = Arc::new(Mutex::new(BTreeMap::from([(
-            "build".into(),
-            state.clone(),
-        )])));
-        let mut owner = BuildOwnerGuard {
-            in_flight: in_flight.clone(),
-            key: "build".into(),
-            state: state.clone(),
-            completed: false,
-        };
-        let mut first = Box::pin(state.wait());
-        let mut second = Box::pin(state.wait());
-        assert!(first.as_mut().now_or_never().is_none());
-        assert!(second.as_mut().now_or_never().is_none());
-        let first_wake = Arc::new(PublicationWake::default());
-        let second_wake = Arc::new(PublicationWake::default());
-        let first_waker = std::task::Waker::from(first_wake.clone());
-        let second_waker = std::task::Waker::from(second_wake.clone());
-        assert!(
-            std::future::Future::poll(
-                first.as_mut(),
-                &mut std::task::Context::from_waker(&first_waker)
-            )
-            .is_pending()
-        );
-        assert!(
-            std::future::Future::poll(
-                second.as_mut(),
-                &mut std::task::Context::from_waker(&second_waker)
-            )
-            .is_pending()
-        );
-        // Spurious wakeups cannot manufacture preparation completion.
-        state.notify.notify_waiters();
-        assert!(first.as_mut().now_or_never().is_none());
-        assert!(second.as_mut().now_or_never().is_none());
-        assert!(
-            std::future::Future::poll(
-                first.as_mut(),
-                &mut std::task::Context::from_waker(&first_waker)
-            )
-            .is_pending()
-        );
-        assert!(
-            std::future::Future::poll(
-                second.as_mut(),
-                &mut std::task::Context::from_waker(&second_waker)
-            )
-            .is_pending()
-        );
-        first_wake
-            .0
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        second_wake
-            .0
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        assert!(in_flight.lock().unwrap().contains_key("build"));
-        let prepared = PreparedPythonPackage {
-            fingerprint: "build".into(),
-            state_dir: PathBuf::from("prepared"),
-            permissions: None,
-            tool_permissions: BTreeMap::new(),
-        };
-        owner.finish(Ok(prepared.clone()));
-        assert!(first_wake.0.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(second_wake.0.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(in_flight.lock().unwrap().is_empty());
-        for result in [
-            first.now_or_never(),
-            second.now_or_never(),
-            state.wait().now_or_never(),
-        ] {
-            assert_eq!(
-                result
-                    .expect("publication is immediately observable")
-                    .unwrap(),
-                prepared
-            );
-        }
-    }
-
-    #[test]
-    fn preparation_owner_exit_publishes_failure_to_registered_and_late_waiters() {
-        use futures_util::FutureExt;
-        let state = Arc::new(BuildState {
-            result: Mutex::new(None),
-            notify: tokio::sync::Notify::new(),
-        });
-        let in_flight = Arc::new(Mutex::new(BTreeMap::from([(
-            "build".into(),
-            state.clone(),
-        )])));
-        let owner = BuildOwnerGuard {
-            in_flight: in_flight.clone(),
-            key: "build".into(),
-            state: state.clone(),
-            completed: false,
-        };
-        let mut waiter = Box::pin(state.wait());
-        assert!(waiter.as_mut().now_or_never().is_none());
-        drop(owner);
-        assert!(in_flight.lock().unwrap().is_empty());
-        for result in [waiter.now_or_never(), state.wait().now_or_never()] {
-            assert!(
-                matches!(result.expect("owner exit publishes without another wakeup"),
-                Err(PythonToolError::Environment(reason))
-                    if reason == "the Python build owner exited before terminal publication")
-            );
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn concurrent_preparations_coalesce_onto_one_physical_build() {
-        let directory = tempfile::tempdir().expect("store");
-        let runner = Arc::new(FakeRunner::default());
-        let store = PythonToolStore::with_binaries_and_runner(
-            directory.path().to_path_buf(),
-            PathBuf::from("/usr/bin/uv"),
-            PathBuf::from("/usr/bin/python3"),
-            runner.clone(),
-        )
-        .expect("store");
-        let package = package("demo");
-
-        let cancellation = CancellationSignal::new();
-        let (first, second) = tokio::join!(
-            store.ensure_prepared(&package, &cancellation),
-            store.ensure_prepared(&package, &cancellation),
-        );
-        let first = first.expect("first preparation");
-        let second = second.expect("second preparation");
-        assert_eq!(
-            first, second,
-            "both callers observe the same published state"
-        );
-        assert!(venv_python(&first.state_dir).is_file());
-        assert!(first.state_dir.join(MANIFEST_FILE).is_file());
-        assert!(first.state_dir.join("source").join(SERVER_FILE).is_file());
-
-        let commands = runner.commands.lock().expect("commands").clone();
-        assert_eq!(
-            commands
-                .iter()
-                .filter(|command| command.contains(" lock "))
-                .count(),
-            1,
-            "concurrent builds of one fingerprint coalesce: {commands:?}"
-        );
-
-        // A later preparation of the unchanged package reuses the validated
-        // state: no further uv lock runs.
-        let reused = store
-            .ensure_prepared(&package, &CancellationSignal::new())
-            .await
-            .expect("reuse");
-        assert_eq!(reused, first);
-        let commands = runner.commands.lock().expect("commands").clone();
-        assert_eq!(
-            commands
-                .iter()
-                .filter(|command| command.contains(" lock "))
-                .count(),
-            1,
-            "a valid published state is reused without rebuilding: {commands:?}"
-        );
-
-        // A changed package is a new fingerprint and a new build.
-        let mut changed = package.clone();
-        change_source(&mut changed, SERVER_FILE, b"# changed\n");
-        let rebuilt = store
-            .ensure_prepared(&changed, &CancellationSignal::new())
-            .await
-            .expect("rebuild");
-        assert_ne!(rebuilt.fingerprint, first.fingerprint);
-    }
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn issue527_file_backed_packages_scale_without_retaining_asset_bytes() {
-        use std::os::unix::fs::MetadataExt;
-        for size_mib in [17_u64, 64, 256] {
-            let temporary = tempfile::tempdir().unwrap();
-            let root = temporary.path().canonicalize().unwrap();
-            let source = root.join("demo");
-            std::fs::create_dir(&source).unwrap();
-            std::fs::write(
-                source.join(SERVER_FILE),
-                b"from fastmcp import FastMCP\nmcp = FastMCP('demo')\n",
-            )
-            .unwrap();
-            std::fs::write(source.join(REQUIREMENTS_FILE), b"# none\n").unwrap();
-            std::fs::File::create(source.join("asset.bin"))
-                .unwrap()
-                .set_len(size_mib * 1024 * 1024)
-                .unwrap();
-            let started = std::time::Instant::now();
-            let cancellation = crate::runtime::CancellationSignal::new();
-            let package = discover_package(&source, "demo", &cancellation).unwrap();
-            assert_eq!(
-                package.source.file.metadata().unwrap().nlink(),
-                0,
-                "capture has no named cleanup residue"
-            );
-            assert_eq!(package.source.entries.len(), 3);
-            let captured_bytes = package.source.file.metadata().unwrap().len();
-            assert!(captured_bytes > size_mib * 1024 * 1024);
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(source.join("asset.bin"))
-                .unwrap()
-                .write_all(b"changed")
-                .unwrap();
-            let runner = Arc::new(FakeRunner::default());
-            let store = PythonToolStore::with_binaries_and_runner(
-                root.join("store"),
-                PathBuf::from("/usr/bin/uv"),
-                PathBuf::from("/usr/bin/python3"),
-                runner,
-            )
-            .unwrap();
-            let prepared = store
-                .ensure_prepared(&package, &cancellation)
-                .await
-                .unwrap();
-            let installed_root = prepared.state_dir.join(SOURCE_DIRECTORY);
-            assert_eq!(
-                std::fs::metadata(installed_root.join("asset.bin"))
-                    .unwrap()
-                    .len(),
-                size_mib * 1024 * 1024
-            );
-            assert_eq!(
-                source_digest(&installed_root, &package.files, &cancellation).unwrap(),
-                package.source_digest
-            );
-            let changed = discover_package(&source, "demo", &cancellation).unwrap();
-            assert_ne!(changed.source_digest, package.source_digest);
-            eprintln!(
-                "issue527 Python {size_mib} MiB: {:?}; anonymous capture disk={captured_bytes} bytes; package files={}; I/O buffer={} bytes",
-                started.elapsed(),
-                package.files.len(),
-                crate::package_io::CHUNK_BYTES
-            );
-        }
-    }
-
-    #[derive(Default)]
-    struct CancelBeforePublication(FakeRunner);
-    impl SupervisedProcessRunner for CancelBeforePublication {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            if spec.command.contains("sync") {
-                spec.cancellation.cancel();
-            }
-            self.0.run(spec, control)
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn issue527_cancelled_preparation_settles_and_cannot_publish_ready() {
-        let temporary = tempfile::tempdir().unwrap();
-        let store = PythonToolStore::with_binaries_and_runner(
-            temporary.path().to_path_buf(),
-            PathBuf::from("/usr/bin/uv"),
-            PathBuf::from("/usr/bin/python3"),
-            Arc::new(CancelBeforePublication::default()),
-        )
-        .unwrap();
-        let cancellation = crate::runtime::CancellationSignal::new();
-        let package = package("demo");
-        assert!(
-            store
-                .ensure_prepared(&package, &cancellation)
-                .await
-                .is_err()
-        );
-        assert!(cancellation.is_cancelled());
-        assert!(store.inner.in_flight.lock().unwrap().is_empty());
-        assert_eq!(
-            std::fs::read_dir(temporary.path().join(PACKAGES_DIRECTORY))
-                .unwrap()
-                .count(),
-            0,
-            "no published or partial package remains after settlement"
-        );
-        assert!(store.inner.pending_cleanup.lock().unwrap().is_empty());
-    }
 }

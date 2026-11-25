@@ -285,9 +285,9 @@ impl Lab {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            // The child owns its own process group, so the harness can end the
-            // child *and* every OS process it started with one deterministic
-            // `killpg`, leaving no orphan behind.
+            // The Server and its staged subagents share a crash group.
+            // The Execution Client owns a separate group so losing the
+            // Server closes its transport and triggers physical settlement.
             .process_group(0);
         if let Some(gate) = gate {
             command

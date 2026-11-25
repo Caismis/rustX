@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openEmptySession, expectSettled, choose } from './shell-actions';
+import { connectRemote, createBoundSession, openExistingSession, expectSettled, choose } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('explicit native delivery, safe shared viewers, actual original-byte downloads, mutable reopen and both layouts/locales', async ({ page }, testInfo) => {
@@ -30,8 +30,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     expect(file.suggestedFilename()).toBe(name); const path = testInfo.outputPath(`download-${encodeURIComponent(name)}`); await file.saveAs(path); expect(readFileSync(path)).toEqual(expected);
   };
   try {
+    const session = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-    await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, session);
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Deliver files explicitly');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const approval = page.getByRole('region', { name: 'Approval', exact: true });
@@ -91,9 +92,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     expect(deliveryRead).toBeDefined();
     const admission = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<{ deliveryAccess?: boolean; removedMethod?: number; copiedTarget?: string; ownDelivery?: any }>((resolve, reject) => {
       const observed: { deliveryAccess?: boolean; removedMethod?: number; copiedTarget?: string; ownDelivery?: any } = {};
-      const socket = new WebSocket(endpoint, ['rustx.app-server.v80', `rustx-token.${btoa(token!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v81', `rustx-token.${btoa(token!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
-      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 80, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 81, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) {

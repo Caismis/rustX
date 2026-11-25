@@ -1064,6 +1064,8 @@ impl RuntimeInner {
                 .await;
             inner.finish_attempt(attempt_id, result);
             poison_guard.disarm();
+            // The drain acknowledgement covers the task's runtime reference.
+            drop(inner);
             drop(attempt_admission);
             drop(activity);
         });

@@ -192,6 +192,160 @@ fn next_request(
         .expect("a continuation request exists")
 }
 
+/// Both real Bash calls share the Session binding. The first waits on a TCP
+/// barrier until the second's Client-confirmed result has reached its executor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_bash_reversed_settlement_keeps_canonical_order() {
+    use rustx::tools::deadline::ToolProgressCapability;
+    use rustx::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
+    use rustx::tools::types::{ToolInvocation, ToolInvocationPolicy};
+    use tokio::io::AsyncWriteExt as _;
+
+    struct ObserveSecond {
+        bash: Arc<dyn ToolExecutor>,
+        completed: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl ToolExecutor for ObserveSecond {
+        fn start<'a>(
+            &'a self,
+            invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> ToolExecutionHandle<'a> {
+            let second = invocation
+                .id
+                .canonical_call_id()
+                .is_some_and(|id| id.as_str() == "call-b");
+            let ToolExecutionHandle {
+                completion,
+                settlement,
+            } = self.bash.start(invocation, context);
+            ToolExecutionHandle {
+                completion: Box::pin(async move {
+                    let result = completion.await;
+                    if second {
+                        assert_eq!(result.status, ToolExecutionStatus::Success);
+                        self.completed.send_replace(true);
+                    }
+                    result
+                }),
+                settlement,
+            }
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            self.bash.progress_capability()
+        }
+    }
+
+    let private = tempfile::tempdir().unwrap();
+    let workspace = private.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    let execution = common::session_execution::ExecutionFixture::new(&workspace);
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            execution_scope: Some(execution.scope.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                private.path().join("artifacts"),
+            )
+        },
+    )
+    .unwrap();
+    let mut native = ToolRegistry::new();
+    rustx::tools::native::register_native_tools(
+        &mut native,
+        rustx::tools::native::NativeToolResources {
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
+            background: tool_runtime.background().clone(),
+            subagents: None,
+        },
+        rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ForegroundOnly,
+        )),
+    )
+    .unwrap();
+    let definition = native
+        .definitions()
+        .into_iter()
+        .find(|d| d.name == "bash")
+        .unwrap();
+    let (completed, mut second) = tokio::sync::watch::channel(false);
+    let bash = native.executor(&definition.id);
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(definition, Arc::new(ObserveSecond { bash, completed }))
+        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let first_call = scripted(
+        "call-a",
+        "tool-bash",
+        "bash",
+        serde_json::json!({
+            "command": format!("printf A >> first-starts; exec 9<>/dev/tcp/127.0.0.1/{port}; read -r go <&9; printf first")
+        }),
+    );
+    let second_call = scripted(
+        "call-b",
+        "tool-bash",
+        "bash",
+        serde_json::json!({
+            "command": "printf B >> second-starts; printf second"
+        }),
+    );
+    let model = fake_model(tool_turn_then_stop(&[&first_call, &second_call]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let (lease, _owner) = common::capability_lease(tools, &tool_runtime)
+        .await
+        .into_lease_and_coordinator();
+    let store = tool_runtime.durable_store();
+    let release = async {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        second.wait_for(|done| *done).await.unwrap();
+        socket.write_all(b"go\n").await.unwrap();
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(
+            prepared_execution(&model, lease, &cancellation, &tool_runtime).run(),
+            release
+        )
+    })
+    .await
+    .expect("both Client operations settle");
+    let result = common::durable_agent_result(result, store.as_ref());
+    assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
+    assert_eq!(std::fs::read(workspace.join("first-starts")).unwrap(), b"A");
+    assert_eq!(
+        std::fs::read(workspace.join("second-starts")).unwrap(),
+        b"B"
+    );
+    assert_eq!(model.requests().len(), 2);
+    let messages = tool_messages(&result);
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.tool_call_id.as_str())
+            .collect::<Vec<_>>(),
+        ["call-a", "call-b"],
+    );
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. }))
+            .count(),
+        1,
+    );
+    assert!(matches!(
+        result.event_history.last(),
+        Some(RuntimeEvent::AttemptCompleted { .. })
+    ));
+}
+
 /// Parallel reversed completion: both parallel foreground calls start
 /// concurrently, B completes physically first, and the canonical tool
 /// messages plus the next model request stay in original call order.

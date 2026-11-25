@@ -239,7 +239,11 @@ class Planning(unittest.TestCase):
         run = v.plan("pull_request", [], modified("src/lib.rs"))["run"]
         self.assertTrue(run["rust-fast"] and run["web-client"])
         self.assertFalse(run["rust-contracts"] or run["rust-boundaries"])
-        for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
+        # Execution-boundary member crates are rust surface too.
+        self.assertEqual(v.classify(modified("crates/confined-fs/src/lib.rs"))["surfaces"], ["rust"])
+        run = v.plan("pull_request", [], modified("crates/execution-client/src/main.rs"))["run"]
+        self.assertTrue(run["rust-fast"])
+        for path in ("crates/process-supervisor/src/interactive_supervisor.rs", "crates/process-supervisor/src/supervised_unit.rs"):
             with self.subTest(path=path):
                 self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["web-client"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
@@ -423,10 +427,17 @@ class Workflow(unittest.TestCase):
                 self.assertIn(f"fromJSON(needs.plan.outputs.run)['{job}']", condition.group(1))
                 self.assertIsNotNone(re.search(r"^    needs: \[?plan\b", jobs[job], re.M), f"{job} must need plan")
 
-    def test_every_other_job_is_the_plan_the_gate_or_always_on(self):
+    def test_jobs_outside_the_plan_have_explicit_verification_ownership(self):
         jobs = self.jobs()
         planned = v.plan("push", [], [])
-        self.assertEqual(set(jobs) - set(planned["run"]), {"plan", "notifications", "verification"})
+        self.assertEqual(
+            set(jobs) - set(planned["run"]),
+            {"plan", "notifications", "verification", "installed-macos"},
+        )
+        self.assertIn(
+            "if: github.event_name == 'workflow_dispatch' && inputs.installed_macos",
+            jobs["installed-macos"],
+        )
         gate = jobs["verification"]
         for job in planned["run"]:
             self.assertIn(job, gate, f"the gate must need {job}")

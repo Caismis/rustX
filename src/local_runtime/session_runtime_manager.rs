@@ -24,6 +24,7 @@ use crate::runtime::identity::ConversationId;
 mod client;
 mod configuration;
 mod drain;
+mod execution;
 mod lifecycle;
 mod model_selection;
 #[cfg(feature = "issue-387-profile")]
@@ -32,14 +33,46 @@ mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
 pub(crate) mod status;
+#[cfg(target_os = "linux")]
+pub(crate) use execution::maintain_local_client;
+pub(crate) use execution::{
+    ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, LocalClient, OutputBinding,
+    ReceiveExchange, StandaloneExecution, StdioMcpBinding, WorkspaceDocumentSnapshot,
+    workspace_entry,
+};
+pub use execution::{
+    EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,
+};
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
+mod session_inputs;
 mod sessions;
+pub(crate) use session_inputs::SessionInputError;
 mod source_watch;
 
 pub(crate) use client::ConfigurationObservationSource;
 pub use client::ManagedRuntimeClient;
 pub use configuration::SourceSettingsError;
 pub(crate) use model_selection::ModelSelectionError;
+
+/// Execution authority for a source catalog read. A private probe has no
+/// durable Session and its owner remains alive for the entire read.
+pub(crate) enum SourceCatalogExecution {
+    Session(Option<SessionId>),
+    Private(SessionExecutionScope),
+}
+
+impl SourceCatalogExecution {
+    pub(crate) fn scope(
+        &self,
+        manager: &SessionRuntimeManager,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Option<SessionExecutionScope>, RuntimeManagerError> {
+        match self {
+            Self::Session(session) => manager.source_catalog_scope(session.as_ref(), workspace),
+            Self::Private(scope) => Ok(Some(scope.clone())),
+        }
+    }
+}
 
 pub(super) type NativeOperationReply = Result<
     crate::runtime_client::types::RuntimeClientResult,
@@ -208,6 +241,7 @@ struct Flight {
     startup: super::composition::McpInitialSubmission,
     initialization: Arc<Initialization>,
     prepares_runtime: std::sync::atomic::AtomicBool,
+    local_admission: lifecycle::LocalRuntimeAdmission,
     target: std::sync::OnceLock<(SessionId, SessionNodeId)>,
     submission_restart: Mutex<Option<(SessionId, SessionNodeId)>>,
     result: watch::Sender<Option<Outcome>>,
@@ -221,11 +255,45 @@ impl Flight {
             startup,
             initialization: Arc::new(Initialization::default()),
             prepares_runtime: std::sync::atomic::AtomicBool::new(false),
+            local_admission: lifecycle::LocalRuntimeAdmission::default(),
             target: std::sync::OnceLock::new(),
             submission_restart: Mutex::new(None),
             result: watch::channel(None).0,
         })
     }
+    fn check_admission(
+        &self,
+        registry: &RegistryState,
+        retirement_requested: bool,
+    ) -> Result<(), RuntimeManagerError> {
+        let target = self.target.get().expect("registered runtime preparation");
+        if registry.draining
+            || registry.retiring_sessions.contains(&target.0)
+            || retirement_requested
+        {
+            return Err(RuntimeManagerError::LoadingCancelled);
+        }
+        Ok(())
+    }
+
+    /// Linearizes short preparation decisions with retirement. Physical I/O
+    /// stays outside both locks; its owners still finish before the terminal
+    /// cancellation or failure is published.
+    fn with_admission<T>(
+        &self,
+        owner: &SessionRuntimeManager,
+        decide: impl FnOnce() -> Result<T, RuntimeManagerError>,
+    ) -> Result<T, RuntimeManagerError> {
+        let registry = owner.registry.0.lock().expect("registry mutex");
+        let control = self
+            .initialization
+            .control
+            .lock()
+            .expect("initialization control");
+        self.check_admission(&registry, control.retirement_requested)?;
+        decide()
+    }
+
     fn cancel_loading(&self) {
         self.initialization.retire();
     }
@@ -340,7 +408,7 @@ impl ManagedRuntime {
 /// Sole strong composition owner, retained only by registry/transition machinery.
 #[derive(Debug)]
 struct ResidentRuntime {
-    status_read: Mutex<()>,
+    status_read: tokio::sync::Mutex<()>,
     status_wake: Arc<tokio::sync::Notify>,
     node: SessionNodeId,
     initialization: Arc<Initialization>,
@@ -427,6 +495,13 @@ impl ResidentRuntime {
             .wait_for(|count| *count == 0)
             .await
             .expect("resident owns operation drain");
+    }
+
+    async fn release_composition(&self) {
+        // Readers can still hold a native reference after shutdown. Take
+        // the composition under their guard before reporting writer absence.
+        let _status_read = self.status_read.lock().await;
+        self.composition.lock().expect("composition mutex").take();
     }
 
     fn try_observation_runtime(&self) -> Option<ConversationRuntime> {
@@ -623,6 +698,7 @@ pub struct SessionRuntimeManager {
         Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
+    execution: Arc<execution::SessionExecutionRegistry>,
     pub(in crate::local_runtime) configuration: UserConfigManager,
     pub(in crate::local_runtime) credentials: CredentialSnapshot,
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
@@ -861,6 +937,7 @@ impl SessionRuntimeManager {
                 #[cfg(test)]
                 reaper_waiting: None,
             }))),
+            execution: Arc::default(),
             process_policy: Arc::new(std::sync::RwLock::new(
                 configuration.app_server_policy().map_err(error)?,
             )),

@@ -446,3 +446,555 @@ async fn session_claim_survives_replacement_handoff_and_clears_on_failed_loading
     })
     .await;
 }
+
+fn pending_execution(f: &Fixture, session: &SessionId) -> bool {
+    rustx_execution_server::RecoveryFence::session_pending(
+        &f.archive_root,
+        &rustx_execution_protocol::SessionId::new(session.as_str()),
+    )
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_reaps_eight_rejected_clients_and_allows_same_session_retry() {
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 16).await;
+        f.manager
+            .configure_local_sessions(f.workspaces.to_vec())
+            .unwrap();
+        let invalid = f.workspaces[0].join("rustx.toml");
+        let valid = std::fs::read(&invalid).unwrap();
+        std::fs::write(&invalid, "[environment\n").unwrap();
+        for session in f.sessions.iter().step_by(2) {
+            let failure = f.manager.load(&session.id, None).await.unwrap_err();
+            assert!(failure.to_string().contains("rustx.toml"), "{failure}");
+            assert!(
+                f.manager
+                    .execution
+                    .configuration_endpoint(&session.id)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!pending_execution(&f, &session.id));
+            assert!(
+                !f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .contains_key(&session.id)
+            );
+        }
+        let healthy = f
+            .manager
+            .create_session(SessionPersistentState::from_input(
+                &SessionConfigInput::new(f.workspaces[1].clone()),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            f.manager
+                .execution_endpoint(&healthy.session.id)
+                .unwrap()
+                .control()
+                .is_some()
+        );
+
+        std::fs::write(&invalid, valid).unwrap();
+        let original = &f.sessions[0];
+        let resumed = f.manager.load(&original.id, None).await.unwrap();
+        assert_eq!(resumed.conversation_id(), &original.active_conversation_id);
+        assert!(
+            f.manager
+                .execution_endpoint(&original.id)
+                .unwrap()
+                .control()
+                .is_some()
+        );
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+        assert_eq!(f.host.drain().await, Vec::<String>::new());
+        f.manager.join_local_sessions().await.unwrap();
+        assert!(!pending_execution(&f, &original.id));
+        assert!(!pending_execution(&f, &healthy.session.id));
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_shares_client_admission_across_cold_nodes() {
+    Box::pin(bounded(async {
+        for reject in [true, false] {
+            let f = Fixture::with_session_count(None, 1).await;
+            let branch = second_node(&f).await;
+            let root = &f.sessions[0];
+            f.manager
+                .configure_local_sessions(f.workspaces.to_vec())
+                .unwrap();
+            let (entered, waiting) = tokio::sync::oneshot::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            f.manager.configuration.test_hooks.insert(
+                "before_resumed_client_preparation",
+                move || {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                },
+            );
+            let root_probe = f.manager.probe(&root.active_conversation_id);
+            root_probe.before_recovery_inspection.arm();
+            if reject {
+                f.manager
+                    .configuration
+                    .test_hooks
+                    .fail_once("after_initial_runtime_configuration");
+            }
+            let loading = f.load(0);
+            waiting.await.unwrap();
+            assert!(
+                f.manager
+                    .execution
+                    .configuration_endpoint(&root.id)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("preparation in progress")
+            );
+            let contender = f.manager.probe(&branch.active_conversation_id);
+            let start_branch = || {
+                let manager = f.manager.clone();
+                let session = branch.id.clone();
+                let node = branch.active_node.clone();
+                tokio::spawn(async move { manager.load(&session, Some(&node)).await })
+            };
+            let early = start_branch();
+            contender.joined(1).await;
+            release.send(()).unwrap();
+            root_probe.before_recovery_inspection.entered().await;
+            let provisional = f.manager.execution_endpoint(&root.id).unwrap();
+            let pair = provisional.control().expect("real provisional Client");
+            assert!(pending_execution(&f, &root.id));
+            assert!(
+                !f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .contains_key(&root.id)
+            );
+            let later = start_branch();
+            contender.joined(2).await;
+            root_probe.before_recovery_inspection.release();
+            let first = loading.await.unwrap();
+            let early = early.await.unwrap().unwrap_err();
+            let later = later.await.unwrap().unwrap_err();
+            if reject {
+                let failure = first.unwrap_err();
+                assert!(
+                    failure
+                        .to_string()
+                        .contains("injected composition failure after configuration"),
+                    "{failure}"
+                );
+                assert_eq!(early, failure);
+                assert_eq!(later, failure);
+                assert!(provisional.control().is_none());
+                assert!(
+                    f.manager
+                        .execution
+                        .configuration_endpoint(&root.id)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(!pending_execution(&f, &root.id));
+                assert!(
+                    !f.manager
+                        .sessions
+                        .configuration_bindings
+                        .lock()
+                        .unwrap()
+                        .contains_key(&root.id)
+                );
+            } else {
+                let first = first.unwrap();
+                let expected = RuntimeManagerError::SessionAlreadyResident {
+                    session_id: root.id.clone(),
+                    resident_conversation: root.active_conversation_id.clone(),
+                    requested_conversation: branch.active_conversation_id.clone(),
+                };
+                assert_eq!(early, expected);
+                assert_eq!(later, expected);
+                let assert_same_client = || {
+                    let endpoint = f.manager.execution_endpoint(&root.id).unwrap();
+                    assert!(Arc::ptr_eq(&provisional, &endpoint));
+                    assert!(endpoint.control().unwrap().same_pair(&pair));
+                };
+                assert_same_client();
+                f.manager.unload(first.conversation_id()).await.unwrap();
+                f.manager
+                    .configuration
+                    .test_hooks
+                    .fail_once("after_initial_runtime_configuration");
+                let failure = start_branch().await.unwrap().unwrap_err();
+                assert!(
+                    failure.to_string().contains("injected composition failure"),
+                    "{failure}"
+                );
+                assert_same_client();
+                assert_eq!(
+                    f.load(0).await.unwrap().unwrap().conversation_id(),
+                    first.conversation_id()
+                );
+                assert_same_client();
+            }
+            assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+            assert_eq!(f.host.drain().await, Vec::<String>::new());
+            f.manager.join_local_sessions().await.unwrap();
+            assert!(!pending_execution(&f, &root.id));
+        }
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let session = &f.sessions[0];
+        f.manager
+            .configure_local_sessions(f.workspaces.to_vec())
+            .unwrap();
+        let probe = f.manager.probe(&session.active_conversation_id);
+        probe.before_resident_publication.arm();
+        let loading = f.load(0);
+        probe.before_resident_publication.entered().await;
+        let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
+        assert!(endpoint.control().is_some());
+        endpoint.cut_pair();
+        probe.before_resident_publication.release();
+        let failure = loading.await.unwrap().unwrap_err();
+        assert!(
+            failure
+                .to_string()
+                .contains("the local Client or its Workspace grant is unavailable"),
+            "{failure}"
+        );
+        assert!(pending_execution(&f, &session.id));
+        let replacement = f.load(0).await.unwrap().unwrap_err();
+        assert!(
+            replacement
+                .to_string()
+                .contains("execution binding is closed; recovery is required"),
+            "{replacement}"
+        );
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+        let failures = f.host.drain().await;
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("revocation is unconfirmed")),
+            "{failures:?}"
+        );
+        f.manager.join_local_sessions().await.unwrap();
+        assert!(pending_execution(&f, &session.id));
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{
+            ErrorData, JsonRpcVersion, Method, MethodResult, Request, RequestId, Response,
+            WorkspaceCatalogAuthority,
+        },
+    };
+    use crate::local_runtime::{
+        configuration::settings::SourceTarget, skill_management::SkillContentKind,
+    };
+    use crate::runtime::identity::McpServerId;
+    use crate::tools::mcp::catalog::CatalogKind;
+
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let session = &f.sessions[0].id;
+        let workspace = &f.workspaces[0];
+        f.manager
+            .configure_local_sessions(vec![workspace.parent().unwrap().to_path_buf()])
+            .unwrap();
+        f.manager
+            .environment
+            .configure(std::slice::from_ref(workspace));
+        let skill = workspace.join(".agents/skills/retired-guide");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), b"---\nname: retired-guide\ndescription: Workspace guide.\n---\nWorkspace instructions.\n").unwrap();
+        let capacity = f.manager.available_local_client_slots();
+        let runtime = f.load(0).await.unwrap().unwrap();
+        assert!(f.manager.execution.reserves_workspace(workspace));
+        assert!(pending_execution(&f, session));
+        assert_eq!(f.manager.available_local_client_slots(), capacity - 1);
+        f.manager.environment.configure(&[]);
+        f.manager.join_local_sessions().await.unwrap();
+        assert_eq!(f.manager.available_local_client_slots(), capacity);
+        assert!(!pending_execution(&f, session));
+        assert!(!f.manager.execution.reserves_workspace(workspace));
+        assert!(
+            f.manager
+                .execution
+                .configuration_endpoint(session)
+                .unwrap()
+                .is_none()
+        );
+        let route = || f.manager.source_catalog_scope(Some(session), Some(workspace));
+        assert!(route().is_err());
+        let target = SourceTarget::Workspace { directory: workspace.clone() };
+        let list = |execution_session| Method::SkillsList {
+            target: target.clone(), execution_session, offset: 0, limit: 32, expected_revision: None,
+        };
+        let mcp = |execution_session| Method::McpProbe {
+            target: target.clone(), execution_session,
+            id: McpServerId::new("inventory"), expected_revision: "prior revision".into(),
+        };
+        let workflow = |execution_session| Method::WorkflowToolCatalog {
+            target: target.clone(), execution_session, source: None, cursor: None, expected_scope: None,
+        };
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        for method in [
+            list(Some(session.clone())),
+            list(None),
+            mcp(None),
+            workflow(None),
+            Method::SkillsRead {
+                target: target.clone(), execution_session: Some(session.clone()), name: "retired-guide".into(),
+                kind: SkillContentKind::Instructions, offset: 0, max_bytes: 1024, expected_revision: None,
+            },
+            Method::McpSourceRead {
+                target: target.clone(), execution_session: session.clone(),
+            },
+            Method::McpCatalog {
+                target: target.clone(), execution_session: Some(session.clone()),
+                id: McpServerId::new("inventory"), expected_revision: "prior revision".into(), kind: CatalogKind::Tools,
+            },
+        ] {
+            let Response::Failure(failure) = connection.handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(60), call: method,
+            }).await else { panic!("a local catalog cannot use Server authoring after the grant retires"); };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
+        f.manager.environment.configure(std::slice::from_ref(workspace));
+        assert!(route().is_err(), "restoring a grant does not bind a Session");
+        for method in [mcp(Some(session.clone())), workflow(Some(session.clone()))] {
+            let Response::Failure(failure) = connection.handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(62), call: method,
+            }).await else { panic!("a grant cannot substitute for the exact Session's Client"); };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
+        let MethodResult::Skills { page, authority } = super::protocol::call(&connection, 61, list(None)).await else {
+            panic!("an unscoped catalog with a valid grant can use a private Client");
+        };
+        assert_eq!(authority, WorkspaceCatalogAuthority::Client);
+        let [skill] = page.data.as_slice() else { panic!("one Workspace Skill: {page:?}"); };
+        assert_eq!(skill.catalog.name, "retired-guide");
+        assert!(!f.manager.execution.reserves_workspace(workspace));
+        assert!(!rustx_execution_server::RecoveryFence::workspace_pending(&f.archive_root, workspace).unwrap());
+        drop(runtime);
+        assert_eq!(f.host.drain().await, Vec::<String>::new());
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+    }))
+    .await;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResumeCut {
+    Reservation,
+    BeforePhysicalStartup,
+    #[cfg(target_os = "linux")]
+    SupervisorReady,
+    CapturedConfiguration,
+    BeforeComposition,
+    Prepared,
+    Activated,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanly() {
+    Box::pin(bounded(async {
+        for cut in [
+            ResumeCut::Reservation,
+            ResumeCut::BeforePhysicalStartup,
+            #[cfg(target_os = "linux")]
+            ResumeCut::SupervisorReady,
+            ResumeCut::CapturedConfiguration,
+            ResumeCut::BeforeComposition,
+            ResumeCut::Prepared,
+            ResumeCut::Activated,
+        ] {
+            let f = Fixture::with_session_count(None, 1).await;
+            f.manager
+                .configure_local_sessions(f.workspaces.to_vec())
+                .unwrap();
+            let session = &f.sessions[0];
+            let id = &session.active_conversation_id;
+            let probe = f.manager.probe(id);
+            let gate = match cut {
+                ResumeCut::Reservation
+                | ResumeCut::BeforePhysicalStartup
+                | ResumeCut::CapturedConfiguration => None,
+                #[cfg(target_os = "linux")]
+                ResumeCut::SupervisorReady => None,
+                ResumeCut::BeforeComposition => Some(&probe.before_recovery_inspection),
+                ResumeCut::Prepared => Some(&probe.before_prepared_admission),
+                ResumeCut::Activated => Some(&probe.before_resident_publication),
+            };
+            let hook = match cut {
+                ResumeCut::Reservation => Some("before_resumed_client_preparation"),
+                ResumeCut::BeforePhysicalStartup => Some("before_local_client_startup"),
+                #[cfg(target_os = "linux")]
+                ResumeCut::SupervisorReady => Some("after_local_supervisor_ready"),
+                ResumeCut::CapturedConfiguration => Some("before_bound_initial_publication"),
+                _ => None,
+            };
+            let capture_pause = hook.map(|hook| {
+                let (entered, waiting) = tokio::sync::oneshot::channel();
+                let (release, released) = std::sync::mpsc::channel();
+                f.manager.configuration.test_hooks.insert(hook, move || {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                });
+                (waiting, release)
+            });
+            let capacity = f.manager.available_local_client_slots();
+            if let Some(gate) = gate {
+                gate.arm();
+            }
+            let loading = f.load(0);
+            let release = if let Some((waiting, release)) = capture_pause {
+                waiting.await.unwrap();
+                Some(release)
+            } else {
+                gate.expect("runtime gate").entered().await;
+                None
+            };
+            {
+                let registry = f.manager.registry.0.lock().unwrap();
+                let Entry::Loading(flight) = &registry.entries[id] else {
+                    panic!("runtime has not been published at {cut:?}");
+                };
+                assert_eq!(
+                    flight
+                        .initialization
+                        .prepared_runtime()
+                        .map(|runtime| runtime.is_activated()),
+                    match cut {
+                        ResumeCut::Prepared => Some(false),
+                        ResumeCut::Activated => Some(true),
+                        _ => None,
+                    },
+                    "{cut:?}"
+                );
+            }
+            let endpoint = if cut == ResumeCut::Reservation {
+                assert!(
+                    f.manager
+                        .execution_endpoint(&session.id)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("preparation in progress")
+                );
+                assert!(!pending_execution(&f, &session.id));
+                None
+            } else {
+                let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
+                let authenticated = match cut {
+                    ResumeCut::BeforePhysicalStartup => false,
+                    #[cfg(target_os = "linux")]
+                    ResumeCut::SupervisorReady => false,
+                    _ => true,
+                };
+                assert_eq!(endpoint.control().is_some(), authenticated, "{cut:?}");
+                assert!(pending_execution(&f, &session.id), "{cut:?}");
+                Some(endpoint)
+            };
+            assert_eq!(
+                f.manager.available_local_client_slots(),
+                capacity - 1,
+                "{cut:?}"
+            );
+            let authorities = || {
+                std::fs::read_dir(f.archive_root.join("execution-pending"))
+                    .into_iter()
+                    .flatten()
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| {
+                        path.extension()
+                            .is_some_and(|extension| extension == "authority")
+                    })
+                    .count()
+            };
+            f.host.begin_drain();
+            if cut == ResumeCut::BeforePhysicalStartup {
+                assert_eq!(
+                    f.host.settle_execution().await,
+                    Vec::<String>::new(),
+                    "{cut:?}"
+                );
+                assert!(!pending_execution(&f, &session.id));
+                assert_eq!(authorities(), 0);
+            }
+            let host = f.host.clone();
+            let draining = tokio::spawn(async move { host.drain().await });
+            probe
+                .unloads_joined
+                .subscribe()
+                .wait_for(|n| *n == 1)
+                .await
+                .unwrap();
+            #[cfg(target_os = "linux")]
+            if cut == ResumeCut::SupervisorReady {
+                let endpoint = endpoint.as_ref().expect("setup has an endpoint");
+                // The guardian has reported ready, while the Client has yet
+                // to receive G. The Host joined the startup owner and cannot
+                // forget the marker or independent authority in this window.
+                endpoint.settlement_joined.notified().await;
+                assert!(!draining.is_finished());
+                assert!(pending_execution(&f, &session.id));
+                assert_eq!(authorities(), 1);
+                assert!(endpoint.control().is_none());
+            }
+            if let Some(release) = release {
+                release.send(()).unwrap();
+            } else {
+                gate.expect("runtime gate").release();
+            }
+            assert_eq!(
+                loading.await.unwrap().unwrap_err(),
+                RuntimeManagerError::LoadingCancelled,
+                "{cut:?}"
+            );
+            assert_eq!(draining.await.unwrap(), Vec::<String>::new(), "{cut:?}");
+            f.manager.join_local_sessions().await.unwrap();
+            assert_eq!(f.manager.residency(id), ResidencyState::Unloaded, "{cut:?}");
+            assert!(
+                endpoint.is_none_or(|endpoint| endpoint.control().is_none()),
+                "{cut:?}"
+            );
+            assert!(!pending_execution(&f, &session.id), "{cut:?}");
+            assert_eq!(authorities(), 0, "{cut:?}");
+            assert_eq!(
+                f.manager.available_local_client_slots(),
+                capacity,
+                "{cut:?}"
+            );
+            assert_eq!(f.provider.request_bodies(), Vec::<String>::new(), "{cut:?}");
+            assert!(
+                !f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .contains_key(&session.id),
+                "{cut:?}"
+            );
+        }
+    }))
+    .await;
+}

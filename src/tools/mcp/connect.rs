@@ -8,6 +8,7 @@
 //! mechanism. Every failure after physical process ownership began awaits
 //! the same settlement proof drain uses ([`settle_connect_failure`]).
 
+#[cfg(any(test, feature = "test-support"))]
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -18,8 +19,10 @@ use rmcp::service::{RoleClient, RunningService};
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::McpServerId;
-use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInteractiveProcess};
 use crate::tools::workspace::Workspace;
+#[cfg(any(test, feature = "test-support"))]
+use rustx_process_supervisor::interactive_process::InteractiveProcessSpec;
+use rustx_process_supervisor::interactive_process::SupervisedInteractiveProcess;
 
 use super::handler::McpClientHandler;
 use super::invalidation::McpInvalidationState;
@@ -42,6 +45,8 @@ pub(crate) struct OwnedConnect<'a> {
     workspace: &'a Workspace,
     invalidation: Arc<McpInvalidationState>,
     cancellation: CancellationSignal,
+    #[cfg(any(test, feature = "test-support"))]
+    fixture_stdio: bool,
     /// Test-only: parks the connect exactly once physical process ownership
     /// exists and before the handshake begins.
     #[cfg(test)]
@@ -62,6 +67,8 @@ impl<'a> OwnedConnect<'a> {
             workspace,
             invalidation,
             cancellation,
+            #[cfg(any(test, feature = "test-support"))]
+            fixture_stdio: cfg!(test),
             #[cfg(test)]
             ownership_pause: None,
         }
@@ -78,8 +85,7 @@ impl<'a> OwnedConnect<'a> {
 }
 
 impl McpServerRuntime {
-    /// Connects one configured server, negotiating a mutually supported MCP
-    /// protocol revision.
+    /// Connects a protocol fixture without constructing a Session binding.
     ///
     /// `server_id` is the authoritative identity of the binding; the binding
     /// itself carries none.
@@ -94,19 +100,25 @@ impl McpServerRuntime {
     ///
     /// Panics only if the connection's invalidation sink is installed twice,
     /// which the single-install control flow below makes impossible.
-    pub async fn connect(
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub async fn connect_fixture(
         server_id: &McpServerId,
         binding: &McpServerBinding,
         workspace: &Workspace,
         invalidation: Arc<McpInvalidationState>,
     ) -> Result<Arc<Self>, McpError> {
-        Self::connect_owned(OwnedConnect::new(
+        let request = OwnedConnect::new(
             server_id,
             binding,
             workspace,
             invalidation,
             CancellationSignal::new(),
-        ))
+        );
+        Self::connect_owned(OwnedConnect {
+            fixture_stdio: true,
+            ..request
+        })
         .await
     }
 
@@ -122,15 +134,16 @@ impl McpServerRuntime {
     ///
     /// # Errors
     ///
-    /// Same as [`McpServerRuntime::connect`], plus a cancellation diagnostic
-    /// when the owner was cancelled before the handshake completed.
+    /// Returns an admission, transport, or physical-settlement failure.
     #[allow(clippy::too_many_lines)]
     pub(crate) async fn connect_owned(request: OwnedConnect<'_>) -> Result<Arc<Self>, McpError> {
         #[cfg(test)]
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::Connect,
         );
-        let binding = request.binding.with_connection_redactions();
+        let binding = request
+            .binding
+            .with_connection_redactions(request.server_id);
         let request = OwnedConnect {
             binding: &binding,
             ..request
@@ -146,9 +159,16 @@ impl McpServerRuntime {
             workspace,
             invalidation,
             cancellation,
+            #[cfg(any(test, feature = "test-support"))]
+            fixture_stdio,
             #[cfg(test)]
             ownership_pause,
         } = request;
+        if binding.policy.execution != crate::tools::types::ToolExecutionPolicy::ForegroundOnly {
+            return Err(McpError::Configuration(format!(
+                "source {server_id}: MCP requires foreground execution; remove the obsolete background policy"
+            )));
+        }
         let credentials = binding
             .credentials
             .resolve()
@@ -173,12 +193,48 @@ impl McpServerRuntime {
         // observes); the recorder exists for every transport so the
         // violation check is uniform. Streamable HTTP surfaces corruption
         // through its own worker transport and is unchanged by this seam.
-        let protocol_violation =
-            framing::ProtocolViolationRecorder::new(binding.credentials.clone());
+        let protocol_violation = framing::ProtocolViolationRecorder::new(
+            #[cfg(any(test, feature = "test-support"))]
+            binding.credentials.clone(),
+        );
         // Set by the Streamable HTTP arm only: stdio owns no per-request
         // local HTTP state.
         let mut request_ownership: Option<Arc<streamable_http::McpHttpRequestOwnership>> = None;
+        let mut remote_stdio = None;
         let (service, process) = match &binding.transport {
+            McpTransportConfig::Stdio { .. } | McpTransportConfig::ManagedPython { .. }
+                if workspace.execution_scope().is_some() =>
+            {
+                let scope = workspace
+                    .execution_scope()
+                    .expect("checked execution scope");
+                let launch = super::stdio::launch_spec(binding, server_id, workspace.root())?
+                    .expect("matched stdio transport");
+                let (owner, transport, admission) = super::stdio::Session::open(
+                    scope,
+                    workspace.root(),
+                    server_id.as_str(),
+                    launch,
+                    &cancellation,
+                    protocol_violation.clone(),
+                    &binding.credentials,
+                )
+                .await?;
+                let transport = dispatch::ObservingTransport::new(
+                    transport,
+                    Arc::new(dispatch::McpDispatchSeam::new(
+                        Arc::clone(&handler.progress),
+                        None,
+                    )),
+                );
+                let service =
+                    rmcp::service::serve_admitted_client(handler.clone(), transport, admission);
+                disable_sdk_response_cache(service.peer()).await;
+                remote_stdio = Some(owner);
+                (service, None)
+            }
+            McpTransportConfig::ManagedPython { .. } => return Err(stdio_requires_binding()),
+            #[cfg(any(test, feature = "test-support"))]
             McpTransportConfig::Stdio {
                 program,
                 args,
@@ -190,7 +246,9 @@ impl McpServerRuntime {
                         "stdio program must be non-empty".to_owned(),
                     ));
                 }
-                let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
+                if !fixture_stdio {
+                    return Err(stdio_requires_binding());
+                }
                 let mut explicit_environment =
                     vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())];
                 explicit_environment.extend(
@@ -204,6 +262,7 @@ impl McpServerRuntime {
                         .iter()
                         .map(|(key, value)| (key.clone(), value.expose().to_owned())),
                 );
+                let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
                 let process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
                     program: PathBuf::from(program),
                     args: args.clone(),
@@ -218,7 +277,7 @@ impl McpServerRuntime {
                 // no retained runtime behind it.
                 #[cfg(test)]
                 if let Some(pause) = &ownership_pause {
-                    pause.record_process(process.lock().await.supervisor_child_pid);
+                    pause.record_process(process.lock().await.supervisor_child_pid());
                     pause.park().await;
                 }
                 let stdout = {
@@ -311,6 +370,8 @@ impl McpServerRuntime {
                 };
                 (service, Some(process))
             }
+            #[cfg(not(any(test, feature = "test-support")))]
+            McpTransportConfig::Stdio { .. } => return Err(stdio_requires_binding()),
             McpTransportConfig::StreamableHttp { endpoint, headers } => {
                 if endpoint.trim().is_empty() {
                     return Err(McpError::Configuration(
@@ -393,9 +454,13 @@ impl McpServerRuntime {
         {
             Ok(info) => info,
             Err(error) => {
-                return Err(
-                    settle_connect_failure(&binding.credentials, process.as_ref(), error).await,
-                );
+                return Err(settle_admitted_failure(
+                    &binding.credentials,
+                    process.as_ref(),
+                    remote_stdio.as_deref(),
+                    error,
+                )
+                .await);
             }
         };
         // rmcp's discover lifecycle already rejects a peer with no shared
@@ -405,8 +470,9 @@ impl McpServerRuntime {
         let supported = supported_protocol_versions();
         if !supported.contains(&info.protocol_version) {
             return Err(
-                settle_connect_failure(&binding.credentials,
+                settle_admitted_failure(&binding.credentials,
                     process.as_ref(),
+                    remote_stdio.as_deref(),
                     McpError::ProtocolCompatibility(bound_error(&format!(
                         "rustX speaks {}; server negotiated MCP revision {}, which rustX does not speak",
                         joined_versions(&supported),
@@ -429,6 +495,7 @@ impl McpServerRuntime {
             service: Arc::new(tokio::sync::Mutex::new(Some(service))),
             handler,
             process,
+            remote_stdio,
             closed,
             call_gate,
             subscription: tokio::sync::Mutex::new(None),
@@ -621,7 +688,24 @@ async fn settle_connect_failure(
     }
 }
 
-fn append_server_stderr(error: McpError, preview: &str) -> McpError {
+async fn settle_admitted_failure(
+    credentials: &crate::credentials::SourceCredentials,
+    process: Option<&Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
+    remote: Option<&super::stdio::Session>,
+    error: McpError,
+) -> McpError {
+    if let Some(remote) = remote {
+        return match remote.close().await {
+            Ok(()) => error,
+            Err(settlement) => {
+                McpError::PhysicalSettlement(bound_error(&format!("{error}; {settlement}")))
+            }
+        };
+    }
+    settle_connect_failure(credentials, process, error).await
+}
+
+pub(super) fn append_server_stderr(error: McpError, preview: &str) -> McpError {
     if preview.is_empty() {
         return error;
     }
@@ -647,6 +731,11 @@ pub(super) fn joined_versions(versions: &[ProtocolVersion]) -> String {
         .join(", ")
 }
 
+fn stdio_requires_binding() -> McpError {
+    McpError::Discovery("stdio MCP requires an authenticated Session Execution Client".into())
+}
+
+#[cfg(any(test, feature = "test-support"))]
 fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<PathBuf, McpError> {
     let Some(cwd) = cwd else {
         return Ok(workspace.root().to_path_buf());
@@ -667,6 +756,42 @@ fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn obsolete_mcp_background_policy_is_refused_before_the_peer_can_start() {
+        use crate::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
+
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(root.path()).unwrap();
+        let id = McpServerId::new("foreground-only");
+        for policy in [
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolExecutionPolicy::ModelSelectable,
+        ] {
+            let binding = McpServerBinding {
+                credentials: crate::credentials::SourceCredentials::default(),
+                transport: McpTransportConfig::Stdio {
+                    program: "/bin/sh".into(),
+                    args: vec!["-c".into(), "printf started > peer-started".into()],
+                    cwd: None,
+                    environment: std::collections::BTreeMap::new(),
+                },
+                policy: ToolInvocationPolicy::new(policy),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
+            };
+            let result = McpServerRuntime::connect_fixture(
+                &id,
+                &binding,
+                &workspace,
+                Arc::new(McpInvalidationState::default()),
+            )
+            .await;
+            assert!(matches!(result, Err(McpError::Configuration(reason))
+                if reason.contains("remove the obsolete background policy")));
+            assert!(!root.path().join("peer-started").exists());
+        }
+    }
 
     #[test]
     fn sanitized_error_and_complete_stderr_share_one_final_diagnostic_budget() {

@@ -6,6 +6,8 @@ mod app_server_conformance;
 mod authentication;
 mod compaction_ownership;
 mod configuration;
+#[cfg(feature = "mcp-fixture")]
+pub(crate) use configuration::reconcile_waiting_for_client_does_not_retain_the_unloaded_writer;
 mod inbound_model;
 #[cfg(unix)]
 mod job_wait_ownership;
@@ -130,6 +132,8 @@ pub(super) struct Probe {
     pub(super) archive_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) status_before_recovery: AsyncGate,
     pub(super) status_before_wait: AsyncGate,
+    pub(super) status_recovery_holding_runtime: Arc<crate::runtime::conversation_runtime::Gate>,
+    pub(super) draining_status: watch::Sender<bool>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) catalog_observer_start:
         Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
@@ -147,6 +151,8 @@ pub(super) struct Probe {
     pub(super) panic_once: std::sync::atomic::AtomicBool,
     pub(super) before_compose: AsyncGate,
     pub(super) before_recovery_inspection: AsyncGate,
+    pub(super) before_prepared_admission: AsyncGate,
+    pub(super) before_resident_publication: AsyncGate,
     pub(super) after_delete_fence: AsyncGate,
     pub(super) before_shutdown: AsyncGate,
     pub(super) before_operation: AsyncGate,
@@ -182,6 +188,8 @@ impl Default for Probe {
             archive_before_claim: Arc::default(),
             status_before_recovery: AsyncGate::default(),
             status_before_wait: AsyncGate::default(),
+            status_recovery_holding_runtime: Arc::default(),
+            draining_status: watch::channel(false).0,
             activation: Mutex::new(None),
             catalog_observer_start: Mutex::new(None),
             initialization_admission: Mutex::new(None),
@@ -197,6 +205,8 @@ impl Default for Probe {
             panic_once: std::sync::atomic::AtomicBool::new(false),
             before_compose: AsyncGate::default(),
             before_recovery_inspection: AsyncGate::default(),
+            before_prepared_admission: AsyncGate::default(),
+            before_resident_publication: AsyncGate::default(),
             after_delete_fence: AsyncGate::default(),
             before_shutdown: AsyncGate::default(),
             before_operation: AsyncGate::default(),

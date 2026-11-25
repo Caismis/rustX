@@ -79,6 +79,7 @@ pub struct ToolExecutionContext<'a> {
     /// An invocation-local complete stdout channel requested by a native
     /// runtime consumer. It never changes the model-facing preview policy.
     pub(crate) stdout_capture: Option<crate::tools::output::BoundedStdoutCapture>,
+    #[cfg(test)]
     pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
@@ -179,6 +180,7 @@ impl<'a> ToolExecutionContext<'a> {
     ) -> ToolExecutionContext<'b> {
         ToolExecutionContext {
             stdout_capture: self.stdout_capture.clone(),
+            #[cfg(test)]
             workspace_changes: self.workspace_changes.clone(),
             conversation_id: self.conversation_id,
             execution_id: self.execution_id,
@@ -237,25 +239,34 @@ impl<'a> ToolExecutionContext<'a> {
             goal: None,
             schedule: None,
             subagent: None,
+            #[cfg(test)]
             workspace_changes: None,
             bound_mutation: None,
         }
     }
 
-    /// Freezes the effective Write/Edit target before direct native dispatch.
-    /// The caller owns permission admission; executors recheck this binding
-    /// before committing and refuse an independently resolved target.
+    /// Binds the remote Write/Edit mutation claim before direct native
+    /// dispatch: the planned operation is prepared on the Session's
+    /// admitted Client and the ticketed owner — or its deferred failure —
+    /// is what executors consume. The caller owns permission admission;
+    /// executors refuse an independently resolved target.
     ///
     /// # Errors
-    /// Returns an error if the path cannot be resolved or names managed output.
-    pub fn bind_mutation_target(mut self, prepared: &PreparedInvocation) -> Result<Self, String> {
+    /// Returns an error if the path argument is missing or names managed
+    /// output — the failures reported verbatim.
+    pub async fn bind_mutation_target(
+        mut self,
+        prepared: &PreparedInvocation,
+    ) -> Result<Self, String> {
         self.bound_mutation = crate::tools::native::support::bind_invocation_mutation_target(
             &prepared.origin,
             &prepared.invocation.tool_name,
             &prepared.invocation.arguments,
-            self.workspace.root(),
+            self.workspace,
             self.tool_output,
-        )?;
+            &self.cancellation,
+        )
+        .await?;
         Ok(self)
     }
 
@@ -553,7 +564,7 @@ impl<'a> ToolExecutionHandle<'a> {
         cancellation: ExecutionCancellation,
     ) -> Self {
         let operation_cancellation = cancellation.clone();
-        let operation: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
+        let operation = Box::pin(async move {
             // This checkpoint precedes the first physical poll, including
             // when cancellation hands an unpolled operation to settlement.
             if operation_cancellation.is_cancelled() {
@@ -562,6 +573,19 @@ impl<'a> ToolExecutionHandle<'a> {
                     phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
                 });
             }
+            operation.await
+        });
+        Self::settled_by_prepared_operation(operation, cancellation)
+    }
+
+    /// Drives a previously prepared native operation even when already
+    /// cancelled. The operation must gate business dispatch itself and
+    /// settle its preparation before reporting a result.
+    pub(crate) fn settled_by_prepared_operation(
+        operation: BoxFuture<'a, ToolExecutionResult>,
+        cancellation: ExecutionCancellation,
+    ) -> Self {
+        let operation: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
             // Catch inside the shared slot's lock so invocation unwinding
             // cannot poison that ownership lock or unwind sibling calls.
             // The consumed future is dropped before publishing its result.

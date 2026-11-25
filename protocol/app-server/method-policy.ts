@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v80.ts';
+import type { Request1 } from './v81.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -107,6 +107,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/uploadStatus': { effect: 'read' },
   'configuration/sourcesRead': { effect: 'read' },
   'model/probe': { effect: 'side_effecting' },
+  'mcp/sourceRead': { effect: 'read', unbounded: true },
   'mcp/probe': { effect: 'read', unbounded: true },
   'session/effectiveConfiguration': { effect: 'read' },
   'session/effectiveConfigurationValueRead': { effect: 'read' },
@@ -225,6 +226,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'inbound/remove': { effect: 'side_effecting' },
   'inbound/steer': { effect: 'side_effecting' },
   'turn/interrupt': { effect: 'side_effecting', lane: 'control' },
+  'session/inputsWrite': { effect: 'side_effecting' },
   'session/settings': { effect: 'read', lane: 'metadata' },
   'session/settingsValueRead': { effect: 'read' },
   'session/configuration': { effect: 'read' },

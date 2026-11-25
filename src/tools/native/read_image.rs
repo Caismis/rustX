@@ -1,6 +1,4 @@
 //! Read a bounded PNG snapshot into the existing managed artifact owner.
-use std::io::Read;
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 
 use schemars::JsonSchema;
@@ -19,7 +17,8 @@ use crate::tools::types::{
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Input {
-    /// PNG file path. Relative paths resolve from the execution cwd.
+    /// PNG file path. Relative paths resolve from the execution cwd; absolute
+    /// paths must stay within the Session's admitted Client workspace.
     #[schemars(length(min = 1))]
     path: String,
 }
@@ -29,7 +28,7 @@ pub(super) fn definition() -> ToolDefinition {
     native_definition::<Input>(
         "tool-read-image",
         "read_image",
-        "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+        "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
         ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
     )
 }
@@ -89,47 +88,59 @@ impl ReadImage {
                     return cancelled_result(context.cancellation.reason());
                 }
                 let path = interpret_path(context.workspace.root(), &input.path);
-                let read = tokio::task::spawn_blocking(move || {
-                    if path
-                        .extension()
-                        .is_some_and(|ext| !ext.eq_ignore_ascii_case("png"))
-                    {
-                        return Err("read_image supports only PNG files".to_owned());
+                if path
+                    .extension()
+                    .is_some_and(|ext| !ext.eq_ignore_ascii_case("png"))
+                {
+                    return failed_result("read_image supports only PNG files");
+                }
+                let Some(scope) = context.workspace.execution_scope().cloned() else {
+                    return failed_result(
+                        "Session execution unavailable: no admitted Execution Client",
+                    );
+                };
+                // The physical bytes cross the Session's admitted
+                // Execution Client boundary in bounded range chunks; the
+                // PNG constraint itself is validated Agent-side on the
+                // assembled bytes, off the async reactor.
+                let read = scope.image_bytes(&path, &context.cancellation).await;
+                let read = match read {
+                    Ok(bytes) => {
+                        match tokio::task::spawn_blocking(move || {
+                            crate::model::images::validate_png(&bytes).map(|()| bytes)
+                        })
+                        .await
+                        {
+                            Ok(Ok(bytes)) => Ok(bytes),
+                            Ok(Err(error)) => Err(error),
+                            Err(_) => Err("image validation failed".to_owned()),
+                        }
                     }
-                    let mut file = std::fs::File::options()
-                        .read(true)
-                        .custom_flags(libc::O_NONBLOCK)
-                        .open(path)
-                        .map_err(|_| "image path is unreadable".to_owned())?;
-                    if !file
-                        .metadata()
-                        .map_err(|_| "image metadata is unavailable".to_owned())?
-                        .is_file()
-                    {
-                        return Err("image path is not a regular file".to_owned());
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                        return cancelled_result(context.cancellation.reason());
                     }
-                    let mut bytes = Vec::new();
-                    Read::by_ref(&mut file)
-                        .take((crate::tools::artifacts::ARTIFACT_TRANSFER_MAX + 1) as u64)
-                        .read_to_end(&mut bytes)
-                        .map_err(|_| "image read failed".to_owned())?;
-                    crate::model::images::validate_png(&bytes)?;
-                    Ok(bytes)
-                })
-                .await;
+                    Err(error) => {
+                        return failed_result(format!("cannot read {}: {error}", path.display()));
+                    }
+                };
                 #[cfg(test)]
                 before_commit();
                 if context.cancellation.is_cancelled() {
                     return cancelled_result(context.cancellation.reason());
                 }
                 let bytes = match read {
-                    Ok(Ok(bytes)) => bytes,
-                    Ok(Err(error)) => return failed_result(error),
-                    Err(_) => return failed_result("image validation failed"),
+                    Ok(bytes) => bytes,
+                    Err(error) => return failed_result(error),
                 };
-                let Ok(artifact_id) = context.artifacts.put_bounded(&bytes) else {
-                    return failed_result("image artifact storage failed");
-                };
+                // The durable store is atomic with the cancellation
+                // grant: `with_active` admits the commit on the physical
+                // writer thread or it never happens.
+                let artifacts = context.artifacts.clone();
+                let commit_cancellation = context.cancellation.clone();
+                let committed = tokio::task::spawn_blocking(move || {
+                    commit_cancellation.with_active(|| artifacts.put_bounded(&bytes))
+                })
+                .await;
                 #[cfg(test)]
                 after_commit();
                 if context.cancellation.is_cancelled() {
@@ -137,6 +148,13 @@ impl ReadImage {
                     // cancellation never publishes a successful image reference.
                     return cancelled_result(context.cancellation.reason());
                 }
+                let artifact_id = match committed {
+                    Ok(Some(Ok(id))) => id,
+                    Ok(Some(Err(_))) | Err(_) => {
+                        return failed_result("image artifact storage failed");
+                    }
+                    Ok(None) => return cancelled_result(context.cancellation.reason()),
+                };
                 let mut result = success_text("Read static PNG image", None);
                 result
                     .content
@@ -153,6 +171,8 @@ impl ReadImage {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read as _;
+
     use super::*;
     use crate::model::catalog::{Modality, ModelCapabilities, ModelRef};
     use crate::model::invocation::{ModelSelection, effective_capabilities};
@@ -315,7 +335,7 @@ mod tests {
         use crate::tools::artifacts::ArtifactStore;
 
         for after_commit in [false, true] {
-            let fixture = common::native_fixture();
+            let fixture = common::native_fixture_with_execution(Vec::new());
             let model = invocation(true);
             let mut bytes = Vec::new();
             {
@@ -373,9 +393,114 @@ mod tests {
         }
     }
 
+    /// A Session with no admitted Execution Client has no Server-local
+    /// fallback: even a physically valid workspace PNG is refused before
+    /// any artifact is allocated, and the refusal leaks no file bytes.
+    #[tokio::test]
+    async fn an_unbound_session_refuses_image_reads_without_touching_artifacts() {
+        let fixture = common::native_fixture();
+        let model = invocation(true);
+        let mut bytes = Vec::new();
+        {
+            let encoder = png::Encoder::new(&mut bytes, 1, 1);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[128])
+                .unwrap();
+        }
+        std::fs::write(fixture.runtime.workspace().root().join("image.png"), &bytes).unwrap();
+        let result = run(&fixture, &model, "image.png", false).await;
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("an unbound Session must refuse image reads: {result:?}");
+        };
+        assert!(
+            error.contains("Session execution unavailable"),
+            "honest unavailable, got: {error}"
+        );
+        assert!(
+            result
+                .content
+                .iter()
+                .all(|block| !matches!(block, ToolResultContent::Image(_))),
+            "no image block leaks through the unavailable route"
+        );
+        assert_eq!(
+            std::fs::read_dir(fixture.runtime.artifacts().root())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with("artifact_"))
+                .count(),
+            0,
+            "a refused read allocates no artifact"
+        );
+    }
+
+    /// A valid PNG larger than one 64 KiB wire chunk is assembled from
+    /// bounded `ReadRange` exchanges on the real admitted Client and
+    /// committed byte-exact; the immutable snapshot outlives the source and Client.
+    #[tokio::test]
+    async fn a_multichunk_png_commits_exact_artifact_bytes() {
+        let mut fixture = common::native_fixture_with_execution(Vec::new());
+        let model = invocation(true);
+        let root = fixture.runtime.workspace().root();
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 384, 384);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::NoCompression);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![0xAB; 384 * 384])
+                .unwrap();
+        }
+        assert!(
+            bytes.len() > rustx_execution_protocol::MAX_RAW_CHUNK_BYTES,
+            "the fixture image spans multiple wire chunks"
+        );
+        assert!(bytes.len() <= crate::tools::artifacts::ARTIFACT_TRANSFER_MAX);
+        std::fs::write(root.join("large.png"), &bytes).unwrap();
+        let result = run(&fixture, &model, "large.png", false).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        let ToolResultContent::Image(reference) = &result.content[1] else {
+            panic!("canonical image")
+        };
+        std::fs::write(root.join("large.png"), b"source replaced after commit").unwrap();
+        assert_eq!(
+            fixture
+                .runtime
+                .artifacts()
+                .read_bounded(&reference.artifact_id)
+                .unwrap(),
+            bytes
+        );
+        std::fs::remove_file(root.join("large.png")).unwrap();
+        assert_eq!(
+            fixture
+                .runtime
+                .artifacts()
+                .read_bounded(&reference.artifact_id)
+                .unwrap(),
+            bytes,
+            "the committed artifact is immutable once the source is gone"
+        );
+        fixture.disconnect_execution();
+        assert_eq!(
+            fixture
+                .runtime
+                .artifacts()
+                .read_bounded(&reference.artifact_id)
+                .unwrap(),
+            bytes,
+            "the committed artifact is independent of the reaped Client"
+        );
+    }
+
     #[tokio::test]
     async fn native_validation_cancellation_storage_and_immutable_snapshot() {
-        let fixture = common::native_fixture();
+        let fixture = common::native_fixture_with_execution(Vec::new());
         let image = invocation(true);
         let text = invocation(false);
         let root = fixture.runtime.workspace().root();

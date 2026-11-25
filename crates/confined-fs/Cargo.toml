@@ -1,0 +1,28 @@
+[package]
+name = "rustx-confined-fs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "Descriptor-relative, confined filesystem primitives shared by the rustX Agent Server and the physical Execution Client: no-follow traversal under an opened root, revision-checked bounded range reads."
+publish = false
+
+[dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+nix = { version = "0.31.3", default-features = false, features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
+sha2 = "0.10"
+base64 = "0.22"
+uuid = { version = "1.24", features = ["v7"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+rustx-execution-protocol = { path = "../execution-protocol" }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

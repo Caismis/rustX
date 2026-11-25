@@ -221,6 +221,8 @@ pub(super) async fn headless_runtime(
 }
 
 pub(super) struct HeadlessRuntimeOptions {
+    pub(super) execution_scope:
+        Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
     pub(super) approval_mode: ApprovalMode,
     pub(super) skill_discovery: crate::skills::SkillDiscoveryConfig,
     pub(super) estimator: Arc<dyn TokenEstimator>,
@@ -247,6 +249,7 @@ pub(super) struct HeadlessRuntimeOptions {
 impl Default for HeadlessRuntimeOptions {
     fn default() -> Self {
         Self {
+            execution_scope: None,
             approval_mode: ApprovalMode::FullAccess,
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             estimator: Arc::new(DefaultTokenEstimator),
@@ -295,19 +298,18 @@ pub(super) async fn headless_runtime_with_options(
     let conversation_id = ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
+    let mut config = crate::tools::runtime::ConversationRuntimeConfig::new(
+        &workspace,
+        dir.path().join("artifacts"),
+    )
+    .with_extensions(
+        crate::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(options.status_engine.config().clone()),
+    );
+    config.execution_scope = options.execution_scope;
     let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id.clone(),
-        crate::tools::runtime::ConversationRuntimeConfig::new(
-            &workspace,
-            dir.path().join("artifacts"),
-        )
-        .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
-            crate::context::AgentStatusConfig::default(),
-        ))
-        .with_extensions(
-            crate::extensions::NativeAgentExtensions::with_todo()
-                .and_agent_status(options.status_engine.config().clone()),
-        ),
+        config,
     )
     .expect("tool runtime");
     let base_tool_registry = base_tool_registry.unwrap_or_default();

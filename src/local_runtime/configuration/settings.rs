@@ -42,7 +42,7 @@ impl SourceTarget {
     /// Rejects relative, removed, redirected, or noncanonical Workspace paths.
     pub fn validate(&self) -> Result<(), SettingsError> {
         if let Self::Workspace { directory } = self
-            && (!directory.is_absolute()
+            && (!rustx_execution_protocol::is_normalized_absolute_path(directory)
                 || super::capture::canonical_directory(directory)
                     .map_err(|_| SettingsError::Invalid)?
                     != *directory)
@@ -386,6 +386,7 @@ pub enum SettingsError {
         actual: String,
     },
     Invalid,
+    ExecutionUnavailable,
     /// A Workflow candidate the native parser or compiler rejected, with its
     /// bounded diagnostic. Nothing was staged.
     InvalidWorkflow(Box<super::super::workflow_authoring::WorkflowDiagnostic>),
@@ -499,8 +500,15 @@ fn mcp_view(
     path: PathBuf,
 ) -> Result<SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>, SettingsError> {
     let bytes = read(&path)?;
+    Ok(mcp_document_view(path, bytes.as_deref()))
+}
+
+pub(crate) fn mcp_document_view(
+    path: PathBuf,
+    bytes: Option<&[u8]>,
+) -> SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>> {
     let parsed: Result<super::super::mcp_resources::McpDocument, _> =
-        crate::toml_authoring::parse(bytes.as_deref().unwrap_or(b""));
+        crate::toml_authoring::parse(bytes.unwrap_or(b""));
     let diagnostic = parsed.as_ref().err().map(|_| "invalid MCP document".into());
     let authored = parsed.ok().map(|document| {
         document
@@ -522,12 +530,12 @@ fn mcp_view(
             })
             .collect()
     });
-    Ok(SourceView {
+    SourceView {
         path,
-        revision: revision(bytes.as_deref()),
+        revision: revision(bytes),
         authored,
         diagnostic,
-    })
+    }
 }
 fn agent_views(root: &Path, scope: SourceScope) -> Result<Vec<AgentSourceView>, SettingsError> {
     let mut result = Vec::new();

@@ -26,12 +26,16 @@ admission owner alongside the frozen model and resource revision.
 ## Image contract
 
 Input is `{ "path": "screenshot.png" }`. Relative paths use the execution cwd;
-absolute paths and symlinks retain native file-tool host semantics. The opened
-handle must be a regular file. Nonblocking open prevents FIFO reads from hanging.
-Only `.png` (case insensitive) or extensionless PNG files are accepted. Both the
-signature and complete decoding are checked; an extension cannot grant support.
+absolute paths must stay within the Session's admitted Client workspace. The
+physical bytes cross the Session's admitted Execution Client, assembled from
+at most four bounded `ReadRange` exchanges under one pinned source stamp — a
+Session without an admitted Client answers `Session execution unavailable`,
+never a Server-local open. Only `.png` (case insensitive) or extensionless
+PNG files are accepted. Both the signature and complete decoding are checked
+Agent-side on the assembled bytes; an extension cannot grant support.
 
-- Encoded snapshot: at most 256 KiB, enforced with a bounded read of limit + 1.
+- Encoded snapshot: at most 256 KiB, enforced by the pinned source stamp: a
+  file stamped over the bound is refused after one range request.
 - Dimensions: at most 4096 pixels per side and 4,194,304 pixels total.
 - Output decode allocation: at most 16 MiB, checked before allocation.
 - Decoder internal allocation budget: 32 MiB using `png::Limits` (the decoder
@@ -41,8 +45,12 @@ signature and complete decoding are checked; an extension cannot grant support.
 
 The decoder validates CRCs and completes the PNG stream, including the end
 marker. Validation and artifact creation consume the same encoded byte vector.
-There is no second read of the source. Cancellation waits for the blocking read
-and decode to settle, then discards its output before artifact creation.
+There is no second read of the source: the pinned stamp authorizes every
+later chunk, a mid-fetch replacement conflicts, and a contradictory stamp
+can never publish assembled bytes. Cancellation before dispatch writes no
+request; a cancelled post-dispatch fetch is still awaited to wire settlement
+before its output is discarded, and the durable artifact commit itself is
+atomic with the cancellation grant.
 Artifacts follow the existing monotonic reservation and Session deletion owner;
 a failed allocation never publishes a successful ToolResult. Cancellation
 observed after storage also publishes no successful reference; its reserved

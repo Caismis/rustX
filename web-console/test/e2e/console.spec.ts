@@ -2,7 +2,7 @@ import { settledSave } from './shell-actions';
 import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
-import { openEmptySession } from './shell-actions';
+import { createBoundSession, openEmptySession, openExistingSession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import {
@@ -19,9 +19,15 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   const fixture = await startDogfood();
   const wire = await wireProbe(page);
   const closeView = async (id: string) => {
-    const count = wire.responses.filter(row => row.method === 'session/detach').length;
+    const requestOffset = wire.requests.length;
+    const responseOffset = wire.responses.length;
     await closeSessionView(page, id);
-    await expect.poll(() => wire.responses.filter(row => row.method === 'session/detach').length).toBe(count + 1);
+    await expect.poll(() => {
+      const detach = wire.requests.slice(requestOffset).find(row => row.method === 'session/detach'
+        && row.params.target.session_id === id);
+      return wire.responses.slice(responseOffset).filter(row => row.id === detach?.id
+        && row.method === 'session/detach' && row.result?.type === 'detached');
+    }).toHaveLength(1);
   };
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -39,13 +45,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   let remote: AppServerHost | undefined;
   let passed = false;
   try {
+    const idA = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle('rustX');
     await expect(page.locator('[data-harness-frame]')).toBeVisible();
     await connect();
-    await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, idA);
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
-    const idA = await selectedSessionId(page);
+    expect(await selectedSessionId(page)).toBe(idA);
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     const idB = await selectedSessionId(page);
@@ -114,9 +121,18 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Every close is acknowledged as detached, and every reopen keeps residency.
     for (let i = 0; i < 34; i++) {
       const id = i % 2 === 0 ? idA : idB;
+      // Reload restores the selected Session. Open each target explicitly
+      // before testing detach, including an inactive catalog-only Session.
+      await openSession(id);
+      const beforeClose = await wire.attachedTarget(id);
       await closeView(id);
       await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', '');
-      await page.locator(`button[data-session-id="${id}"]`).click();
+      const responseOffset = wire.responses.length;
+      await openSession(id);
+      await expect.poll(() => wire.responses.slice(responseOffset).find(row => row.method === 'thread/resume'
+        && row.result?.target?.session_id === id)?.result.target).toMatchObject({
+        session_id: id, runtime_incarnation: beforeClose.runtime_incarnation,
+      });
       await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
       await expect.poll(() => selectedSessionId(page)).toBe(id);
     }

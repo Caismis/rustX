@@ -1,6 +1,6 @@
-import type { McpProbeResult, ModelProbeOutcome, ModelProbeSource, SourceMutation, SourceScope, SourceSettings, SourceTarget } from '../../../protocol/app-server/v80.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v80.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v80.ts';
+import type { McpProbeResult, ModelProbeOutcome, ModelProbeSource, SourceMutation, SourceScope, SourceSettings, SourceTarget } from '../../../protocol/app-server/v81.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v81.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v81.ts';
 import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
@@ -37,7 +37,7 @@ export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
-  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null; expected_scope?: SourceScope | null; expected_directory?: string }
+  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null; expected_scope?: SourceScope | null; expected_directory?: string; execution_session?: { id: string; cwd: string } }
   | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
   | { kind: 'check'; id: string; document: WorkflowFileDocument }
@@ -71,15 +71,19 @@ export interface WorkspaceFolderListing { displayPath: string; folders: string[]
 export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   workspaces: ProductHostWorkspace[];
   preferredWorkspace?: string;
-  picker: { kind: 'native' } | { kind: 'configured' | 'browser'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
+  picker: { kind: 'configured' | 'browser'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
 export interface WorkspaceSelectionIntent { client: string; sequence: number }
-export type SessionLocation = { authorized: false; reason: 'denied' | 'unavailable' } | { authorized: true; workspaceId?: string };
+export type SessionLocation =
+  | { authorized: false; reason: 'denied' }
+  | { authorized: false; reason: 'unavailable'; clientCatalogWorkspaceId?: string }
+  | { authorized: true; workspaceId?: string };
 /** Validate the current positional contract before any display or admission consumer. */
 export function validateLocations(value: unknown, count: number): asserts value is SessionLocation[] {
   if (!Array.isArray(value) || value.length !== count || value.some(row => !row ||
     (row.authorized !== true && row.authorized !== false) ||
-    (row.authorized === false && !['denied', 'unavailable'].includes(row.reason)) ||
+    (row.authorized === false && (!['denied', 'unavailable'].includes(row.reason)
+      || (row.clientCatalogWorkspaceId !== undefined && (row.reason !== 'unavailable' || typeof row.clientCatalogWorkspaceId !== 'string')))) ||
     (row.authorized === true && row.workspaceId !== undefined && typeof row.workspaceId !== 'string'))) {
     throw new Error('Invalid Workspace classification');
   }
@@ -147,10 +151,9 @@ export interface ProductHostWorkspaces {
    * transaction was bound to. The two are separate constraints: the Host
    * checks `native` against the connection it opened, after initializing it
    * and before dispatching anything. */
-  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
+  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation, signal?: AbortSignal): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** The Host obtains the path from its desktop chooser. Null means canceled. */
-  pickWorkspace?(scope: WorkspaceAuthorityScope, signal?: AbortSignal): Promise<string | null>;
   browseWorkspace?(scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal): Promise<WorkspaceFolderListing>;
   registerWorkspaceFolder?(scope: WorkspaceAuthorityScope, location: string, selection: WorkspaceFolderSelection): Promise<string>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */

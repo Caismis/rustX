@@ -28,6 +28,8 @@ async fn submit(
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[workspace].clone(),
                 model: None,
             },
@@ -170,6 +172,8 @@ async fn create_ack_precedes_validated_transfer_without_releasing_the_reserved_g
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
@@ -244,6 +248,8 @@ async fn sixty_seconds_preparation_then_submission_has_the_full_budget_on_the_sa
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
@@ -287,6 +293,8 @@ async fn submission_timeout_survives_handoff_and_cannot_resurrect_late_ready() {
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
@@ -468,6 +476,8 @@ async fn failed_session_creation_settles_reserved_preparation_without_a_durable_
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: Some(crate::model::session::SessionModelConfig::of(
                         crate::model::catalog::ModelRef::parse("missing/model").unwrap(),
@@ -522,6 +532,8 @@ async fn cancellation_before_validated_transfer_uses_normal_startup_under_the_or
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
@@ -574,6 +586,8 @@ async fn capacity_queueing_uses_the_same_submission_deadline_without_starting_a_
         .manager
         .create_session_submitted(
             SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
@@ -1368,7 +1382,7 @@ async fn credential_rotation_retires_preparation_while_model_only_changes_reuse_
                 fixture.manager.credentials = credentials("draft-secret-after");
             }
             let created = fixture.manager.create_session_submitted(
-                SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) }, Vec::new(),
+                SessionPersistentState { session_config: None, session_resources: None, cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) }, Vec::new(),
                 scope.claim(&target(1), SubmissionIntent::now()),
             ).await.unwrap();
             let session = fixture.manager.sessions.rename_session(&created.session.id, "Model and credential boundaries").await.unwrap();
@@ -1409,6 +1423,8 @@ async fn committed_creation_durability_warning_keeps_the_same_preparation_and_se
             .manager
             .create_session_submitted(
                 SessionPersistentState {
+                    session_config: None,
+                    session_resources: None,
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
@@ -1434,5 +1450,141 @@ async fn committed_creation_durability_warning_keeps_the_same_preparation_and_se
         fixture.close().await;
         mcp.close().await;
     })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn first_model_request_can_use_cached_declaration_without_live_mcp_readiness() {
+    bounded(async {
+        let mcp = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        fixture
+            .manager
+            .unload(&session.active_conversation_id)
+            .await
+            .unwrap();
+
+        mcp.control.gate.arm();
+        first_request(&fixture, &session, &[TOOL]).await;
+        assert_eq!(fixture.provider.request_bodies().len(), 1);
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+        assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+        mcp.control.gate.release();
+        fixture.close().await;
+        mcp.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_draft_with_client_stdio_defers_the_complete_batch_to_session_admission() {
+    use std::io::Write as _;
+    let mcp = McpFixture::start().await;
+    let fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    only_mcp(&fixture, 0);
+    let workspace = &fixture.workspaces[0];
+    let marker = workspace.join("must-not-start");
+    let source = workspace.join(".agents/mcp.toml");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(source)
+        .unwrap()
+        .write_all(
+            format!(
+                "\n[mcp_servers.client]\ncommand = '/usr/bin/touch'\nargs = [{:?}]\n",
+                marker.display().to_string()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let path = workspace.join("rustx.toml");
+    let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    config["agent"]["tools"]["sources"]
+        .as_table_mut()
+        .unwrap()
+        .insert("client".into(), toml::Value::String("all".into()));
+    std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    let scope = fixture.manager.mcp_draft_scope();
+    select(&fixture, &scope, 1, 0);
+    scope.prepared_for_test().await;
+    let diagnostics = fixture.manager.mcp_drafts.diagnostics();
+    assert_eq!(diagnostics.source_capacity_used, 0);
+    assert_eq!(diagnostics.failed, 0);
+    assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 0);
+    assert!(!marker.exists());
+    assert_eq!(fixture.provider.request_bodies(), [] as [String; 0]);
+    scope.close();
+    fixture.close().await;
+    mcp.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_session_settles_the_authored_http_draft_before_ordinary_admission() {
+    use crate::local_runtime::configuration::{SessionConfigInput, application::ApplicationState};
+    use crate::runtime::CancellationSignal;
+
+    Box::pin(bounded(async {
+        let mcp = McpFixture::start().await;
+        let fixture = Fixture::with_session_count(None, 1).await;
+        configure(&fixture, &[("late", &mcp)]);
+        only_mcp(&fixture, 0);
+        let scope = fixture.manager.mcp_draft_scope();
+        select(&fixture, &scope, 1, 0);
+        scope.prepared_for_test().await;
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
+        let transferred = scope.transfer_for_test();
+        let mut client = fixture.start_execution(0).await;
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let configuration = fixture.manager.configuration.clone();
+        let credentials = fixture.manager.credentials.clone();
+        let input = SessionConfigInput::new(fixture.workspaces[0].clone());
+        let paths = tokio::task::spawn_blocking(move || {
+            ApplicationState::initial_bound_session(
+                &configuration,
+                &input,
+                &credentials,
+                &endpoint,
+                true,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let claim = scope.claim(&target(1), SubmissionIntent::now());
+        assert!(
+            claim
+                .consume(&paths, &CancellationSignal::new())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!*transferred.borrow());
+        assert_eq!(
+            fixture
+                .manager
+                .mcp_drafts
+                .diagnostics()
+                .source_capacity_used,
+            0
+        );
+        first_request(&fixture, &fixture.sessions[0], &[TOOL]).await;
+        assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+        scope.close();
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+        mcp.close().await;
+    }))
     .await;
 }

@@ -5,7 +5,7 @@ import { interactionBody, readInteractionBody } from '../../../protocol/app-serv
 import { observationCheckpoint } from '../../../protocol/app-server/projection';
 import { OutcomeUncertain } from './errors';
 import { interactionKey, type ClientView, type ConnectionRequest, type SessionView } from './contracts';
-import type { AttachmentTarget, CheckpointReadCut, InteractionRef, InteractionResponse, RuntimeClientInteractionHeader } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, CheckpointReadCut, InteractionRef, InteractionResponse, RuntimeClientInteractionHeader } from '../../../protocol/app-server/v81';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { SessionReads } from './session-reads';
 

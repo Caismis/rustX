@@ -167,8 +167,12 @@ impl McpDraftRegistry {
         scopes.push(Arc::downgrade(&scope));
         McpDraftScope(Arc::new(ScopeLease(scope)))
     }
-    pub(crate) fn begin_drain(&self) {
+    pub(crate) fn close_admission(&self) {
         self.draining.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn begin_drain(&self) {
+        self.close_admission();
         for scope in self
             .scopes
             .lock()
@@ -608,14 +612,23 @@ impl Scope {
         let cwd = slot.cwd.clone();
         let paths = tokio::task::spawn_blocking(move || {
             configuration
-                .resolve_session(&super::configuration::SessionConfigInput { cwd, model: None })
+                .resolve_session(&super::configuration::SessionConfigInput::new(cwd))
                 .map_err(|error| error.to_string())?
                 .admit(|| credentials)
         })
         .await
         .map_err(|error| error.to_string())??;
         let inputs = Inputs::capture(&paths)?;
-        if inputs.bindings.is_empty() {
+        if inputs.bindings.is_empty()
+            || inputs.bindings.values().any(|binding| {
+                !matches!(
+                    binding.transport,
+                    crate::tools::mcp::McpTransportConfig::StreamableHttp { .. }
+                )
+            })
+        {
+            // The draft has no Session or Client. Keep the entire source
+            // batch for normal admission if any source requires one.
             return Ok((inputs, None));
         }
         let count = u32::try_from(inputs.bindings.len())
@@ -684,6 +697,18 @@ impl DraftClaim {
         };
         #[cfg(test)]
         slot.consume_waiting.send_replace(true);
+        if matches!(
+            paths.workspace_resources,
+            super::configuration::WorkspaceResourceAuthority::Bound
+        ) {
+            let failures = slot.settle().await;
+            slot.release_reservation();
+            return if failures.is_empty() {
+                Ok(None)
+            } else {
+                Err(failures.join("; "))
+            };
+        }
         let prepared = tokio::select! {
             outcome = slot.take() => outcome,
             () = cancellation.cancelled() => { slot.cancel(); slot.take().await },

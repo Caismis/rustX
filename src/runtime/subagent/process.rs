@@ -38,6 +38,9 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 
+use crate::local_runtime::session_runtime_manager::{
+    ChildExecutionRelay, ChildExecutionSettlement,
+};
 use crate::runtime::identity::{ConversationId, SubagentId};
 use crate::runtime::interaction::{InteractionRef, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
@@ -201,6 +204,7 @@ impl SubagentSpawnPlan {
             model_timeout_policy: execution_policy.model_timeout,
             tool_deadline_policy: execution_policy.tool_deadline,
             context: execution_policy.context,
+            execution: None,
             workspace: workspace.to_path_buf(),
             incarnation: runtime_root
                 .path()
@@ -234,6 +238,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     /// production-allocated root. Test-only roots do not own a durable store.
     durable_store: Option<(ConversationId, PathBuf, PathBuf)>,
     physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
+    execution_relay: Option<ChildExecutionSettlement>,
 }
 
 impl PhysicalChildRuntimeRoot {
@@ -352,6 +357,7 @@ impl PhysicalChildRuntimeRoot {
                             product.root().to_owned(),
                         )),
                         physical_owner: None,
+                        execution_relay: None,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -394,9 +400,17 @@ impl PhysicalChildRuntimeRoot {
         &self.path
     }
 
-    /// Removes exactly this incarnation directory. The semantic grouping
-    /// directory is intentionally left alone because another incarnation
-    /// may be using it.
+    async fn settle_execution_relay(&mut self) -> Result<(), String> {
+        match self.execution_relay.take() {
+            Some(relay) => relay
+                .after_child_reaped()
+                .await
+                .map_err(|error| error.to_string()),
+            None => Ok(()),
+        }
+    }
+
+    /// Removes the disposable root of this physical incarnation.
     fn remove(self) -> std::io::Result<()> {
         std::fs::remove_dir_all(self.path)
     }
@@ -447,6 +461,7 @@ impl PhysicalChildRuntimeRoot {
             path,
             durable_store: None,
             physical_owner: None,
+            execution_relay: None,
         }
     }
 }
@@ -631,6 +646,7 @@ pub(crate) async fn spawn_staged(
     spec: &SubagentChildSpec,
     mut runtime_root: PhysicalChildRuntimeRoot,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
+    execution_scope: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
 ) -> Result<StagedChild, SpawnError> {
     if runtime_root.physical_owner.is_none() {
         match super::physical_recovery::ParentPhysicalLease::reserve(
@@ -676,7 +692,7 @@ pub(crate) async fn spawn_staged(
     // lazily inside the child (as the child's own local runner does) would
     // make the child a subreaper, not this process, and the anchors this
     // process retains would be unreachable.
-    if let Err(detail) = crate::runtime::process_supervision::ensure_child_subreaper() {
+    if let Err(detail) = rustx_process_supervisor::process_supervision::ensure_child_subreaper() {
         return Err(discard_unstaged_resources(
             runtime_root,
             SpawnError::ContainmentPrerequisite { detail },
@@ -693,11 +709,48 @@ pub(crate) async fn spawn_staged(
             .credentials
             .export_process_credentials(&mut credentials);
     }
-    let spawned = match spawn_process(plan, &runtime_root, &spec.workspace, &credentials) {
-        Ok(spawned) => spawned,
-        Err(error) => {
-            return Err(discard_unstaged_resources(runtime_root, error));
+    let relay = match execution_scope {
+        Some(scope) => {
+            let workspace = spec.workspace.clone();
+            let conversation = spec.child_conversation_id.clone();
+            let resolved = spec.resolved.clone();
+            let created = tokio::task::spawn_blocking(move || {
+                ChildExecutionRelay::create(
+                    &scope,
+                    &workspace,
+                    &conversation,
+                    &resolved.tools,
+                    Some(&resolved),
+                )
+            })
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(std::convert::identity);
+            match created {
+                Ok(relay) => Some(relay),
+                Err(error) if error.kind() == std::io::ErrorKind::NotConnected => None,
+                Err(error) => {
+                    return Err(discard_unstaged_resources(
+                        runtime_root,
+                        SpawnError::Spawn {
+                            detail: error.to_string(),
+                        },
+                    ));
+                }
+            }
         }
+        None => None,
+    };
+    if preparation_cancellation.is_cancelled() {
+        return Err(discard_unstaged_resources(
+            runtime_root,
+            SpawnError::Cancelled,
+        ));
+    }
+    wire_spec.execution = relay.as_ref().map(ChildExecutionRelay::grant);
+    let spawned = match spawn_process(plan, &runtime_root, &credentials) {
+        Ok(spawned) => spawned,
+        Err(error) => return Err(discard_unstaged_resources(runtime_root, error)),
     };
     let mut staged = StagedChild {
         child: spawned.child,
@@ -722,6 +775,24 @@ pub(crate) async fn spawn_staged(
                 detail: format!("{error}; {rollback}"),
             }),
         };
+    }
+    if let Some(relay) = relay {
+        let ready = relay
+            .transfer(&staged.control)
+            .await
+            .and_then(|()| relay.start());
+        match ready {
+            Ok(settlement) => staged.runtime_root.execution_relay = Some(settlement),
+            Err(error) => {
+                let detail = error.to_string();
+                return match staged.rollback().await {
+                    Ok(()) => Err(SpawnError::Spawn { detail }),
+                    Err(rollback) => Err(SpawnError::Rollback {
+                        detail: format!("{detail}; {rollback}"),
+                    }),
+                };
+            }
+        }
     }
     if let Err(error) = staged.handshake(spec, preparation_cancellation).await {
         if matches!(error, SpawnError::Cancelled) {
@@ -776,7 +847,6 @@ fn discard_unstaged_resources(
 fn spawn_process(
     plan: &SubagentSpawnPlan,
     runtime_root: &PhysicalChildRuntimeRoot,
-    project_workspace: &Path,
     credentials: &[(String, String)],
 ) -> Result<SpawnedProcess, SpawnError> {
     // The control channel: one UnixStream pair. The child end becomes the
@@ -819,16 +889,10 @@ fn spawn_process(
         .map_err(|error| SpawnError::WorkspaceSetup {
             detail: error.to_string(),
         })?;
-    crate::tools::execution_environment::publish_child_snapshot(runtime_root.path())
-        .map_err(|detail| SpawnError::Spawn { detail })?;
     let mut command = tokio::process::Command::new(&plan.program);
     command.envs(credentials.iter().map(|(key, value)| (key, value)));
     command
-        // The typed child spec carries the Session execution binding. This
-        // matters for subprocesses that inherit cwd in addition to the
-        // native tools that receive ConversationToolRuntime's Workspace. A
-        // missing binding fails the spawn; there is no fallback directory.
-        .current_dir(project_workspace)
+        .current_dir(runtime_root.path())
         .arg("--subagent-child")
         .stdin(child_stdio)
         .stdout(observation_stdio)
@@ -1082,9 +1146,10 @@ impl StagedChild {
         // Once the direct child and every nested anchor are settled, remove
         // the disposable child-private runtime root. The Session workspace is
         // not a runtime resource and is never touched here.
-        let runtime_root = self.runtime_root;
+        let mut runtime_root = self.runtime_root;
+        let relay = runtime_root.settle_execution_relay().await;
         remove_inspection_liveness_marker(&runtime_root);
-        let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
+        let runtime_root_cleanup_error = if settlement.unproven.is_empty() && relay.is_ok() {
             // Reaping the direct child and containing every retained anchor
             // prove physical quiescence, even when the child needed escalation.
             let proof_error = runtime_root
@@ -1106,6 +1171,9 @@ impl StagedChild {
         } else {
             None
         };
+        if let Err(detail) = relay {
+            return Err(RollbackError::NestedContainment { detail });
+        }
         if let Some(detail) = settlement.unproven_diagnostic() {
             return Err(RollbackError::NestedContainment { detail });
         }
@@ -1167,7 +1235,7 @@ impl StagedChild {
     #[cfg(test)]
     pub(crate) fn retain_for_test(
         &mut self,
-        unit_id: crate::runtime::identity::ProcessUnitId,
+        unit_id: rustx_process_supervisor::identity::ProcessUnitId,
         pgid: i32,
     ) {
         self.retained.retain(unit_id, pgid).expect("test retention");
@@ -2026,11 +2094,13 @@ async fn drive_child_control(
 async fn settle_nested(
     outcome: PhysicalOutcome,
     retained: &mut RetainedProcessUnits,
-    runtime_root: PhysicalChildRuntimeRoot,
+    mut runtime_root: PhysicalChildRuntimeRoot,
 ) -> PhysicalSettlement {
+    let relay = runtime_root.settle_execution_relay().await;
     let nested = contain_retained(retained.take()).await;
     remove_inspection_liveness_marker(&runtime_root);
-    let runtime_root_cleanup_error = if nested.unproven.is_empty()
+    let runtime_root_cleanup_error = if relay.is_ok()
+        && nested.unproven.is_empty()
         && !matches!(outcome, PhysicalOutcome::ControlFailure { .. })
     {
         let path = runtime_root.path().display().to_string();
@@ -2053,8 +2123,56 @@ async fn settle_nested(
     PhysicalSettlement {
         outcome,
         nested,
-        runtime_root_cleanup_error,
+        runtime_root_cleanup_error: relay.err().or(runtime_root_cleanup_error),
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn assert_unproven_relay_retains_child_root(relay: ChildExecutionSettlement) {
+    use super::physical_recovery::{ChildPhysicalLease, ParentPhysicalLease, prove_after_release};
+    use crate::runtime::identity::SessionId;
+    use crate::runtime::local_storage::ProductRoot;
+
+    let artifacts = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("child-runtime");
+    std::fs::create_dir(&path).unwrap();
+    let product = ProductRoot::create(artifacts.path()).unwrap();
+    let session = SessionId::generate();
+    let conversation = ConversationId::generate();
+    let activation = SubagentId::new("unproven-relay:1");
+    let owner =
+        ParentPhysicalLease::reserve(&product, &session, &conversation, &activation).unwrap();
+    let child =
+        ChildPhysicalLease::acquire_from_parent(&owner, &activation, &conversation).unwrap();
+    let mut root = PhysicalChildRuntimeRoot::from_existing(path.clone());
+    root.install_physical_owner(std::sync::Arc::new(owner));
+    root.execution_relay = Some(relay);
+    // The Server child has been reaped. Its delegated work can still be live.
+    drop(child);
+    let settlement = settle_nested(
+        PhysicalOutcome::Lost {
+            diagnostic: "child was reaped".to_owned(),
+            cancellation_delivered: false,
+        },
+        &mut RetainedProcessUnits::default(),
+        root,
+    )
+    .await;
+    assert!(
+        settlement
+            .runtime_root_cleanup_error
+            .as_deref()
+            .is_some_and(|detail| detail.contains("unconfirmed")),
+        "{settlement:?}"
+    );
+    assert!(path.is_dir());
+    assert!(
+        prove_after_release(&product, &session, &conversation, &activation)
+            .unwrap()
+            .is_none(),
+        "recovery must not observe a quiescent receipt"
+    );
 }
 
 /// Removes the exact disposable live-inspection lease belonging to one
@@ -2140,12 +2258,13 @@ mod tests {
     };
 
     use crate::runtime::cancellation::CancellationSignal;
-    use crate::runtime::identity::{ConversationId, ProcessUnitId};
+    use crate::runtime::identity::ConversationId;
     use crate::runtime::subagent::anchors::RetainedProcessUnits;
     use crate::runtime::subagent::ipc::{
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
         write_child_frame,
     };
+    use rustx_process_supervisor::identity::ProcessUnitId;
 
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -2338,7 +2457,10 @@ mod tests {
         ));
         assert_eq!(
             settled.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(
             matches!(
@@ -2849,7 +2971,10 @@ mod tests {
         assert_eq!(settled.nested.contained, vec![unit]);
         assert_eq!(
             settled.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
@@ -2923,7 +3048,10 @@ mod tests {
         assert_eq!(settled.nested.contained, vec![unit]);
         assert_eq!(
             settled.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
@@ -3093,7 +3221,10 @@ mod tests {
         let settlement = tokio::time::timeout(DEADLINE, task).await.unwrap().unwrap();
         assert_eq!(
             settlement.nested.unproven,
-            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+            [] as [(
+                rustx_process_supervisor::identity::ProcessUnitId,
+                std::string::String
+            ); 0]
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
@@ -3198,7 +3329,7 @@ mod tests {
         // here is exactly what `spawn_staged` does before it launches the
         // child whose root was already reserved by the caller.
         assert_eq!(
-            crate::runtime::process_supervision::ensure_child_subreaper(),
+            rustx_process_supervisor::process_supervision::ensure_child_subreaper(),
             Ok(()),
             "the supported platforms must be able to establish the prerequisite"
         );
@@ -3261,6 +3392,7 @@ mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
+            execution: None,
             workspace: dir.path().join("workspace"),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
@@ -3286,7 +3418,8 @@ mod tests {
                     &plan,
                     &spec,
                     runtime_root,
-                    &crate::runtime::cancellation::CancellationSignal::new()
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                    None,
                 )
                 .await,
                 Err(super::SpawnError::Spawn { .. })

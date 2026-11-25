@@ -1,3 +1,4 @@
+import { startHttpMcpPeer } from './http-mcp-startup-gate';
 import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
@@ -88,7 +89,7 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
   process?: (process: { role: 'native' | 'provider_launcher'; pid: number }) => void;
   /** Runs after both original subprocesses exit, before fixture deletion. */
   afterExit?: () => void | Promise<void>;
-}) {
+}, localWorkspacePicker = false) {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-web-console-'));
   const settings = join(directory, 'rustx.toml');
   const workspaceA = join(directory, 'A'), workspaceB = join(directory, 'B');
@@ -106,10 +107,19 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
-    const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
-    const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
+    const gatedModel = ['tui_multi_session', 'live_model_switch'].includes(scenario);
+    const primaryModel = gatedModel || scenario === 'mcp_startup' ? 'integration-model' : 'console-model';
+    const profiles = gatedModel ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
+    const secondProfiles = scenario === 'live_model_switch' ? `
+default_profile = "native"
+[models."fixture/second-model".profiles.high]
+max_output_tokens = 256
+[models."fixture/second-model".profiles.native]
+request_params = '{"reasoning_effort":"medium"}'
+max_output_tokens = 2048
+` : '';
     const catalog = `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
+      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : secondProfiles}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
@@ -140,6 +150,9 @@ timezone = "UTC"
     // Omit its unused Tool setup; retain all 300 durable Attempts and gates.
     const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ${scenario === 'web_reading_surface' ? '[]' : '["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]'}\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
+    if (localWorkspacePicker) {
+      writeFileSync(settings, readFileSync(settings, 'utf8') + `\n[app_server]\nenvironment_roots = ${JSON.stringify([workspaceA, workspaceB])}\n`);
+    }
     if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');
     // Automatically repairable sources (#464): the App Server repairs the User
     // document at startup and Workspace A before its first Session resolves.
@@ -171,14 +184,20 @@ timezone = "UTC"
     const productHostToken = randomBytes(32).toString('base64url');
     const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
     let appErrors = '';
+    let execution: { sessionId: string; workspace: string } | undefined;
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
-      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      const args = ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile];
+      if (localWorkspacePicker) args.push('--local-workspace-picker');
+      if (execution) args.push('--local-execution-session', execution.sessionId, '--local-execution-workspace', execution.workspace);
+      app = spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
       appIdentity = nativeIdentity(app.pid);
       if (app.pid !== undefined) measurement?.process?.({ role: 'native', pid: app.pid });
       if (measurement) observeMeasurementLines(app, measurement.line);
       app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
       return readiness(app, 'stderr', appServerEndpoint);
     };
+    const mcpFixtureLifetime = new AbortController();
+    const mcpFixtures: Awaited<ReturnType<typeof startHttpMcpPeer>>[] = [];
     const endpoint = await startApp();
     const control = async (path: string, method = 'GET') => {
       const response = await fetch(`${providerUrl}/__control/${path}`, { method });
@@ -195,14 +214,25 @@ timezone = "UTC"
       const restarted = await startApp(endpoint);
       if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
     };
+    const restartApp = async () => {
+      app!.kill('SIGTERM');
+      await exited(app!);
+      await startOnSameEndpoint();
+    };
     return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
-      async restartApp() {
-        app!.kill('SIGTERM');
-        await exited(app!);
-        await startOnSameEndpoint();
+      restartApp,
+      async serveMcpCatalog(catalog: (cursor: string | undefined) => unknown) {
+        const peer = await startHttpMcpPeer(mcpFixtureLifetime.signal, catalog);
+        mcpFixtures.push(peer);
+        return peer.url;
+      },
+      /** Model-tool fixtures enroll the exact Session through trusted startup. */
+      async bindExecution(sessionId: string, workspace: string) {
+        execution = { sessionId, workspace };
+        await restartApp();
       },
       /** Public creation materializes defaults. Seed inherited intent only
        * before the browser connects, with the native owner physically stopped. */
@@ -238,7 +268,9 @@ timezone = "UTC"
           try { await workspaceHost.stop(); }
           finally {
             app?.kill('SIGTERM'); provider.kill('SIGTERM');
-            rmSync(directory, { recursive: true, force: true });
+            mcpFixtureLifetime.abort(new Error('Dogfood fixture settled'));
+            try { await Promise.all(mcpFixtures.map(peer => peer.close())); }
+            finally { rmSync(directory, { recursive: true, force: true }); }
           }
         }
       },

@@ -14,9 +14,7 @@
 
 use std::time::Duration;
 
-use crate::common::{
-    native_fixture, native_fixture_with_environment, run_tool, run_tool_with_cancellation,
-};
+use crate::common::{native_fixture_with_execution, run_tool, run_tool_with_cancellation};
 use rustx::runtime::CancellationSignal;
 use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolResultContent,
@@ -24,7 +22,7 @@ use rustx::tools::types::{
 
 fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
     fixture_with_control(
-        &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl {
+        &rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl {
             trace: Some(trace.to_path_buf()),
             before_term_socket: None,
         },
@@ -32,10 +30,10 @@ fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
 }
 
 fn fixture_with_control(
-    control: &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl,
+    control: &rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
 ) -> crate::common::NativeFixture {
-    use rustx::tools::native::bash_supervisor::diagnostics::fixture_executor;
-    let mut fixture = native_fixture();
+    use rustx::tools::native::fixture_executor;
+    let mut fixture = crate::common::native_fixture();
     let mut registry = rustx::tools::executor::ToolRegistry::new();
     for definition in fixture.registry.definitions() {
         let executor = if definition.name == "bash" {
@@ -74,7 +72,7 @@ fn spill_count(fixture: &crate::common::NativeFixture) -> usize {
 
 #[tokio::test]
 async fn bash_uses_full_shell_semantics() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
         &fixture,
         "bash",
@@ -99,7 +97,7 @@ async fn bash_uses_full_shell_semantics() {
 
 #[tokio::test]
 async fn bash_uses_the_fixed_workspace_directory() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let root = fixture.runtime.workspace().root().to_path_buf();
     std::fs::write(root.join("marker.txt"), "here").expect("write marker");
     let result = run_tool(
@@ -120,7 +118,7 @@ async fn bash_uses_the_fixed_workspace_directory() {
 
 #[tokio::test]
 async fn bash_has_no_state_persistence_between_calls() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let first = run_tool(
         &fixture,
         "bash",
@@ -149,7 +147,7 @@ async fn bash_has_no_state_persistence_between_calls() {
 
 #[tokio::test]
 async fn bash_captures_stdout_stderr_and_combined() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
         &fixture,
         "bash",
@@ -167,7 +165,7 @@ async fn bash_captures_stdout_stderr_and_combined() {
 
 #[tokio::test]
 async fn bash_zero_exit_is_success_and_nonzero_exit_is_a_failed_result() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let zero = run_tool(&fixture, "bash", serde_json::json!({"command": "exit 0"})).await;
     assert_eq!(zero.status, ToolExecutionStatus::Success);
     assert_eq!(json_content(&zero)["exit_code"], 0);
@@ -183,7 +181,7 @@ async fn bash_zero_exit_is_success_and_nonzero_exit_is_a_failed_result() {
 
 #[tokio::test]
 async fn bash_foreground_timeout_is_timed_out() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
         &fixture,
         "bash",
@@ -200,7 +198,7 @@ async fn bash_foreground_timeout_is_timed_out() {
 
 #[tokio::test]
 async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Keep the socket path within Darwin's native path bound.
@@ -306,7 +304,7 @@ async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
 
 #[tokio::test]
 async fn bash_kill_escalates_when_term_is_ignored() {
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     let dir = tempfile::tempdir().unwrap();
     let trace = dir.path().join("signals");
     let fixture = fixture_with_trace(&trace);
@@ -370,7 +368,7 @@ impl Drop for SignalReleaseGuard {
 async fn bash_cancellation_terminates_descendants_of_the_process_group() {
     use nix::sys::signal::kill;
     use nix::unistd::{Pid, getpgid};
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Keep the socket path within Darwin's native path bound.
@@ -584,7 +582,7 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
             .expect("spawn"),
     );
     let unrelated_pid = unrelated.0.id();
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let cancellation = CancellationSignal::new();
     // The SignalPipe proves the tool's own child is running inside the
     // workspace before cancellation fires, while an owned FIFO blocks it until
@@ -633,7 +631,7 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
 #[tokio::test]
 async fn bash_background_cancellation_uses_the_same_process_group_path() {
     use rustx::tools::background::BackgroundLifecycle;
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     let trace_dir = tempfile::tempdir().unwrap();
     let trace = trace_dir.path().join("supervision.jsonl");
     let fixture = fixture_with_trace(&trace);
@@ -736,11 +734,8 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
 #[tokio::test]
 async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
     use rustx::tools::background::BackgroundLifecycle;
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let registry = fixture.runtime.background().clone();
-    let executor = fixture
-        .registry
-        .executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
     let invocation = ToolInvocation {
         id: rustx::tools::types::ToolInvocationId::Agent {
             call_id: rustx::runtime::identity::ToolCallId::new("call-bg"),
@@ -750,12 +745,17 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
         mode: ToolInvocationMode::Background,
         arguments: serde_json::json!({"command": "echo done"}),
     };
+    let cancellation = rustx::runtime::ExecutionCancellation::detached(
+        CancellationSignal::new(),
+        rustx::runtime::types::CancellationReason::UserRequested,
+    );
     let prepared = registry
-        .prepare_dispatch(
+        .prepare_native_bash(
             &invocation,
-            &executor,
-            rustx::tools::environment::ToolEnvironment::new(),
+            fixture.runtime.environment().clone(),
+            &cancellation,
         )
+        .await
         .expect("prepare");
     let outcome = registry
         .commit_dispatch_owned(prepared, &CancellationSignal::new())
@@ -783,11 +783,11 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
 }
 
 #[test]
-fn bash_inherits_host_values_and_applies_configured_overrides() {
+fn bash_excludes_server_environment_and_applies_configured_overrides() {
     let test_env = std::env::var("RUSTX_SENTINEL_TEST").is_ok();
     if test_env {
         // Inner run: execute the Bash tool and print its observable stdout.
-        let fixture = native_fixture_with_environment(vec![(
+        let fixture = native_fixture_with_execution(vec![(
             "RUSTX_AUTHORIZED".to_owned(),
             "visible".to_owned(),
         )]);
@@ -801,12 +801,12 @@ fn bash_inherits_host_values_and_applies_configured_overrides() {
         return;
     }
     // Outer run: re-execute this test with a sentinel secret injected into
-    // the child process environment, then prove Bash inherits it while
-    // configured entries override the captured host baseline.
+    // the Server test process, then prove the bound Client only sees
+    // the admitted configuration.
     let exe = std::env::current_exe().expect("current exe");
     let output = std::process::Command::new(exe)
         .arg("--exact")
-        .arg("bash::bash_inherits_host_values_and_applies_configured_overrides")
+        .arg("bash::bash_excludes_server_environment_and_applies_configured_overrides")
         .arg("--nocapture")
         .env("RUSTX_SENTINEL_TEST", "1")
         .env("RUSTX_SENTINEL_SECRET", "shhh")
@@ -820,8 +820,8 @@ fn bash_inherits_host_values_and_applies_configured_overrides() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("shhh:visible"),
-        "host data must be inherited and configured overrides must win: {stdout}"
+        stdout.contains("absent:visible"),
+        "Server host data must stay private and configured overrides must win: {stdout}"
     );
 }
 
@@ -829,7 +829,7 @@ fn bash_inherits_host_values_and_applies_configured_overrides() {
 /// file, no artifact, no truncation.
 #[tokio::test]
 async fn bash_small_output_creates_no_spill() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
         &fixture,
         "bash",
@@ -861,7 +861,7 @@ async fn bash_small_output_creates_no_spill() {
 #[allow(clippy::too_many_lines)] // one scenario: spill, then prove read/search access
 #[tokio::test]
 async fn bash_large_output_spills_to_managed_output() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
         &fixture,
         "bash",
@@ -902,9 +902,8 @@ async fn bash_large_output_spills_to_managed_output() {
     let full_output = full_output.as_str();
     assert!(std::path::Path::new(full_output).is_absolute());
     assert!(
-        std::path::Path::new(full_output)
-            .starts_with(fixture.runtime.tool_output().root().unwrap()),
-        "the spill lives in the managed tool-output root: {full_output}"
+        !std::path::Path::new(full_output).exists(),
+        "capture belongs to the Client"
     );
     // The canonical result projection presents the locator plus the
     // Read/Grep continuation guidance to the model.
@@ -917,152 +916,93 @@ async fn bash_large_output_spills_to_managed_output() {
         continuation_text.contains("Read or Grep"),
         "the bounded text states how to reach the complete output"
     );
-    assert_eq!(spill_count(&fixture), 1, "exactly one combined spill file");
-
-    // The spill retains the complete output from byte zero; the middle
-    // marker line is absent from the bounded head/tail preview but present
-    // in the file.
-    let spilled = std::fs::read_to_string(full_output).expect("spill text");
-    assert!(spilled.starts_with("line-1\n"));
-    assert!(spilled.ends_with("line-3000\n"));
+    assert_eq!(spill_count(&fixture), 0, "no Server spill");
     assert!(
         !content["combined"]
             .as_str()
-            .expect("combined")
+            .unwrap()
             .contains("spill-boundary-marker"),
-        "the middle marker line is beyond the bounded head/tail preview"
+        "the middle marker falls outside the bounded preview"
     );
-
-    // Ordinary native Read with offset/limit reads the spill file.
-    let marker_line = 1501_u64;
-    let read = run_tool(
-        &fixture,
-        "read",
-        serde_json::json!({
-            "path": full_output,
-            "offset": marker_line,
-            "limit": 1,
-        }),
-    )
-    .await;
-    assert_eq!(read.status, ToolExecutionStatus::Success);
-    let read_text = read
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("text content");
-    assert_eq!(
-        read_text,
-        "spill-boundary-marker\n\n[1501 more lines in file. Use offset=1502 to continue.]"
-    );
-
-    // Ordinary native Grep searches the single spill file and the managed
-    // root directory.
-    let grep_file = run_tool(
+    let expected: String = (1..=1500)
+        .map(|i| format!("line-{i}\n"))
+        .chain(std::iter::once("spill-boundary-marker\n".to_owned()))
+        .chain((1501..=3000).map(|i| format!("line-{i}\n")))
+        .collect();
+    assert_eq!(truncation.original_bytes, Some(expected.len() as u64));
+    for (offset, limit) in [(1, 1000), (1001, 1000), (2001, 1001)] {
+        let read = run_tool(
+            &fixture,
+            "read",
+            serde_json::json!({"path": full_output, "offset": offset, "limit": limit}),
+        )
+        .await;
+        assert_eq!(read.status, ToolExecutionStatus::Success);
+        let ToolResultContent::Text(text) = &read.content[0] else {
+            panic!("Read text")
+        };
+        let expected = expected
+            .split('\n')
+            .skip(offset - 1)
+            .take(limit)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            text.text.split("\n\n[").next().unwrap().trim_end(),
+            expected.trim_end()
+        );
+    }
+    let grep = run_tool(
         &fixture,
         "grep",
         serde_json::json!({"pattern": "spill-boundary-marker", "path": full_output}),
     )
     .await;
-    assert_eq!(grep_file.status, ToolExecutionStatus::Success);
-    let grep_file_text = grep_file
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("Grep text");
-    assert!(grep_file_text.contains(": spill-boundary-marker"));
-    let grep_root = run_tool(
-        &fixture,
-        "grep",
-        serde_json::json!({
-            "pattern": "spill-boundary-marker",
-            "path": fixture.runtime.tool_output().root().unwrap().to_str().expect("utf8"),
-        }),
-    )
-    .await;
-    assert_eq!(grep_root.status, ToolExecutionStatus::Success);
-    let grep_root_text = grep_root
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("Grep text");
-    assert!(grep_root_text.contains(": spill-boundary-marker"));
+    assert_eq!(grep.status, ToolExecutionStatus::Success);
+    let ToolResultContent::Text(text) = &grep.content[0] else {
+        panic!("Grep text")
+    };
+    let name = locator.file_name().unwrap().to_str().unwrap();
+    assert_eq!(text.text, format!("{name}:1501: spill-boundary-marker"));
 }
 
-/// Every advertised Read/Grep path holds valid UTF-8 text (Issue #86):
-/// raw non-UTF-8 output decodes deterministically to U+FFFD replacement
-/// characters — never raw bytes — so the spilled file is always readable
-/// by Read and searchable by Grep. The decoded text is identical to the
-/// one-shot lossy decoding of the same bytes.
+/// Continuations preserve lossy UTF-8 decoding across the physical boundary.
 #[tokio::test]
 async fn bash_non_utf8_output_spills_as_deterministic_text() {
-    let fixture = native_fixture();
-    // Deterministic invalid bytes (never /dev/urandom): 20000 'x' bytes
-    // cross the bound, then an invalid tail.
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
-        &fixture,
-        "bash",
-        serde_json::json!({"command": "printf 'x%.0s' {1..20000}; printf '\\377\\376\\001\\002end\\n'"}),
-    )
-    .await;
+        &fixture, "bash",
+        serde_json::json!({"command": r"printf 'x%.0s' {1..20000}; printf '\377\376\001\002end\n'"}),
+    ).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     let Some(rustx::tools::ManagedOutputContinuation::Complete { locator }) =
         result.managed_output.as_deref()
     else {
         panic!(
-            "the spill is typed Complete, got {:?}",
+            "expected a complete Client capture: {:?}",
             result.managed_output
-        );
+        )
     };
-    let full_output = locator.to_str().expect("utf8 spill locator");
-    let text = std::fs::read_to_string(full_output)
-        .expect("the advertised spill path is always valid UTF-8 text");
-    assert!(text.starts_with(&"x".repeat(100)));
-    // \377 \376 are invalid UTF-8 and decode to exactly two U+FFFD
-    // replacement characters; \001 \002 are valid control bytes and pass
-    // through unchanged.
-    assert!(
-        text.ends_with("\u{FFFD}\u{FFFD}\u{1}\u{2}end\n"),
-        "invalid bytes decode deterministically to U+FFFD: {:?}",
-        &text[text.len() - 16..]
-    );
-
-    // The advertised path is genuinely inspectable: Read and Grep succeed.
-    let read = run_tool(&fixture, "read", serde_json::json!({"path": full_output})).await;
+    let read = run_tool(&fixture, "read", serde_json::json!({"path": locator})).await;
+    assert_eq!(read.status, ToolExecutionStatus::Success);
+    let ToolResultContent::Text(text) = &read.content[0] else {
+        panic!("Read text")
+    };
     assert_eq!(
-        read.status,
-        ToolExecutionStatus::Success,
-        "Read inspects the decoded-text spill"
+        text.text,
+        format!("{}\u{FFFD}\u{FFFD}\u{1}\u{2}end\n", "x".repeat(20_000))
     );
     let grep = run_tool(
         &fixture,
         "grep",
-        serde_json::json!({"pattern": "end", "path": full_output}),
+        serde_json::json!({"pattern": "end", "path": locator}),
     )
     .await;
-    assert_eq!(
-        grep.status,
-        ToolExecutionStatus::Success,
-        "Grep searches the decoded-text spill"
-    );
-    let grep_text = grep
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("Grep text");
-    assert!(grep_text.contains("... [truncated]"));
+    assert_eq!(grep.status, ToolExecutionStatus::Success);
+    let ToolResultContent::Text(text) = &grep.content[0] else {
+        panic!("Grep text")
+    };
+    assert!(text.text.contains(":1:"), "{}", text.text);
 }
 
 /// A shell parent that exits while a descendant stays in the owned process
@@ -1071,7 +1011,7 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
 /// it.
 #[tokio::test]
 async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = tokio::time::timeout(
         Duration::from_secs(15),
         run_tool(
@@ -1099,7 +1039,7 @@ async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let shell_pid_file = workspace.join("shell.pid");
     let descendant_pid_file = workspace.join("descendant.pid");
@@ -1150,7 +1090,7 @@ async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
 /// then settles the command as ordinary `Success`.
 #[tokio::test]
 async fn bash_natural_descendant_completion_settles_success() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = tokio::time::timeout(
         Duration::from_secs(20),
         run_tool(
@@ -1182,7 +1122,7 @@ async fn bash_natural_descendant_completion_settles_success() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bash_descendant_replacement_keeps_the_invocation_active() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let a_pid_file = workspace.join("a.pid");
     let b_pid_file = workspace.join("b.pid");
@@ -1276,7 +1216,7 @@ async fn wait_for_process_death(pid: i32) {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn bash_replaced_exit_trap_does_not_fabricate_terminality() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let pid_file = workspace.join("bg.pid");
     let command = format!("trap ':' EXIT; sleep 30 & echo $! > {}", pid_file.display());
@@ -1304,7 +1244,7 @@ async fn bash_replaced_exit_trap_does_not_fabricate_terminality() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn bash_cleared_exit_trap_does_not_fabricate_terminality() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let pid_file = workspace.join("bg.pid");
     let command = format!("trap - EXIT; sleep 30 & echo $! > {}", pid_file.display());
@@ -1472,13 +1412,17 @@ async fn model_selectable_bash_background_selection_dispatches_conversation_owne
         "the executor receives only business arguments"
     );
     let background = fixture.runtime.background().clone();
-    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let cancellation = rustx::runtime::ExecutionCancellation::detached(
+        CancellationSignal::new(),
+        rustx::runtime::types::CancellationReason::UserRequested,
+    );
     let dispatch = background
-        .prepare_dispatch(
+        .prepare_native_bash(
             &prepared.invocation,
-            &executor,
-            rustx::tools::environment::ToolEnvironment::new(),
+            fixture.runtime.environment().clone(),
+            &cancellation,
         )
+        .await
         .expect("prepare background dispatch");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         background
@@ -1594,9 +1538,7 @@ async fn background_cancel_records_term_before_trap_and_physical_terminal() {
 
 async fn background_cancel_at_native_gate() {
     use rustx::tools::background::BackgroundLifecycle;
-    use rustx::tools::native::bash_supervisor::diagnostics::{
-        Entry, Event, FixtureControl, fixture_executor,
-    };
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // Bounded native socket namespace, independent of macOS TMPDIR length.
     let dir = tempfile::Builder::new()
@@ -1606,7 +1548,7 @@ async fn background_cancel_at_native_gate() {
     let trace = dir.path().join("trace");
     let socket = dir.path().join("gate");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-    let fixture = native_fixture_with_environment(vec![
+    let fixture = native_fixture_with_execution(vec![
         (
             "RUSTX_TEST_SUPERVISION_TRACE".into(),
             dir.path().join("untrusted-trace").display().to_string(),
@@ -1632,7 +1574,7 @@ async fn background_cancel_at_native_gate() {
         ready_path.display()
     );
     let registry = fixture.runtime.background();
-    let executor = fixture_executor(FixtureControl {
+    let executor = rustx::tools::native::fixture_executor(FixtureControl {
         trace: Some(trace.clone()),
         before_term_socket: Some(socket),
     });
@@ -1754,12 +1696,12 @@ async fn background_cancel_at_native_gate() {
 #[tokio::test]
 async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        use rustx::tools::native::bash_supervisor::diagnostics::TERM_GATE_ENV;
+        use rustx_process_supervisor::bash_supervisor::diagnostics::TERM_GATE_ENV;
         let dir = tempfile::Builder::new().prefix("rx-env-").tempdir_in("/tmp").unwrap();
         let socket = dir.path().join("gate");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         listener.set_nonblocking(true).unwrap();
-        let fixture = native_fixture_with_environment(vec![
+        let fixture = native_fixture_with_execution(vec![
             (TERM_GATE_ENV.into(), socket.display().to_string()),
             ("RUSTX_TEST_FAIL_SIGNAL".into(), "1".into()),
             ("RUSTX_TEST_FORCE_ANCHOR_LOSS".into(), "1".into()),
@@ -1791,7 +1733,7 @@ async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
 
 #[tokio::test]
 async fn ordinary_environment_cannot_enable_supervisor_controls() {
-    use rustx::tools::native::bash_supervisor::diagnostics::TRACE_ENV;
+    use rustx_process_supervisor::bash_supervisor::diagnostics::TRACE_ENV;
     use std::fmt::Write;
     let dir = tempfile::tempdir().unwrap();
     let trace = dir.path().join("trace");
@@ -1823,7 +1765,7 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
         "RUSTX_TEST_BEFORE_TERM_SOCKET".into(),
         "user-visible-value".into(),
     ));
-    let fixture = native_fixture_with_environment(environment);
+    let fixture = native_fixture_with_execution(environment);
     let mut command = String::new();
     for key in keys.into_iter().chain([
         TRACE_ENV,
@@ -1849,7 +1791,7 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
 
 #[tokio::test]
 async fn description_changes_neither_native_bash_execution_nor_registry_approval() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let command = "printf stable-output";
     let before = fixture
         .registry
@@ -1875,7 +1817,7 @@ async fn description_changes_neither_native_bash_execution_nor_registry_approval
 
 #[tokio::test]
 async fn direct_image_read_without_attempt_authority_fails_before_path_or_artifact_work() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let before = std::fs::read_dir(fixture.runtime.artifacts().root())
         .unwrap()
         .count();

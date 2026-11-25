@@ -191,8 +191,15 @@ impl Fixture {
                     return tool_call_reply("workflow", name, "{}").with_header_gate(server_gates[index].clone());
                 }
             }
+            if tool == Some("startup_echo")
+                && request["messages"].as_array().unwrap().last().is_some_and(|message| message["role"] == "user")
+            {
+                let call = if index == 0 { "old-credential" } else { "new-credential" };
+                return tool_call_reply(call, "startup_echo", r#"{"id":"rotation"}"#)
+                    .with_header_gate(server_gates[index].clone());
+            }
             if let Some(name) = tool
-                && !matches!(name, "review" | "delivery-child" | "title")
+                && !matches!(name, "review" | "delivery-child" | "title" | "startup_echo")
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
@@ -343,7 +350,7 @@ impl Fixture {
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
             LocalRuntimeDependencies {
                 child_program: matches!(tool, Some("review" | "delivery-child"))
-                    .then(|| crate::runtime::process_runner::companion_binary("rustx")),
+                    .then(|| rustx_process_supervisor::invocation::companion_binary("rustx")),
                 ..LocalRuntimeDependencies::default()
             },
             residency,
@@ -383,6 +390,90 @@ impl Fixture {
         let manager = self.manager.clone();
         let id = self.sessions[index].id.clone();
         tokio::spawn(async move { manager.load(&id, None).await })
+    }
+    /// Launches the real staged Execution Client sibling for the Session at
+    /// `index` and admits it on the Session's reserved endpoint — the same
+    /// composition the App Server performs, with the trusted executable
+    /// resolved only as this test harness's sibling.
+    ///
+    /// The child is caller-owned: `kill_on_drop` applies, and callers stop
+    /// and reap it explicitly. Panics when the preparation stage did not
+    /// place a client binary beside the harness — there is no fallback.
+    pub(super) async fn start_execution(&self, index: usize) -> tokio::process::Child {
+        self.start_execution_via(index, None).await
+    }
+
+    /// [`start_execution`](Self::start_execution) through an explicit launcher
+    /// program. The launcher is a test artifact that execs the staged Client
+    /// with its own environment; the default path is the staged binary itself.
+    pub(super) async fn start_execution_via(
+        &self,
+        index: usize,
+        launcher: Option<&std::path::Path>,
+    ) -> tokio::process::Child {
+        let endpoint = self
+            .manager
+            .reserve_local_execution(&self.sessions[index].id)
+            .await
+            .unwrap();
+        let binary = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        assert!(
+            binary.is_file(),
+            "staged Execution Client is absent: {binary:?}"
+        );
+        let child = tokio::process::Command::new(launcher.unwrap_or(&binary))
+            .arg("--binding-file")
+            .arg(endpoint.bootstrap_path())
+            .arg("--workspace")
+            .arg(endpoint.workspace())
+            .current_dir("/")
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        Self::admit_execution_pair(&endpoint).await;
+        child
+    }
+
+    pub(super) async fn admit_execution_pair(
+        endpoint: &Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>,
+    ) {
+        let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(std_listener) =
+            endpoint.listener()
+        else {
+            panic!("the reserved local endpoint is a Unix listener");
+        };
+        let std_listener = std_listener.try_clone().unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
+        bounded(async {
+            let deadline = std::time::Instant::now()
+                + rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+            loop {
+                let (stream, _) = listener.accept().await?;
+                let endpoint = endpoint.clone();
+                match tokio::task::spawn_blocking(move || {
+                    endpoint.admit_local_stream_deadline(stream.into_std()?, deadline)
+                })
+                .await??
+                {
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Live => {
+                        break Ok::<_, std::io::Error>(());
+                    }
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Pending => {}
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+                        reject,
+                    ) => panic!("execution client rejected: {reject:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
     }
     pub(super) async fn close(&self) {
         for gate in &self.gates {

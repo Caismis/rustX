@@ -665,6 +665,7 @@ pub struct SubagentRegistry {
     resume_activity: Arc<std::sync::atomic::AtomicUsize>,
     recovery_reconciliation: tokio::sync::watch::Sender<bool>,
     config: SubagentRegistryConfig,
+    execution_scope: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
     identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
     state: Arc<Mutex<RegistryState>>,
     state_version: tokio::sync::watch::Sender<u64>,
@@ -697,6 +698,7 @@ impl SubagentRegistry {
         Self {
             recovery_reconciliation: tokio::sync::watch::Sender::new(true),
             config,
+            execution_scope: None,
             identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             state: Arc::new(Mutex::new(RegistryState {
                 max_active,
@@ -912,10 +914,19 @@ impl SubagentRegistry {
         state.failure_sink = Some(sink);
     }
 
+    pub(crate) fn with_execution_scope(
+        mut self,
+        scope: Option<crate::local_runtime::session_runtime_manager::SessionExecutionScope>,
+    ) -> Self {
+        self.execution_scope = scope;
+        self
+    }
+
     fn clone_for_task(&self) -> Self {
         Self {
             recovery_reconciliation: self.recovery_reconciliation.clone(),
             config: self.config.clone(),
+            execution_scope: self.execution_scope.clone(),
             identities: Arc::clone(&self.identities),
             state: Arc::clone(&self.state),
             resume_activity: self.resume_activity.clone(),

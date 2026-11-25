@@ -1793,14 +1793,23 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
 }
 
 fn copy_reference(source: &std::path::Path, target: &std::path::Path) {
-    std::fs::create_dir_all(target).unwrap();
-    for entry in std::fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_dir() {
-            copy_reference(&entry.path(), &target.join(entry.file_name()));
-        } else {
-            std::fs::copy(entry.path(), target.join(entry.file_name())).unwrap();
-        }
+    // Copy the shipped authoring inputs. Running the example can create a
+    // local .venv with symlinks, and this fixture provisions its own venv.
+    for path in [
+        "rustx.toml",
+        "AGENTS.md",
+        "greeting.py",
+        ".agents/agents/implementer.toml",
+        ".agents/agents/navigator.toml",
+        ".agents/agents/planner.toml",
+        ".agents/agents/reviewer.toml",
+        ".agents/skills/review-guidance/SKILL.md",
+        ".agents/workflows/implement_and_review.yaml",
+        ".agents/workflows/parallel_review.yaml",
+    ] {
+        let destination = target.join(path);
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::copy(source.join(path), destination).unwrap();
     }
 }
 
@@ -1872,7 +1881,6 @@ impl Driver {
             venv.success(),
             "the reference workspace needs a default Python environment"
         );
-        rustx::tools::workspace_python::prepare_now(&workspace).await;
 
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),

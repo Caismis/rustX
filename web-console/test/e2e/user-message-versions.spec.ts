@@ -1,7 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { EditorPage, UserInputBlock } from '../../../protocol/app-server/v80';
+import type { EditorPage, UserInputBlock } from '../../../protocol/app-server/v81';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';

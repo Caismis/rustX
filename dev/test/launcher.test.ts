@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { appServerEndpoint } from '../src/app-server-readiness.ts';
 import { Launcher } from '../src/launcher.ts';
 import type { Spawn, ChildSpec } from '../src/process.ts';
 import { LocalWorkspaceHost } from '../../web-console/host/workspaces.ts';
+import { configurationCommand } from '../../tui/src/configuration-command.ts';
 import { parseArguments as parseTui } from '../../tui/src/cli.ts';
 import { handoff } from '../src/browser.ts';
 import { workspaceRegistry } from '../src/workspace-registry.ts';
@@ -16,7 +17,7 @@ import { workspaceRegistry } from '../src/workspace-registry.ts';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const nativeDirectory = mkdtempSync(join(tmpdir(), 'rustx-native-test-'));
 const nativeBinary = join(nativeDirectory, 'rustx');
-for (const name of ['rustx', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
+for (const name of ['rustx', 'rustx-execution-client', 'bash-supervisor', 'interactive-supervisor', 'workflow-renderer']) {
   writeFileSync(join(nativeDirectory, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
 }
 after(() => rmSync(nativeDirectory, { recursive: true, force: true }));
@@ -79,6 +80,31 @@ test('TUI delegates unchanged arguments to the existing composition root and nat
   const stopping = launcher.settle(0); child.reap.resolve(); await stopping;
 });
 
+test('installed TUI forwards native configuration commands and their exit codes', async () => {
+  for (const forwarded of [['config', 'show', '--sources'], ['init', '--help'], ['doctor', '--help'], ['workflow', '--help']]) {
+    const h = harness(), launcher = new Launcher(root, h.spawn, undefined, true);
+    await launcher.start(parseArguments(['tui', '--binary', nativeBinary, ...forwarded], root));
+    const child = h.calls[0];
+    assert.deepEqual(configurationCommand(child.spec.args.slice(1)), { binary: nativeBinary, arguments: forwarded });
+    child.exit(27);
+    child.reap.resolve();
+    assert.equal(await launcher.done, 27);
+  }
+});
+
+test('installed interactive TUI starts the local Session composition', async t => {
+  const f = fixture(); t.after(f.remove);
+  const h = harness(), launcher = new Launcher(root, h.spawn, undefined, true);
+  await launcher.start(parseArguments(['tui', '--binary', nativeBinary, '--workspace', f.a], root));
+  const child = h.calls[0];
+  assert.ok(child.spec.args.includes('--local-session-execution'));
+  const parsed = parseTui(child.spec.args.slice(1));
+  assert.equal(parsed.mode.kind === 'local' && parsed.mode.launch.localSessionRoot, realpathSync(f.a));
+  child.exit(0);
+  child.reap.resolve();
+  assert.equal(await launcher.done, 0);
+});
+
 test('Web creates one token/config, passes the bound endpoint, and cleanup waits for BOTH owned children', async t => {
   const f = fixture(); t.after(f.remove);
   const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'));
@@ -88,7 +114,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   const scratch = dirname(tokenFile);
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   assert.equal(app.spec.component, 'app-server');
-  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile]);
+  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--local-workspace-picker', '--product-host-token-file', productHostTokenFile]);
   assert.match(readFileSync(tokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
   assert.equal(statSync(productHostTokenFile).mode & 0o777, 0o600);
@@ -100,7 +126,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, nativePicker: true, browsePicker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
+  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, browsePicker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
   assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
   const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
   const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));
@@ -134,6 +160,27 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.equal(existsSync(scratch), false);
   assert.equal(readFileSync(join(f.a, 'user-owned'), 'utf8'), 'keep');
   assert.equal(await launcher.settle(1), 130);
+});
+
+test('installed Web uses built assets and enables the private Workspace picker', async t => {
+  const f = fixture(); t.after(f.remove);
+  const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'), true);
+  const starting = launcher.start(f.args);
+  h.calls[0].ready.resolve('ws://127.0.0.1:4242/');
+  await h.count(2);
+  const web = h.calls[1];
+  const config = JSON.parse(readFileSync(web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!, 'utf8'));
+  assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/installed-carrier.ts')]);
+  const host = new LocalWorkspaceHost(config);
+  const catalog = await host.listWorkspaces();
+  assert.ok(h.calls[0].spec.args.includes('--local-workspace-picker'));
+  assert.deepEqual(h.calls[0].spec.args.flatMap((argument, index, argv) =>
+    argument === '--local-session-root' ? [argv[index + 1]] : []), [f.a, f.b]);
+  assert.equal(catalog.picker.kind, 'browser');
+  await host.close();
+  web.ready.resolve('http://127.0.0.1:4243/'); await starting;
+  const stopping = launcher.settle(0);
+  h.calls.forEach(call => call.reap.resolve()); await stopping;
 });
 
 test('partial startup failure: A ready, B starts/fails, A reaped before scratch disappears', async t => {
@@ -325,7 +372,7 @@ for (const missing of ['bash-supervisor', 'interactive-supervisor', 'workflow-re
     const h = harness(), launcher = new Launcher(root, h.spawn);
     const messages: string[] = [];
     t.mock.method(process.stderr, 'write', (message: string) => { messages.push(message); return true; });
-    await launcher.start(parseArguments(['app-server', '--binary', join(directory, 'rustx')], root));
+    await launcher.start(parseArguments(['tui', '--binary', join(directory, 'rustx')], root));
     assert.equal(await launcher.done, 1);
     assert.equal(h.calls.length, 0);
     assert.ok(messages.join('').includes(join(directory, missing)));
@@ -339,7 +386,24 @@ test('symlinked native binary resolves helpers beside its real executable', asyn
   const binary = join(directory, 'rustx');
   symlinkSync(nativeBinary, binary);
   const h = harness(), launcher = new Launcher(root, h.spawn);
-  await launcher.start(parseArguments(['app-server', '--binary', binary], root));
+  await launcher.start(parseArguments(['tui', '--binary', binary], root));
   assert.equal(h.calls.length, 1);
   const stopping = launcher.settle(0); h.calls[0].reap.resolve(); await stopping;
+});
+
+test('app-server launches the bare native executable without helper siblings', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'rustx-standalone-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const binary = join(directory, 'rustx');
+  writeFileSync(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const h = harness(), launcher = new Launcher(root, h.spawn);
+  await launcher.start(parseArguments(['app-server', '--binary', binary], root));
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].spec.command, binary);
+  assert.deepEqual(h.calls[0].spec.args, ['app-server', '--listen', 'stdio']);
+  assert.equal(h.calls[0].spec.component, 'app-server');
+  // Nothing was needed or created beside the executable: no Client,
+  // Python, or native helper.
+  assert.deepEqual(readdirSync(directory), ['rustx']);
+  const terminal = launcher.settle(0); h.calls[0].reap.resolve(); await terminal;
 });

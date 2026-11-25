@@ -73,7 +73,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -250,8 +250,9 @@ mod unix_tests {
 
     /// The real rmcp stdio boundary feeds complete MCP text into the shared
     /// Tool Plane normalizer. Exact-boundary output remains direct JSON-like
-    /// text, while boundary-plus-one and collectively oversized blocks use
-    /// one complete managed spill with typed continuation metadata.
+    /// text, while boundary-plus-one and collectively oversized blocks settle
+    /// a typed `Unavailable` continuation — foreground MCP output has no
+    /// eligible Execution Client save binding, so nothing is spilled.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn foreground_mcp_result_normalization_is_collective_and_complete() {
@@ -300,7 +301,7 @@ mod unix_tests {
                 permissions: None,
                 tool_permissions: std::collections::BTreeMap::new(),
             };
-            let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+            let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
                 &server_id,
                 &binding,
                 &workspace,
@@ -380,7 +381,7 @@ mod unix_tests {
                 if text.text.len() == rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
         ));
 
-        let (_over_directory, _over_artifacts, over) = invoke(
+        let (_over_directory, over_artifacts, over) = invoke(
             Some(rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1),
             None,
             "mcp-over",
@@ -390,33 +391,56 @@ mod unix_tests {
             over.status,
             rustx::tools::types::ToolExecutionStatus::Success
         );
-        let Some(rustx::tools::types::ManagedOutputContinuation::Complete { locator }) =
+        // No eligible Execution Client save binding exists for foreground
+        // MCP output: the overflow honestly settles `Unavailable` — never
+        // a locator, never a Read/Grep promise, never a local file.
+        let Some(rustx::tools::types::ManagedOutputContinuation::Unavailable { diagnostic }) =
             over.managed_output.as_deref()
         else {
-            panic!("boundary-plus-one MCP result must be Complete: {over:?}");
+            panic!("boundary-plus-one MCP result must be Unavailable: {over:?}");
         };
         assert_eq!(
-            std::fs::read(locator).expect("complete MCP spill"),
-            vec![b'x'; rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1]
+            diagnostic,
+            "Full output was not saved: no eligible Execution Client save binding at the \
+             preview threshold."
         );
         assert_eq!(
-            std::fs::read_dir(locator.parent().expect("results directory"))
-                .expect("results directory")
-                .filter(|e| e
-                    .as_ref()
-                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
-                .count(),
-            1
+            over.truncation.as_ref().and_then(|t| t.original_bytes),
+            Some((rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1) as u64)
+        );
+        let artifacts_files: Vec<String> = std::fs::read_dir(over_artifacts.path())
+            .expect("artifacts")
+            .flat_map(|entry| {
+                let entry = entry.expect("artifact entry");
+                if entry.file_type().expect("file type").is_dir() {
+                    std::fs::read_dir(entry.path())
+                        .expect("artifact subdir")
+                        .filter_map(|e| {
+                            e.ok().map(|e| e.file_name().to_string_lossy().into_owned())
+                        })
+                        .collect()
+                } else {
+                    vec![entry.file_name().to_string_lossy().into_owned()]
+                }
+            })
+            .collect();
+        assert!(
+            artifacts_files
+                .iter()
+                .all(|name| !name.starts_with("r-") && !name.starts_with("e-")),
+            "no save attempt may leave a managed-output file: {artifacts_files:?}"
         );
         assert!(
-            over.model_facing_projection()
+            !over
+                .model_facing_projection()
                 .as_text()
                 .contains("Read or Grep")
         );
 
         // Each block is below 16 KiB, but the deterministic newline-joined
         // aggregate is above it. Per-block truncation would incorrectly
-        // classify this as a direct result; the shared capture spills once.
+        // classify this as a direct result; the shared capture normalizes
+        // the crossing once and reports it as `Unavailable`.
         let first = rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES / 2;
         let second = rustx::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES - first;
         let (_aggregate_directory, _aggregate_artifacts, aggregate) =
@@ -427,64 +451,64 @@ mod unix_tests {
         );
         assert!(matches!(
             aggregate.managed_output.as_deref(),
-            Some(rustx::tools::types::ManagedOutputContinuation::Complete { .. })
+            Some(rustx::tools::types::ManagedOutputContinuation::Unavailable { .. })
         ));
-        assert!(aggregate.truncation.is_some());
+        assert_eq!(
+            aggregate.truncation.as_ref().and_then(|t| t.original_bytes),
+            Some((first + 1 + second) as u64)
+        );
     }
 
-    /// A real background MCP call reuses the dispatch-owned output file for
-    /// the complete final result. The terminal canonical publication keeps
-    /// the typed continuation while staying inside the model-facing bound.
+    /// Even callers using the executor directly cannot invoke an MCP tool in
+    /// the background. The effectful fixture tool leaves a catalog change.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn background_mcp_result_reuses_the_dispatch_owned_locator() {
+    async fn mcp_executor_refuses_background_before_the_remote_call() {
+        use rustx::tools::types::{
+            ToolExecutionStatus, ToolInvocation, ToolInvocationId, ToolInvocationMode,
+        };
         if rustx::tools::mcp::fixture::serve_if_fixture_mode(FixtureServer::from_env()).await {
             return;
         }
         let directory = tempfile::tempdir().expect("fixture directory");
+        let artifacts = tempfile::tempdir().expect("artifacts");
         let workspace = rustx::tools::Workspace::new(directory.path()).expect("workspace");
-        let server_id = rustx::runtime::identity::McpServerId::new("mcp-background");
+        let server_id = rustx::runtime::identity::McpServerId::new("foreground-only");
         let binding = rustx::tools::mcp::McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
-                    .expect("test executable")
+                    .expect("executable")
                     .display()
                     .to_string(),
                 args: rustx::tools::mcp::fixture::fixture_spawn_args(
-                    "mcp::unix_tests::background_mcp_result_reuses_the_dispatch_owned_locator",
+                    "mcp::unix_tests::mcp_executor_refuses_background_before_the_remote_call",
                 ),
                 cwd: None,
-                environment: std::collections::BTreeMap::from([
-                    (
-                        rustx::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
-                        "1".to_owned(),
-                    ),
-                    (
-                        rustx::tools::mcp::fixture::RESULT_BYTES_ENV.to_owned(),
-                        "100000".to_owned(),
-                    ),
-                ]),
+                environment: [(
+                    rustx::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                    "1".to_owned(),
+                )]
+                .into(),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let mcp_runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
-            Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
+            Arc::default(),
         )
         .await
         .expect("MCP connect");
-        let tools = mcp_runtime.list_tools().await.expect("tools/list");
+        let initial_epoch = runtime.change_epoch();
+        let tools = runtime.list_tools().await.expect("tools/list");
         let (definition, executor) =
-            rustx::tools::mcp::definitions(&server_id, binding.policy, &mcp_runtime, tools)
+            rustx::tools::mcp::definitions(&server_id, binding.policy, &runtime, tools.clone())
                 .into_iter()
-                .find(|(definition, _)| definition.name == "echo")
-                .expect("echo definition");
-        let artifacts = tempfile::tempdir().expect("artifacts");
+                .find(|(definition, _)| definition.name == "mutate")
+                .expect("mutate definition");
         let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
             rustx::runtime::identity::ConversationId::new(
                 "conv_1e7f1310-fcd1-7f89-8b7a-a631a29b1e83",
@@ -493,95 +517,42 @@ mod unix_tests {
             artifacts.path(),
         )
         .expect("tool runtime");
-        let invocation = rustx::tools::types::ToolInvocation {
-            id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("mcp-background-call"),
-            },
-            tool_id: definition.id,
-            tool_name: "echo".to_owned(),
-            mode: rustx::tools::types::ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let prepared = tool_runtime
-            .background()
-            .prepare_dispatch(
-                &invocation,
-                &executor,
-                rustx::tools::environment::ToolEnvironment::new(),
+        let result = executor
+            .start(
+                ToolInvocation {
+                    id: ToolInvocationId::Agent {
+                        call_id: rustx::runtime::identity::ToolCallId::new("mcp-background-call"),
+                    },
+                    tool_id: definition.id,
+                    tool_name: definition.name,
+                    mode: ToolInvocationMode::Background,
+                    arguments: serde_json::json!({}),
+                },
+                rustx::tools::executor::ToolExecutionContext::new(
+                    tool_runtime.conversation_id(),
+                    None,
+                    rustx::runtime::ExecutionCancellation::detached(
+                        rustx::runtime::CancellationSignal::new(),
+                        rustx::runtime::types::CancellationReason::UserRequested,
+                    ),
+                    tool_runtime.workspace(),
+                    &NoProgress,
+                    tool_runtime.artifacts(),
+                    tool_runtime.tool_output(),
+                    tool_runtime.environment(),
+                ),
             )
-            .expect("prepare background MCP dispatch");
-        let rustx::tools::background::BackgroundDispatchOutcome::Accepted {
-            execution_id,
-            result: accepted,
-        } = tool_runtime
-            .background()
-            .commit_dispatch_owned(prepared, &rustx::runtime::CancellationSignal::new())
-            .await
-            .expect("commit background MCP dispatch")
-        else {
-            panic!("background MCP dispatch was not accepted");
-        };
-        let advertised = match &accepted.content[0] {
-            rustx::tools::types::ToolResultContent::Json { value } => value["output_path"]
-                .as_str()
-                .expect("accepted output path")
-                .to_owned(),
-            content => panic!("accepted result is JSON: {content:?}"),
-        };
-        assert!(std::path::Path::new(&advertised).exists());
-        let terminal = tool_runtime
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal MCP result");
-        assert_eq!(
-            terminal.state,
-            rustx::tools::background::BackgroundLifecycle::Succeeded
+            .completion
+            .await;
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { ref error }
+            if error.contains("MCP tools require foreground execution")),
+            "{result:?}"
         );
-        let result = terminal.result.as_ref().expect("terminal result");
-        assert_eq!(
-            result.managed_output.as_deref().cloned(),
-            Some(rustx::tools::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(&advertised),
-            })
-        );
-        assert_eq!(
-            std::fs::read(&advertised).expect("complete MCP output"),
-            vec![b'x'; 100_000]
-        );
-        assert_eq!(
-            std::fs::read_dir(tool_runtime.tool_output().root().unwrap())
-                .expect("results directory")
-                .filter(|entry| entry
-                    .as_ref()
-                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
-                .count(),
-            0,
-            "background MCP never allocates a secondary result spill"
-        );
-        assert_eq!(
-            std::fs::read_dir(tool_runtime.tool_output().root().unwrap())
-                .expect("tasks directory")
-                .filter(|entry| entry
-                    .as_ref()
-                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("e-")))
-                .count(),
-            1
-        );
-        let batch = tool_runtime
-            .mailbox()
-            .select_pending_batch()
-            .expect("terminal mailbox")
-            .expect("terminal inbound");
-        let rustx::message::types::UserContentBlock::Text(text) =
-            &batch.items()[0].message().content[0]
-        else {
-            panic!("MCP terminal publication is text-only");
-        };
-        assert!(text.text.len() <= rustx::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256);
-        assert!(text.text.contains(&advertised));
-        assert!(text.text.contains("Read or Grep"));
-        mcp_runtime.close().await.expect("MCP close");
+        assert!(result.managed_output.is_none());
+        assert_eq!(runtime.list_tools().await.unwrap(), tools);
+        assert_eq!(runtime.change_epoch(), initial_epoch);
+        runtime.close().await.expect("MCP close");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -623,7 +594,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -810,7 +781,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,
@@ -1023,7 +994,7 @@ mod unix_tests {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect_fixture(
             &server_id,
             &binding,
             &workspace,

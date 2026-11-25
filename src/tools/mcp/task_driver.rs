@@ -20,7 +20,7 @@ use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 use super::invocation::McpCallIdentity;
 use super::outcome::{McpPhysicalOutcome, McpResponseOutcome, is_transport_loss};
 use super::request::McpRequestOwnership;
-use super::result::{failed_mcp, mcp_empty_terminal, translate_result};
+use super::result::{failed_mcp, mcp_empty_terminal, translate_remote_result};
 use super::runtime::McpServerRuntime;
 #[cfg(test)]
 use super::test_sync;
@@ -84,7 +84,6 @@ impl McpServerRuntime {
                 &created.task.task_id,
                 "the MCP server answered tools/call with a task result without advertising the \
                  io.modelcontextprotocol/tasks extension",
-                context,
                 started,
                 generation,
             );
@@ -95,7 +94,6 @@ impl McpServerRuntime {
                 return self.task_outcome_unknown(
                     &created.task.task_id,
                     &violation.diagnostic,
-                    context,
                     started,
                     generation,
                 );
@@ -137,7 +135,8 @@ impl McpServerRuntime {
                 // `completed` task carrying `isError: true` is a completed
                 // task with a failed tool, not a failed task.
                 tasks::RemoteTaskObservation::Completed(result) => {
-                    return translate_result(*result, context, started);
+                    return translate_remote_result(*result, context, started, &self.credentials)
+                        .await;
                 }
                 // The task's own terminal failure, correlated to this task
                 // by the protocol. A known terminal outcome, bounded.
@@ -151,7 +150,6 @@ impl McpServerRuntime {
                                     .to_string()
                             )
                         ),
-                        context,
                         started,
                     );
                 }
@@ -165,7 +163,6 @@ impl McpServerRuntime {
                             "the MCP server cancelled the task and it produced no result ({})",
                             self.generation_tag(generation)
                         ),
-                        context,
                         started,
                     );
                 }
@@ -186,7 +183,7 @@ impl McpServerRuntime {
         };
         match failure {
             TaskDriveFailure::Unreachable(detail) => {
-                self.task_outcome_unknown(task.task_id(), &detail, context, started, generation)
+                self.task_outcome_unknown(task.task_id(), &detail, started, generation)
             }
             TaskDriveFailure::AbandonAddressable(detail) | TaskDriveFailure::Cancelled(detail) => {
                 self.abandon_active_task(task.task_id(), &detail, context, started, generation)
@@ -513,7 +510,6 @@ impl McpServerRuntime {
             return self.task_outcome_unknown(
                 task_id,
                 &format!("{detail}; no tasks/cancel: Tasks was not negotiated"),
-                context,
                 started,
                 generation,
             );
@@ -522,7 +518,6 @@ impl McpServerRuntime {
             return self.task_outcome_unknown(
                 task_id,
                 &format!("{detail}; no tasks/cancel: {reason}"),
-                context,
                 started,
                 generation,
             );
@@ -558,7 +553,6 @@ impl McpServerRuntime {
         self.task_outcome_unknown(
             task_id,
             &format!("{detail}; {requested}"),
-            context,
             started,
             generation,
         )
@@ -587,7 +581,6 @@ impl McpServerRuntime {
             Err(violation) => self.task_outcome_unknown(
                 &created.task.task_id,
                 &format!("{detail}; {}", violation.diagnostic),
-                context,
                 started,
                 generation,
             ),
@@ -606,7 +599,6 @@ impl McpServerRuntime {
         &self,
         task_id: &str,
         detail: &str,
-        context: &ToolExecutionContext<'_>,
         started: Instant,
         generation: u64,
     ) -> ToolExecutionResult {
@@ -619,7 +611,6 @@ impl McpServerRuntime {
                     self.generation_tag(generation)
                 )),
             },
-            context,
             started,
         )
     }

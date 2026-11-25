@@ -23,7 +23,7 @@ import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import { SessionPanel } from './SessionPanel';
 import type { ResponseAction } from '../commands/native';
-import type { CanonicalContentLocator, CompletedResponseView, SessionMessageVersion } from '../../../../protocol/app-server/v80';
+import type { CanonicalContentLocator, CompletedResponseView, SessionMessageVersion } from '../../../../protocol/app-server/v81';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { useMessageVersions } from './message-version-reading';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';

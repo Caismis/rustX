@@ -144,7 +144,7 @@ fn stage_process_inner(plane: &TestPlane, shell: &str, unresolved_anchor: bool) 
     let mut staged = StagedChild::for_test(child, driver_end, observation_end, child_runtime_root);
     if unresolved_anchor {
         staged.retain_for_test(
-            crate::runtime::identity::ProcessUnitId::new("unit-unresolved"),
+            rustx_process_supervisor::identity::ProcessUnitId::new("unit-unresolved"),
             i32::MAX,
         );
     }

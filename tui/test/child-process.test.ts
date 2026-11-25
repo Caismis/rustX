@@ -57,6 +57,14 @@ describe("AppServerChild", () => {
     assert.deepEqual(appServerArguments({}), ["app-server", "--listen", "stdio"]);
   });
 
+  it("forwards the exact explicitly authorized execution binding", () => {
+    assert.deepEqual(appServerArguments({
+      runtimeRoot: "/session-store",
+      localExecution: { workspace: "/workspace with spaces", sessionId: "ses_existing" },
+    }), ["app-server", "--runtime-root", "/session-store", "--local-execution-workspace",
+      "/workspace with spaces", "--local-execution-session", "ses_existing", "--listen", "stdio"]);
+  });
+
   it("forwards only process-level source bindings, in a deterministic order", async () => {
     const child = spawn();
     const output = readAll(child);

@@ -573,6 +573,10 @@ async fn scheduled_native_effect(kind: ScheduledEffectKind) {
             let path=f.workspaces[0].join(".agents/agents/reviewer.toml");std::fs::create_dir_all(path.parent().unwrap()).unwrap();std::fs::write(path,"description='Review'\ninstructions='Return the Workflow output'\n").unwrap();
             let path=f.workspaces[0].join("rustx.toml");let mut config:toml::Value=toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();config["agent"].as_table_mut().unwrap().insert("agents".into(),vec![toml::Value::from("reviewer")].into());std::fs::write(path,toml::to_string(&config).unwrap()).unwrap();
         }
+        // A scheduled native tool effect dispatches through the Session's
+        // real execution route — bound only for the Tool kind, which is the
+        // one that issues `read`.
+        let mut execution=if kind==ScheduledEffectKind::Tool {Some(f.start_execution(0).await)} else {None};
         let clock=Clock::new();f.manager.schedule_clock=clock.clone();let resident=f.load(0).await.unwrap().unwrap();let runtime=resident.inspect_runtime().unwrap();let created=scheduled(&f).await;clock.add(60);
         let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted{start,..})=f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap() else {panic!("native effect acceptance")};
         let view=finished(&f,&runtime,&start.id).await;assert!(matches!(view.start.state,ScheduledWorkflowState::Settled{outcome:ScheduledWorkflowOutcome::Completed,..}),"{:?}",view.start.state);
@@ -580,6 +584,7 @@ async fn scheduled_native_effect(kind: ScheduledEffectKind) {
         match (kind,&view.effects[0].owner) {(ScheduledEffectKind::Tool,ScheduledEffectOwner::Tool{..})|(ScheduledEffectKind::Model,ScheduledEffectOwner::Model{..})|(ScheduledEffectKind::Agent,ScheduledEffectOwner::Agent{..})=>{},_=>panic!("missing exact native effect owner")}
         match kind {ScheduledEffectKind::Tool=>assert!(view.result.unwrap()["value"].as_str().unwrap().contains("RESIDENCY_SESSION")),ScheduledEffectKind::Model=>assert_eq!(view.result,Some(serde_json::json!({"value":"done"}))),ScheduledEffectKind::Agent=>assert_eq!(view.result,Some(serde_json::json!({}))),ScheduledEffectKind::Review=>unreachable!()}
         assert!(events(&runtime).iter().all(|event|!matches!(event,RuntimeEvent::AttemptStarted{..})));
+        if let Some(execution)=execution.as_mut() {execution.kill().await.unwrap();}
         f.close().await;
     }).await;
 }

@@ -3,7 +3,7 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
-pub(in crate::local_runtime) mod capture;
+pub(crate) mod capture;
 pub mod effective_observation;
 pub mod generation;
 pub mod observation;
@@ -122,11 +122,16 @@ impl ConfigurationHooks {
 pub struct SessionConfigInput {
     pub cwd: PathBuf,
     pub model: Option<crate::model::session::SessionModelConfig>,
+    pub authoring: super::session_inputs::SessionAuthoredInputs,
 }
 impl SessionConfigInput {
     #[must_use]
     pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd, model: None }
+        Self {
+            cwd,
+            model: None,
+            authoring: super::session_inputs::SessionAuthoredInputs::default(),
+        }
     }
 }
 
@@ -137,6 +142,7 @@ pub enum Origin {
     Builtin,
     User { document: PathBuf, base: PathBuf },
     Workspace { document: PathBuf, base: PathBuf },
+    Session { document: PathBuf, base: PathBuf },
     Process { base: PathBuf },
 }
 
@@ -175,6 +181,19 @@ pub(crate) struct SourceCapture {
     scoped_workflows: [Vec<crate::runtime::workflow::WorkflowId>; 2],
 }
 
+/// Physical identity of the Server-side authored Workspace resource root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WorkspaceResourceIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WorkspaceResourceAuthority {
+    Authored(WorkspaceResourceIdentity),
+    Bound,
+}
+
 /// Immutable prospective Session settings and statically resolved resources.
 /// Admission adds credentials; native composition owns external preparation.
 #[derive(Clone)]
@@ -195,6 +214,7 @@ pub struct ProspectiveSessionConfig {
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub(crate) locations: SessionLocations,
+    pub(crate) workspace_resources: WorkspaceResourceAuthority,
     pub(crate) config: std::sync::Arc<CurrentRuntimeConfig>,
     pub(crate) models: ModelCatalog,
     pub(crate) provenance: BTreeMap<String, Origin>,

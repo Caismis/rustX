@@ -4,12 +4,11 @@ import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts'
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
-import { WorkspaceTerminals, workspaceDescriptors, workspaceFile, withWorkspacePath } from './workbench.ts';
+import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { settlementFailureKind, WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, WorkspaceFolderSelection, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
@@ -27,6 +26,7 @@ import { observeFile } from './file-observation.ts';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
 import { readWorkspacePreview, openWorkspaceBytePreview } from './workspace-preview.ts';
 import { observeNativeDelivery } from './native-file-observation.ts';
+import { browseNativeWorkspace } from './workspace-picker.ts';
 
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
@@ -39,18 +39,13 @@ export interface LocalHostConfig {
   endpoint: string;
   roots: { id: string; cwd: string; displayName: string }[];
   picker: boolean;
-  /** Operator enables explicit folder selection on a shared local desktop. */
-  nativePicker?: boolean;
   /** Permit listing and explicitly registering descendants of configured roots. */
   browsePicker?: boolean;
   /** Operator-owned file outside the browser and rustX runtime root. */
   metadataFile: string;
 }
-type PickedFolder = { path: string; device: string; inode: string; root?: string };
+type PickedFolder = { path: string; device: string; inode: string; root: string };
 type Registration = { id: string; location: string; displayName: string; selected?: true; folder?: PickedFolder };
-const folderRevision = (folder: PickedFolder) => `${folder.device}:${folder.inode}`;
-const directoryIdentity = (path: string, stat: { dev: bigint; ino: bigint }): PickedFolder =>
-  ({ path, device: String(stat.dev), inode: String(stat.ino) });
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
@@ -76,7 +71,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly desktop: DesktopAdapter;
   private readonly readSession: typeof readDesktopSession;
   private readonly observeTerminals: typeof observeTerminalOwnership;
-  private folderPick?: { abort: AbortController; selection: Promise<string | null> };
+  private readonly pickerLifetime = new AbortController();
   constructor(config: LocalHostConfig, desktop = new DesktopAdapter(), readSession = readDesktopSession, observeTerminals = observeTerminalOwnership) {
     this.observeTerminals = observeTerminals;
     this.terminals = new WorkspaceTerminals(config.terminalSupervisor);
@@ -94,8 +89,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       || (row.folder === undefined ? !this.roots.some(root => root.id === row.location)
         : !row.folder || typeof row.folder.path !== 'string' || !isAbsolute(row.folder.path)
           || ![row.folder.device, row.folder.inode].every(value => typeof value === 'string' && /^\d+$/.test(value))
-          || (row.folder.root !== undefined && !this.roots.some(root => root.id === row.folder!.root
-            && this.descendsFrom(root.cwd, row.folder!.path)))
+          || !this.roots.some(root => root.id === row.folder!.root
+            && this.descendsFrom(root.cwd, row.folder!.path))
           || this.roots.some(root => root.id === row.location))
       || (row.selected !== undefined && row.selected !== true))
       || this.registrations.filter(row => row.selected).length > 1) throw new Error('Invalid Host registrations');
@@ -137,7 +132,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
       workspaces: this.registrations.map(({ id, location, displayName, folder }) => ({ id, location, displayName, displayPath: folder?.path ?? this.roots.find(root => root.id === location)!.cwd })),
       ...(preferredWorkspace ? { preferredWorkspace } : {}),
-      picker: this.folderPicker() ? { kind: 'native' } : this.config.picker ? { kind: this.canBrowse() ? 'browser' : 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
+      picker: this.config.picker ? { kind: this.canBrowse() ? 'browser' : 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
   private mutationScope(scope: WorkspaceAuthorityScope) {
@@ -147,10 +142,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   close(): Promise<void> {
     this.closed = true;
-    this.folderPick?.abort.abort();
+    this.pickerLifetime.abort();
     for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations, ...this.previewOwners]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), this.folderPick?.selection.catch(() => {}), ...this.fileObservationTasks, ...this.previewRetirements]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks, ...this.previewRetirements]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -293,7 +288,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       throw error;
     }
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v80.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v81.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -574,62 +569,32 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.cwd(location);
     this.register(location, root.displayName);
   }
-  private folderPicker() {
-    if (this.config.nativePicker && this.config.nativeFilesystem === 'shared' && this.config.transportToken)
-      return this.desktop.prepareFolderPicker();
-  }
-  async pickWorkspace(scope: WorkspaceAuthorityScope, signal?: AbortSignal): Promise<string | null> {
-    this.mutationScope(scope);
-    if (this.folderPick) throw new Error('A system folder chooser is already open');
-    const pick = this.folderPicker();
-    if (!pick) throw new Error('The system folder chooser is unavailable');
-    const abort = new AbortController();
-    const lifetime = AbortSignal.any([abort.signal, AbortSignal.timeout(5 * 60_000), ...(signal ? [signal] : [])]);
-    lifetime.throwIfAborted();
-    const selection = pick(lifetime);
-    this.folderPick = { abort, selection };
-    try {
-      const selected = await selection;
-      lifetime.throwIfAborted();
-      this.mutationScope(scope);
-      if (selected === null) return null;
-      if (!isAbsolute(selected)) throw new Error('The system chooser did not return an absolute folder');
-      const path = realpathSync(selected);
-      const stat = statSync(path, { bigint: true });
-      if (!stat.isDirectory()) throw new Error('The selected location is not a directory');
-      return this.registerFolder(directoryIdentity(path, stat));
-    } finally { this.folderPick = undefined; }
-  }
   private canBrowse() {
-    return this.config.picker && this.config.browsePicker && this.config.nativeFilesystem === 'shared' && !!this.config.transportToken;
+    return this.config.picker && this.config.browsePicker && this.config.nativeFilesystem === 'shared' && !!this.config.productHostToken;
   }
-  private withPickerFolder<T>(scope: WorkspaceAuthorityScope, location: string, path: string, action: (fd: number, folder: PickedFolder) => T) {
+  private async browseFolder(scope: WorkspaceAuthorityScope, location: string, path: string, expected?: string, signal?: AbortSignal) {
     this.mutationScope(scope);
     if (!this.canBrowse()) throw new Error('Host directory browsing is unavailable');
     const root = this.roots.find(root => root.id === location);
     if (!root) throw new Error('Unknown directory browser root');
-    if (typeof path !== 'string' || path !== '' && path.split('/').some(part => !part)) throw new Error('Invalid directory browser path');
-    return withWorkspacePath(this.cwd(root.id), path, true, fd => {
-      const directory = join(root.cwd, path);
-      return action(fd, { ...directoryIdentity(directory, fstatSync(fd, { bigint: true })), root: root.id });
-    });
+    if (typeof path !== 'string' || Buffer.byteLength(path) > 4096
+      || path !== '' && path.split('/').some(part => !part || part === '.' || part === '..' || part.includes('\0'))) throw new Error('Invalid directory browser path');
+    const directory = join(root.cwd, path);
+    const lifetime = AbortSignal.any([this.pickerLifetime.signal, AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
+    const listing = await browseNativeWorkspace(this.config.endpoint, this.config.productHostToken!, root.cwd, directory, expected, lifetime);
+    lifetime.throwIfAborted();
+    this.mutationScope(scope);
+    return { root, directory, listing };
   }
-  async browseWorkspace(scope: WorkspaceAuthorityScope, location: string, path: string) {
-    return this.withPickerFolder(scope, location, path, (fd, folder) => {
-      const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-      const folders = workspaceDescriptors.entries(fd).filter(entry => entry.directory && !entry.link)
-        .map(entry => decoder.decode(entry.name)).sort((a, b) => a.localeCompare(b));
-      return { displayPath: folder.path, folders, revision: folderRevision(folder) };
-    });
+  async browseWorkspace(scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal) {
+    const { directory, listing } = await this.browseFolder(scope, location, path, undefined, signal);
+    return { displayPath: directory, folders: listing.folders, revision: listing.revision };
   }
   async registerWorkspaceFolder(scope: WorkspaceAuthorityScope, location: string, selection: WorkspaceFolderSelection) {
-    return this.withPickerFolder(scope, location, selection.path, (_fd, folder) => {
-      if (selection.revision !== folderRevision(folder) || realpathSync(folder.path) !== folder.path
-        || folderRevision(directoryIdentity(folder.path, statSync(folder.path, { bigint: true }))) !== folderRevision(folder)) {
-        throw new Error('The folder changed. Browse to it again before adding it.');
-      }
-      return this.registerFolder(folder);
-    });
+    if (!/^[a-f0-9]{64}$/.test(selection.revision)) throw new Error('Invalid directory revision');
+    const { root, directory, listing } = await this.browseFolder(scope, location, selection.path, selection.revision);
+    const [device, inode] = listing.identity.split(':') as [string, string];
+    return this.registerFolder({ path: directory, device, inode, root: root.id });
   }
   private registerFolder(folder: PickedFolder) {
     const root = this.roots.find(root => root.cwd === folder.path);
@@ -641,10 +606,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private register(location: string, displayName: string, folder?: PickedFolder) {
     const existing = this.registrations.find(row => row.location === location);
     if (existing) return existing.id;
-    const directory = folder?.path ?? this.cwd(location);
+    if (!folder) this.cwd(location);
     const row = { id: randomUUID(), location, displayName, folder };
     this.commit([...this.registrations, row]);
-    if (this.config.nativeFilesystem === 'shared') queueWorkspacePythonAdmission(directory);
     return row.id;
   }
   async renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string) {
@@ -700,19 +664,25 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   /** Read-only native work owns its connection and frozen target, without
    * holding the Workspace mutation lane during external source preparation. */
-  private async nativeConnection<T>(resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string): Promise<T> {
+  private async nativeConnection<T>(resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     const cwd = await resolve();
     if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
+    signal?.throwIfAborted();
     const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
-    const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
+    const abort = () => { void transport.close(); };
+    signal?.addEventListener('abort', abort, { once: true });
     try {
+      signal?.throwIfAborted();
+      const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } });
       // The connection just opened may reach another App Server process at
       // the same endpoint; a transaction bound to one never runs on another.
       if (native !== undefined && client.authorityId !== native) throw new WorkspaceHostError('App Server authority replaced', 'native_replaced');
       // Resolve again after asynchronous admission, immediately before submission.
       if (await resolve() !== cwd) throw new Error('Workspace authority changed');
+      signal?.throwIfAborted();
       return await run(client, cwd, async () => await resolve() === cwd);
-    } finally { await client.close(); }
+    } finally { signal?.removeEventListener('abort', abort); await transport.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
     const transfer = operation.kind === 'transfer' ? operation : undefined;
@@ -783,7 +753,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
    * replaced authority is `authority_replaced` even when it reuses the
    * registration ID; a registration that is unknown, unavailable or changed
    * is `workspace_unavailable`. Neither falls back to another directory. */
-  async workflowWorkspace(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
+  async workflowWorkspace(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation, signal?: AbortSignal): Promise<WorkflowHostResult> {
     validateWorkflowOperation(operation);
     if (typeof native !== 'string' || !native) throw new WorkspaceHostError('Expected native App Server authority', 'native_replaced');
     // Both lane resolutions, including the one immediately before native
@@ -821,7 +791,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope }, 'workflow_tool_catalog');
+          const execution_session = operation.execution_session?.cwd === cwd ? operation.execution_session.id : undefined;
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope, execution_session }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -839,7 +810,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v80.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v81.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {
@@ -851,7 +822,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       }
     };
     return operation.kind === 'tool_catalog'
-      ? this.nativeConnection(resolve, run, native)
+      ? this.nativeConnection(resolve, run, native, signal)
       : this.nativeLane(id, resolve, run, native);
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
@@ -873,7 +844,16 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       this.cwd(location);
       const workspaceId = registration?.id;
       return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
-    } catch { return { authorized: false, reason: 'unavailable' }; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // A previously registered path can identify a native Session's Client
+        // catalog. This carries no authority for the Host to access the path.
+        const root = this.roots.find(root => root.cwd === cwd);
+        const registration = this.registrations.find(row => row.folder ? row.folder.path === cwd : row.location === root?.id);
+        if (registration) return { authorized: false, reason: 'unavailable', clientCatalogWorkspaceId: registration.id };
+      }
+      return { authorized: false, reason: 'unavailable' };
+    }
   }
 }
 
@@ -898,36 +878,26 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
       && Number.isInteger(row.offset) && Number(row.offset) >= 0 && Number(row.offset) <= 4294967295
       && Object.keys(row).every(key => ['offset', 'digest'].includes(key));
   };
+  const catalogSession = (session: unknown) => {
+    if (session === undefined) return true;
+    if (!object(session)) return false;
+    const row = session as Record<string, unknown>;
+    return typeof row.id === 'string' && row.id.length > 0 && row.id.length <= 64
+      && typeof row.cwd === 'string' && row.cwd.length > 0 && row.cwd.length <= 4096
+      && Object.keys(row).every(key => ['id', 'cwd'].includes(key));
+  };
   const valid = object(value) && (
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory'])
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory', 'execution_session'])
           && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
           && (value!.expected_scope == null || value!.source != null && (value!.expected_scope === 'user' || value!.expected_scope === 'workspace'))
           && (value!.expected_directory === undefined || typeof value!.expected_directory === 'string' && value!.expected_directory.length > 0)
-          && catalogCursor(value!.cursor)
+          && catalogCursor(value!.cursor) && catalogSession(value!.execution_session)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');
-}
-
-/** Best-effort handoff after a Workspace registration has already committed. */
-function queueWorkspacePythonAdmission(workspace: string) {
-  try {
-    const home = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir();
-    if (!home || !isAbsolute(workspace)) return;
-    const directory = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const id = randomUUID();
-    const pending = join(directory, `${id}.pending`);
-    try {
-      writeFileSync(pending, workspace, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-      renameSync(pending, join(directory, `${id}.txt`));
-    } finally { rmSync(pending, { force: true }); }
-  } catch {
-    // Registration remains successful when the native runtime is not ready to observe this file.
-  }
 }

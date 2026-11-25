@@ -5,12 +5,14 @@ use super::{
         UserConfigManager,
         settings::{SettingsError, SourceTarget},
     },
-    session_runtime_manager::SessionRuntimeManager,
+    session_runtime_manager::{
+        SessionExecutionScope, SessionRuntimeManager, SourceCatalogExecution,
+    },
 };
 use crate::{
     runtime::{CancellationSignal, identity::McpServerId},
     tools::{
-        mcp::{McpInvalidationState, McpServerRuntime, OwnedConnect},
+        mcp::{McpInvalidationState, McpServerRuntime, McpTransportConfig, OwnedConnect},
         workspace::Workspace,
     },
 };
@@ -89,41 +91,31 @@ impl Drop for CancelOnDrop {
 impl SessionRuntimeManager {
     /// Probe exactly the authored source, without changing Session resources.
     /// The native task owns cleanup even if its RPC waiter is dropped.
-    pub(crate) async fn probe_mcp(
+    pub(crate) async fn inspect_mcp_source(
         &self,
         target: SourceTarget,
+        execution: SourceCatalogExecution,
         id: McpServerId,
         revision: String,
+        kind: Option<crate::tools::mcp::catalog::CatalogKind>,
         request_owner: impl Send + 'static,
     ) -> Result<McpProbeResult, SettingsError> {
+        let manager = self.clone();
         probe_query(
             self.configuration.clone(),
             target,
+            move |target| {
+                let workspace = target.workspace();
+                if let (None, SourceCatalogExecution::Session(session)) = (workspace, &execution) {
+                    return Ok(session.as_ref().map(|id| manager.execution_scope(id)));
+                }
+                execution
+                    .scope(&manager, workspace)
+                    .map_err(|_| SettingsError::ExecutionUnavailable)
+            },
             id,
             revision,
-            None,
-            request_owner,
-            self.mcp_probes.clone(),
-        )
-        .await
-    }
-}
-
-impl SessionRuntimeManager {
-    pub(crate) async fn mcp_catalog(
-        &self,
-        target: SourceTarget,
-        id: McpServerId,
-        revision: String,
-        kind: crate::tools::mcp::catalog::CatalogKind,
-        request_owner: impl Send + 'static,
-    ) -> Result<McpProbeResult, SettingsError> {
-        probe_query(
-            self.configuration.clone(),
-            target,
-            id,
-            revision,
-            Some(kind),
+            kind,
             request_owner,
             self.mcp_probes.clone(),
         )
@@ -138,12 +130,26 @@ async fn probe(
     id: McpServerId,
     revision: String,
 ) -> Result<McpProbeResult, SettingsError> {
-    probe_query(owner, target, id, revision, None, (), Arc::default()).await
+    probe_query(
+        owner,
+        target,
+        |_| Ok(None),
+        id,
+        revision,
+        None,
+        (),
+        Arc::default(),
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)] // one bounded source read and its independently retained probe
 async fn probe_query(
     owner: UserConfigManager,
     target: SourceTarget,
+    resolve_scope: impl Fn(&SourceTarget) -> Result<Option<SessionExecutionScope>, SettingsError>
+    + Send
+    + 'static,
     id: McpServerId,
     revision: String,
     query: Option<crate::tools::mcp::catalog::CatalogKind>,
@@ -171,13 +177,16 @@ async fn probe_query(
         let capture_target = target.clone();
         let capture_id = id.clone();
         let capture_revision = revision.clone();
-        let (binding, workspace) = tokio::task::spawn_blocking(move || {
-            capture(
+        let (binding, workspace, resolve_scope) = tokio::task::spawn_blocking(move || {
+            let execution = resolve_scope(&capture_target)?;
+            let (binding, workspace) = capture(
                 &capture_owner,
                 &capture_target,
                 &capture_id,
                 &capture_revision,
-            )
+                execution.as_ref(),
+            )?;
+            Ok::<_, SettingsError>((binding, workspace, resolve_scope))
         })
         .await
         .map_err(|_| SettingsError::Io)??;
@@ -201,13 +210,26 @@ async fn probe_query(
                     _runtime: unsettled,
                     _permit: probe_permit,
                 });
+            return Ok(McpProbeResult {
+                id,
+                revision,
+                outcome,
+                page: None,
+            });
         }
         // A changed definition cannot receive a successful result for old bytes.
         let check_id = id.clone();
         let check_revision = revision.clone();
-        tokio::task::spawn_blocking(move || capture(&owner, &target, &check_id, &check_revision))
-            .await
-            .map_err(|_| SettingsError::Io)??;
+        let scope = workspace.execution_scope().cloned();
+        tokio::task::spawn_blocking(move || {
+            if target.workspace().is_some() && scope.is_none() && resolve_scope(&target)?.is_some()
+            {
+                return Err(SettingsError::ExecutionUnavailable);
+            }
+            capture(&owner, &target, &check_id, &check_revision, scope.as_ref())
+        })
+        .await
+        .map_err(|_| SettingsError::Io)??;
         Ok(McpProbeResult {
             id,
             revision,
@@ -224,12 +246,36 @@ fn capture(
     target: &SourceTarget,
     id: &McpServerId,
     expected: &str,
+    execution: Option<&SessionExecutionScope>,
 ) -> Result<(crate::tools::mcp::McpServerBinding, Workspace), SettingsError> {
-    target.validate()?;
+    let pin = |scope: &SessionExecutionScope| {
+        scope.pin().map_err(|_| SettingsError::ExecutionUnavailable)
+    };
+    let bound_workspace = execution
+        .filter(|_| target.workspace().is_some())
+        .map(pin)
+        .transpose()?;
     // Load only this scope. Inherited/same-name winning definitions are not the
     // configuration row the user requested to check.
     let root = owner.resource_root(target);
-    let catalog = super::mcp_resources::load(&root, None);
+    let catalog = if let Some(scope) = &bound_workspace {
+        let endpoint = scope
+            .endpoint()
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        if target.workspace().map(std::path::Path::as_os_str)
+            != Some(endpoint.workspace().as_os_str())
+        {
+            return Err(SettingsError::Invalid);
+        }
+        let document = super::configuration::capture::read_bound_mcp(&endpoint)
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        super::mcp_resources::load_with_workspace(None, Some(endpoint.workspace()), move |_| {
+            Ok(document)
+        })
+    } else {
+        target.validate()?;
+        super::mcp_resources::load(&root, None)
+    };
     let actual = catalog
         .revisions
         .get(&root.join("mcp.toml"))
@@ -255,8 +301,23 @@ fn capture(
     binding
         .credentials
         .capture(crate::credentials::CredentialSnapshot::capture());
-    let workspace = Workspace::new(target.workspace().unwrap_or(&owner.sources.home_directory))
-        .map_err(|_| SettingsError::Invalid)?;
+    let scope = if let Some(scope) = bound_workspace {
+        Some(scope)
+    } else if matches!(binding.transport, McpTransportConfig::Stdio { .. }) {
+        let scope = execution.ok_or(SettingsError::ExecutionUnavailable)?;
+        Some(pin(scope)?)
+    } else {
+        None
+    };
+    let workspace = if let Some(scope) = scope {
+        let endpoint = scope
+            .endpoint()
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        Workspace::for_session(endpoint.workspace(), scope)
+    } else {
+        Workspace::new(target.workspace().unwrap_or(&owner.sources.home_directory))
+    }
+    .map_err(|_| SettingsError::Invalid)?;
     Ok((binding, workspace))
 }
 
@@ -372,6 +433,7 @@ async fn inspect_and_close(
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod tests {
     use super::*;
+    use crate::runtime::identity::SessionId;
     use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
     use std::time::Duration;
 
@@ -436,6 +498,7 @@ mod tests {
         let result = probe_query(
             owner,
             SourceTarget::User,
+            |_| Ok(None),
             McpServerId::new("inventory"),
             revision,
             Some(CatalogKind::Resources),
@@ -459,14 +522,36 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn public_stdio_catalog_keeps_process_bound_cursor_until_physical_close() {
+        use crate::local_runtime::session_runtime_manager::StandaloneExecution;
         use crate::tools::mcp::{catalog::CatalogKind, fixture};
+        use tokio::io::AsyncReadExt as _;
+        let witness_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let witness = witness_dir.path().join("catalog");
+        let listener = tokio::net::UnixListener::bind(&witness).unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let owner = owner(temporary.path());
         let journal = temporary.path().join("native-catalog.jsonl");
-        let program = std::env::current_exe().unwrap();
-        let arguments = fixture::fixture_spawn_args(
+        let workspace = temporary.path().canonicalize().unwrap();
+        let execution =
+            StandaloneExecution::start(SessionId::generate(), workspace.clone(), workspace.clone())
+                .await
+                .unwrap();
+        let script = r"
+import os, socket, sys
+witness = socket.socket(socket.AF_UNIX)
+witness.connect(sys.argv[1])
+witness.set_inheritable(True)
+os.execv(sys.argv[2], sys.argv[2:])
+";
+        let mut arguments = vec![
+            "-c".to_owned(),
+            script.to_owned(),
+            witness.display().to_string(),
+            std::env::current_exe().unwrap().display().to_string(),
+        ];
+        arguments.extend(fixture::fixture_spawn_args(
             "tools::mcp::resources::tests::resource_only_stdio_negotiates_modern_and_legacy_without_tools_list",
-        );
+        ));
         let environment = BTreeMap::from([
             (fixture::FIXTURE_MODE_ENV, "1".to_string()),
             (fixture::RESOURCES_ENV, "1".to_string()),
@@ -479,7 +564,7 @@ mod tests {
         ]);
         let config = format!(
             "[mcp_servers.inventory]\ncommand = {:?}\nargs = {}\nenv = {{{}}}\n",
-            program.to_str().unwrap(),
+            "/usr/bin/python3",
             serde_json::to_string(&arguments).unwrap(),
             environment
                 .iter()
@@ -488,17 +573,24 @@ mod tests {
                 .join(", ")
         );
         let revision = write(&owner, &SourceTarget::User, &config);
-        let result = probe_query(
+        let scope = execution.scope();
+        let query = probe_query(
             owner,
             SourceTarget::User,
+            move |_| Ok(Some(scope.clone())),
             McpServerId::new("inventory"),
             revision,
             Some(CatalogKind::Resources),
             (),
             Arc::default(),
-        )
-        .await
-        .unwrap();
+        );
+        tokio::pin!(query);
+        let mut peer = tokio::select! {
+            accepted = listener.accept() => accepted.unwrap().0,
+            result = &mut query => panic!("catalog returned before the Client started: {result:?}"),
+        };
+        let result = query.await.unwrap();
+        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
         assert_eq!(result.outcome, McpProbeOutcome::Reachable);
         assert_eq!(result.page.unwrap().resources.len(), 2);
         let records: Vec<serde_json::Value> = std::fs::read_to_string(journal)
@@ -518,16 +610,18 @@ mod tests {
             cursor.starts_with("process-"),
             "the continuation belongs to the actual native process"
         );
-        let pid = cursor
+        let local_pid = cursor
             .strip_prefix("process-")
             .unwrap()
             .parse::<i32>()
             .unwrap();
+        let pid = peer.peer_cred().unwrap().pid().unwrap_or(local_pid);
         assert_eq!(
             nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
             Err(nix::errno::Errno::ESRCH),
             "successful discovery waits for physical process close"
         );
+        execution.shutdown().await.unwrap();
     }
 
     #[cfg(unix)]
@@ -552,16 +646,42 @@ mod tests {
                 "passive reads must never start native MCP"
             );
         }
-        let result = probe(
+        let id = McpServerId::new("explicit");
+        assert!(matches!(
+            probe(
+                owner.clone(),
+                SourceTarget::User,
+                id.clone(),
+                revision.clone()
+            )
+            .await,
+            Err(SettingsError::ExecutionUnavailable)
+        ));
+        assert!(!marker.exists());
+        let root = directory.path().canonicalize().unwrap();
+        let execution = crate::local_runtime::session_runtime_manager::StandaloneExecution::start(
+            SessionId::generate(),
+            root.clone(),
+            root,
+        )
+        .await
+        .unwrap();
+        let scope = execution.scope();
+        let result = probe_query(
             owner,
             SourceTarget::User,
-            McpServerId::new("explicit"),
+            move |_| Ok(Some(scope.clone())),
+            id,
             revision,
+            None,
+            (),
+            Arc::default(),
         )
         .await
         .unwrap();
         assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
         assert_eq!(std::fs::read_to_string(marker).unwrap(), "started");
+        execution.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -592,30 +712,38 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(user.outcome, McpProbeOutcome::Reachable);
-        let failed = probe(
-            owner.clone(),
-            workspace.clone(),
-            id.clone(),
-            workspace_revision.clone(),
+        let root = directory.path().canonicalize().unwrap();
+        let execution = crate::local_runtime::session_runtime_manager::StandaloneExecution::start(
+            SessionId::generate(),
+            root.clone(),
+            root,
         )
         .await
         .unwrap();
+        let workspace_probe = |revision| {
+            let scope = execution.scope();
+            probe_query(
+                owner.clone(),
+                workspace.clone(),
+                move |_| Ok(Some(scope.clone())),
+                id.clone(),
+                revision,
+                None,
+                (),
+                Arc::default(),
+            )
+        };
+        let failed = workspace_probe(workspace_revision.clone()).await.unwrap();
         assert_eq!(failed.outcome, McpProbeOutcome::ConnectionFailed);
         // Scope-local diagnostics do not resolve the user's same-name definition
         // when the Workspace entry disappears.
         let empty_revision = write(&owner, &workspace, "");
         assert!(matches!(
-            probe(
-                owner.clone(),
-                workspace.clone(),
-                id.clone(),
-                workspace_revision
-            )
-            .await,
+            workspace_probe(workspace_revision).await,
             Err(SettingsError::Conflict { .. })
         ));
         assert!(matches!(
-            probe(owner.clone(), workspace, id.clone(), empty_revision).await,
+            workspace_probe(empty_revision).await,
             Err(SettingsError::Invalid)
         ));
         assert!(matches!(
@@ -624,6 +752,7 @@ mod tests {
         ));
         assert_eq!(fixture.control.accepted_calls(), 0);
         fixture.shutdown().await;
+        execution.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -708,6 +837,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bound_probe_reports_unsettled_close_after_client_loss() {
+        use crate::local_runtime::session_runtime_manager::StandaloneExecution;
+        use crate::tools::mcp::{catalog::CatalogKind, test_sync::CloseProbe};
+
+        let fixture = HttpFixture::start(HttpFixtureControl::default()).await;
+        let directory = tempfile::tempdir().unwrap();
+        let owner = owner(directory.path());
+        let workspace = directory.path().canonicalize().unwrap();
+        let source = SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let revision = write(
+            &owner,
+            &source,
+            &format!("[mcp_servers.close]\nurl = {:?}\n", fixture.endpoint),
+        );
+        let execution =
+            StandaloneExecution::start(SessionId::generate(), workspace.clone(), workspace)
+                .await
+                .unwrap();
+        let close = Arc::new(CloseProbe::parking_with_failure("injected unproven close"));
+        install_close_probe(owner.sources.config_path.clone(), close.clone());
+        let scope = execution.scope();
+        let registry = Arc::<McpProbeRegistry>::default();
+        let available = registry.capacity.available_permits();
+        let mut query = tokio::spawn(probe_query(
+            owner,
+            source,
+            move |_| Ok(Some(scope.clone())),
+            McpServerId::new("close"),
+            revision.clone(),
+            Some(CatalogKind::Tools),
+            (),
+            registry.clone(),
+        ));
+        tokio::select! {
+            () = close.wait_entered() => (),
+            result = &mut query => panic!("the probe settled before entering the close gate: {result:?}"),
+        }
+        execution.shutdown().await.unwrap();
+        close.release();
+        let result = query.await.unwrap().unwrap();
+        assert_eq!(result.outcome, McpProbeOutcome::SettlementFailed);
+        assert_eq!(result.revision, revision);
+        assert!(result.page.is_none());
+        assert_eq!(registry.capacity.available_permits(), available - 1);
+        assert!(!registry.is_settled());
+        assert_eq!(fixture.control.accepted_calls(), 0);
+        fixture.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn native_deadline_cancels_a_held_handshake() {
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -722,7 +903,8 @@ mod tests {
                 listener.local_addr().unwrap()
             ),
         );
-        let (binding, workspace) = capture(&owner, &SourceTarget::User, &id, &revision).unwrap();
+        let (binding, workspace) =
+            capture(&owner, &SourceTarget::User, &id, &revision, None).unwrap();
         let task =
             tokio::spawn(
                 async move { run(&id, &binding, &workspace, CancellationSignal::new()).await },

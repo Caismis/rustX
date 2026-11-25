@@ -40,6 +40,8 @@ pub(crate) mod frontmatter;
 pub(crate) mod identity;
 pub(crate) mod package;
 pub mod source;
+mod tree;
+pub(crate) use tree::SkillWatchObservation;
 
 pub use catalog::{SkillCatalogEntry, SkillReadTool, SkillSnapshot, render_skill_catalog};
 pub use diagnostics::{ShadowedSkill, SkillDiagnostic, SkillDiagnosticSeverity, SkillProvenance};

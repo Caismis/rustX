@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor, SnapshotDelta, TranscriptDelta, BindingDelta, FrontierDelta, ToolDelta, DescriptorDelta, EntryDelta, RefDelta, ReadEvidenceDelta, ObservationCutDelta } from './v80.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor, SnapshotDelta, TranscriptDelta, BindingDelta, FrontierDelta, ToolDelta, DescriptorDelta, EntryDelta, RefDelta, ReadEvidenceDelta, ObservationCutDelta } from './v81.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();

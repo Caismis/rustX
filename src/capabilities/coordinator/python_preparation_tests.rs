@@ -12,15 +12,15 @@ use super::{CapabilityCoordinator, CapabilityCoordinatorConfig};
 use crate::capabilities::availability::CapabilityAvailability;
 use crate::capabilities::source::{ToolSourceDemand, ToolSourceId};
 use crate::runtime::identity::ConversationId;
-use crate::runtime::process_runner::{
-    CapturedProcessResult, ProcessOutcomeIntent, RunnerTestControl, SupervisedCommandSpec,
-    SupervisedProcessRunner,
-};
 use crate::runtime::resources::ManagedPythonCatalog;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::python::PythonToolStore;
 use crate::tools::workspace::Workspace;
+use rustx_process_supervisor::process_runner::{
+    CapturedProcessResult, ProcessOutcomeIntent, RunnerTestControl, SupervisedCommandSpec,
+    SupervisedProcessRunner,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 enum BuildEvent {
@@ -133,6 +133,7 @@ impl SupervisedProcessRunner for BuildRunner {
                 Vec::new()
             };
             Ok(CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(0),
                 intent,
                 stdout,

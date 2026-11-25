@@ -207,6 +207,50 @@ impl AvailableToolCatalog {
     }
 }
 
+fn validate_root_selection(
+    profile: &crate::runtime::agent_profile::ResolvedAgentProfile,
+) -> Result<(), String> {
+    // Root MCP selection is optional availability, not a frozen child's
+    // exact executable contract. Keep its typed diagnostic and frozen intent
+    // while failed sources contribute no declarations. Undefined
+    // selections, live-confirmed missing exact tools and other profile errors
+    // remain fatal. An enabled Workflow that is not admitted is off.
+    if let Some(diagnostic) = profile.diagnostics.iter().find(|diagnostic| {
+        !matches!(
+            diagnostic,
+            crate::runtime::agent_profile::AgentProfileDiagnostic::WorkflowUnavailable { .. }
+                | crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
+                    super::selection::ToolSelectionError::SourceUnavailable {
+                        source: super::ToolSourceId::Mcp(_),
+                        reason: super::selection::SourceResolutionFailure::Unavailable { .. },
+                        ..
+                    }
+                )
+        )
+    }) {
+        use super::selection::{SourceResolutionFailure, ToolSelectionError};
+        use crate::runtime::agent_profile::AgentProfileDiagnostic;
+
+        let mut failure = format!(
+            "selected Agent capability cannot be admitted: {:?}",
+            diagnostic.redacted()
+        );
+        if let AgentProfileDiagnostic::Tool(ToolSelectionError::SourceUnavailable {
+            source: super::ToolSourceId::ManagedPython(_),
+            reason: SourceResolutionFailure::Unavailable { reason },
+            ..
+        }) = diagnostic
+        {
+            // Managed source availability already owns the bounded,
+            // credential-redacted diagnostic for this exact package.
+            failure.push_str("; ");
+            failure.push_str(reason);
+        }
+        return Err(failure);
+    }
+    Ok(())
+}
+
 /// Applies the bounded startup selection pipeline to one complete available
 /// registration set, then composes the extension-provided Tool surfaces of
 /// the same Agent composition (Issue #259).
@@ -302,29 +346,7 @@ pub(crate) fn select_tools(
         .map(|registration| &registration.definition)
         .collect::<Vec<_>>();
     let profile = resolve_profile(&available_catalog, policy, skills, availability)?;
-    // Root MCP selection is optional availability, not a frozen child's
-    // exact executable contract. Keep its typed diagnostic and frozen intent
-    // while failed sources contribute no declarations. Undefined
-    // selections, live-confirmed missing exact tools and other profile errors
-    // remain fatal. An enabled Workflow that is not admitted is off.
-    if let Some(diagnostic) = profile.diagnostics.iter().find(|diagnostic| {
-        !matches!(
-            diagnostic,
-            crate::runtime::agent_profile::AgentProfileDiagnostic::WorkflowUnavailable { .. }
-                | crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
-                    super::selection::ToolSelectionError::SourceUnavailable {
-                        source: super::ToolSourceId::Mcp(_),
-                        reason: super::selection::SourceResolutionFailure::Unavailable { .. },
-                        ..
-                    }
-                )
-        )
-    }) {
-        return Err(format!(
-            "selected Agent capability cannot be admitted: {:?}",
-            diagnostic.redacted()
-        ));
-    }
+    validate_root_selection(&profile)?;
     let selected = selected_definitions(&definitions, &profile);
     let plugin_tools = crate::extensions::composed_extension_tool_names(&profile.extensions);
     let resource_tools = crate::tools::mcp::resource_definitions(

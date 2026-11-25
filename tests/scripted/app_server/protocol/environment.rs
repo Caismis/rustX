@@ -5,10 +5,11 @@ use base64::Engine as _;
 use std::path::Path;
 use std::sync::Arc;
 pub(crate) mod concurrency;
+pub(crate) mod detach;
 pub(crate) mod review;
 
 fn parameters(fixture: &Fixture, command: &[&str]) -> ExecParams {
-    serde_json::from_value(serde_json::json!({"command":command,"cwd":fixture.workspaces[0],"env":{},"processId":null,"tty":false,"streamStdin":false,"streamStdoutStderr":false,"outputBytesCap":null,"timeoutMs":10_000,"size":null})).unwrap()
+    serde_json::from_value(serde_json::json!({"sessionId":fixture.sessions[0].id,"command":command,"cwd":fixture.workspaces[0],"env":{},"processId":null,"tty":false,"streamStdin":false,"streamStdoutStderr":false,"outputBytesCap":null,"timeoutMs":10_000,"size":null})).unwrap()
 }
 fn grant(fixture: &Fixture) {
     fixture
@@ -68,6 +69,15 @@ pub(crate) async fn buffered_scenario() {
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let params = parameters(&fixture, &["/usr/bin/printf", "%s", "literal;$(false)"]);
+    // Without an admitted Client the Session cannot resolve — honest
+    // unavailability, never a Server-local fallback.
+    assert_eq!(
+        rejected(&connection, 0, Method::CommandExec(params.clone())).await,
+        ErrorData::ExecutionUnavailable
+    );
+    // With the Client admitted but no environment grant, the workspace
+    // check refuses before anything is dispatched.
+    let mut execution = fixture.start_execution(0).await;
     assert_eq!(
         rejected(&connection, 1, Method::CommandExec(params.clone())).await,
         ErrorData::EnvironmentUnauthorized
@@ -141,12 +151,14 @@ pub(crate) async fn buffered_scenario() {
     assert!(environment.contains("GIT_CONFIG_KEY_4=core.fsmonitor\n"));
     assert!(environment.contains("GIT_CONFIG_VALUE_4=false\n"));
     assert_eq!(fixture.manager.diagnostics().loaded, 0);
+    execution.kill().await.unwrap();
     connection.close();
 }
 
 pub(crate) async fn connection_process_scenario() {
     let fixture = Fixture::new().await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let first = Arc::new(AppServerConnection::new(fixture.host.clone()));
     let second = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&first).await;
@@ -238,6 +250,7 @@ pub(crate) async fn connection_process_scenario() {
         .await
         .unwrap();
     process_gone(pid);
+    execution.kill().await.unwrap();
     second.close();
 }
 async fn rejected_or_result(
@@ -261,6 +274,7 @@ async fn rejected_or_result(
 pub(crate) async fn terminal_scenario() {
     let fixture = Fixture::new().await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut params = parameters(
@@ -315,6 +329,7 @@ pub(crate) async fn terminal_scenario() {
     };
     assert_eq!(result.status, ExecStatus::Completed);
     assert_eq!(result.stdout_base64, "");
+    execution.kill().await.unwrap();
     connection.close();
 }
 
@@ -345,8 +360,9 @@ async fn terminal_completion(
 }
 
 pub(crate) async fn terminal_descriptor_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     // /dev/fd and shell test are native on both supported Unix platforms.
@@ -409,13 +425,15 @@ pub(crate) async fn terminal_descriptor_scenario() {
     )
     .await;
     terminal_completion(&observer, other).await;
+    execution.kill().await.unwrap();
     observer.close();
     connection.close();
 }
 
 pub(crate) async fn terminal_eof_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let cases: [(&str, bool, &[u8], &[u8]); 5] = [
@@ -505,135 +523,84 @@ pub(crate) async fn terminal_eof_scenario() {
             "invalid EOF must leave stdin open and write none of its batch"
         );
     }
+    execution.kill().await.unwrap();
     connection.close();
 }
 
 pub(crate) async fn watch_registration_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
-    for (symlink, capture, directory) in [
-        (true, false, true),
-        (false, false, true),
-        (false, true, true),
-        (true, false, false),
-        (false, false, false),
-    ] {
-        let source = fixture.workspaces[0].join("watch-source");
-        let saved = fixture.workspaces[0].join("saved-source");
-        let outside_root = tempfile::tempdir().unwrap();
-        let outside = outside_root.path().join("outside");
+    let session_id = &fixture.sessions[0].id;
+    let root = &fixture.workspaces[0];
+    let source = root.join("exact-source");
+    let saved = root.join("retired-source");
+    let outside = tempfile::tempdir().unwrap();
+    let external = outside.path().join("outside");
+    std::fs::write(&external, b"private").unwrap();
+    std::os::unix::fs::symlink(&external, &source).unwrap();
+    let watch = || Method::FsWatch {
+        session_id: session_id.clone(),
+        watch_id: "inode".into(),
+        path: source.display().to_string(),
+    };
+    assert_eq!(
+        rejected(&connection, 0, watch()).await,
+        ErrorData::ExecutionUnavailable,
+    );
+    let _execution = fixture.start_execution(0).await;
+    assert_eq!(
+        rejected(&connection, 1, watch()).await,
+        ErrorData::EnvironmentUnauthorized,
+    );
+    std::fs::remove_file(&source).unwrap();
+    for directory in [true, false] {
         if directory {
             std::fs::create_dir(&source).unwrap();
-            std::fs::create_dir(&outside).unwrap();
         } else {
             std::fs::write(&source, b"inside").unwrap();
-            std::fs::write(&outside, b"outside").unwrap();
         }
-        crate::app_server::filesystem::expect_native_source(
-            source.clone(),
-            std::fs::metadata(if capture { &outside } else { &source }).unwrap(),
-        );
-        let (before_source, before_saved, before_outside) =
-            (source.clone(), saved.clone(), outside.clone());
-        let (after_source, after_saved, after_outside) =
-            (source.clone(), saved.clone(), outside.clone());
-        let before: Box<dyn FnOnce() + Send> = Box::new(move || {
-            std::fs::rename(&before_source, &before_saved).unwrap();
-            if symlink {
-                std::os::unix::fs::symlink(&before_outside, &before_source).unwrap();
-            } else {
-                std::fs::rename(&before_outside, &before_source).unwrap();
-            }
-        });
-        let after: Box<dyn FnOnce() + Send> = Box::new(move || {
-            if symlink {
-                std::fs::remove_file(&after_source).unwrap();
-            } else {
-                std::fs::rename(&after_source, &after_outside).unwrap();
-            }
-            std::fs::rename(&after_saved, &after_source).unwrap();
-        });
-        if capture {
-            crate::app_server::filesystem::registration_hooks(
-                source.clone(),
-                Box::new(|| {}),
-                after,
-            );
-            crate::app_server::filesystem::capture_hook(&source, before);
-        } else {
-            crate::app_server::filesystem::registration_hooks(source.clone(), before, after);
-        }
-        let watch = Method::FsWatch {
-            watch_id: "inode".into(),
-            path: source.display().to_string(),
-        };
-        if capture {
-            assert_eq!(
-                rejected(&connection, 1, watch).await,
-                ErrorData::EnvironmentUnauthorized
-            );
-            std::fs::remove_dir_all(&source).unwrap();
-            continue;
-        }
-        call(
-            &connection,
-            1,
-            Method::FsWatch {
-                watch_id: "inode".into(),
-                path: source.display().to_string(),
-            },
-        )
-        .await;
-        // The outside name must never be translated beneath the restored grant.
-        if directory {
-            std::fs::write(outside.join("outside-private-name"), b"outside").unwrap();
-        }
+        call(&connection, 2, watch()).await;
         let sentinel = if directory {
-            source.join("authorized-sentinel")
+            source.join("owned")
         } else {
             source.clone()
         };
-        std::fs::write(&sentinel, b"inside").unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let notification = connection.next_notification().await;
-                if let NotificationMethod::FsChanged(changed) = notification.notification {
-                    assert!(!changed.retired);
-                    assert!(
-                        changed
-                            .changed_paths
-                            .iter()
-                            .all(|path| path.starts_with(&source))
-                    );
-                    assert!(!changed.changed_paths.iter().any(|path| {
-                        path.file_name()
-                            .is_some_and(|name| name == "outside-private-name")
-                    }));
-                    if changed.changed_paths.contains(&sentinel)
-                        || cfg!(target_os = "macos") && changed.resync_required
-                    {
-                        break;
-                    }
+        observed_mutation_hint(&connection, "inode", &source, &sentinel, || {
+            std::fs::write(&sentinel, b"authorized").unwrap();
+        })
+        .await;
+        let retiring = connection.watch_retirement_for_test("inode");
+        std::fs::rename(&source, &saved).unwrap();
+        std::os::unix::fs::symlink(&external, &source).unwrap();
+        std::fs::write(&external, b"outside-private-name").unwrap();
+        bounded(retiring).await.unwrap();
+        loop {
+            if let NotificationMethod::FsChanged(changed) =
+                bounded(connection.next_notification()).await.notification
+            {
+                assert!(
+                    !changed
+                        .changed_paths
+                        .iter()
+                        .any(|path| path.starts_with(outside.path()))
+                );
+                if changed.retired {
+                    assert_eq!(changed.watch_id, "inode");
+                    assert!(changed.resync_required);
+                    assert_eq!(changed.changed_paths, [] as [std::path::PathBuf; 0]);
+                    break;
                 }
             }
-        })
-        .await
-        .expect("only the retained authorized directory must produce the sentinel hint");
-        call(
-            &connection,
-            2,
-            Method::FsUnwatch {
-                watch_id: "inode".into(),
-            },
-        )
-        .await;
-        if directory {
-            std::fs::remove_dir_all(&source).unwrap();
-        } else {
-            std::fs::remove_file(&source).unwrap();
         }
+        std::fs::remove_file(&source).unwrap();
+        if directory {
+            std::fs::remove_dir_all(&saved).unwrap();
+        } else {
+            std::fs::remove_file(&saved).unwrap();
+        }
+        bounded(fixture.host.settle_file_observers()).await;
     }
     connection.close();
 }
@@ -649,15 +616,8 @@ pub(crate) async fn observed_mutation_hint(
     let mut phases = FixturePhase::new("native filesystem mutation hint");
     phases.enter("drain earlier routed hints");
     while connection.next_notification().now_or_never().is_some() {}
-    let published = crate::app_server::filesystem::observe_native_change(
-        source.to_path_buf(),
-        expected.to_path_buf(),
-    );
-    phases.enter("fresh native callback publication");
+    phases.enter("fresh physical mutation and Client hint");
     mutation();
-    bounded(published)
-        .await
-        .expect("fresh native callback publication");
     phases.enter("routed hint after native publication");
     let mut last = None;
     let change = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -668,12 +628,15 @@ pub(crate) async fn observed_mutation_hint(
                 if change.watch_id != watch_id {
                     continue;
                 }
-                assert!(change.resync_required);
                 assert!(!change.retired);
-                // The receipt above proves observation of this exact native
-                // path even when a busy identity check discards routed paths.
-                if change.changed_paths.is_empty()
-                    || change.changed_paths.contains(&expected.to_path_buf())
+                assert!(
+                    change
+                        .changed_paths
+                        .iter()
+                        .all(|path| path.starts_with(source))
+                );
+                if change.changed_paths.contains(&expected.to_path_buf())
+                    || cfg!(target_os = "macos") && change.resync_required
                 {
                     return change;
                 }
@@ -694,10 +657,13 @@ pub(crate) async fn observed_mutation_hint(
 
 #[cfg(target_os = "macos")]
 pub(crate) async fn macos_watch_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
+    // fs/readFile dispatches through Session A's admitted Execution Client.
+    let mut execution = fixture.start_execution(0).await;
+    let session_id = fixture.sessions[0].id.clone();
     let source = fixture.workspaces[0].join("bounded-watch");
     std::fs::create_dir(&source).unwrap();
     let existing = source.join("existing");
@@ -706,26 +672,37 @@ pub(crate) async fn macos_watch_scenario() {
     std::fs::create_dir(&child_directory).unwrap();
     let outside = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(outside.path(), source.join("outside-symlink")).unwrap();
-    let capacity = fixture.manager.environment.watch_files.clone();
-    let _reserved = capacity.clone().acquire_many_owned(1021).await.unwrap();
-    let watch = || Method::FsWatch {
-        watch_id: "macos".into(),
-        path: source.display().to_string(),
-    };
-    call(&connection, 1, watch()).await;
-    assert_eq!(
-        capacity.available_permits(),
+    call(
+        &connection,
         1,
-        "only the two immediate native sources consume descriptors"
-    );
-    macos_watch_existing(&connection, &source).await;
-    macos_watch_membership(&connection, &source, &capacity).await;
-    macos_watch_capacity(&connection, &source, &capacity).await;
+        Method::FsWatch {
+            session_id: session_id.clone(),
+            watch_id: "macos".into(),
+            path: source.display().to_string(),
+        },
+    )
+    .await;
+    macos_watch_existing(&connection, &session_id, &source).await;
+    macos_watch_membership(&connection, &session_id, &source).await;
+    call(
+        &connection,
+        2,
+        Method::FsUnwatch {
+            watch_id: "macos".into(),
+        },
+    )
+    .await;
+    assert_eq!(fixture.host.file_observers().available_permits(), 32);
+    execution.kill().await.unwrap();
     connection.close();
 }
 
 #[cfg(target_os = "macos")]
-async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
+async fn macos_watch_existing(
+    connection: &AppServerConnection,
+    session_id: &crate::local_runtime::session::SessionId,
+    source: &Path,
+) {
     use std::os::unix::fs::PermissionsExt;
     let mut phases = FixturePhase::new("macOS descriptor existing children");
     let existing = source.join("existing");
@@ -735,7 +712,7 @@ async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
         std::fs::write(&existing, b"after").unwrap();
     })
     .await;
-    macos_watch_read(connection, &existing, b"after").await;
+    macos_watch_read(connection, session_id, &existing, b"after").await;
     let mode = std::fs::metadata(&child_directory)
         .unwrap()
         .permissions()
@@ -762,8 +739,8 @@ async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
 #[cfg(target_os = "macos")]
 async fn macos_watch_membership(
     connection: &AppServerConnection,
+    session_id: &crate::local_runtime::session::SessionId,
     source: &Path,
-    capacity: &tokio::sync::Semaphore,
 ) {
     let mut phases = FixturePhase::new("macOS descriptor membership refresh");
     let created = source.join("created");
@@ -772,20 +749,18 @@ async fn macos_watch_membership(
         std::fs::write(&created, b"new").unwrap();
     })
     .await;
-    assert_eq!(capacity.available_permits(), 0);
-    macos_watch_read(connection, &created, b"new").await;
+    macos_watch_read(connection, session_id, &created, b"new").await;
     phases.enter("created child contents");
     observed_mutation_hint(connection, "macos", source, &created, || {
         std::fs::write(&created, b"changed").unwrap();
     })
     .await;
-    macos_watch_read(connection, &created, b"changed").await;
+    macos_watch_read(connection, session_id, &created, b"changed").await;
     phases.enter("remove child descriptor");
     observed_mutation_hint(connection, "macos", source, source, || {
         std::fs::remove_file(&created).unwrap();
     })
     .await;
-    assert_eq!(capacity.available_permits(), 1);
     assert!(!created.exists());
     let existing = source.join("existing");
     let renamed = source.join("renamed");
@@ -794,94 +769,27 @@ async fn macos_watch_membership(
         std::fs::rename(&existing, &renamed).unwrap();
     })
     .await;
-    assert_eq!(capacity.available_permits(), 1);
     phases.enter("renamed child contents");
     observed_mutation_hint(connection, "macos", source, &renamed, || {
         std::fs::write(&renamed, b"changed again").unwrap();
     })
     .await;
-    macos_watch_read(connection, &renamed, b"changed again").await;
+    macos_watch_read(connection, session_id, &renamed, b"changed again").await;
     phases.finish();
 }
 
 #[cfg(target_os = "macos")]
-async fn macos_watch_capacity(
+async fn macos_watch_read(
     connection: &AppServerConnection,
-    source: &Path,
-    capacity: &Arc<tokio::sync::Semaphore>,
+    session_id: &crate::local_runtime::session::SessionId,
+    path: &Path,
+    expected: &[u8],
 ) {
-    let mut phases = FixturePhase::new("macOS descriptor capacity and settlement");
-    let created = source.join("created");
-    let watch = || Method::FsWatch {
-        watch_id: "macos".into(),
-        path: source.display().to_string(),
-    };
-    phases.enter("unwatch physical settlement");
-    call(
-        connection,
-        2,
-        Method::FsUnwatch {
-            watch_id: "macos".into(),
-        },
-    )
-    .await;
-    let all = bounded(capacity.clone().acquire_many_owned(3))
-        .await
-        .unwrap();
-    drop(all);
-    // Initial refusal releases every partially registered source.
-    phases.enter("initial capacity refusal");
-    std::fs::write(&created, b"third").unwrap();
-    let held = capacity.clone().acquire_owned().await.unwrap();
-    assert_eq!(
-        rejected(connection, 3, watch()).await,
-        ErrorData::EnvironmentCapacityOrConflict
-    );
-    assert_eq!(capacity.available_permits(), 2);
-    drop(held);
-    std::fs::remove_file(&created).unwrap();
-    phases.enter("overflow physical retirement");
-    call(connection, 4, watch()).await;
-    let held = capacity.clone().acquire_owned().await.unwrap();
-    let queued = connection.watch_retirement_for_test("macos");
-    std::fs::write(&created, b"overflow").unwrap();
-    bounded(queued).await.unwrap();
-    macos_retirement_hint(connection).await;
-    drop(held);
-    let all = bounded(capacity.clone().acquire_many_owned(3))
-        .await
-        .unwrap();
-    drop(all);
-    phases.finish();
-}
-
-#[cfg(target_os = "macos")]
-async fn macos_retirement_hint(connection: &AppServerConnection) {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if let NotificationMethod::FsChanged(change) =
-                connection.next_notification().await.notification
-            {
-                if change.watch_id != "macos" {
-                    continue;
-                }
-                assert!(change.resync_required);
-                if change.retired {
-                    break;
-                }
-            }
-        }
-    })
-    .await
-    .expect("queued native descriptor retirement");
-}
-
-#[cfg(target_os = "macos")]
-async fn macos_watch_read(connection: &AppServerConnection, path: &Path, expected: &[u8]) {
     let MethodResult::FileChunk { chunk } = call(
         connection,
         99,
         Method::FsReadFile {
+            session_id: session_id.clone(),
             path: path.display().to_string(),
             offset: 0,
             max_bytes: 64,
@@ -905,11 +813,31 @@ pub(crate) async fn filesystem_scenario() {
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
+    let session_id = fixture.sessions[0].id.clone();
+    let unbound = fixture.workspaces[0].join("unbound");
+    assert_eq!(
+        rejected(
+            &connection,
+            20,
+            Method::FsCreateDirectory {
+                session_id: session_id.clone(),
+                path: unbound.display().to_string(),
+                recursive: true,
+            },
+        )
+        .await,
+        ErrorData::ExecutionUnavailable
+    );
+    assert!(!unbound.exists());
+    let mut execution = fixture.start_execution(0).await;
+    let mut execution_b = fixture.start_execution(1).await;
+    let session_b = fixture.sessions[1].id.clone();
     let path = fixture.workspaces[0].join("document").display().to_string();
     let MethodResult::FileMetadata { metadata } = call(
         &connection,
         1,
         Method::FsWriteFile {
+            session_id: session_id.clone(),
             path: path.clone(),
             data_base64: base64::engine::general_purpose::STANDARD.encode(b"before"),
             expected_revision: None,
@@ -924,6 +852,7 @@ pub(crate) async fn filesystem_scenario() {
             &connection,
             2,
             Method::FsWriteFile {
+                session_id: session_id.clone(),
                 path: path.clone(),
                 data_base64: "YWZ0ZXI=".into(),
                 expected_revision: None
@@ -934,6 +863,7 @@ pub(crate) async fn filesystem_scenario() {
     );
     let revision = metadata.revision;
     let write = Method::FsWriteFile {
+        session_id: session_id.clone(),
         path: path.clone(),
         data_base64: "YWZ0ZXI=".into(),
         expected_revision: Some(revision.clone()),
@@ -947,6 +877,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         5,
         Method::FsReadFile {
+            session_id: session_id.clone(),
             path: path.clone(),
             offset: 0,
             max_bytes: 2,
@@ -964,6 +895,7 @@ pub(crate) async fn filesystem_scenario() {
             &connection,
             6,
             Method::FsReadFile {
+                session_id: session_id.clone(),
                 path: path.clone(),
                 offset: 0,
                 max_bytes: 2,
@@ -989,6 +921,7 @@ pub(crate) async fn filesystem_scenario() {
                 &connection,
                 7,
                 Method::FsReadFile {
+                    session_id: session_id.clone(),
                     path: denied,
                     offset: 0,
                     max_bytes: 32,
@@ -999,11 +932,12 @@ pub(crate) async fn filesystem_scenario() {
             .is_err()
         );
     }
-    let directory = fixture.workspaces[1].join("copy").display().to_string();
+    let directory = fixture.workspaces[0].join("copy").display().to_string();
     call(
         &connection,
         8,
         Method::FsCreateDirectory {
+            session_id: session_id.clone(),
             path: directory.clone(),
             recursive: true,
         },
@@ -1013,6 +947,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         9,
         Method::FsCopy {
+            session_id: session_id.clone(),
             source_path: path,
             destination_path: format!("{directory}/copy"),
             recursive: false,
@@ -1027,6 +962,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         10,
         Method::FsReadDirectory {
+            session_id: session_id.clone(),
             path: directory.clone(),
             offset: 0,
             limit: 16,
@@ -1039,26 +975,40 @@ pub(crate) async fn filesystem_scenario() {
     };
     assert_eq!(page.entries.len(), 1);
     let copied_root = fixture.workspaces[0].join("copied-root");
+    assert_eq!(
+        rejected(
+            &connection,
+            15,
+            Method::FsCopy {
+                session_id: session_b,
+                source_path: directory.clone(),
+                destination_path: fixture.workspaces[1].join("denied").display().to_string(),
+                recursive: true,
+            },
+        )
+        .await,
+        ErrorData::EnvironmentUnauthorized
+    );
+    assert!(!fixture.workspaces[1].join("denied").exists());
     call(
         &connection,
-        15,
+        16,
         Method::FsCopy {
-            source_path: fixture.workspaces[1].display().to_string(),
+            session_id: session_id.clone(),
+            source_path: directory.clone(),
             destination_path: copied_root.display().to_string(),
             recursive: true,
         },
     )
     .await;
-    assert_eq!(
-        std::fs::read(copied_root.join("copy/copy")).unwrap(),
-        b"after"
-    );
+    assert_eq!(std::fs::read(copied_root.join("copy")).unwrap(), b"after");
     let inside = format!("{directory}/recursive-cycle");
     assert_eq!(
         rejected(
             &connection,
-            16,
+            19,
             Method::FsCopy {
+                session_id: session_id.clone(),
                 source_path: directory.clone(),
                 destination_path: inside.clone(),
                 recursive: true
@@ -1072,6 +1022,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         17,
         Method::FsRemove {
+            session_id: session_id.clone(),
             path: copied_root.display().to_string(),
             recursive: true,
             force: false,
@@ -1082,6 +1033,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         18,
         Method::FsRemove {
+            session_id: session_id.clone(),
             path: copied_root.display().to_string(),
             recursive: true,
             force: true,
@@ -1092,6 +1044,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         11,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "watch".into(),
             path: directory.clone(),
         },
@@ -1116,8 +1069,22 @@ pub(crate) async fn filesystem_scenario() {
     .await;
     call(
         &connection,
+        21,
+        Method::FsRemove {
+            session_id: session_id.clone(),
+            path: fixture.workspaces[0].join("link").display().to_string(),
+            recursive: true,
+            force: false,
+        },
+    )
+    .await;
+    assert!(!fixture.workspaces[0].join("link").is_symlink());
+    assert_eq!(std::fs::read(outside).unwrap(), b"private");
+    call(
+        &connection,
         13,
         Method::FsRemove {
+            session_id: session_id.clone(),
             path: directory.clone(),
             recursive: true,
             force: false,
@@ -1133,12 +1100,15 @@ pub(crate) async fn filesystem_scenario() {
             &connection,
             14,
             Method::FsGetMetadata {
+                session_id: session_id.clone(),
                 path: fixture.workspaces[0].display().to_string()
             }
         )
         .await,
         ErrorData::EnvironmentUnauthorized
     );
+    execution.kill().await.unwrap();
+    execution_b.kill().await.unwrap();
     connection.close();
 }
 
@@ -1159,10 +1129,11 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
     let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };
-    let MethodResult::Skills { page } = call(
+    let MethodResult::Skills { page, .. } = call(
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 0,
             limit: 32,
@@ -1187,6 +1158,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         &connection,
         2,
         Method::SkillsRead {
+            execution_session: None,
             target: target.clone(),
             name: "inspection".into(),
             kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1211,6 +1183,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             &connection,
             3,
             Method::SkillsRead {
+                execution_session: None,
                 target: target.clone(),
                 name: "inspection".into(),
                 kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1227,6 +1200,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             &connection,
             4,
             Method::SkillsRead {
+                execution_session: None,
                 target,
                 name: "../inspection".into(),
                 kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
@@ -1242,8 +1216,9 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
 }
 
 pub(crate) async fn output_capacity_and_timeout_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut capped = parameters(
@@ -1306,6 +1281,7 @@ pub(crate) async fn output_capacity_and_timeout_scenario() {
     let (error, info) = tokio::join!(bounded(slow), call(&healthy, 5, Method::ServerInfo {}));
     assert_eq!(error.unwrap(), ErrorData::ConnectionClosed);
     assert!(matches!(info, MethodResult::ServerInfo { .. }));
+    execution.kill().await.unwrap();
     connection.close();
     healthy.close();
     bounded(
@@ -1319,14 +1295,16 @@ pub(crate) async fn output_capacity_and_timeout_scenario() {
 }
 
 pub(crate) async fn host_drain_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     call(
         &connection,
         2,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "drain-watch".into(),
             path: fixture.workspaces[0].to_str().unwrap().into(),
         },
@@ -1366,15 +1344,17 @@ pub(crate) async fn host_drain_scenario() {
     match bounded(command).await.unwrap() {
         Response::Success(success) => assert!(matches!(success.result,
             MethodResult::CommandExec { result } if result.status == ExecStatus::Terminated)),
-        Response::Failure(failure) => {
-            assert_eq!(failure.error.data, Some(ErrorData::ConnectionClosed));
-        }
+        // START already won. Drain can reap the physical process without
+        // retaining the command's final reply on the request's data lane.
+        Response::Failure(failure) => assert!(matches!(
+            failure.error.data,
+            Some(ErrorData::ConnectionClosed | ErrorData::OutcomeUnknown)
+        )),
     }
+    execution.kill().await.unwrap();
     assert_eq!(*fixture.host.request_operations().borrow(), 0);
-    assert!(
-        fixture.host.finish_drain().is_err(),
-        "native watch is still owned"
-    );
+    // Pending watch publication cannot prevent physical Client drain.
+    assert!(fixture.host.file_observers().available_permits() >= 31);
     connection.close();
     bounded(fixture.host.settle_file_observers()).await;
     assert!(fixture.host.finish_drain().is_ok());
@@ -1422,6 +1402,7 @@ pub(crate) async fn mcp_admission_scenario() {
         let request = tokio::spawn(async move {
             let call = if catalog {
                 Method::McpCatalog {
+                    execution_session: None,
                     target: SourceTarget::User,
                     id: crate::runtime::identity::McpServerId::new("held"),
                     expected_revision: revision,
@@ -1429,6 +1410,7 @@ pub(crate) async fn mcp_admission_scenario() {
                 }
             } else {
                 Method::McpProbe {
+                    execution_session: None,
                     target: SourceTarget::User,
                     id: crate::runtime::identity::McpServerId::new("held"),
                     expected_revision: revision,
@@ -1502,6 +1484,7 @@ pub(crate) async fn mcp_capacity_scenario() {
     }
     let revision = crate::local_runtime::settings::revision(Some(text.as_bytes()));
     let method = || Method::McpProbe {
+        execution_session: None,
         target: SourceTarget::User,
         id: crate::runtime::identity::McpServerId::new("held"),
         expected_revision: revision.clone(),
@@ -1544,8 +1527,9 @@ pub(crate) async fn mcp_capacity_scenario() {
 }
 
 pub(crate) async fn duplex_terminal_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut params = parameters(
@@ -1598,6 +1582,7 @@ pub(crate) async fn duplex_terminal_scenario() {
     assert_eq!(result.status, ExecStatus::Completed);
     assert!(output.ends_with(b"DONE"));
     assert_eq!(output.len(), 5 + 131_072 + 4);
+    execution.kill().await.unwrap();
     connection.close();
 }
 
@@ -1609,12 +1594,14 @@ pub(crate) async fn skill_admission_scenario() {
     let fixture = Fixture::with_session_count(None, 0).await;
     for method in [
         Method::SkillsList {
+            execution_session: None,
             target: SourceTarget::User,
             offset: 0,
             limit: 1,
             expected_revision: None,
         },
         Method::SkillsRead {
+            execution_session: None,
             target: SourceTarget::User,
             name: "absent".into(),
             kind: SkillContentKind::Instructions,
@@ -1693,10 +1680,11 @@ pub(crate) async fn skill_large_resources_scenario() {
     let target = SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };
-    let MethodResult::Skills { page } = call(
+    let MethodResult::Skills { page, .. } = call(
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 0,
             limit: 1,
@@ -1713,10 +1701,11 @@ pub(crate) async fn skill_large_resources_scenario() {
     let preview = page.data[0].catalog.description.strip_suffix('…').unwrap();
     assert!(!preview.is_empty() && description.starts_with(preview));
     assert_eq!(page.next_offset, Some(1));
-    let MethodResult::Skills { page: last } = call(
+    let MethodResult::Skills { page: last, .. } = call(
         &connection,
         1,
         Method::SkillsList {
+            execution_session: None,
             target: target.clone(),
             offset: 1,
             limit: 32,
@@ -1737,6 +1726,7 @@ pub(crate) async fn skill_large_resources_scenario() {
             &connection,
             2,
             Method::SkillsRead {
+                execution_session: None,
                 target: target.clone(),
                 name: "large".into(),
                 kind: SkillContentKind::Metadata,
@@ -1767,6 +1757,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         &connection,
         3,
         Method::SkillsRead {
+            execution_session: None,
             target,
             name: "large".into(),
             kind: SkillContentKind::Instructions,
@@ -1789,9 +1780,69 @@ pub(crate) async fn skill_large_resources_scenario() {
     connection.close();
 }
 
-pub(crate) async fn partial_stdin_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+pub(crate) async fn released_output_preserves_the_unclaimed_input_receipt() {
+    use crate::app_server::command::{ReleaseOutcome, hold_input_receipt, observe_release};
+
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let process_id = "output-release-before-input-receipt";
+    let mut params = parameters(&fixture, &["/bin/cat"]);
+    params.process_id = Some(process_id.into());
+    params.stream_stdin = true;
+    let (held, resume) = hold_input_receipt(process_id);
+    let release = observe_release(process_id);
+
+    let driver = connection.clone();
+    let mut command =
+        tokio::spawn(async move { call(&driver, 1, Method::CommandExec(params)).await });
+    admit_or_fail(&connection, process_id, &mut command).await;
+    let input = tokio::spawn({
+        let connection = connection.clone();
+        async move {
+            call(
+                &connection,
+                2,
+                Method::CommandWrite(WriteParams {
+                    process_id: process_id.into(),
+                    delta_base64: Some(
+                        base64::engine::general_purpose::STANDARD.encode(b"before EOF"),
+                    ),
+                    close_stdin: true,
+                }),
+            )
+            .await
+        }
+    });
+    bounded(held).await.unwrap();
+    let MethodResult::CommandExec { result } = bounded(command).await.unwrap() else {
+        panic!("command result");
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(result.stdout_base64)
+            .unwrap(),
+        b"before EOF"
+    );
+    assert_eq!(release.outcomes().last(), Some(&ReleaseOutcome::Released));
+    assert!(!input.is_finished());
+    resume.send(()).unwrap();
+    assert!(matches!(
+        bounded(input).await.unwrap(),
+        MethodResult::EnvironmentAccepted {}
+    ));
+    connection.close();
+    assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
+    assert!(bounded(execution.wait()).await.unwrap().success());
+}
+
+pub(crate) async fn partial_stdin_scenario() {
+    let fixture = Fixture::with_session_count(None, 1).await;
+    grant(&fixture);
+    let mut execution = fixture.start_execution(0).await;
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
     let mut params = parameters(
@@ -1807,32 +1858,45 @@ pub(crate) async fn partial_stdin_scenario() {
     let worker = connection.clone();
     let command = tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
     assert!(output(&connection, "prefix").await.starts_with(b"READY"));
-    let error = rejected(
-        &connection,
-        2,
-        Method::CommandWrite(WriteParams {
-            process_id: "prefix".into(),
-            delta_base64: Some(base64::engine::general_purpose::STANDARD.encode(vec![b'x'; 65536])),
-            close_stdin: false,
-        }),
-    )
-    .await;
-    assert_eq!(
-        error,
-        ErrorData::OutcomeUnknown,
-        "a prefix may already have reached the child"
-    );
+    // The receipt is the physical answer: the 64 KiB write can fully
+    // apply into the PTY buffer before the one-byte reader exits, or
+    // the peer can be gone already — both outcomes are honest, a partial
+    // application is never reported as success.
+    match connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(2),
+            call: Method::CommandWrite(WriteParams {
+                process_id: "prefix".into(),
+                delta_base64: Some(
+                    base64::engine::general_purpose::STANDARD.encode(vec![b'x'; 65536]),
+                ),
+                close_stdin: false,
+            }),
+        })
+        .await
+    {
+        Response::Success(success) => assert!(matches!(
+            success.result,
+            MethodResult::EnvironmentAccepted {}
+        )),
+        Response::Failure(failure) => {
+            assert_eq!(failure.error.data, Some(ErrorData::OutcomeUnknown));
+        }
+    }
     assert!(matches!(
         bounded(command).await.unwrap(),
         MethodResult::CommandExec { .. }
     ));
+    execution.kill().await.unwrap();
     connection.close();
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) async fn idle_root_watch_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
+    let _execution = fixture.start_execution(0).await;
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let root = fixture.workspaces[0].clone();
@@ -1840,19 +1904,47 @@ pub(crate) async fn idle_root_watch_scenario() {
         &connection,
         1,
         Method::FsWatch {
+            session_id: fixture.sessions[0].id.clone(),
             watch_id: "idle".into(),
             path: root.display().to_string(),
         },
     )
     .await;
-    let (observed, ignored) = tokio::sync::oneshot::channel();
-    crate::app_server::filesystem::observe_access(root.clone(), observed);
-    drop(std::fs::read_dir(&root).unwrap());
-    bounded(ignored).await.unwrap();
-    assert!(
-        connection.environment_events_idle_for_test(),
-        "native root opens never emit content hints or fill the connection queue"
-    );
+    let session_id = fixture.sessions[0].id.clone();
+    let page = call(
+        &connection,
+        4,
+        Method::FsReadDirectory {
+            session_id,
+            path: root.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await;
+    assert!(matches!(page, MethodResult::DirectoryPage { .. }));
+    assert!(connection.environment_events_idle_for_test());
+    let observed_file = root.join("first-real-change");
+    std::fs::write(&observed_file, b"changed").unwrap();
+    loop {
+        if let NotificationMethod::FsChanged(change) =
+            bounded(connection.next_notification()).await.notification
+        {
+            assert_eq!(change.watch_id, "idle");
+            assert!(!change.retired);
+            assert!(!change.resync_required);
+            assert!(
+                change
+                    .changed_paths
+                    .iter()
+                    .all(|path| path == &observed_file)
+            );
+            if change.changed_paths.contains(&observed_file) {
+                break;
+            }
+        }
+    }
     assert!(matches!(
         call(&connection, 2, Method::ServerInfo {}).await,
         MethodResult::ServerInfo { .. }
@@ -1902,10 +1994,11 @@ pub(crate) async fn skill_catalog_page_scenario() {
     let mut total = 0;
     let mut pages = 0;
     loop {
-        let MethodResult::Skills { page } = call(
+        let MethodResult::Skills { page, .. } = call(
             &connection,
             1,
             Method::SkillsList {
+                execution_session: None,
                 target: target.clone(),
                 offset,
                 limit: 32,
@@ -1931,4 +2024,145 @@ pub(crate) async fn skill_catalog_page_scenario() {
     assert_eq!(total, 32);
     assert!(pages > 1, "byte budget trims a count-valid page");
     connection.close();
+}
+
+/// Agent Read through the real composition chain: a Session loaded with
+/// an admitted Execution Client serves `read` through the
+/// `SessionExecutionScope` `SessionRuntimeManager::load` bound into its
+/// composed workspace, while another Session — loaded through the same
+/// path but never given an execution reservation — reports the honest
+/// unavailable diagnostic for the identical lexical path. The scope is a
+/// per-dispatch lookup, never a claim: no Client is spawned or prepared
+/// for the unbound Session, and there is no Server-local read to fall
+/// back to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_read_dispatches_only_through_the_bound_session_scope() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(Some("read"), 2).await;
+        // The identical lexical name under each admitted workspace,
+        // carrying distinct physical bodies.
+        std::fs::write(
+            fixture.workspaces[0].join("note.txt"),
+            "bound-session-bytes\n",
+        )
+        .unwrap();
+        std::fs::write(
+            fixture.workspaces[1].join("note.txt"),
+            "unbound-session-bytes\n",
+        )
+        .unwrap();
+
+        // Session A: the real reservation, the real staged Client child,
+        // and a real `SessionRuntimeManager::load` — the production route
+        // that binds `execution_scope` into the composed Workspace.
+        let mut execution = fixture.start_execution(0).await;
+        let managed = fixture.load(0).await.unwrap().unwrap();
+        // Session B: the same load path, deliberately without any
+        // execution reservation.
+        let unbound = fixture.load(1).await.unwrap().unwrap();
+        assert!(
+            fixture
+                .manager
+                .execution_endpoint(&fixture.sessions[1].id)
+                .is_err(),
+            "Session B keeps no endpoint claim: no Client was ever prepared"
+        );
+
+        // The bound Session returns the exact model-facing bytes — only
+        // the admitted Client for Session A's workspace can produce them.
+        let bound_runtime = managed.inspect_runtime().expect("resident runtime A");
+        let bound = read_page_in_session(&bound_runtime, "read-bound").await;
+        assert_eq!(
+            bound.status,
+            crate::tools::types::ToolExecutionStatus::Success
+        );
+        let Some(crate::tools::types::ToolResultContent::Text(text)) = bound.content.first() else {
+            panic!("expected a textual page: {bound:?}");
+        };
+        assert_eq!(text.text, "bound-session-bytes\n");
+
+        // The unbound Session — same lexical path, physically present —
+        // gets the honest unavailable diagnostic, never a local read.
+        let unbound_runtime = unbound.inspect_runtime().expect("resident runtime B");
+        let refused = read_page_in_session(&unbound_runtime, "read-unbound").await;
+        let crate::tools::types::ToolExecutionStatus::Failed { error } = refused.status else {
+            panic!("the unbound Session must not serve a read: {refused:?}");
+        };
+        assert!(
+            error.contains("Session execution unavailable"),
+            "unexpected diagnostic: {error}"
+        );
+        assert!(
+            !error.contains("unbound-session-bytes") && !error.contains("bound-session-bytes"),
+            "no file body may leak through the refused route: {error}"
+        );
+
+        let _ = execution.kill().await;
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// One `read` dispatch through the composed root Agent tool boundary —
+/// the resident runtime's own Workspace, artifacts, managed output, and
+/// environment, exactly the `ToolExecutionContext` the resident tool
+/// plane builds for a real tool call.
+async fn read_page_in_session(
+    runtime: &crate::runtime::ConversationRuntime,
+    call: &str,
+) -> crate::tools::types::ToolExecutionResult {
+    struct Silent;
+    impl crate::tools::executor::ProgressReporter for Silent {
+        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+    let progress = Silent;
+    let tool_runtime = runtime.tool_runtime();
+    let mut registry = crate::tools::executor::ToolRegistry::new();
+    crate::tools::native::register_native_tools(
+        &mut registry,
+        crate::tools::native::NativeToolResources {
+            subagent_catalog: crate::runtime::subagent::AgentCatalog::empty(),
+            background: tool_runtime.background().clone(),
+            subagents: None,
+        },
+        crate::tools::native::NativeToolPolicies::default(),
+    )
+    .expect("native registry");
+    let invocation = crate::tools::types::ToolInvocation {
+        id: crate::tools::types::ToolInvocationId::Agent {
+            call_id: crate::runtime::identity::ToolCallId::new(call),
+        },
+        tool_id: crate::runtime::identity::ToolId::new("tool-read"),
+        tool_name: "read".to_owned(),
+        mode: crate::tools::types::ToolInvocationMode::Foreground,
+        arguments: serde_json::json!({"path": "note.txt"}),
+    };
+    let context = crate::tools::executor::ToolExecutionContext {
+        stdout_capture: None,
+        workspace_changes: None,
+        model_invocation: None,
+        attempt_id: None,
+        goal: None,
+        schedule: None,
+        conversation_id: tool_runtime.conversation_id(),
+        execution_id: None,
+        cancellation: crate::runtime::ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        ),
+        workspace: tool_runtime.workspace(),
+        progress: &progress,
+        artifacts: tool_runtime.artifacts(),
+        tool_output: tool_runtime.tool_output(),
+        environment: tool_runtime.environment(),
+        questionnaire_requester: None,
+        todos: None,
+        subagent: None,
+        bound_mutation: None,
+    };
+    registry
+        .executor(&crate::runtime::identity::ToolId::new("tool-read"))
+        .start(invocation, context)
+        .completion
+        .await
 }

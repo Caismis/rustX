@@ -100,7 +100,17 @@ impl WorkflowCatalog {
             workflows: &workflows,
             scope: AgentScope::OneShotChild,
         };
-        for entry in self.entries.values_mut() {
+        for (id, entry) in &mut self.entries {
+            if self.locations.get(id).is_some_and(|location| {
+                location.scope == crate::runtime::resources::SourceScope::Session
+            }) && !self.session_grants.contains(id)
+            {
+                entry.admission = WorkflowAdmission::Disabled(vec![WorkflowAdmissionDiagnostic {
+                    path: "agent.workflows".into(),
+                    reason: WorkflowDependencyFailure::SessionGrantRequired,
+                }]);
+                continue;
+            }
             let mut program = (*entry.source).clone();
             let mut diagnostics = Vec::new();
             admit_block(

@@ -390,6 +390,12 @@ pub use crate::durable::reading::LineageReadCut;
 #[serde(deny_unknown_fields)]
 pub struct SessionPersistentState {
     pub cwd: PathBuf,
+    /// Session-authored configuration above the Workspace and User layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_config: Option<super::session_inputs::SessionConfigContent>,
+    /// Complete definitions owned by this Session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_resources: Option<super::session_inputs::SessionResources>,
     /// Explicit initial selection. Omission delegates to the native configuration
     /// owner at creation; clients must not copy a projected default into this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -399,6 +405,8 @@ impl SessionPersistentState {
     #[must_use]
     pub fn from_input(input: &super::configuration::SessionConfigInput) -> Self {
         Self {
+            session_config: input.authoring.session_config.clone(),
+            session_resources: input.authoring.session_resources.clone(),
             cwd: input.cwd.clone(),
             model: input.model.clone(),
         }
@@ -408,6 +416,10 @@ impl SessionPersistentState {
         super::configuration::SessionConfigInput {
             cwd: self.cwd.clone(),
             model: self.model.clone(),
+            authoring: super::session_inputs::SessionAuthoredInputs {
+                session_config: self.session_config.clone(),
+                session_resources: self.session_resources.clone(),
+            },
         }
     }
 }
@@ -523,6 +535,8 @@ pub struct SessionCatalog {
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
     #[cfg(test)]
+    write_gate: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
+    #[cfg(test)]
     preparation_cleanup_fault: Arc<std::sync::atomic::AtomicBool>,
     /// Test-only gate parked between the Surface-head observation and the
     /// acceptance-watermark read of `is_unused`, so a race regression can
@@ -566,6 +580,8 @@ impl SessionCatalog {
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            write_gate: None,
             #[cfg(test)]
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
@@ -917,6 +933,8 @@ impl SessionCatalog {
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            write_gate: None,
             #[cfg(test)]
             preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]

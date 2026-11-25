@@ -1,5 +1,6 @@
 //! Bounded canonical named Agent discovery. Project overrides user as a whole resource.
 use super::config::NamedAgentProfileDocument;
+use super::resource_directory::BoundDefinitions;
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
 use serde::Serialize;
@@ -28,10 +29,15 @@ pub(crate) fn parse(text: &str) -> Result<NamedAgentProfileDocument, String> {
 fn candidates(
     boundary: &Path,
     root: &Path,
+    bound: Option<&BoundDefinitions<'_>>,
     diagnostics: &mut Vec<RuntimeResourceLoadError>,
 ) -> Result<BTreeMap<SubagentName, PathBuf>, RuntimeResourceLoadError> {
     let mut result = BTreeMap::new();
-    for path in super::resource_directory::files(boundary, root, "toml")? {
+    let paths = match bound {
+        Some(bound) => bound.files(root)?,
+        None => super::resource_directory::files(boundary, root, "toml")?,
+    };
+    for path in paths {
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
             diagnostics.push(
                 RuntimeResourceLoadError::new("Agent filename must be UTF-8").at(&path, "agents"),
@@ -51,16 +57,25 @@ fn candidates(
 }
 
 /// User discovery has no Workspace authority unless one is explicitly supplied.
-#[allow(clippy::too_many_lines)] // One bounded, shadow-before-parse catalog pass.
 pub(crate) fn load_authorized(
     workspace: Option<&Path>,
     user_root: &Path,
 ) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
+    load(workspace, user_root, None)
+}
+
+#[allow(clippy::too_many_lines)] // One bounded, shadow-before-parse catalog pass.
+pub(super) fn load(
+    workspace: Option<&Path>,
+    user_root: &Path,
+    bound: Option<&BoundDefinitions<'_>>,
+) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
     let mut diagnostics = Vec::new();
-    let mut users = candidates(user_root, user_root, &mut diagnostics).unwrap_or_else(|error| {
-        diagnostics.push(error);
-        BTreeMap::new()
-    });
+    let mut users =
+        candidates(user_root, user_root, None, &mut diagnostics).unwrap_or_else(|error| {
+            diagnostics.push(error);
+            BTreeMap::new()
+        });
     let projects = workspace
         .map_or_else(
             || Ok(BTreeMap::new()),
@@ -68,6 +83,7 @@ pub(crate) fn load_authorized(
                 candidates(
                     workspace,
                     &workspace.join(".agents/agents"),
+                    bound,
                     &mut diagnostics,
                 )
             },
@@ -112,11 +128,11 @@ pub(crate) fn load_authorized(
         let error = |message: String| RuntimeResourceLoadError::new(message).at(path, &field);
         let mut revision = "unreadable".to_owned();
         let result = (|| -> Result<NamedAgentDefinition, RuntimeResourceLoadError> {
-            let bytes = super::resource_directory::read_resource(
-                boundary,
-                path,
-                crate::bounded_file::MAX_RESOURCE_BYTES,
-            )?;
+            let limit = crate::bounded_file::MAX_RESOURCE_BYTES;
+            let bytes = match bound.filter(|_| project_exists) {
+                Some(bound) => bound.read(path, limit),
+                None => super::resource_directory::read_resource(boundary, path, limit),
+            }?;
             revision = super::settings::revision(Some(&bytes));
             let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
             let agent = parse(text).map_err(|e| {
@@ -155,6 +171,58 @@ pub(crate) fn load_authorized(
     catalog.set_invalid(invalid);
     catalog.discovery_diagnostics = diagnostics;
     Ok((catalog, sources))
+}
+
+/// Apply complete inline definitions using the same strict Agent parser.
+pub(super) fn apply_session(
+    (catalog, mut sources): (AgentCatalog, BTreeMap<SubagentName, AgentSource>),
+    authored: &super::session_inputs::SessionResources,
+) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
+    let mut definitions: Vec<_> = catalog
+        .definitions()
+        .filter(|definition| !authored.agents.contains_key(definition.name()))
+        .map(|definition| (**definition).clone())
+        .collect();
+    for (name, contents) in &authored.agents {
+        let source = Path::new(super::session_inputs::RESOURCES_DOCUMENT)
+            .join("agents")
+            .join(format!("{name}.toml"));
+        let failure = |error: String| {
+            RuntimeResourceLoadError::new(error)
+                .at(&source, format!("agents.{name}"))
+                .because("invalid Session Agent TOML")
+        };
+        let document = parse(contents).map_err(failure)?;
+        let profile = document.lower().map_err(failure)?;
+        definitions.push(
+            NamedAgentDefinition::new(name.clone(), profile, source.clone())
+                .map_err(|error| failure(error.to_string()))?,
+        );
+        let lower = sources.remove(name);
+        sources.insert(
+            name.clone(),
+            AgentSource {
+                revision: super::settings::revision(Some(contents.as_bytes())),
+                identity: name.clone(),
+                selected: source,
+                layer: "session",
+                overridden: lower.as_ref().map(|lower| lower.selected.clone()),
+                overridden_revision: lower.map(|lower| lower.revision),
+            },
+        );
+    }
+    let mut effective = AgentCatalog::new(definitions)
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+    effective.set_invalid(
+        catalog
+            .invalid()
+            .iter()
+            .filter(|(name, _)| !authored.agents.contains_key(*name))
+            .map(|(name, error)| (name.clone(), error.clone()))
+            .collect(),
+    );
+    effective.discovery_diagnostics = catalog.discovery_diagnostics;
+    Ok((effective, sources))
 }
 
 #[cfg(test)]

@@ -228,12 +228,16 @@ impl AppServerConnection {
             }),
             Method::SessionCreate {
                 settings,
+                input_references,
                 dynamic_tools,
                 ..
             } => {
-                let result = self
-                    .host
-                    .manager()
+                let manager = self.host.manager();
+                let settings = manager
+                    .resolve_session_input_references(settings, input_references)
+                    .await
+                    .map_err(super::super::rpc_error::session_input_error)?;
+                let result = manager
                     .create_thread(settings, dynamic_tools)
                     .await
                     .map_err(session_error)?;

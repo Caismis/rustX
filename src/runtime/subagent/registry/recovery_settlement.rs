@@ -90,6 +90,7 @@ impl SubagentRegistry {
                     // No filesystem work or proof acquisition occurs under the
                     // registry mutex. A damaged published authority stays pending.
                     self.reconcile_recovered_settlements();
+                    self.start_recovery_reconciliation();
                 }
                 Err(super::SubagentStartError::Durability {
                     detail: error.to_string(),

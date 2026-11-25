@@ -591,7 +591,7 @@ fn assert_no_manager_operation(fixture: &Fixture, id: &ConversationId) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_and_journal() {
-    bounded(async {
+    Box::pin(bounded(async {
         for lose_reply in [false, true] {
             let f = Fixture::with_summary_gate().await;
             let _headers = ReleaseHeaders(f.gates.clone());
@@ -742,7 +742,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             );
             f.close().await;
         }
-    })
+    }))
     .await;
 }
 

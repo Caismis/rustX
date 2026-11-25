@@ -49,12 +49,16 @@ struct HostInner {
     #[cfg(test)]
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
+    workspace_picker_enabled: AtomicBool,
+    local_workspace_probes: Arc<tokio::sync::Semaphore>,
     revocations: Arc<super::delivery_access::Revocations>,
     authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
     environment_stop: crate::runtime::CancellationSignal,
+    execution_drain_plan: Mutex<Option<ExecutionDrain>>,
+    execution_drain: watch::Sender<Option<Vec<String>>>,
     /// A finite chain of admitted intent jobs. The host request limit bounds
     /// these owners; completion order, rather than reply polling, orders clocks.
     submission_intent_tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -64,6 +68,7 @@ struct HostInner {
     uploads: super::upload_transfer::UploadTransfers,
     file_reads: Arc<tokio::sync::Semaphore>,
     file_observers: Arc<tokio::sync::Semaphore>,
+    unconfirmed_file_observer: AtomicBool,
     file_previews: Arc<tokio::sync::Semaphore>,
     file_routes: Mutex<
         std::collections::HashMap<
@@ -72,16 +77,17 @@ struct HostInner {
         >,
     >,
 }
+#[derive(Debug)]
+struct ExecutionDrain {
+    initializations: Vec<Arc<crate::local_runtime::session_runtime_manager::Initialization>>,
+    endpoints: Vec<Arc<crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint>>,
+    deadline: std::time::Instant,
+}
+
 #[derive(Clone, Debug)]
 pub struct AppServerHost(Arc<HostInner>);
 
 pub(crate) struct ServerOperation(watch::Sender<usize>);
-#[cfg(test)]
-impl ServerOperation {
-    pub(super) fn for_test() -> Self {
-        Self(watch::channel(1).0)
-    }
-}
 impl Drop for ServerOperation {
     fn drop(&mut self) {
         self.0.send_modify(|n| *n -= 1);
@@ -182,6 +188,22 @@ impl AppServerHost {
         self.0.file_read_probe.authenticating.enter();
         authority.as_ref()?.authenticate(offered)
     }
+
+    pub(crate) fn enable_workspace_picker(&self) {
+        self.0
+            .workspace_picker_enabled
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn workspace_picker_enabled(&self) -> bool {
+        self.0.workspace_picker_enabled.load(Ordering::Acquire)
+    }
+
+    // Browsing and catalog reads use the same private Client capacity. Only
+    // the WebSocket picker route needs the separate Product Host switch.
+    pub(crate) fn local_workspace_probes(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.0.local_workspace_probes
+    }
     /// One authority transition of a credential slot, linearized in the
     /// exclusive side of [`Self::revocations`] and the slot's own mutex.
     ///
@@ -250,6 +272,11 @@ impl AppServerHost {
     pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_observers.clone()
     }
+    pub(crate) fn record_unconfirmed_file_observer(&self) {
+        self.0
+            .unconfirmed_file_observer
+            .store(true, Ordering::Release);
+    }
     pub(crate) fn environment_stop(&self) -> crate::runtime::CancellationSignal {
         self.0.environment_stop.child()
     }
@@ -282,6 +309,8 @@ impl AppServerHost {
             state: Mutex::default(),
             requests: watch::channel(0).0,
             environment_stop: crate::runtime::CancellationSignal::new(),
+            execution_drain_plan: Mutex::default(),
+            execution_drain: watch::channel(None).0,
             submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
             transport: Arc::default(),
@@ -293,6 +322,9 @@ impl AppServerHost {
             file_previews: Arc::new(tokio::sync::Semaphore::new(2)),
             file_routes: Mutex::default(),
             file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
+            workspace_picker_enabled: AtomicBool::new(false),
+            local_workspace_probes: Arc::new(tokio::sync::Semaphore::new(1)),
+            unconfirmed_file_observer: AtomicBool::new(false),
         }))
     }
     #[must_use]
@@ -399,28 +431,69 @@ impl AppServerHost {
     /// # Panics
     /// Panics if the host mutex is poisoned.
     pub fn begin_drain(&self) {
-        let initializations = {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(self.policy().shutdown_deadline_ms);
+        self.begin_drain_by(deadline);
+    }
+
+    pub(crate) fn begin_drain_by(&self, deadline: std::time::Instant) {
+        {
             let mut state = self.0.state.lock().expect("host mutex");
-            let initializations = self.manager().begin_draining();
-            self.0.manager.close_schedule_admission();
-            if state.lifecycle == ServerLifecycle::Accepting {
-                state.lifecycle = ServerLifecycle::Draining;
+            if state.lifecycle != ServerLifecycle::Accepting {
+                return;
             }
-            // START grants and observable Host admission closure share the
-            // same cancellation boundary. No process I/O holds this mutex.
+            let (initializations, endpoints) = self.manager().begin_draining(deadline);
+            *self
+                .0
+                .execution_drain_plan
+                .lock()
+                .expect("execution drain plan") = Some(ExecutionDrain {
+                initializations,
+                endpoints,
+                deadline,
+            });
+            self.0.manager.close_schedule_admission();
+            self.0.manager.mcp_drafts.close_admission();
+            state.lifecycle = ServerLifecycle::Draining;
             self.0.environment_stop.cancel();
-            initializations
-        };
-        // Independent commands retain request admission through physical
-        // settlement. Cancel them before drain waits for those same owners.
-        // Native cancellation arbitrates with recovery under its own
-        // coordinator. Neither host nor registry locks cover durable work.
-        for initialization in initializations {
-            initialization.retire();
         }
-        self.manager().mcp_drafts.begin_drain();
         self.uploads().revoke_prepared();
     }
+
+    pub(crate) async fn settle_execution(&self) -> Vec<String> {
+        let plan = self
+            .0
+            .execution_drain_plan
+            .lock()
+            .expect("execution drain plan")
+            .take();
+        if let Some(ExecutionDrain {
+            initializations,
+            endpoints,
+            deadline,
+        }) = plan
+        {
+            for initialization in initializations {
+                initialization.retire();
+            }
+            self.manager().mcp_drafts.begin_drain();
+            let settled = self.0.execution_drain.clone();
+            tokio::spawn(async move {
+                let failures =
+                    SessionRuntimeManager::settle_execution_bindings(endpoints, deadline).await;
+                settled.send_replace(Some(failures));
+            });
+        }
+        self.0
+            .execution_drain
+            .subscribe()
+            .wait_for(Option::is_some)
+            .await
+            .expect("Client drain owner")
+            .clone()
+            .expect("Client drain results")
+    }
+
     /// Supervise existing runtimes immediately, including when an accepted
     /// request is still pending. A final pass after request settlement covers
     /// every late load claimed by a pre-drain request. Neither pass fails fast.
@@ -442,7 +515,12 @@ impl AppServerHost {
                 .await
                 .expect("host request owner");
         };
-        let (mut failures, ()) = tokio::join!(self.manager().drain_all_runtimes(), requests);
+        let (mut failures, (), execution_failures) = tokio::join!(
+            self.manager().drain_all_runtimes(),
+            requests,
+            self.settle_execution()
+        );
+        failures.extend(execution_failures);
         self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
         failures.extend(self.manager().mcp_drafts.settle().await);
@@ -454,9 +532,8 @@ impl AppServerHost {
         }
         failures
     }
-    /// Called after carrier teardown has dropped every native watch registry.
-    /// A notify handle's Drop requests shutdown; only callback destruction
-    /// returns its permit and proves that the native event loop has settled.
+    /// Waits for physical observer shutdown and release of the corresponding
+    /// UI watch registrations. Carrier teardown cancels pending publication.
     pub(crate) async fn settle_file_observers(&self) {
         let _settled = self
             .0
@@ -467,7 +544,17 @@ impl AppServerHost {
     }
     pub(crate) fn finish_drain(&self) -> Result<(), String> {
         let mut state = self.0.state.lock().expect("host mutex");
+        if self.0.unconfirmed_file_observer.load(Ordering::Acquire) {
+            state.shutdown_failures += 1;
+            return Err("Client file observer settlement is unconfirmed".into());
+        }
         if state.lifecycle != ServerLifecycle::Draining
+            || self
+                .0
+                .execution_drain
+                .borrow()
+                .as_ref()
+                .is_none_or(|failures| !failures.is_empty())
             || !self.manager().is_empty()
             || !self.manager().mcp_drafts.is_settled()
             || !self.manager().mcp_probes.is_settled()

@@ -103,6 +103,8 @@ fn identities(values: &[u64]) -> std::sync::Arc<dyn crate::runtime::identity::Uu
 /// A Session intent bound to `/workspace` with no explicit model.
 fn workspace_state() -> SessionPersistentState {
     SessionPersistentState {
+        session_config: None,
+        session_resources: None,
         cwd: std::path::PathBuf::from("/workspace"),
         model: None,
     }
@@ -110,6 +112,8 @@ fn workspace_state() -> SessionPersistentState {
 
 fn state() -> SessionPersistentState {
     SessionPersistentState {
+        session_config: None,
+        session_resources: None,
         model: Some(config().initial_model().clone()),
         ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
             std::path::PathBuf::from("/"),

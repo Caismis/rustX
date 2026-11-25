@@ -60,6 +60,8 @@
 //! are a Session application's configuration directory; an unrelated
 //! directory is never scanned.
 
+mod bound;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -758,17 +760,26 @@ impl SessionRuntimeManager {
     }
 
     fn known_sources(&self) -> KnownSources {
-        let (workspaces, inputs) = {
+        let (mut workspaces, inputs) = {
             let application = self.applications.lock();
             (
                 application.watched_source_directories(),
                 application.source_inputs(),
             )
         };
+        // A replacement, detached or retiring binding still reserves the
+        // Client as the physical Workspace authority.
+        let client_workspaces = self.execution.reserved_workspaces();
+        workspaces.retain(|directory| !client_workspaces.contains(directory));
         KnownSources {
             user: self.user_source_roots(),
+            inputs: resolved(
+                inputs
+                    .into_iter()
+                    .filter(|(workspace, _)| workspaces.contains(workspace))
+                    .collect(),
+            ),
             workspaces,
-            inputs: resolved(inputs),
         }
     }
 
@@ -854,6 +865,27 @@ impl SessionRuntimeManager {
     ///
     /// Panics only if the test-only registry mutex is poisoned.
     pub async fn run_source_watch(
+        &self,
+        stop: tokio_util::sync::CancellationToken,
+    ) -> Result<(), String> {
+        let native = self.run_native_source_watch(stop.clone());
+        let bound = self.run_bound_source_watch(stop.clone());
+        let mut native = std::pin::pin!(native);
+        let mut bound = std::pin::pin!(bound);
+        tokio::select! {
+            result = &mut native => {
+                stop.cancel();
+                bound.await;
+                result
+            }
+            () = &mut bound => {
+                stop.cancel();
+                native.await
+            }
+        }
+    }
+
+    async fn run_native_source_watch(
         &self,
         stop: tokio_util::sync::CancellationToken,
     ) -> Result<(), String> {
@@ -1985,6 +2017,7 @@ mod case_insensitive_tests {
     /// documents; a renamed-away root invalidates the watches beneath the
     /// loaders' spelling.
     #[test]
+    #[allow(clippy::too_many_lines)] // The case aliases share one real volume and owner inventory.
     fn a_case_variant_the_loaders_read_routes_to_its_workspace() {
         let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
         let entry = volume.path().join("entry");

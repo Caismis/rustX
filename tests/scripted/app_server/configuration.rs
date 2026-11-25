@@ -15,6 +15,8 @@ mod catalog_recovery;
 mod desired_sources;
 #[cfg(feature = "mcp-fixture")]
 mod mcp_readiness;
+#[cfg(feature = "mcp-fixture")]
+pub(crate) use mcp_readiness::reconcile_waiting_for_client_does_not_retain_the_unloaded_writer;
 mod preparation;
 mod session_creation;
 mod skill_transfer;

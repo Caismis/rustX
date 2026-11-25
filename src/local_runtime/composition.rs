@@ -387,6 +387,7 @@ pub struct LocalConversationCore {
     /// composition. A subagent child's generation is frozen by its parent and
     /// is never prepared again, so it has none.
     resource_loader: Option<Arc<LocalRuntimeResourceLoader>>,
+    standalone_execution: Option<super::session_runtime_manager::StandaloneExecution>,
 }
 
 impl std::fmt::Debug for LocalConversationCore {
@@ -405,7 +406,17 @@ impl LocalConversationCore {
     pub async fn shutdown(
         &self,
     ) -> Result<(), crate::runtime::conversation_runtime::ShutdownError> {
-        self.runtime.shutdown().await
+        let runtime = self.runtime.shutdown().await;
+        if let Some(execution) = &self.standalone_execution {
+            let settled = execution.shutdown().await.map_err(|detail| {
+                crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail,
+                }
+            });
+            runtime.and(settled)
+        } else {
+            runtime
+        }
     }
 
     /// Composes the shared semantic runtime from validated resolved launch inputs.
@@ -471,24 +482,28 @@ impl LocalConversationCore {
         }
         let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        let current = manager
-            .resolve_session(&intent.input())
-            .map_err(|error| LocalRuntimeError::SessionConfiguration {
-                session_id: session_id.clone(),
-                diagnostic: error.diagnostic,
-            })?
-            .admit(|| paths.credentials.clone())
-            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        startup
-            .bind_policy(current.config.mcp_startup_policy)
-            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-        let registry = load_model_registry(&current, dependencies)?;
+        let input = intent.input();
         let database = catalog.database_path(&session_id, &node.conversation_id);
         let allocation = database
             .parent()
             .expect("Conversation database has an allocation")
             .to_path_buf();
-        let core = Self::compose_from_config_started(
+        let execution = super::session_runtime_manager::StandaloneExecution::start(
+            session_id.clone(),
+            input.cwd.clone(),
+            lifecycle.root().to_path_buf(),
+        )
+        .await
+        .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let (current, registry) = prepare_standalone_configuration(
+            &execution,
+            manager,
+            input,
+            standalone_credentials(paths, dependencies),
+            &startup,
+        )
+        .await?;
+        let composed = Self::compose_from_config_started(
             &current,
             dependencies,
             registry,
@@ -499,9 +514,28 @@ impl LocalConversationCore {
             allocation,
             lifecycle,
             startup,
+            Some(execution.scope()),
         )
-        .await?;
-        catalog.commit_planned(planned)?;
+        .await;
+        let mut core = match composed {
+            Ok(core) => core,
+            Err(error) => {
+                if let Err(settlement) = execution.shutdown().await {
+                    tracing::warn!(%settlement, "local execution settlement after failed composition");
+                }
+                return Err(error);
+            }
+        };
+        core.standalone_execution = Some(execution);
+        if let Err(error) = catalog.commit_planned(planned) {
+            if let Err(settlement) = core.shutdown().await {
+                tracing::warn!(
+                    ?settlement,
+                    "local execution settlement after failed catalog publication"
+                );
+            }
+            return Err(error.into());
+        }
         Ok(core)
     }
 
@@ -531,6 +565,7 @@ impl LocalConversationCore {
             artifacts_root,
             lifecycle,
             McpInitialSubmission::default(),
+            None,
         )
         .await
     }
@@ -547,6 +582,7 @@ impl LocalConversationCore {
         artifacts_root: PathBuf,
         lifecycle: Arc<crate::runtime::local_storage::ProductController>,
         startup: McpInitialSubmission,
+        execution_scope: Option<super::session_runtime_manager::SessionExecutionScope>,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now());
         startup
@@ -570,6 +606,7 @@ impl LocalConversationCore {
             startup,
             &crate::runtime::cancellation::CancellationSignal::new(),
             &dynamic_tools,
+            execution_scope,
         )
         .await
     }
@@ -589,6 +626,9 @@ impl LocalConversationCore {
         startup: McpInitialSubmission,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
         host_tools: &[crate::tools::host::HostToolDefinition],
+        execution_scope: Option<
+            crate::local_runtime::session_runtime_manager::SessionExecutionScope,
+        >,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now()); // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
@@ -644,6 +684,16 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
+            if let Some(scope) = execution_scope.clone() {
+                let preparation = crate::runtime::ExecutionCancellation::detached(
+                    cancellation.child(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                );
+                std::mem::drop(tokio::spawn(async move {
+                    let _ = scope.prepare_workspace_python(&preparation).await;
+                }));
+            }
+            tool_runtime_config.execution_scope = execution_scope;
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
@@ -725,7 +775,8 @@ impl LocalConversationCore {
                     // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
                 },
-            );
+            )
+            .with_execution_scope(tool_runtime.workspace().execution_scope().cloned());
             let workflow_runtime = WorkflowRuntime::new(
                 subagents.clone(),
                 tool_runtime.durable_store(),
@@ -945,6 +996,7 @@ impl LocalConversationCore {
                     capability,
                     workflow_terminal: None,
                     resource_loader: Some(resource_loader),
+                    standalone_execution: None,
                 })
             }
             .await;
@@ -1041,6 +1093,43 @@ impl LocalConversationCore {
     }
 }
 
+fn standalone_credentials(
+    authored: &AdmittedSessionConfig,
+    dependencies: &LocalRuntimeDependencies,
+) -> crate::credentials::CredentialSnapshot {
+    dependencies.credentials.as_deref().map_or_else(
+        || authored.credentials.clone(),
+        CredentialEnvironment::snapshot,
+    )
+}
+
+async fn prepare_standalone_configuration(
+    execution: &super::session_runtime_manager::StandaloneExecution,
+    manager: super::configuration::UserConfigManager,
+    input: super::configuration::SessionConfigInput,
+    credentials: crate::credentials::CredentialSnapshot,
+    startup: &McpInitialSubmission,
+) -> Result<(AdmittedSessionConfig, ModelBindingRegistry), LocalRuntimeError> {
+    let prepared = execution
+        .capture_configuration(manager, input, credentials)
+        .await
+        .map_err(|detail| LocalRuntimeError::Capability { detail })
+        .and_then(|current| {
+            startup
+                .bind_policy(current.config.mcp_startup_policy)
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+            let registry =
+                ModelBindingRegistry::new(current.models.resolve(&current.credentials)?)?;
+            Ok((current, registry))
+        });
+    if prepared.is_err()
+        && let Err(settlement) = execution.shutdown().await
+    {
+        tracing::warn!(%settlement, "execution settlement after configuration refusal");
+    }
+    prepared
+}
+
 /// Loads the current model catalog and constructs its resolved binding
 /// authority. This is intentionally a composition concern, not a
 /// `SessionCatalog` concern: callers can validate the current runtime default
@@ -1067,11 +1156,6 @@ pub(crate) fn load_model_registry(
 pub enum LocalRuntimeError {
     /// The composition owner cancelled and settled initial preparation.
     Cancelled,
-    /// Current sources rejected an explicitly persisted Session selection.
-    SessionConfiguration {
-        session_id: SessionId,
-        diagnostic: Box<super::diagnostics::Diagnostic>,
-    },
     /// A startup file could not be read.
     Io {
         /// The path that failed.
@@ -1135,14 +1219,6 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::Observation { detail } => {
                 write!(f, "runtime observation subscription: {detail}")
             }
-            Self::SessionConfiguration {
-                session_id,
-                diagnostic,
-            } => write!(
-                f,
-                "Session {session_id} configuration at {}: {} ({})",
-                diagnostic.path, diagnostic.reason, diagnostic.correction
-            ),
             Self::SessionCatalog(error) => write!(f, "session catalog: {error}"),
         }
     }

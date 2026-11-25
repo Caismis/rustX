@@ -204,6 +204,7 @@ fn spec_with_extensions(
             keep_recent_tokens: 0,
             summary_output_cap: None,
         },
+        execution: None,
         workspace: root.join("workspace"),
         incarnation: "incarnation-test".to_owned(),
         terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
@@ -1350,7 +1351,7 @@ async fn frozen_fixture_tool(
     workspace: &crate::tools::Workspace,
     name: &str,
 ) -> ToolDefinition {
-    let runtime = crate::tools::mcp::McpServerRuntime::connect(
+    let runtime = crate::tools::mcp::McpServerRuntime::connect_fixture(
         server_id,
         binding,
         workspace,

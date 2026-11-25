@@ -1,0 +1,41 @@
+[package]
+name = "rustx-process-supervisor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "rustX physical process-supervisor helpers: the dedicated Bash and interactive supervisor binaries and their shared supervised-unit core."
+publish = false
+
+[lib]
+name = "rustx_process_supervisor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bash-supervisor"
+path = "src/bin/bash_supervisor.rs"
+
+[[bin]]
+name = "interactive-supervisor"
+path = "src/bin/interactive_supervisor.rs"
+
+[features]
+# Root consumer tests enable the physical fixture seams through their own
+# dev-dependency; no production dependency ever selects this feature.
+test-support = []
+
+[dependencies]
+futures-util = "0.3"
+libc = "0.2"
+nix = { version = "0.31.3", features = ["signal", "process", "fs", "poll", "socket", "user"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1" }
+tempfile = "3.27.0"
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "net", "process"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "process", "time"] }

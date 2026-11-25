@@ -2,7 +2,7 @@ import { selectedCheckpoint, selectedSessionId } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { connectRemote } from './shell-actions';
-import { connectionAction, returnHome, expectSettled } from './shell-actions';
+import { connectionAction, createBoundSession, returnHome, expectSettled } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { test, expect, type Page } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
@@ -51,9 +51,8 @@ test('native history, rich settlement, real image previews, reconnect and native
   page.on('pageerror', error => errors.push(error.message));
   try {
     // Build durable history via typed native admission before the browser attaches.
+    id = await createBoundSession(fixture);
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    const created = await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
-    id = created.session.id;
     await remote.renameSession(id, 'New session');
     const attached = await remote.client.call('thread/resume', {threadId:(await remote.readSession(id)).active_conversation_id}, 'attached');
     await expect(remote.client.call('artifact/read', { target: attached.target, artifact_id: 'artifact_999' }, 'artifact_bytes')).rejects.toThrow();

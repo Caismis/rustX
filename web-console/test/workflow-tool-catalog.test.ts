@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v80';
+import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v81';
 import { readToolCatalog } from '../src/app/workflows/port';
 
 it('collects every page of one source before exposing the complete catalog', async () => {
@@ -27,6 +27,6 @@ it('does not request another MCP catalog page after the discovery owner is retir
     active = false;
     return { sources: [], next: { offset: 17, digest: 'a'.repeat(64) } };
   });
-  await expect(readToolCatalog({ toolCatalog }, 'shared', 'workspace', () => active)).rejects.toThrow('Tool catalog request superseded');
+  await expect(readToolCatalog({ toolCatalog }, 'shared', 'workspace', { owns: () => active })).rejects.toThrow('Tool catalog request superseded');
   expect(toolCatalog).toHaveBeenCalledTimes(1);
 });

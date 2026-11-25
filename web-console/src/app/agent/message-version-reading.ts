@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AttachmentTarget, SessionMessageVersionFamily, SessionMessageVersionsPage } from '../../../../protocol/app-server/v80';
+import type { AttachmentTarget, SessionMessageVersionFamily, SessionMessageVersionsPage } from '../../../../protocol/app-server/v81';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../client/app-server';

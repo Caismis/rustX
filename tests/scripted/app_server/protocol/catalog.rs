@@ -772,7 +772,7 @@ async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadat
         initialize(&first).await; initialize(&second).await;
         let tools = vec![crate::tools::host::HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Look up an application record".into(),permissions: None,
             input_schema:serde_json::json!({"type":"object","properties":{},"additionalProperties":false})}];
-        let MethodResult::SessionTransition {thread,session,..} = call(&first,100,Method::SessionCreate {dynamic_tools:tools.clone(),submission:None,settings:crate::local_runtime::session::SessionPersistentState {cwd:f.workspaces[0].clone(),model:None}}).await else {panic!("Thread creation")};
+        let MethodResult::SessionTransition {thread,session,..} = call(&first,100,Method::SessionCreate {input_references: None,dynamic_tools:tools.clone(),submission:None,settings:crate::local_runtime::session::SessionPersistentState {session_config: None,session_resources: None,cwd:f.workspaces[0].clone(),model:None}}).await else {panic!("Thread creation")};
         assert_eq!(thread.id,session.active_conversation_id); assert_eq!(thread.node_id,session.active_node); assert_eq!(thread.dynamic_tools,tools);
         let MethodResult::Attached {target:a,..}=call(&first,101,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("resume")};
         let MethodResult::Attached {target:b,..}=call(&second,102,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("shared resume")};
@@ -795,7 +795,7 @@ async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadat
             use futures_util::FutureExt;
             let attempt=AttemptId::new("incarnation-probe");
             let invocation=ToolInvocation {id:crate::tools::types::ToolInvocationId::Agent{call_id:ToolCallId::new("incarnation-probe")},tool_id:ToolId::new("probe"),tool_name:"lookup".into(),mode:ToolInvocationMode::Foreground,arguments:serde_json::json!({})};
-            let mut operation=f.host.callbacks().call(&thread.id,&attempt,&tools[0],invocation,ExecutionCancellation::detached(CancellationSignal::new(),CancellationReason::UserRequested));
+            let mut operation=f.host.callbacks().call(&thread.id,&attempt,&tools[0],invocation,ExecutionCancellation::detached(CancellationSignal::new(),CancellationReason::UserRequested),None);
             assert!(futures_util::poll!(&mut operation).is_pending());
             let Some(ServerMessage::Request(request))=first.next_server_message().await else {panic!("new native incarnation receives callback")};
             assert!(second.next_server_message().now_or_never().is_none(),"retired native subscription cannot receive new-incarnation calls even before Closed delivery");

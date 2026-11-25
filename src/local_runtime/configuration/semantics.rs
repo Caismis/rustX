@@ -69,7 +69,9 @@ impl SemanticFailure {
         });
         let first = owners.next()?;
         let document = match first {
-            Origin::User { document, .. } | Origin::Workspace { document, .. } => document,
+            Origin::User { document, .. }
+            | Origin::Workspace { document, .. }
+            | Origin::Session { document, .. } => document,
             Origin::Builtin | Origin::Process { .. } => return None,
         };
         owners

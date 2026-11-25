@@ -11,7 +11,7 @@ interface Cursor { location: string; path: string }
 
 export function WorkspaceFolderDialog({ host, scope, locations, busy, error, close, add }: {
   host: ProductHostWorkspaces; scope: WorkspaceAuthorityScope; locations: readonly { id: string; displayName: string }[];
-  busy: boolean; error?: string; close: () => void; add: (location: string, selection: WorkspaceFolderSelection) => void;
+  busy: boolean; error?: string; close: () => void; add: (location: string, selection?: WorkspaceFolderSelection) => void;
 }) {
   const tx = useTranslation();
   const [cursor, setCursor] = useState<Cursor>();
@@ -37,8 +37,9 @@ export function WorkspaceFolderDialog({ host, scope, locations, busy, error, clo
     className={css.dialog} description={tx('workspace:folder-browser.description')}
     footer={<>
       <Button variant="outline" disabled={busy} onClick={close}>{tx('common:conversation-composer.cancel')}</Button>
-      <Button variant="primary" disabled={busy || !cursor || !listing} onClick={() => {
-        if (cursor && listing) add(cursor.location, { path: cursor.path, revision: listing.revision });
+      <Button variant="primary" disabled={busy || !cursor || !!cursor.path && !listing} onClick={() => {
+        if (cursor?.path === '') add(cursor.location);
+        else if (cursor && listing) add(cursor.location, { path: cursor.path, revision: listing.revision });
       }}>{tx('workspace:folder-browser.add-folder')}</Button>
     </>}>
     {error && <p className={css.notice} role="alert">{error}</p>}

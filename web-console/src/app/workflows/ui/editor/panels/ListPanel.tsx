@@ -1,4 +1,4 @@
-import type { WorkflowListFilter, WorkflowListSort } from '../../../../../../../protocol/app-server/v80';
+import type { WorkflowListFilter, WorkflowListSort } from '../../../../../../../protocol/app-server/v81';
 import { useTranslation } from '../../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';

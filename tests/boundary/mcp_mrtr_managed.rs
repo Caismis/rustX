@@ -165,31 +165,31 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
     std::fs::write(package_root.join("server.py"), GUARD_SERVER).expect("server source");
     std::fs::write(package_root.join("requirements.txt"), "# none\n").expect("requirements");
 
-    let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let discovered = crate::boundary_suites::common::discover_python_packages(&workspace)
-        .expect("package discovery");
-    let package = discovered
-        .into_iter()
-        .find(|entry| entry.server_id == crate::tools::python::python_server_id("mrtr-tool"))
-        .expect("the guard package is discovered")
-        .outcome
-        .expect("the guard package is valid");
-    let store = crate::tools::python::PythonToolStore::new(directory.path().join("runtime"))
-        .expect("python tool store");
-    let prepared = store
-        .ensure_prepared(&package, &crate::runtime::CancellationSignal::new())
+    let execution =
+        crate::session_execution_support::ExecutionFixture::for_managed_python(&workspace_root);
+    let workspace = Workspace::for_session(
+        &workspace_root.canonicalize().unwrap(),
+        execution.scope.clone(),
+    )
+    .expect("Session Workspace");
+    let source = crate::capabilities::ToolSourceId::ManagedPython("mrtr-tool".into());
+    let demand = execution.managed_demand([source.to_string()]).await;
+    let binding = demand.managed_python.packages()[&source]
+        .as_ref()
+        .expect("Client captured package")
+        .prepare_on_client(&crate::runtime::CancellationSignal::new())
         .await
-        .expect("the managed FastMCP environment materializes");
-    // The exact rustX-owned pin this acceptance ran against.
+        .expect("exact Client source")
+        .expect("Client prepares the managed environment");
     eprintln!(
         "managed FastMCP pin: {}",
         crate::tools::python::MANAGED_FASTMCP_VERSION
     );
 
     let server_id = crate::tools::python::python_server_id("mrtr-tool");
-    let runtime = McpServerRuntime::connect(
+    let runtime = McpServerRuntime::connect_fixture(
         &server_id,
-        &prepared.server_binding(),
+        &binding,
         &workspace,
         Arc::new(McpInvalidationState::new()),
     )
@@ -426,4 +426,5 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
         "one requested and one settled interaction fact"
     );
     runtime.close().await.expect("physical settlement");
+    execution.settle().await;
 }

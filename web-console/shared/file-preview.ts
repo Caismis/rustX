@@ -52,7 +52,7 @@ export class PreviewCancelled extends Error {
 export interface FilePreviewOperation {
   readonly version: string;
   readonly bytes: number;
-  readonly file?: import('../../protocol/app-server/v80.ts').SessionFileReference;
+  readonly file?: import('../../protocol/app-server/v81.ts').SessionFileReference;
   /** Pages remain provisional until close validates the complete source. */
   read(range: { offset: number; length: number }, signal?: AbortSignal): Promise<FileBytes>;
   /** Secure final validation and physical retirement precede success. */

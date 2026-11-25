@@ -215,9 +215,12 @@ impl WorkflowRuntime {
             &prepared.origin,
             &prepared.invocation.tool_name,
             &prepared.invocation.arguments,
-            workspace_root,
+            services.runtime.workspace(),
             services.runtime.tool_output(),
-        ) {
+            cancellation,
+        )
+        .await
+        {
             Ok(bound) => prepared.mutation_target = bound,
             Err(error) => {
                 return Ok((terminal(ToolExecutionStatus::Failed { error }), true));
@@ -230,19 +233,11 @@ impl WorkflowRuntime {
                 &prepared.invocation.arguments,
                 services.lifecycle.approval_mode(),
             );
-        let mut environment = context
+        let environment = context
             .resources()
             .capability()
             .effective_environment()
             .clone();
-        if definition.name == crate::tools::native::BASH_TOOL_NAME
-            && matches!(prepared.origin, crate::tools::types::ToolOrigin::Builtin)
-        {
-            environment = crate::tools::execution_environment::freeze_bash(
-                &environment,
-                services.runtime.workspace(),
-            );
-        }
         let view = crate::agent::PreToolView {
             task: services.task.as_deref(),
             conversation_id: &run.run_id.conversation_id,
@@ -273,6 +268,11 @@ impl WorkflowRuntime {
                 .await
                 .map_err(|e| WorkflowRunError::InvocationAuthority(e.to_string()))?
         {
+            // Authorization denied: the ticketed preparation is aborted
+            // explicitly now rather than left to the owner's drop.
+            if let Some(bound) = prepared.mutation_target.take() {
+                bound.abort().await;
+            }
             result
         } else {
             // Batch slots run concurrently; domain owners keep their own
@@ -290,6 +290,11 @@ impl WorkflowRuntime {
                 permit = acquire => Some(permit),
             };
             if permit.is_none() || cancellation.is_cancelled() {
+                // Cancelled before the execution-start frontier: abort
+                // the ticketed preparation explicitly.
+                if let Some(bound) = prepared.mutation_target.take() {
+                    bound.abort().await;
+                }
                 terminal(
                     cancellation
                         .native_status(crate::tools::types::ToolCancellationPhase::BeforeStart),

@@ -8,7 +8,7 @@ import { WorkspaceHostError, settlementFailureKind, validateLocations, type Prod
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   private observations?: FileObservationFeed;
   constructor(private readonly base = '/product-host') {}
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v80.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v81.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
     return this.observeFile(scope, { read, file }, changed, signal);
   }
   observeWorkspaceFile(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal) {
@@ -149,8 +149,8 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       throw new WorkspaceHostError('Resource transfer acknowledgement lost', undefined, true);
     }
   };
-  workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
-    try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
+  workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation, signal?: AbortSignal) => {
+    try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }, operation.kind === 'tool_catalog' ? signal : undefined); }
     catch (cause) {
       // A lost write carrier conceals whether native committed it.
       if (cause instanceof WorkspaceHostError || operation.kind !== 'write') throw cause;
@@ -158,7 +158,6 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     }
   };
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
-  pickWorkspace = (scope: WorkspaceAuthorityScope, signal?: AbortSignal) => this.call<string | null>('pick-workspace', { scope }, signal);
   browseWorkspace = (scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal) =>
     this.call<import('./host.ts').WorkspaceFolderListing>('browse-workspace', { scope, location, path }, signal);
   registerWorkspaceFolder = (scope: WorkspaceAuthorityScope, location: string, selection: import('./host.ts').WorkspaceFolderSelection) =>
@@ -175,7 +174,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   };
 }
 
-interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v80.ts').ErrorData } }
+interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v81.ts').ErrorData } }
 function hostFailure(failure: HostFailure) {
   const nativeError = failure.nativeError ?? (() => {
     if (typeof failure.message !== 'string') return undefined;

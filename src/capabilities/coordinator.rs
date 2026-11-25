@@ -24,6 +24,7 @@ use crate::tools::mcp::McpServerRuntime;
 use crate::tools::mcp::{
     McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet, McpServerBindings,
 };
+#[cfg(test)]
 use crate::tools::python::PythonToolStore;
 use crate::tools::workspace::Workspace;
 
@@ -35,6 +36,8 @@ mod startup;
 pub(crate) use mcp_preparation::{McpPreparation, McpPreparationState};
 pub(crate) use startup::McpStartupDeadline;
 
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod mcp_capacity_tests;
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod mcp_ownership_tests;
 mod readiness;
@@ -184,6 +187,7 @@ struct CoordinatorInner {
     ///
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
+    #[cfg(test)]
     python_store: Mutex<Option<PythonToolStore>>,
     /// Closed Plugin Tool registrations backed by this conversation's domain owners.
     /// The owner-backed registration set is stable. Each candidate's resolved
@@ -507,9 +511,27 @@ impl PreparedCapabilityCandidate {
         if workflows.is_empty() {
             return Ok(());
         }
+        let mut workflow_availability = self.availability.clone();
+        for (id, connection) in self
+            .mcp_runtimes
+            .iter()
+            .map(|generation| (generation.server_id(), generation.connection()))
+            .chain(
+                self.retained_mcp
+                    .iter()
+                    .map(|(id, binding)| (id, binding.connection())),
+            )
+        {
+            if connection.catalog_snapshot().is_none() {
+                workflow_availability.insert(
+                    ToolSourceId::Mcp(id.clone()),
+                    CapabilitySourceState::Unprepared,
+                );
+            }
+        }
         workflows.admit(
             &self.available_tools,
-            &self.availability,
+            &workflow_availability,
             &self.skills,
             agents,
             &self.effective_mcp_servers,
@@ -616,6 +638,14 @@ impl CapabilityCoordinator {
         self.inner.extension_tools.shape()
     }
 
+    #[cfg(all(test, feature = "mcp-fixture"))]
+    pub(crate) fn forget_cached_declarations(&self) {
+        let state = self.inner.state.lock().expect("capability state");
+        for generation in &state.mcp_runtimes {
+            generation.connection().forget_cached_declarations();
+        }
+    }
+
     /// Creates the coordinator with an initial empty capability set at
     /// revision zero.
     ///
@@ -720,6 +750,7 @@ impl CapabilityCoordinator {
                 ),
                 initial_mcp: Mutex::new(preparation),
                 python_store_root,
+                #[cfg(test)]
                 python_store: Mutex::new(None),
                 extension_tools,
                 state: Mutex::new(CoordinatorState {
@@ -1023,6 +1054,7 @@ impl CapabilityCoordinator {
             .expect("published Tool environment was validated"),
         };
         let discovered = crate::skills::SkillDiscoveryOutcome {
+            observed_workspace: std::collections::BTreeMap::new(),
             invalid: Vec::new(),
             roots: skills.roots().to_vec(),
             packages: skills
@@ -1153,13 +1185,27 @@ impl CapabilityCoordinator {
         } else {
             let config = inputs.skill_discovery.clone();
             let signal = cancellation.cloned().unwrap_or_default();
+            let scope = self.inner.mcp_owner.workspace.execution_scope().cloned();
             let discovered = tokio::task::spawn_blocking(move || {
-                SkillDiscovery::with_config(config)
-                    .with_cancellation(signal)
-                    .discover()
+                let requires_workspace = config
+                    .automatic
+                    .iter()
+                    .any(|root| root.source == crate::skills::SkillSource::Workspace);
+                let discovery = SkillDiscovery::with_config(config).with_cancellation(signal);
+                if let Some(scope) = scope
+                    && requires_workspace
+                {
+                    let endpoint = scope.endpoint()?;
+                    discovery.discover_bound(&endpoint)
+                } else {
+                    Ok(discovery.discover())
+                }
             })
             .await
-            .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+            .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?
+            .map_err(|error| {
+                CapabilityPreparationError::Mcp(format!("Skill discovery: {error}"))
+            })?;
             if cancellation.is_some_and(crate::runtime::CancellationSignal::is_cancelled) {
                 return Err(CapabilityPreparationError::ConversationInactive);
             }
@@ -1204,6 +1250,13 @@ impl CapabilityCoordinator {
             })
             .map(|(id, binding)| (id.clone(), binding.clone()))
             .collect();
+        check_stdio_generation(
+            configured_sources.iter().map(|(_, binding)| binding),
+            python_source_bindings
+                .values()
+                .filter(|source| inputs.source_demand.sources.contains(source))
+                .count(),
+        )?;
         let deadline = startup.as_ref().map(|startup| &startup.deadline);
         // Each package connects as soon as its own build publishes. Its one
         // source slot spans both phases; unrelated sources never form a barrier.
@@ -1244,7 +1297,12 @@ impl CapabilityCoordinator {
                     (binding, outcome)
                 },
             ),
-            self.prepare_mcp_bindings(configured_sources, cancellation, deadline),
+            self.prepare_mcp_bindings(
+                configured_sources,
+                cancellation,
+                deadline,
+                startup.as_ref().map(|_| &inputs.source_demand.live_mcp),
+            ),
         );
         let mut prepared_mcp: BTreeMap<_, _> = configured_outcomes.into_iter().collect();
         let mut effective_mcp_servers = inputs.mcp_servers.clone();
@@ -1460,30 +1518,10 @@ impl CapabilityCoordinator {
                 .map(|entry| (entry.server_id, Err(entry.outcome.unwrap_err().to_string())))
                 .collect();
         }
-        let store = match self.python_store() {
-            Ok(store) => store,
-            Err(error) => {
-                // The store is shared preparation infrastructure: its
-                // failure rejects every discovered package with the same
-                // diagnostic, but nothing else.
-                let reason = error.to_string();
-                return discovered
-                    .into_iter()
-                    .map(|entry| {
-                        let outcome = match entry.outcome {
-                            Ok(_) => Err(reason.clone()),
-                            Err(error) => Err(error.to_string()),
-                        };
-                        (entry.server_id, outcome)
-                    })
-                    .collect();
-            }
-        };
         let cancellation = cancellation.unwrap_or(&self.inner.preparation_cancellation);
         self.inner
             .mcp_owner
             .prepare_sources(discovered, cancellation, |entry| {
-                let store = &store;
                 let prepared = &prepared;
                 async move {
                     let outcome = match entry.outcome {
@@ -1491,11 +1529,21 @@ impl CapabilityCoordinator {
                         Ok(_) if cancellation.is_cancelled() => {
                             Err("Python package preparation cancelled".to_owned())
                         }
-                        Ok(package) => store
-                            .ensure_prepared(&package, &self.inner.preparation_cancellation.child())
-                            .await
-                            .map(|prepared| prepared.server_binding())
-                            .map_err(|error| error.to_string()),
+                        Ok(package) => {
+                            if let Some(binding) = package.prepare_on_client(cancellation).await {
+                                binding
+                            } else {
+                                #[cfg(test)]
+                                {
+                                    match self.python_store() {
+                                        Ok(store) => store.ensure_prepared(&package, &self.inner.preparation_cancellation.child()).await.map(|prepared| prepared.server_binding()).map_err(|error| error.to_string()),
+                                        Err(error) => Err(error.to_string()),
+                                    }
+                                }
+                                #[cfg(not(test))]
+                                Err(String::from("Managed Python requires a frozen source from the admitted Execution Client"))
+                            }
+                        }
                     };
                     let outcome = match outcome {
                         Ok(_) if cancellation.is_cancelled() => {
@@ -1532,6 +1580,7 @@ impl CapabilityCoordinator {
     /// environment build coalescing. The mutex is never held across
     /// `.await`: construction is a bounded synchronous `create_dir_all`
     /// sequence.
+    #[cfg(test)]
     fn python_store(&self) -> Result<PythonToolStore, crate::tools::python::PythonToolError> {
         let mut slot = self
             .inner
@@ -1552,6 +1601,7 @@ impl CapabilityCoordinator {
         bindings: Vec<(McpServerId, crate::tools::mcp::McpServerBinding)>,
         cancellation: Option<&crate::runtime::cancellation::CancellationSignal>,
         deadline: Option<&startup::McpStartupDeadline>,
+        startup_live_mcp: Option<&std::collections::BTreeSet<ToolSourceId>>,
     ) -> Vec<(McpServerId, McpPreparationOutcome)> {
         let initial = self.inner.initial_mcp.lock().expect("initial MCP").take();
         if let Some(initial) = initial {
@@ -1565,11 +1615,34 @@ impl CapabilityCoordinator {
             |(server_id, binding)| {
                 let cancellation = &cancellation;
                 async move {
-                    let outcome = self
-                        .inner
-                        .mcp_owner
-                        .prepare_mcp_server(&server_id, &binding, Some(cancellation))
-                        .await;
+                    let owner = &self.inner.mcp_owner;
+                    let key = startup_live_mcp.and_then(|required| {
+                        let key = crate::tools::mcp::declaration_cache::DeclarationKey::for_source(
+                            &self.inner.python_store_root,
+                            &server_id,
+                            &binding,
+                            &owner.workspace,
+                        )?;
+                        Some((
+                            key,
+                            required.contains(&ToolSourceId::Mcp(server_id.clone())),
+                        ))
+                    });
+                    let outcome = if let Some((key, require_live)) = key {
+                        owner
+                            .prepare_startup_mcp_server(
+                                &server_id,
+                                &binding,
+                                cancellation,
+                                key,
+                                require_live,
+                            )
+                            .await
+                    } else {
+                        owner
+                            .prepare_mcp_server(&server_id, &binding, Some(cancellation))
+                            .await
+                    };
                     let outcome = match deadline {
                         Some(deadline) => {
                             startup::finish_source_before_deadline(outcome, deadline).await
@@ -1786,8 +1859,9 @@ impl CapabilityCoordinator {
             };
             bindings.push((server_id, binding.clone()));
         }
+        check_stdio_generation(bindings.iter().map(|(_, binding)| binding), 0)?;
         let outcomes = self
-            .prepare_mcp_bindings(bindings, Some(preparation_cancellation), None)
+            .prepare_mcp_bindings(bindings, Some(preparation_cancellation), None, None)
             .await;
         let mut failure = None;
         for (source_id, (server_id, outcome)) in required.iter().zip(outcomes) {
@@ -2770,6 +2844,28 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// provenance and typed Skill diagnostics, so a rediscovery that changes
 /// only those is still a real publication. See that method for the two
 /// cases (diagnostics-only and provenance-only) this distinction exists for.
+fn check_stdio_generation<'a>(
+    bindings: impl Iterator<Item = &'a crate::tools::mcp::McpServerBinding>,
+    python_packages: usize,
+) -> Result<(), CapabilityPreparationError> {
+    const LIMIT: usize = rustx_execution_protocol::mcp::MAX_GENERATION_SESSIONS;
+    let configured = bindings
+        .filter(|binding| {
+            matches!(
+                binding.transport,
+                crate::tools::mcp::McpTransportConfig::Stdio { .. }
+                    | crate::tools::mcp::McpTransportConfig::ManagedPython { .. }
+            )
+        })
+        .count();
+    if configured + python_packages > LIMIT {
+        return Err(CapabilityPreparationError::Mcp(format!(
+            "one capability generation can admit at most {LIMIT} Client-owned stdio MCP sources"
+        )));
+    }
+    Ok(())
+}
+
 fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
@@ -3787,7 +3883,7 @@ mod mcp_race_tests {
         for server in &servers {
             tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                server.control.wait_catalog(),
+                server.control.wait_catalog(1),
             )
             .await
             .unwrap();
@@ -3840,7 +3936,7 @@ mod mcp_race_tests {
         for server in &servers[..limit] {
             tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                server.control.wait_catalog(),
+                server.control.wait_catalog(1),
             )
             .await
             .unwrap();
@@ -3850,7 +3946,7 @@ mod mcp_race_tests {
         servers[limit - 1].control.release_catalog();
         tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            servers[limit].control.wait_catalog(),
+            servers[limit].control.wait_catalog(1),
         )
         .await
         .unwrap();
@@ -4338,7 +4434,7 @@ mod mcp_race_tests {
             let admission = lifecycle
                 .try_enter_preparation()
                 .expect("generation admission");
-            let runtime = crate::tools::mcp::McpServerRuntime::connect(
+            let runtime = crate::tools::mcp::McpServerRuntime::connect_fixture(
                 server_id,
                 &binding,
                 &workspace,
@@ -4826,6 +4922,9 @@ mod mcp_race_tests {
             }
             other @ McpTransportConfig::StreamableHttp { .. } => {
                 panic!("the fixture binding is stdio: {other:?}")
+            }
+            McpTransportConfig::ManagedPython { .. } => {
+                unreachable!("configured fixture has no managed source")
             }
         };
     }

@@ -28,10 +28,8 @@ pub(super) struct ProbePlan {
 #[derive(Debug, Default)]
 pub(super) struct ProbeHooks {
     pub credentials: Option<crate::credentials::CredentialSnapshot>,
-    pub ownership_pause: Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>,
     pub close: Option<Arc<crate::tools::mcp::test_sync::CloseProbe>>,
     pub expire: Option<Arc<tokio::sync::Notify>>,
-    pub python_store: Option<crate::tools::python::PythonToolStore>,
 }
 
 #[derive(Debug, Serialize)]
@@ -173,11 +171,42 @@ pub(super) async fn execute(
     plan: &ProbePlan,
     cancellation: CancellationSignal,
 ) -> Vec<ProbeResult> {
-    if launch.validate_resource_authority().is_err() {
+    if launch.validate_probe_authority().is_err() {
         return unavailable_targets(plan, "workspace resource authority changed before effects");
     }
-    let Ok(workspace) = Workspace::new(&launch.workspace) else {
+    let needs_client = |target: &ProbeTarget| target.admitted && target.spawn_process;
+    let execution = if !cancellation.is_cancelled() && plan.targets.iter().any(needs_client) {
+        start_probe_client(launch).await.ok()
+    } else {
+        None
+    };
+    let scope = execution.as_ref().map(|probe| probe.execution.scope());
+    let workspace = scope.as_ref().map_or_else(
+        || Workspace::new(&launch.workspace),
+        |scope| Workspace::for_session(&launch.workspace, scope.clone()),
+    );
+    let Ok(workspace) = workspace else {
+        if let Some(execution) = execution {
+            let _ = execution.shutdown().await;
+        }
         return unavailable_targets(plan, "workspace is no longer available");
+    };
+    let python = if plan
+        .targets
+        .iter()
+        .any(|target| target.admitted && target.kind == "python")
+        && let Some(endpoint) = scope.as_ref().and_then(|scope| scope.endpoint().ok())
+    {
+        let user_root = launch.sources.home_directory.join("rustx/.agents");
+        let cancellation = cancellation.clone();
+        tokio::task::spawn_blocking(move || {
+            super::managed_python_resources::discover_bound(&endpoint, &user_root, &cancellation)
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+    } else {
+        None
     };
     let credentials = if !cancellation.is_cancelled()
         && plan.targets.iter().any(|target| target.resolve_credentials)
@@ -210,6 +239,12 @@ pub(super) async fn execute(
             results.push(result);
             continue;
         }
+        if needs_client(target) && execution.is_none() {
+            result.state = ProbeState::Unavailable;
+            result.reason = "the diagnostic Execution Client could not be admitted";
+            results.push(result);
+            continue;
+        }
         let id = McpServerId::new(&target.target);
         let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
         let binding = if target.kind == "python" {
@@ -219,43 +254,23 @@ pub(super) async fn execute(
                 results.push(result);
                 continue;
             }
-            // Reuse the complete source bytes captured by CFG3 discovery. No
-            // second Workspace-only reader can bypass shadowing or reread edits.
             let package = crate::capabilities::ToolSourceId::try_from(target.target.clone())
                 .ok()
-                .and_then(|source| launch.managed_python.packages().get(&source))
+                .and_then(|source| python.as_ref()?.packages().get(&source))
                 .and_then(|package| package.as_ref().ok());
             let Some(package) = package else {
                 result.state = ProbeState::Unavailable;
-                result.reason = "managed package is missing or invalid";
-                results.push(result);
-                continue;
-            };
-            let prepare_store = || {
-                let product =
-                    crate::runtime::local_storage::ProductRoot::create(&launch.runtime_root)
-                        .map_err(|error| error.to_string())?;
-                let path = product
-                    .confined(&product.root().join("environments/python-tools"))
-                    .map_err(|error| error.to_string())?;
-                crate::tools::python::PythonToolStore::new(path).map_err(|error| error.to_string())
-            };
-            #[cfg(test)]
-            let store = plan
-                .hooks
-                .python_store
-                .clone()
-                .map_or_else(prepare_store, Ok);
-            #[cfg(not(test))]
-            let store = prepare_store();
-            let Ok(store) = store else {
-                result.state = ProbeState::Failed;
-                result.reason = "managed environment store could not be opened";
+                result.reason = "the Client could not capture the selected managed package";
                 results.push(result);
                 continue;
             };
             let owned = cancellation.child();
-            let step = store.ensure_prepared(package, &owned);
+            let step = async {
+                package
+                    .prepare_on_client(&owned)
+                    .await
+                    .ok_or_else(|| "managed package has no Client owner".to_owned())?
+            };
             let (state, prepared) =
                 await_owned(step, &owned, tokio::time::sleep_until(deadline)).await;
             result.state = state;
@@ -264,7 +279,7 @@ pub(super) async fn execute(
             } else {
                 None
             };
-            let Some(prepared) = prepared else {
+            let Some(binding) = prepared else {
                 if result.state == ProbeState::Unresolved {
                     result.state = ProbeState::Failed;
                 }
@@ -272,7 +287,7 @@ pub(super) async fn execute(
                 results.push(result);
                 continue;
             };
-            prepared.server_binding()
+            binding
         } else {
             let Ok(mut bindings) =
                 super::composition::captured_mcp_bindings(&launch.config, &credentials)
@@ -295,8 +310,6 @@ pub(super) async fn execute(
             Arc::new(McpInvalidationState::new()),
             owned.clone(),
         );
-        #[cfg(test)]
-        let connect = connect.with_ownership_pause(plan.hooks.ownership_pause.clone());
         let step = McpServerRuntime::connect_owned(connect);
         let deadline = async {
             #[cfg(test)]
@@ -341,7 +354,68 @@ pub(super) async fn execute(
         }
         results.push(result);
     }
+    drop(python);
+    if let Some(execution) = execution
+        && let Err(error) = execution.shutdown().await
+    {
+        eprintln!("rustx doctor could not confirm Client settlement ({error})");
+        for (target, result) in plan.targets.iter().zip(&mut results) {
+            if needs_client(target) {
+                result.state = ProbeState::Failed;
+                result.verified = None;
+                result.reason = "diagnostic Execution Client settlement is unconfirmed";
+            }
+        }
+    }
     results
+}
+
+struct ProbeExecution {
+    execution: super::session_runtime_manager::StandaloneExecution,
+    root: tempfile::TempDir,
+}
+
+impl ProbeExecution {
+    async fn shutdown(self) -> Result<(), String> {
+        self.execution.shutdown().await?;
+        self.root.close().map_err(|error| error.to_string())
+    }
+}
+
+async fn start_probe_client(launch: &ProspectiveSessionConfig) -> Result<ProbeExecution, String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temporary = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let root = tempfile::Builder::new()
+        .prefix("rustx-doctor-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .disable_cleanup(true)
+        .tempdir_in(temporary)
+        .map_err(|error| error.to_string())?;
+    let session = crate::runtime::identity::SessionId::generate();
+    let execution = super::session_runtime_manager::StandaloneExecution::start(
+        session.clone(),
+        launch.workspace.clone(),
+        root.path().to_path_buf(),
+    )
+    .await;
+    match execution {
+        Ok(execution) => Ok(ProbeExecution { execution, root }),
+        Err(error) => {
+            // A failed handshake can leave an admitted physical owner.
+            if rustx_execution_server::RecoveryFence::require_session_settled(
+                root.path(),
+                &rustx_execution_protocol::SessionId::new(session.as_str()),
+            )
+            .is_ok()
+            {
+                let _ = root.close();
+            }
+            Err(error)
+        }
+    }
 }
 
 fn unavailable_targets(plan: &ProbePlan, reason: &'static str) -> Vec<ProbeResult> {

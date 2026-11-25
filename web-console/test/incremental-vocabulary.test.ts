@@ -1,7 +1,7 @@
 import {deltaEvent} from '../../protocol/app-server/test-support/projection-delta';
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, observationCheckpoint, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v80';
+import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v81';
 import capture from './fixtures/incremental-native.json';
 import { checkpoint, interaction, snapshot } from './fixture';
 

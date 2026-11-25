@@ -103,6 +103,7 @@ impl LaunchRequest {
             runtime_root: host.state_directory.clone(),
         };
         let input = SessionConfigInput {
+            authoring: super::session_inputs::SessionAuthoredInputs::default(),
             cwd,
             model: self
                 .model

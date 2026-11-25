@@ -3417,7 +3417,10 @@ hold attempt leases and never block a capability commit.
   constraints. An existing empty directory is never initialized. Physical programs
   inherit that Owner's cancellation signal. Command environments travel in
   private snapshots retained through settlement, not an aggregated OS
-  environment string. See `docs/execution-environment.md`.
+  environment string. UI Workspace registration persists metadata only and
+  no longer schedules Python preparation through `HOME`; Server startup
+  never consumes `HOME` workspace-preparation handoff files. See
+  `docs/execution-environment.md`.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
   runtime occur through native configuration coordination. Complete preserved
@@ -3851,7 +3854,7 @@ Discovery does not hash or watch package payloads.
 - **M7 interactive MCP stdio supervision.** The interactive supervisor unit
   is the M5 Bash supervisor shape applied to a long-lived server, composed
   from the same shared structural ownership core
-  (`src/runtime/supervised_unit`): the inner calls `setsid()`, installs the
+  (`crates/process-supervisor/src/supervised_unit.rs`): the inner calls `setsid()`, installs the
   fixed-membership seccomp restriction on Linux (a `setsid`/`setpgid` escape
   attempt fails with `EPERM`; macOS has no equivalent), ignores the group
   `TERM`, and issues
@@ -4377,8 +4380,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
   overlap — so runtime-private output files are not included in the default
-  cwd-based Glob/Grep traversal. An explicit absolute host path remains
-  subject to the ordinary native file-tool contract. The conversation's
+  cwd-based Glob/Grep traversal. An explicit absolute path still resolves
+  under the ordinary native file-tool contract: Write/Edit treat it as a
+  host path, while Read, Glob, and Grep refuse one outside the Session's
+  admitted Client workspace. The conversation's
   managed tool-output namespaces are disjoint from artifact and workspace
   roots. Namespace bindings, filesystem identities and ownership markers
   authorize only those private temporary directories, never the temporary
@@ -4790,11 +4795,17 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
 
 ## Native tools and Bash (M5)
 
-- Native Read/Write/Edit/Grep/Glob resolve relative model paths against the
+- Native Write/Edit resolve relative model paths against the
   authoritative execution cwd (`Workspace::root()`) and use absolute paths
   as ordinary host filesystem paths. Both forms are lexically normalized for
   `.` and `..` before filesystem behavior, without requiring intermediate
-  components to exist. They no longer impose workspace containment. Workspace remains the runtime/Bash cwd authority, while
+  components to exist. They no longer impose workspace containment. Native
+  Read, `read_image`, Glob, and Grep share the lexical normalization but
+  require the
+  result to stay inside the Session's admitted Client workspace — their
+  physical reads and traversal cross the Execution Client boundary, and an
+  unbound
+  Session answers `Session execution unavailable`. Workspace remains the runtime/Bash cwd authority, while
   `locator.rs` remains the runtime read resolver for advertised managed-output
   paths and unrelated runtime invariants; `ManagedToolOutput` owns the narrow
   model-mutation rejection for that namespace. Final-component symlinks are
@@ -4829,21 +4840,25 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   file unchanged. The registry normalizes known malformed Edit arguments
   before canonical schema validation; the provider and Agent Loop remain
   unaware of those variants.
-- **Glob and Grep observe one shared file universe.** The private
-  `tools/native/search/` substrate — not either tool, and not a traversal
-  crate's defaults — owns that policy: relative roots are cwd-oriented and
-  absolute roots are host paths, hidden files visible, ignore files (`.gitignore`,
+- **Glob and Grep observe one shared file universe.** The Execution
+  Client's private `search` module — not either tool, and not a traversal
+  crate's defaults — owns that policy, enumerated descriptor-relative
+  below the retained workspace `PackageDirectory`: relative roots are
+  cwd-oriented and absolute roots must stay inside the Session's admitted
+  Client workspace, hidden files visible, ignore files (`.gitignore`,
   `.ignore`, git global excludes, `.git/info/exclude`) deliberately not
   applied, symlinks never followed (neither directory-symlink recursion nor
-  a file symlink's target enters the universe), normalized root-relative
+  a file symlink's target enters the universe, and a symlinked root is
+  refused), normalized root-relative
   paths, and deterministic lexical enumeration. A caller filter — Glob's
   `pattern`, Grep's optional `glob` — only narrows that shared set; neither
   tool can reach a file the other cannot see. The substrate is not a tool:
   it is never registered, never model-facing, and never a generic
   search-provider framework.
-- Native search is linked, never spawned: `ignore`, `globset`,
+- Native search is linked, never spawned: `globset`,
   `grep-regex`, and `grep-searcher` are implementation dependencies of the
-  shared substrate and of the Grep engine. The runtime never depends on a
+  Client-side shared substrate and of the Grep engine. The runtime never
+  depends on a
   system-installed or vendored `rg` executable, none of those crates'
   defaults are part of a model-facing contract, and `grep-searcher` never
   owns workspace traversal — it only decides how matching happens inside a
@@ -4892,15 +4907,22 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   managed output is complete
   auxiliary execution text, not canonical history or a semantic artifact.
   Foreground output at or below the threshold remains a direct result and
-  creates no file. Once the complete deterministic representation crosses
-  it, normalization lazily allocates exactly one result spill
+  creates no file. Past the threshold the contract splits by adapter: the
+  native Bash path lazily allocates exactly one result spill
   (`<temp>/rx-<16 hex>/r-<16 hex>.txt`, independent random names,
   `create_new`), writes the complete representation once, and publishes a
   bounded deterministic preview plus typed continuation metadata
   (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
   never a `FileReference`, never a semantic artifact, and never a model
-  `File` modality). Allocation failure is `Unavailable`; a write failure
-  retains the locator as `Partial`; result size alone never turns semantic
+  `File` modality); on that path allocation failure is `Unavailable` and a
+  write failure retains the locator as `Partial`. A foreground MCP result
+  instead has no eligible Execution Client save binding: its capture is
+  preview-only, so crossing the threshold publishes the bounded preview
+  plus a typed `Unavailable` continuation with an explicit not-saved
+  diagnostic — no spill, no locator, no Read/Grep promise, no Client
+  launch/query/wait and no local retention of the complete output; the
+  remote `is_error` verdict is never rewritten by the absent optional save.
+  Result size alone never turns semantic
   success into failure. Failing tool results are intentionally passed back
   to the model as bounded correction evidence. `ToolExecutionStatus` remains
   the typed canonical state; `ToolExecutionResult::model_facing_projection`
@@ -4909,10 +4931,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   bound. Provider adapters only translate that projection and do not choose
   failure policy or truncate independently. The bounded preview is the
   canonical replayable record and the model can Read/Grep the complete
-  auxiliary path explicitly.
+  auxiliary path explicitly only when a locator exists.
   MCP content blocks — a managed Python tool's results included — are
   budgeted collectively, so UTF-8/JSON framing is never delegated to bounded
-  subprocess stdout capture.
+  subprocess stdout capture. The upstream `rmcp` `CallToolResult` is already
+  fully materialized when it reaches the adapter; bounding the HTTP receive
+  itself remains issue #578.
   A **background** execution instead owns one live-output channel from the
   dispatch commit point on (`<temp>/rx-<16 hex>/e-<16 hex>.output`): the file is
   allocated before the accepted result advertises its absolute path
@@ -5107,7 +5131,7 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   reaper.** On Linux, rustX activates `PR_SET_CHILD_SUBREAPER` as a
   runtime-level prerequisite for catastrophic supervisor-loss recovery. The
   capability is owned by the runtime coordination layer
-  (`src/runtime/process_supervision.rs`), activated lazily once per process,
+  (`crates/process-supervisor/src/process_supervision.rs`), activated lazily once per process,
   idempotently and sticky, before any supervised ownership exists. Kernel
   adoption does **not** by itself assign arbitrary adopted children to
   lifecycle ownership: in M5 and M7, only registered supervisor units rely on
@@ -8549,6 +8573,59 @@ read repair never loads a cold runtime or repeats semantic work. See the
   replacement retire callbacks and fence held successes, held errors and lazy reads.
   Status/paging updates preserve camera and focus;
   explicit current-owner closure alone may restore the opener.
+
+## Execution boundary invariants (Issue #576)
+
+Per the [execution-protocol ADR](execution-protocol.md), for the isolated
+local Execution Protocol over Unix sockets:
+
+- **Uniqueness is per `Binding`, not per `Session`.** One binding admits at
+  most one `Live` connection; arbitration is barrier-provable, and a
+  `Detached` binding answers an otherwise valid further Hello with `RecoveryRequired`
+  until #577's live-instance recovery proof exists.
+- **The handshake is one absolute deadline.** `LOCAL_HANDSHAKE_TIMEOUT` (5 s)
+  is armed once at accept entry (server) and once on the established socket
+  (client), covers the Hello read/write, arbitration, admission delivery and
+  verification, and `finish()` restoring blocking mode — never re-armed
+  per byte, per record, or per operation. The server re-checks the deadline
+  inside the binding mutex immediately before `Reserved → Live`: expiry
+  before the commit leaves the binding `Reserved`; a committed connection
+  whose admission delivery fails or expires is disconnected and shut down,
+  leaving the binding `Detached`.
+- **Authentication precedes identity.** The credential verifier runs before
+  any field probe; wrong-field Hellos never consume `Reserved`, and a clean
+  EOF after a successful handshake never permits credential replay.
+- **Requests never bypass the gate.** Only typed exchanges exist (`Ping`,
+  `ReadRange`); the request is encoded before the binding mutex confirms the
+  connection is still live, so an unencodable request touches neither binding
+  nor wire, and a revoke that wins the mutex first denies the exchange. Any
+  transport failure, truncation, malformed or unexpected reply retires the
+  stream (disconnect + shutdown) — it is never reused with untrusted reply
+  accounting.
+- **Confinement is descriptor-relative.** The client opens the workspace root
+  once through `PackageDirectory::open` and serves only normal-component
+  bounded reads and queries; `..`, absolute paths, and special files have
+  no addressable path, intermediate symlink components are refused while a
+  leaf symlink's own metadata is reported never followed, and a path
+  replaced between the two open/verify calls is
+  an `AlreadyExists` conflict, never silently followed.
+- **Session claims are process-owned, once, and fenced by residency.** The
+  manager admits an execution claim only under the catalog visibility cut
+  and the residency mutex together — never on endpoint status — prepares at
+  most one endpoint per Session (a concurrent claimant fails explicitly), and
+  returns the identical endpoint to every later claim. Deletion and drain
+  fence the claim and revoke the binding; a closed claim is never recovered,
+  and endpoint teardown never runs under a registry or residency mutex. An
+  endpoint admits at most one Client connection — stored once, never
+  replaced — and serializes each synchronous typed exchange: a concurrent
+  dispatch is refused as busy rather than queued, and only the binding's
+  live-connection gate, evaluated at send time, authorizes bytes on the
+  wire. When the App Server composes it explicitly
+  (`--local-execution-session`/`--local-execution-workspace`), the Client
+  is a Server-owned child — spawned only as the trusted sibling
+  executable with an empty environment, admitted before transport
+  readiness, and killed-and-reaped on launch failure and inside the
+  drain deadline; no retry or replacement ever occurs.
 
 ## ConversationRuntime boundary ownership (Issue #606)
 

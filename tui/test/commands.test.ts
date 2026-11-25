@@ -60,7 +60,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v80.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v81.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -1664,6 +1664,17 @@ describe("CLI arguments", () => {
     });
     assert.equal(parsed.sessionSettings.model, null);
     assert.equal(parsed.sessionName, undefined);
+  });
+
+  it("launches the local Client for the same Session the TUI opens", () => {
+    const options = ["--local-execution-workspace", "/work/project"];
+    const parsed = parseArguments(["--binary", "rustx", ...options, "--session", "session-1"]);
+    assert.equal(parsed.mode.kind, "local");
+    if (parsed.mode.kind !== "local") throw new Error("local mode");
+    assert.deepEqual(parsed.mode.launch.localExecution, { workspace: "/work/project", sessionId: "session-1" });
+    assert.equal(parsed.routing.session, "session-1");
+    assert.throws(() => parseArguments(["--binary", "rustx", ...options]), /requires --session/);
+    assert.throws(() => parseArguments(["--connect", "wss://server.test", ...options]), /cannot be combined/);
   });
 
   it("defaults only local Session cwd from the controlled client cwd", (t) => {

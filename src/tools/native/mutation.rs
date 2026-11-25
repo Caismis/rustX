@@ -1,320 +1,238 @@
-//! Descriptor-owned native whole-file mutations.
+//! Remote mutation ownership for native Write/Edit.
+//!
+//! The Server no longer opens, stages, or commits mutation targets: the
+//! bound object is a logical admitted path plus one shared, once-consumed
+//! [`PreparedRemoteMutation`] whose ticketed preparation lives on the
+//! Session's admitted Execution Client. Exactly one commit or abort
+//! decision consumes the owner; a drop before either arranges a bounded
+//! remote abort — never a local filesystem touch and never an implicit
+//! publish.
 
-use std::ffi::OsString;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use rustix::fs::{AtFlags, Mode, OFlags, mkdirat, open, openat, renameat, unlinkat};
+use rustx_execution_server::PreparedMutation;
 
-use super::support::resolve_effective_path;
-use crate::tools::managed_output::ManagedToolOutput;
+use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
+use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
+use crate::runtime::types::CancellationReason;
 
-const DIRECTORY: OFlags = OFlags::RDONLY
-    .union(OFlags::DIRECTORY)
-    .union(OFlags::NOFOLLOW)
-    .union(OFlags::CLOEXEC);
-
-/// Authorization retains the deepest existing directory object. Missing
-/// descendants are created only relative to this object, never by full path.
-#[derive(Debug, Clone)]
+/// The Write/Edit mutation claim bound before permission classification:
+/// the logical interpreted target — the permission-UI path — plus the
+/// shared remote owner of the live ticketed preparation. A
+/// `BoundMutationTarget` exists only after a valid physical prepare on the
+/// admitted Client; bind failures short-circuit before permission
+/// classification and never reach this type.
+///
+/// `logical` is `interpret_path`'s workspace-anchored lexical target: the
+/// physical path is the Client's retained descriptor chain, and no
+/// Server-side `stat`, `canonicalize`, or re-resolution ever proves it.
+#[derive(Clone)]
 pub struct BoundMutationTarget {
-    interpreted: PathBuf,
-    effective: PathBuf,
-    directory: Arc<File>,
-    identity: (u64, u64),
-    missing: Vec<OsString>,
-    leaf: OsString,
+    logical: PathBuf,
+    prepared: Arc<PreparedRemoteMutation>,
+}
+
+impl std::fmt::Debug for BoundMutationTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The logical target and whether a live ticketed owner is held —
+        // never ticket internals or payload bytes.
+        formatter
+            .debug_struct("BoundMutationTarget")
+            .field("logical", &self.logical)
+            .field("live", &self.prepared.live_for_debug())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for PreparedRemoteMutation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedRemoteMutation")
+            .field("live", &self.live_for_debug())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PartialEq for BoundMutationTarget {
     fn eq(&self, other: &Self) -> bool {
-        self.interpreted == other.interpreted
-            && self.effective == other.effective
-            && self.identity == other.identity
-            && self.missing == other.missing
-            && self.leaf == other.leaf
+        self.logical == other.logical && std::sync::Arc::ptr_eq(&self.prepared, &other.prepared)
     }
 }
 impl Eq for BoundMutationTarget {}
 
-/// The directory and single leaf used by both reads and atomic replacement.
-#[derive(Debug)]
-pub struct MutationTarget {
-    path: PathBuf,
-    directory: Arc<File>,
-    leaf: OsString,
-}
-
 impl BoundMutationTarget {
+    /// The logical target the permission view and PLAN.md classification
+    /// compare — the Client-proved interpretation, never re-resolved.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.effective
+        &self.logical
     }
 
-    /// Early refusal remains useful, but commit safety comes from retained
-    /// descriptors even if an ancestor changes after this check returns.
-    pub fn ensure_still_authorized(&self, output: &ManagedToolOutput) -> Result<(), String> {
-        let current = resolve_effective_path(&self.interpreted)?;
-        if current != self.effective {
-            return Err(format!(
-                "mutation target changed since authorization (authorized {}, now {})",
-                self.effective.display(),
-                current.display()
-            ));
+    /// A bound target holding the shared remote owner.
+    pub(crate) fn ready(logical: PathBuf, owner: Arc<PreparedRemoteMutation>) -> Self {
+        Self {
+            logical,
+            prepared: owner,
         }
-        output
-            .ensure_model_mutation_allowed(&self.effective)
-            .map_err(|e| e.to_string())
     }
 
-    /// Open/create descendants through the already-authorized directory.
-    pub fn commit_target(&self, create_parents: bool) -> Result<MutationTarget, String> {
-        let mut directory = self.directory.clone();
-        for name in &self.missing {
-            if create_parents {
-                match mkdirat(directory.as_ref(), name, Mode::from_raw_mode(0o777)) {
-                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
-                    Err(error) => return Err(format!("cannot create mutation parent: {error}")),
-                }
-            }
-            directory = Arc::new(File::from(
-                openat(directory.as_ref(), name, DIRECTORY, Mode::empty())
-                    .map_err(|e| format!("cannot open mutation parent: {e}"))?,
-            ));
-        }
-        Ok(MutationTarget {
-            path: self.effective.clone(),
-            directory,
-            leaf: self.leaf.clone(),
-        })
+    /// Aborts the live ticketed preparation — the explicit
+    /// denied/cancelled-preflight cleanup. An already-consumed owner is
+    /// a no-op; the owner's drop covers every other settlement path.
+    pub(crate) async fn abort(&self) {
+        let _ = self.prepared.abort().await;
+    }
+
+    /// The shared remote owner of the live ticketed preparation.
+    pub(crate) fn prepared(&self) -> Arc<PreparedRemoteMutation> {
+        self.prepared.clone()
     }
 }
 
-impl MutationTarget {
-    /// Never follow a leaf substituted after authorization into a new symlink
-    /// or block on a substituted FIFO/device.
-    pub fn read(&self) -> Result<Vec<u8>, String> {
-        let mut file = File::from(
-            openat(
-                self.directory.as_ref(),
-                &self.leaf,
-                OFlags::RDONLY
-                    | OFlags::NOFOLLOW
-                    | OFlags::NONBLOCK
-                    | OFlags::NOCTTY
-                    | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|e| format!("cannot read {}: {e}", self.path.display()))?,
-        );
-        if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-            return Err("mutation input must be a regular file".into());
-        }
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        Ok(bytes)
-    }
+/// The shared remote owner of one ticketed preparation: `scope` is the
+/// Session's non-owning execution route and `prepared` the once-consumed
+/// ticket fact. `commit`/`abort` each consume it exactly once; dropping
+/// before either arranges a bounded remote abort on the runtime.
+pub struct PreparedRemoteMutation {
+    scope: SessionExecutionScope,
+    prepared: Mutex<Option<PreparedMutation>>,
 }
 
-/// Resolve links once, then pin the canonical parent chain without following
-/// links introduced between resolution and descriptor acquisition.
-pub fn bind_mutation_target(
-    interpreted: &Path,
-    output: &ManagedToolOutput,
-) -> Result<BoundMutationTarget, String> {
-    let effective = resolve_effective_path(interpreted)?;
-    output
-        .ensure_model_mutation_allowed(&effective)
-        .map_err(|e| e.to_string())?;
-    let leaf = effective
-        .file_name()
-        .ok_or("mutation target has no filename")?
-        .to_os_string();
-    let parent = effective.parent().ok_or("mutation target has no parent")?;
-    let mut directory = File::from(open("/", DIRECTORY, Mode::empty()).map_err(|e| e.to_string())?);
-    let mut missing = Vec::new();
-    for component in parent.components() {
-        let Component::Normal(name) = component else {
-            continue;
+impl PreparedRemoteMutation {
+    pub(crate) fn new(scope: SessionExecutionScope, prepared: PreparedMutation) -> Self {
+        Self {
+            scope,
+            prepared: Mutex::new(Some(prepared)),
+        }
+    }
+
+    fn take(&self) -> Option<PreparedMutation> {
+        self.prepared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// Consumes the ticket and commits the publish crossing. A clean
+    /// pre-crossing error best-effort aborts the ticket under a detached
+    /// cancellation — a refusal that never reached the wire may leave it
+    /// live. `WriteOutcomeUnknown` sends no spurious abort: the ticket is
+    /// already consumed on whichever side published, and a second
+    /// `AbortWrite` would hit a foreign or vacant slot. Cancellation
+    /// normalization and `WriteOutcomeUnknown` → `OutcomeUnknown`
+    /// mapping are the tool's.
+    pub(crate) async fn commit(
+        &self,
+        cancellation: &ExecutionCancellation,
+    ) -> std::io::Result<rustx_confined_fs::FileMetadata> {
+        let Some(prepared) = self.take() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "prepared mutation already consumed",
+            ));
         };
-        if !missing.is_empty() {
-            missing.push(name.to_os_string());
-            continue;
-        }
-        match openat(&directory, name, DIRECTORY, Mode::empty()) {
-            Ok(fd) => directory = File::from(fd),
-            Err(rustix::io::Errno::NOENT) => missing.push(name.to_os_string()),
+        match self.scope.commit_prepared(&prepared, cancellation).await {
+            Ok(stamp) => Ok(stamp),
             Err(error) => {
-                return Err(format!(
-                    "cannot bind mutation directory {}: {error}",
-                    parent.display()
-                ));
+                let unknown = error.get_ref().is_some_and(
+                    <dyn std::error::Error + Send + Sync + 'static>::is::<
+                        rustx_execution_server::WriteOutcomeUnknown,
+                    >,
+                );
+                if !unknown {
+                    let _ = self.abort_prepared_detached(&prepared).await;
+                }
+                Err(error)
             }
         }
     }
-    let metadata = directory.metadata().map_err(|e| e.to_string())?;
-    Ok(BoundMutationTarget {
-        interpreted: interpreted.to_path_buf(),
-        effective,
-        directory: Arc::new(directory),
-        identity: (metadata.dev(), metadata.ino()),
-        missing,
-        leaf,
-    })
-}
 
-#[cfg(test)]
-thread_local! {
-    pub(super) static BEFORE_TEMP_CREATE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-}
-
-/// A retained temporary File and descriptor-relative rename form the commit.
-/// No path-based reopen occurs between creation and replacement.
-pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), String> {
-    #[cfg(test)]
-    BEFORE_TEMP_CREATE.with(|hook| {
-        if let Some(hook) = hook.borrow_mut().take() {
-            hook();
-        }
-    });
-    let temporary = OsString::from(format!(".rustx-tool-tmp-{}", uuid::Uuid::now_v7()));
-    let mut file = File::from(
-        openat(
-            target.directory.as_ref(),
-            &temporary,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o666),
-        )
-        .map_err(|e| format!("cannot create mutation temporary file: {e}"))?,
-    );
-    let result = file
-        .write_all(content)
-        .map_err(|e| format!("cannot write mutation temporary file: {e}"))
-        .and_then(|()| {
-            renameat(
-                target.directory.as_ref(),
-                &temporary,
-                target.directory.as_ref(),
-                &target.leaf,
-            )
-            .map_err(|e| format!("cannot persist {}: {e}", target.path.display()))
-        });
-    if result.is_err() {
-        let _ = unlinkat(target.directory.as_ref(), &temporary, AtFlags::empty());
-    }
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
-    use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
-    use crate::runtime::types::CancellationReason;
-    use crate::tools::artifacts::ArtifactStore;
-    use crate::tools::environment::ToolEnvironment;
-    use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
-    use crate::tools::types::{
-        ToolExecutionStatus, ToolInvocation, ToolInvocationId, ToolInvocationMode, ToolProgress,
-    };
-    use crate::tools::workspace::Workspace;
-
-    struct Quiet;
-    impl ProgressReporter for Quiet {
-        fn report(&self, _: ToolProgress) {}
+    /// Whether a live ticketed preparation is still held — Debug only.
+    fn live_for_debug(&self) -> bool {
+        self.prepared.lock().is_ok_and(|slot| slot.is_some())
     }
 
-    #[test]
-    fn write_and_edit_commit_to_held_directory_after_final_check_ancestor_replacement() {
-        for (tool, missing) in [("write", false), ("edit", false), ("write", true)] {
-            let temporary = tempfile::tempdir().unwrap();
-            let ancestor = temporary.path().join("ancestor");
-            let root = ancestor.join("workspace");
-            std::fs::create_dir_all(&root).unwrap();
-            let outside = temporary.path().join("outside");
-            std::fs::create_dir_all(outside.join("workspace/nested")).unwrap();
-            let relative = if missing { "nested/PLAN.md" } else { "PLAN.md" };
-            std::fs::write(outside.join("workspace").join(relative), "outside sentinel").unwrap();
-            if !missing {
-                std::fs::write(root.join(relative), "old plan").unwrap();
-            }
-            let conversation = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
-            let output =
-                ManagedToolOutput::new(conversation.clone(), temporary.path().join("managed"))
-                    .unwrap();
-            let artifacts =
-                ArtifactStore::new(conversation.clone(), temporary.path().join("artifacts"))
-                    .unwrap();
-            let workspace = Workspace::new(&root).unwrap();
-            let environment = ToolEnvironment::new();
-            let mut context = ToolExecutionContext::new(
-                &conversation,
-                None,
-                ExecutionCancellation::detached(
+    /// Consumes the ticket and aborts the preparation — the explicit
+    /// denied/cancelled-preflight cleanup path.
+    pub(crate) async fn abort(&self) -> std::io::Result<()> {
+        let Some(prepared) = self.take() else {
+            return Ok(());
+        };
+        self.abort_prepared_detached(&prepared).await
+    }
+
+    /// One bounded abort under a detached cancellation: cleanup is never
+    /// itself cancelled away by the cancelled waiter it serves.
+    async fn abort_prepared_detached(&self, prepared: &PreparedMutation) -> std::io::Result<()> {
+        let detached = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        );
+        self.scope.abort_prepared(prepared, &detached).await
+    }
+}
+
+impl Drop for PreparedRemoteMutation {
+    fn drop(&mut self) {
+        let Ok(mut slot) = self.prepared.lock() else {
+            return;
+        };
+        let Some(prepared) = slot.take() else {
+            return;
+        };
+        drop(slot);
+        // Arrange the abort independent of whatever waiter was cancelled:
+        // on a live runtime the dispatch runs bounded under its own
+        // detached cancellation; with no runtime the ticket honestly
+        // stays occupied on the Client until the connection drops — the
+        // capacity is never silently reused.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let scope = self.scope.clone();
+            handle.spawn(async move {
+                let detached = ExecutionCancellation::detached(
                     CancellationSignal::new(),
                     CancellationReason::UserRequested,
-                ),
-                &workspace,
-                &Quiet,
-                &artifacts,
-                &output,
-                &environment,
-            );
-            context.bound_mutation =
-                Some(bind_mutation_target(&root.join(relative), &output).unwrap());
-            let renamed = temporary.path().join("held");
-            let original = ancestor.clone();
-            let held = renamed.clone();
-            let redirected = outside.clone();
-            BEFORE_TEMP_CREATE.with(|hook| {
-                *hook.borrow_mut() = Some(Box::new(move || {
-                    std::fs::rename(&original, held).unwrap();
-                    std::os::unix::fs::symlink(redirected, original).unwrap();
-                }));
+                );
+                let _ = scope.abort_prepared(&prepared, &detached).await;
             });
-            let invocation = ToolInvocation {
-                id: ToolInvocationId::Agent {
-                    call_id: ToolCallId::new("call-boundary"),
-                },
-                tool_id: ToolId::new(format!("tool-{tool}")),
-                tool_name: tool.to_owned(),
-                mode: ToolInvocationMode::Foreground,
-                arguments: if tool == "write" {
-                    serde_json::json!({"path": relative, "content": "new plan"})
-                } else {
-                    serde_json::json!({"path": relative, "edits": [{"oldText": "old plan", "newText": "new plan"}]})
-                },
-            };
-            let result = if tool == "write" {
-                super::super::write::run_write(&invocation, &context)
-            } else {
-                super::super::edit::run_edit(&invocation, &context)
-            };
-            assert_eq!(
-                result.status,
-                ToolExecutionStatus::Success,
-                "{tool}: {result:?}"
-            );
-            assert_eq!(
-                std::fs::read_to_string(renamed.join("workspace").join(relative)).unwrap(),
-                "new plan"
-            );
-            assert_eq!(
-                std::fs::read_to_string(outside.join("workspace").join(relative)).unwrap(),
-                "outside sentinel"
-            );
-            for parent in [outside.join("workspace"), outside.join("workspace/nested")] {
-                assert!(!std::fs::read_dir(parent).unwrap().any(|entry| {
-                    entry
-                        .unwrap()
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".rustx-tool-tmp-")
-                }));
-            }
         }
     }
+}
+
+/// Maps one remote commit outcome onto the tool's terminal result: a
+/// pre-wire `Interrupted` normalizes to the settled cancellation,
+/// `WriteOutcomeUnknown` to `OutcomeUnknown` — a racing cancellation can
+/// never override it — and a clean refusal to the stable failure text.
+pub(crate) fn commit_error_result(
+    path: &str,
+    cancellation: &ExecutionCancellation,
+    error: &std::io::Error,
+) -> crate::tools::types::ToolExecutionResult {
+    use super::support::{cancelled_result, failed_result};
+    if error.kind() == std::io::ErrorKind::Interrupted {
+        return cancelled_result(cancellation.reason());
+    }
+    if error.get_ref().is_some_and(
+        <dyn std::error::Error + Send + Sync + 'static>::is::<
+            rustx_execution_server::WriteOutcomeUnknown,
+        >,
+    ) {
+        return crate::tools::types::ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: crate::tools::types::ToolExecutionStatus::OutcomeUnknown {
+                detail: format!(
+                    "the committed mutation outcome cannot be proven for {path}: {error}"
+                ),
+            },
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+    }
+    failed_result(format!("cannot persist {path}: {error}"))
 }

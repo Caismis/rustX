@@ -1,144 +1,126 @@
-//! Instance-owned native environment authority, shared by every trusted client.
-//! Grants come only from User/Host process policy, never a request cwd or Thread.
+//! Instance-owned logical environment authorization. The Client owns descriptors.
 pub mod files;
-
-use crate::package_io::PackageDirectory;
 use crate::runtime::CancellationSignal;
 use std::collections::BTreeMap;
-use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
-#[cfg_attr(not(target_os = "macos"), derive(Default))]
+#[derive(Default)]
 pub(crate) struct Environment {
-    io_gate: std::sync::Mutex<()>,
-    roots: RwLock<BTreeMap<PathBuf, Arc<Root>>>,
-    #[cfg(target_os = "macos")]
-    pub(crate) watch_files: Arc<tokio::sync::Semaphore>,
-}
-#[cfg(target_os = "macos")]
-impl Default for Environment {
-    fn default() -> Self {
-        Self {
-            io_gate: std::sync::Mutex::default(),
-            roots: RwLock::default(),
-            #[cfg(target_os = "macos")]
-            watch_files: Arc::new(tokio::sync::Semaphore::new(1024)),
-        }
-    }
-}
-
-pub(crate) struct Root {
-    directory: PackageDirectory,
-    identity: (u64, u64),
-    pub(crate) cancelled: CancellationSignal,
+    roots: RwLock<BTreeMap<PathBuf, CancellationSignal>>,
 }
 
 impl Environment {
-    /// Retire removed roots before accepting their replacements. A failed open
-    /// leaves a configured root unavailable rather than following a replacement.
+    /// Removed grants are cancelled before replacements are published.
     pub(crate) fn configure(&self, paths: &[PathBuf]) {
-        let mut roots = self.roots.write().expect("environment roots");
-        roots.retain(|path, root| {
+        let mut grants = self.roots.write().expect("environment roots");
+        grants.retain(|path, signal| {
             let keep = paths.contains(path);
             if !keep {
-                root.cancelled.cancel();
+                signal.cancel();
             }
             keep
         });
         for path in paths {
-            if roots.contains_key(path) {
-                continue;
-            }
-            if let Ok(directory) = PackageDirectory::open(path)
-                && let Ok(file) = directory.descriptor().try_clone()
-                && let Ok(metadata) = std::fs::File::from(file).metadata()
-            {
-                roots.insert(
-                    path.clone(),
-                    Arc::new(Root {
-                        directory,
-                        identity: (metadata.dev(), metadata.ino()),
-                        cancelled: CancellationSignal::new(),
-                    }),
-                );
-            }
+            grants.entry(path.clone()).or_default();
         }
     }
 
-    pub(crate) fn with_paths<T>(
-        &self,
-        paths: &[&str],
-        operation: impl FnOnce(&[(PathBuf, Arc<Root>, PathBuf)]) -> std::io::Result<T>,
-    ) -> std::io::Result<T> {
-        let _io = self.io_gate.lock().expect("environment I/O");
-        let roots = self.roots.read().expect("environment roots").clone();
-        Self::resolve(paths, &roots, operation)
+    /// The retirement signal for the longest configured logical grant.
+    pub(crate) fn retirement(&self, path: &Path) -> Option<CancellationSignal> {
+        self.roots
+            .read()
+            .expect("environment roots")
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, signal)| signal.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_nonexistent_directory_still_has_a_logical_grant() {
+        let parent = tempfile::tempdir().unwrap();
+        let missing = parent.path().join("missing");
+        let environment = Environment::default();
+        environment.configure(std::slice::from_ref(&missing));
+
+        let signal = environment
+            .retirement(&missing.join("file"))
+            .expect("the logical grant exists without a directory");
+        assert!(!signal.is_cancelled());
+        assert!(!missing.exists());
     }
 
-    pub(crate) fn try_metadata(&self, path: &str) -> std::io::Result<files::FileMetadata> {
-        let busy = || std::io::Error::from(std::io::ErrorKind::WouldBlock);
-        let _io = self.io_gate.try_lock().map_err(|_| busy())?;
-        let roots = self.roots.try_read().map_err(|_| busy())?.clone();
-        Self::resolve(&[path], &roots, |paths| {
-            files::metadata(&paths[0].1, &paths[0].2)
-        })
+    #[test]
+    fn nested_grants_resolve_longest_even_if_child_is_missing() {
+        let parent = tempfile::tempdir().unwrap();
+        let child = parent.path().join("child");
+        let environment = Environment::default();
+        environment.configure(&[parent.path().to_path_buf(), child.clone()]);
+
+        let inner = environment.retirement(&child.join("file")).unwrap();
+        let outer = environment.retirement(&parent.path().join("file")).unwrap();
+        assert!(!inner.is_cancelled() && !outer.is_cancelled());
+        assert!(!child.exists());
+        // Unchanged grants keep their family across publications.
+        inner.cancel();
+        assert!(
+            environment
+                .retirement(&child.join("file"))
+                .unwrap()
+                .is_cancelled()
+        );
+        environment.configure(&[parent.path().to_path_buf(), child.clone()]);
+        assert!(
+            environment
+                .retirement(&child.join("file"))
+                .unwrap()
+                .is_cancelled()
+        );
     }
 
-    fn resolve<T>(
-        paths: &[&str],
-        roots: &BTreeMap<PathBuf, Arc<Root>>,
-        operation: impl FnOnce(&[(PathBuf, Arc<Root>, PathBuf)]) -> std::io::Result<T>,
-    ) -> std::io::Result<T> {
-        let mut resolved = Vec::with_capacity(paths.len());
-        for requested in paths {
-            if requested.is_empty() || requested.len() > 4096 || requested.contains('\0') {
-                return Err(files::invalid("invalid environment path"));
-            }
-            let requested = Path::new(requested);
-            if requested
-                .components()
-                .any(|part| matches!(part, Component::ParentDir))
-            {
-                return Err(files::denied());
-            }
-            if !requested.is_absolute() {
-                return Err(files::invalid("environment paths must be absolute"));
-            }
-            let absolute = requested.to_path_buf();
-            let (path, root) = roots
-                .iter()
-                .filter(|(path, _)| absolute.starts_with(path))
-                .max_by_key(|(path, _)| path.components().count())
-                .ok_or_else(files::denied)?;
-            let current = PackageDirectory::open(path)?;
-            let metadata = std::fs::File::from(current.descriptor().try_clone()?).metadata()?;
-            if (metadata.dev(), metadata.ino()) != root.identity || root.cancelled.is_cancelled() {
-                return Err(files::denied());
-            }
-            let relative = absolute
-                .strip_prefix(path)
-                .map_err(|_| files::denied())?
-                .to_path_buf();
-            resolved.push((absolute, root.clone(), relative));
-        }
-        // Physical operations retain roots; each mutation checks its short native commit grant.
-        operation(&resolved)
+    #[test]
+    fn removing_a_nested_grant_cancels_only_it_and_falls_back_to_the_parent_grant() {
+        let parent = tempfile::tempdir().unwrap();
+        let child = parent.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        let environment = Environment::default();
+        environment.configure(&[parent.path().to_path_buf(), child.clone()]);
+        let inner = environment.retirement(&child.join("file")).unwrap();
+        let outer = environment.retirement(&parent.path().join("file")).unwrap();
+
+        environment.configure(std::slice::from_ref(&parent.path().to_path_buf()));
+        assert!(inner.is_cancelled());
+        assert!(!outer.is_cancelled());
+        let fallback = environment.retirement(&child.join("file")).unwrap();
+        assert!(!fallback.is_cancelled());
     }
 
-    pub(crate) fn directory(
-        &self,
-        requested: &str,
-    ) -> std::io::Result<(PathBuf, (u64, u64), CancellationSignal)> {
-        self.with_paths(&[requested], |paths| {
-            let (absolute, root, relative) = &paths[0];
-            let directory = files::directory(&root.directory, relative)?;
-            let metadata = std::fs::File::from(directory.descriptor().try_clone()?).metadata()?;
-            Ok((
-                absolute.clone(),
-                (metadata.dev(), metadata.ino()),
-                root.cancelled.clone(),
-            ))
-        })
+    #[test]
+    fn revocation_cancels_the_grant_and_regrant_issues_a_fresh_signal() {
+        let root = tempfile::tempdir().unwrap();
+        let environment = Environment::default();
+        environment.configure(&[root.path().to_path_buf()]);
+        let first = environment.retirement(&root.path().join("file")).unwrap();
+
+        environment.configure(&[root.path().to_path_buf()]);
+        let unchanged = environment.retirement(&root.path().join("file")).unwrap();
+        first.cancel();
+        assert!(
+            unchanged.is_cancelled(),
+            "an unchanged grant keeps its family"
+        );
+
+        environment.configure(&[]);
+        assert!(environment.retirement(&root.path().join("file")).is_none());
+
+        environment.configure(&[root.path().to_path_buf()]);
+        let regranted = environment.retirement(&root.path().join("file")).unwrap();
+        assert!(!regranted.is_cancelled(), "a regrant is a fresh grant");
     }
 }

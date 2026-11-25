@@ -3552,6 +3552,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7011d97b484a5ebdc4b1fdb3b12d5e4bbbea56e9d22b688f2e79e04b65a7d8a6"
 
 [[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
 name = "pep-508"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4234,6 +4244,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "read-fonts"
 version = "0.39.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4467,7 +4490,7 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "3.2.0"
-source = "git+https://github.com/Caismis/rust-sdk.git?rev=cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0#cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0"
+source = "git+https://github.com/Caismis/rust-sdk.git?rev=53f7aaef44d40d769ab1c274819019c6c457eead#53f7aaef44d40d769ab1c274819019c6c457eead"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -4595,7 +4618,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -4690,7 +4715,6 @@ dependencies = [
  "getrandom 0.3.4",
  "globset",
  "grep-regex",
- "grep-searcher",
  "http",
  "httpdate",
  "ignore",
@@ -4711,13 +4735,20 @@ dependencies = [
  "rmp-serde",
  "rusqlite",
  "rustix",
+ "rustx-confined-fs",
+ "rustx-document-reader",
+ "rustx-execution-client",
+ "rustx-execution-protocol",
+ "rustx-execution-server",
+ "rustx-execution-transport",
+ "rustx-process-supervisor",
+ "rustx-text-edit",
  "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "serde_yaml_ng",
  "sha2 0.10.9",
- "similar 3.2.0",
  "sse-stream",
  "strum 0.27.2",
  "tempfile",
@@ -4733,8 +4764,140 @@ dependencies = [
  "url",
  "uuid",
  "uv-normalize",
- "xberg",
  "zip",
+]
+
+[[package]]
+name = "rustx-confined-fs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "nix",
+ "rustix",
+ "rustx-execution-protocol",
+ "schemars",
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "rustx-document-reader"
+version = "0.1.0"
+dependencies = [
+ "rustx-execution-protocol",
+ "tempfile",
+ "tokio",
+ "xberg",
+]
+
+[[package]]
+name = "rustx-execution-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chumsky",
+ "futures-util",
+ "getrandom 0.3.4",
+ "globset",
+ "grep-regex",
+ "grep-searcher",
+ "libc",
+ "nix",
+ "notify",
+ "pep-508",
+ "pep440_rs",
+ "rmcp",
+ "rustix",
+ "rustx-confined-fs",
+ "rustx-document-reader",
+ "rustx-execution-protocol",
+ "rustx-execution-server",
+ "rustx-execution-transport",
+ "rustx-process-supervisor",
+ "rustx-text-edit",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "similar 3.2.0",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "toml_edit 0.22.27",
+ "tracing",
+ "uv-normalize",
+]
+
+[[package]]
+name = "rustx-execution-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "nix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "rustx-execution-server"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "constant_time_eq",
+ "getrandom 0.3.4",
+ "nix",
+ "rustx-execution-protocol",
+ "rustx-execution-transport",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
+name = "rustx-execution-transport"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "nix",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "rustx-execution-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tungstenite",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "rustx-process-supervisor"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "libc",
+ "nix",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "rustx-text-edit"
+version = "0.1.0"
+dependencies = [
+ "rustx-execution-protocol",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -5914,6 +6077,7 @@ checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
@@ -6132,6 +6296,24 @@ name = "webpki-root-certs"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.12",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -6429,6 +6611,15 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "yoke"

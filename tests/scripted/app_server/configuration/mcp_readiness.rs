@@ -15,9 +15,91 @@ mod draft_prewarm;
 mod profile_controls;
 
 const TOOL: &str = "startup_echo";
+const OLD_CREDENTIAL: &str = "Bearer fixture-original-credential";
+const NEW_CREDENTIAL: &str = "Bearer fixture-rotated-credential";
+
+fn rotation_credential(headers: &http::HeaderMap) -> Option<&'static str> {
+    match headers.get(http::header::AUTHORIZATION)?.to_str().ok()? {
+        OLD_CREDENTIAL => Some(OLD_CREDENTIAL),
+        NEW_CREDENTIAL => Some(NEW_CREDENTIAL),
+        _ => None,
+    }
+}
+
+pub(crate) async fn reconcile_waiting_for_client_does_not_retain_the_unloaded_writer() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::protocol::{Method, MethodResult};
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::session::deletion::SessionDeleteResult;
+
+    let mcp = McpFixture::start().await;
+    let mut fixture = Fixture::with_session_count(None, 0).await;
+    configure(&fixture, &[("late", &mcp)]);
+    let session = create(&fixture).await;
+    fixture.sessions.push(session.clone());
+    let mut execution = fixture.start_execution(0).await;
+    let managed = fixture.load(0).await.unwrap().unwrap();
+    let conversation = managed.conversation_id().clone();
+    let runtime = managed.inspect_runtime().unwrap();
+    runtime
+        .capability()
+        .mcp_invalidation()
+        .lock()
+        .advance(&McpServerId::new("late"));
+    assert!(runtime.needs_mcp_refresh());
+    let old = runtime.weak_inner();
+    drop(runtime);
+    let discovery_count = mcp.control.lists.load(Ordering::SeqCst);
+    assert_eq!(discovery_count, 1);
+    let revision = super::super::deletion::deletion_revision(&fixture, 0).await;
+
+    let (reached, reading) = tokio::sync::oneshot::channel();
+    let (resume, parked) = std::sync::mpsc::channel();
+    fixture
+        .manager
+        .configuration
+        .test_hooks
+        .insert("before_bound_source_read", move || {
+            let _ = reached.send(());
+            let _ = parked.recv();
+        });
+    let connection = crate::app_server::connection::AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    let target = SourceTarget::Workspace {
+        directory: fixture.workspaces[0].clone(),
+    };
+    let reconciliation = tokio::spawn(async move {
+        call(&connection, 1, Method::ConfigurationReconcile { target }).await
+    });
+    bounded(reading).await.unwrap();
+    bounded(fixture.manager.unload(&conversation))
+        .await
+        .unwrap();
+    assert!(
+        old.upgrade().is_none(),
+        "unload returned before releasing the old writer"
+    );
+    assert!(!reconciliation.is_finished());
+    assert!(matches!(
+        bounded(fixture.manager.delete_session(&session.id, &revision))
+            .await
+            .unwrap(),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    resume.send(()).unwrap();
+    assert!(matches!(
+        bounded(reconciliation).await.unwrap(),
+        MethodResult::ConfigurationReceipt { .. }
+    ));
+    assert_eq!(mcp.control.lists.load(Ordering::SeqCst), discovery_count);
+    assert!(bounded(execution.wait()).await.unwrap().success());
+    fixture.close().await;
+    mcp.close().await;
+}
 
 #[derive(Clone)]
 struct StartupServer {
+    legacy: bool,
     gate: Arc<super::super::AsyncGate>,
     schema_kind: Arc<std::sync::Mutex<&'static str>>,
     lists: Arc<AtomicUsize>,
@@ -25,6 +107,8 @@ struct StartupServer {
     completed: tokio::sync::watch::Sender<usize>,
     fail: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
+    credentials: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    closed: tokio::sync::watch::Sender<Vec<&'static str>>,
     name: Arc<std::sync::Mutex<&'static str>>,
     paginate: Arc<AtomicBool>,
     cancelled: tokio::sync::watch::Sender<usize>,
@@ -36,7 +120,11 @@ impl ServerHandler for StartupServer {
     }
 
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
-        std::borrow::Cow::Owned(vec![ProtocolVersion::V_2026_07_28])
+        std::borrow::Cow::Owned(vec![if self.legacy {
+            ProtocolVersion::V_2025_11_25
+        } else {
+            ProtocolVersion::V_2026_07_28
+        }])
     }
 
     fn discover(
@@ -44,10 +132,18 @@ impl ServerHandler for StartupServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<DiscoverResult, rmcp::ErrorData>> {
         self.discovers.fetch_add(1, Ordering::SeqCst);
-        std::future::ready(Ok(DiscoverResult::from_server_info(
-            vec![ProtocolVersion::V_2026_07_28],
-            self.get_info(),
-        )))
+        std::future::ready(if self.legacy {
+            Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                "legacy fixture requires initialize",
+                None,
+            ))
+        } else {
+            Ok(DiscoverResult::from_server_info(
+                vec![ProtocolVersion::V_2026_07_28],
+                self.get_info(),
+            ))
+        })
     }
 
     async fn list_tools(
@@ -94,10 +190,23 @@ impl ServerHandler for StartupServer {
     fn call_tool(
         &self,
         _request: rmcp::model::CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<rmcp::model::CallToolResponse, rmcp::ErrorData>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        std::future::ready(Ok(rmcp::model::CallToolResult::success(vec![]).into()))
+        let credential = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|request| rotation_credential(&request.headers));
+        let blocks = credential.map_or_else(Vec::new, |credential| {
+            self.credentials.lock().unwrap().push(credential);
+            let response = if credential == OLD_CREDENTIAL {
+                "original binding business result"
+            } else {
+                "rotated binding business result"
+            };
+            vec![rmcp::model::ContentBlock::text(response)]
+        });
+        std::future::ready(Ok(rmcp::model::CallToolResult::success(blocks).into()))
     }
 }
 
@@ -113,11 +222,16 @@ impl McpFixture {
     }
 
     async fn named(name: &'static str) -> Self {
+        Self::with_lifecycle(name, false).await
+    }
+
+    async fn with_lifecycle(name: &'static str, legacy: bool) -> Self {
         use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService,
         };
         let control = StartupServer {
+            legacy,
             gate: Arc::new(super::super::AsyncGate::default()),
             schema_kind: Arc::new(std::sync::Mutex::new("string")),
             lists: Arc::new(AtomicUsize::new(0)),
@@ -125,6 +239,8 @@ impl McpFixture {
             completed: tokio::sync::watch::channel(0).0,
             fail: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
+            credentials: Arc::default(),
+            closed: tokio::sync::watch::channel(Vec::new()).0,
             name: Arc::new(std::sync::Mutex::new(name)),
             paginate: Arc::new(AtomicBool::new(false)),
             cancelled: tokio::sync::watch::channel(0).0,
@@ -139,10 +255,29 @@ impl McpFixture {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let closed = control.closed.clone();
+        let app =
+            axum::Router::new()
+                .nest_service("/mcp", service)
+                .layer(axum::middleware::from_fn(
+                    move |request: axum::extract::Request, next: axum::middleware::Next| {
+                        let closed = closed.clone();
+                        async move {
+                            let credential = (request.method() == http::Method::DELETE)
+                                .then(|| rotation_credential(request.headers()))
+                                .flatten();
+                            let response = next.run(request).await;
+                            if let Some(credential) = credential
+                                && response.status().is_success()
+                            {
+                                closed.send_modify(|settled| settled.push(credential));
+                            }
+                            response
+                        }
+                    },
+                ));
         let task = tokio::spawn(async move {
-            axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
-                .await
-                .unwrap();
+            axum::serve(listener, app).await.unwrap();
         });
         Self {
             endpoint,
@@ -161,6 +296,8 @@ async fn create(fixture: &Fixture) -> SessionSnapshot {
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })
@@ -274,6 +411,83 @@ async fn wait_runtime_catalog(
         .await
         .unwrap();
     assert!(runtime.runtime_resources().revision().get() > 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bound_credential_rotation_preserves_the_admitted_attempt_and_closes_after_last_lease() {
+    bounded(async {
+        // Use the stateful lifecycle so the fixture can prove the two physical closes.
+        let mcp = McpFixture::with_lifecycle(TOOL, true).await;
+        let mut fixture = Fixture::with_session_count(Some(TOOL), 0).await;
+        configure(&fixture, &[("late", &mcp)]);
+        let workspace = &fixture.workspaces[0];
+        let config = workspace.join(".agents/mcp.toml");
+        let write_binding = |credential| {
+            std::fs::write(
+                &config,
+                format!("[mcp_servers.late]\nurl = {:?}\nheaders = {{ Authorization = {credential:?} }}\n", mcp.endpoint),
+            )
+            .unwrap();
+        };
+        write_binding(OLD_CREDENTIAL);
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let old = runtime.runtime_resources();
+        let retained = old.capability().acquire_mcp_leases().unwrap();
+        let mut closed = mcp.control.closed.subscribe();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
+
+        runtime.submit_inbound(input("request-A: use the original MCP binding")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let admitted = runtime.configuration_cut().admitted_attempt.unwrap();
+        write_binding(NEW_CREDENTIAL);
+        let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        fixture.manager.reconcile_configuration(&target).await.unwrap();
+        let staged = settled(&fixture, 0).await;
+        assert_eq!(staged.units.get(&ApplyUnit::Capabilities), Some(&UnitApplication::Ready));
+        assert_eq!(runtime.runtime_resources().revision(), old.revision());
+        assert_eq!(runtime.configuration_cut().admitted_attempt, Some(admitted));
+        assert!(closed.borrow().is_empty());
+        assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
+
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        let current = runtime.runtime_resources();
+        assert_ne!(current.revision(), old.revision());
+        assert_eq!(current.capability().tool_registry().definitions(), old.capability().tool_registry().definitions());
+        assert_eq!(*mcp.control.credentials.lock().unwrap(), [OLD_CREDENTIAL]);
+        assert!(closed.borrow().is_empty(), "the independent old execution lease still owns close");
+
+        runtime.submit_inbound(input("request-B: use the rotated MCP binding")).unwrap();
+        fixture.gates[1].wait_entered().await;
+        fixture.gates[1].release();
+        settlement.wait().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[1].contains("original binding business result"));
+        assert!(requests[3].contains("rotated binding business result"));
+        assert!(requests.iter().all(|request| !request.contains(OLD_CREDENTIAL) && !request.contains(NEW_CREDENTIAL)));
+        assert_eq!(*mcp.control.credentials.lock().unwrap(), [OLD_CREDENTIAL, NEW_CREDENTIAL]);
+        assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
+
+        drop(retained);
+        closed.wait_for(|receipts| receipts.contains(&OLD_CREDENTIAL)).await.unwrap();
+        runtime.capability().settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(*closed.borrow(), [OLD_CREDENTIAL]);
+        fixture.close().await;
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+        assert_eq!(*closed.borrow(), [OLD_CREDENTIAL, NEW_CREDENTIAL]);
+        mcp.close().await;
+    }).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -735,6 +949,13 @@ async fn submission_clock_survives_unload_handoff_and_competing_attach_claims() 
     let session = create(&fixture).await;
     fixture.sessions.push(session.clone());
     fixture.manager.load(&session.id, None).await.unwrap();
+    // This fixture exercises a cold discovery clock after unload.
+    fixture
+        .manager
+        .configuration_runtime(&session.id)
+        .unwrap()
+        .capability()
+        .forget_cached_declarations();
     let id = session.active_conversation_id.clone();
     let probe = fixture.manager.probe(&id);
     probe.before_shutdown.arm();
@@ -2169,6 +2390,12 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
         std::fs::write(config, document).unwrap();
         let session = f.sessions[0].clone();
         f.load(0).await.unwrap().unwrap();
+        // This fixture exercises a cold discovery clock after unload.
+        f.manager
+            .configuration_runtime(&session.id)
+            .unwrap()
+            .capability()
+            .forget_cached_declarations();
         let mutation = if workflow {
             ScheduleMutation::CreateWorkflow {
                 title: "Cold workflow".into(),

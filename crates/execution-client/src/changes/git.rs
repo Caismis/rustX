@@ -1,0 +1,853 @@
+//! Session-private Git index and objects; worktree bytes stay in supervised Git.
+use super::{capture::MAX_FILE_BYTES, storage::SnapshotDirectory};
+use rustx_process_supervisor::process_runner::SupervisedCommandSpec;
+use rustx_process_supervisor::signal::ProcessSignal;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
+const MAX_RETAINED_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_RETAINED_OBJECTS: usize = 65_536;
+
+#[derive(Clone)]
+pub(super) struct Repository {
+    pub root: PathBuf,
+    workspace: PathBuf,
+    pathspec: String,
+    scratch: Arc<SnapshotDirectory>,
+    objects: PathBuf,
+    exclusion: PathBuf,
+    gate: Arc<tokio::sync::Mutex<ObjectUsage>>,
+    index_ready: Arc<AtomicBool>,
+    pub cancellation: ProcessSignal,
+    #[cfg(test)]
+    pub commands: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+// The physical driver retains the attempt until Git has reaped. Dropping
+// the attempt rolls back Git's index and temporary objects together.
+struct SnapshotLease {
+    stage: tempfile::TempDir,
+    usage: tokio::sync::OwnedMutexGuard<ObjectUsage>,
+}
+
+#[derive(Default)]
+struct ObjectUsage {
+    bytes: u64,
+    count: usize,
+}
+
+impl ObjectUsage {
+    fn admit(
+        &mut self,
+        bytes: u64,
+        count: usize,
+        byte_limit: u64,
+        count_limit: usize,
+    ) -> Result<(), String> {
+        let total_bytes = self.bytes.saturating_add(bytes);
+        let total_count = self.count.saturating_add(count);
+        if total_bytes > byte_limit || total_count > count_limit {
+            return Err("Workspace Changes reached its binding's private Git object limit".into());
+        }
+        self.bytes = total_bytes;
+        self.count = total_count;
+        Ok(())
+    }
+}
+
+fn publish_objects(
+    stage: &Path,
+    retained: &Path,
+    usage: &mut ObjectUsage,
+    byte_limit: u64,
+    count_limit: usize,
+) -> Result<(), String> {
+    use std::fs;
+
+    let publish = || -> std::io::Result<Vec<(PathBuf, u64)>> {
+        let mut new = Vec::new();
+        let mut candidate = ObjectUsage {
+            bytes: usage.bytes,
+            count: usage.count,
+        };
+        for entry in fs::read_dir(stage)? {
+            let entry = entry?;
+            let prefix = entry.file_name();
+            if !hex_name(&prefix, &[2]) || !entry.file_type()?.is_dir() {
+                return Err(std::io::Error::other("invalid staged Git object directory"));
+            }
+            for file in fs::read_dir(entry.path())? {
+                let file = file?;
+                let name = file.file_name();
+                let metadata = fs::symlink_metadata(file.path())?;
+                if !hex_name(&name, &[38, 62]) || !metadata.is_file() {
+                    return Err(std::io::Error::other("invalid staged Git object"));
+                }
+                let relative = PathBuf::from(&prefix).join(name);
+                if retained.join(&relative).try_exists()? {
+                    continue;
+                }
+                candidate
+                    .admit(metadata.len(), 1, byte_limit, count_limit)
+                    .map_err(std::io::Error::other)?;
+                new.push((relative, metadata.len()));
+            }
+        }
+        Ok(new)
+    };
+    // Budget the whole attempt before publishing any object or replacing the
+    // private index. Existing observations keep all objects they refer to.
+    let new = publish().map_err(|error| error.to_string())?;
+    for (relative, bytes) in new {
+        let destination = retained.join(&relative);
+        fs::create_dir_all(destination.parent().ok_or("invalid Git object path")?)
+            .and_then(|()| fs::hard_link(stage.join(&relative), &destination))
+            .map_err(|error| error.to_string())?;
+        // Hard links count once. An I/O error on a later object can leave
+        // earlier links installed; those remain counted under the same gate.
+        usage.admit(bytes, 1, byte_limit, count_limit)?;
+    }
+    Ok(())
+}
+
+fn hex_name(name: &std::ffi::OsStr, lengths: &[usize]) -> bool {
+    let bytes = name.as_encoded_bytes();
+    lengths.contains(&bytes.len()) && bytes.iter().all(u8::is_ascii_hexdigit)
+}
+
+pub(super) struct Change {
+    pub path: String,
+    pub old_path: String,
+    pub added: usize,
+    pub deleted: usize,
+    pub binary: bool,
+}
+
+fn quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn invocation(args: &[&str]) -> String {
+    [
+        "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.attributesFile=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.splitIndex=false",
+        "-c",
+        "core.untrackedCache=false",
+    ]
+    .into_iter()
+    .chain(args.iter().copied())
+    .map(quote)
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn environment() -> Vec<(String, String)> {
+    let mut environment = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .filter(|(key, _)| {
+            !key.starts_with("GIT_")
+                && !key.starts_with("BASH_FUNC_")
+                && !["BASH_ENV", "ENV", "BASHOPTS", "SHELLOPTS"].contains(&key.as_str())
+        })
+        .collect::<Vec<_>>();
+    environment.extend([
+        ("GIT_CONFIG_COUNT".into(), "0".into()),
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
+        ("LC_ALL".into(), "C".into()),
+        ("GIT_NO_LAZY_FETCH".into(), "1".into()),
+        ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+        ("GIT_ATTR_NOSYSTEM".into(), "1".into()),
+    ]);
+    environment
+}
+
+/// A missing marker on every ancestor proves Git cannot discover a repository.
+/// Ambiguous filesystem results and possible bare repositories use discovery.
+pub(super) fn may_have_repository(cwd: &Path) -> bool {
+    let Ok(cwd) = cwd.canonicalize() else {
+        return true;
+    };
+    for directory in cwd.ancestors() {
+        for marker in [".git", "HEAD"] {
+            match std::fs::symlink_metadata(directory.join(marker)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) | Err(_) => return true,
+            }
+        }
+    }
+    false
+}
+
+impl Repository {
+    pub async fn locate(
+        cwd: &Path,
+        scratch: Arc<OnceLock<Arc<SnapshotDirectory>>>,
+        cancellation: ProcessSignal,
+    ) -> Result<Option<Self>, String> {
+        if !may_have_repository(cwd) {
+            return Ok(None);
+        }
+        // Read-only discovery/config parsing never executes repository programs.
+        let command = format!(
+            "{} && printf '\\0' && exec {}",
+            invocation(&[
+                "rev-parse",
+                "--show-toplevel",
+                "--absolute-git-dir",
+                "--git-path",
+                "objects",
+                "--show-object-format",
+                "--git-path",
+                "info/exclude",
+                "--git-path",
+                "info/attributes",
+                "--git-path",
+                "info/sparse-checkout"
+            ]),
+            invocation(&["config", "--null", "--list"])
+        );
+        let (code, output, stderr) = super::command::run(
+            SupervisedCommandSpec {
+                command,
+                cwd: cwd.to_owned(),
+                command_environment: environment(),
+                timeout: Some(Duration::from_secs(30)),
+                cancellation: cancellation.child(),
+            },
+            8 * 1024 * 1024,
+            Arc::clone(&scratch),
+        )
+        .await?;
+        if (code == 127 && String::from_utf8_lossy(&stderr).contains("git: command not found"))
+            || (code == 128
+                && (String::from_utf8_lossy(&stderr).contains("not a git repository")
+                    || String::from_utf8_lossy(&stderr).contains("must be run in a work tree")))
+        {
+            return Ok(None);
+        }
+        if code != 0 {
+            return Err(String::from_utf8_lossy(&stderr).trim().to_owned());
+        }
+        let (location, config) = split_once(&output, 0).ok_or("invalid Git discovery output")?;
+        let location = std::str::from_utf8(location).map_err(|error| error.to_string())?;
+        let mut lines = location.lines();
+        let root = PathBuf::from(lines.next().ok_or("missing Git root")?);
+        let workspace = cwd.canonicalize().map_err(|error| error.to_string())?;
+        let scope = workspace
+            .strip_prefix(&root)
+            .map_err(|_| "Git root does not contain the admitted Workspace")?;
+        let scope = scope.to_str().ok_or("Git scope is not a UTF-8 path")?;
+        let pathspec = format!(":(top,literal){scope}");
+        let git_dir = PathBuf::from(lines.next().ok_or("missing Git directory")?);
+        let objects = cwd
+            .join(lines.next().ok_or("missing Git objects")?)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let format = lines.next().ok_or("missing Git object format")?;
+        if !["sha1", "sha256"].contains(&format) {
+            return Err("unsupported Git object format".into());
+        }
+        if scratch.get().is_none() {
+            let directory = super::create_snapshot_directory(&std::env::temp_dir())
+                .map_err(|error| error.to_string())?;
+            let _ = scratch.set(Arc::new(directory));
+        }
+        let scratch = Arc::clone(scratch.get().ok_or("missing Git scratch directory")?);
+        let info = ["info/exclude", "info/attributes", "info/sparse-checkout"]
+            .map(|_| {
+                lines
+                    .next()
+                    .map(|path| cwd.join(path))
+                    .ok_or("missing Git info path")
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        seed(&git_dir, &scratch.path().join("git"), config, format, &info)?;
+        let repository = Self {
+            root,
+            workspace,
+            pathspec,
+            objects,
+            exclusion: scratch.root().to_owned(),
+            scratch,
+            gate: Arc::default(),
+            index_ready: Arc::default(),
+            cancellation,
+            #[cfg(test)]
+            commands: Arc::default(),
+        };
+        Ok(Some(repository))
+    }
+
+    /// The imported index was authored with different filter authority. Its
+    /// stat cache cannot certify our before-image even when the file is clean.
+    /// Normalize ordinary tracked entries once, before producing a baseline;
+    /// later snapshots reuse only entries prepared by our private Git config.
+    async fn normalize_imported_index(&self, lease: Arc<SnapshotLease>) -> Result<(), String> {
+        use std::io::{BufRead as _, Write as _};
+        // Stream the inventory through private scratch rather than imposing a
+        // new repository-size limit or retaining every pathname in memory.
+        let inventory = Arc::new(
+            tempfile::NamedTempFile::new_in(self.scratch.path())
+                .map_err(|error| error.to_string())?,
+        );
+        // First reconcile deletions and directory/symlink replacements using
+        // Git itself; renormalize requires existing, covered index entries.
+        self.run(
+            format!(
+                "{}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi; {} > {}",
+                self.add_command(),
+                invocation(&["ls-files", "--cached", "-v", "-z", "--", &self.pathspec]),
+                quote(&inventory.path().to_string_lossy())
+            ),
+            1024,
+            &self.cancellation,
+            Some(&lease),
+            Arc::clone(&inventory),
+        )
+        .await?;
+        let entries =
+            std::io::BufReader::new(inventory.reopen().map_err(|error| error.to_string())?);
+        let mut paths = tempfile::NamedTempFile::new_in(self.scratch.path())
+            .map_err(|error| error.to_string())?;
+        for entry in entries.split(0) {
+            let entry = entry.map_err(|error| error.to_string())?;
+            // -v emits lowercase for assume-unchanged and S for skip-worktree.
+            // Renormalizing those would erase their intentional Git coverage.
+            if let Some(path) = entry.strip_prefix(b"H ") {
+                if let Ok(excluded) = self.exclusion.strip_prefix(&self.root) {
+                    let prefix = excluded.as_os_str().as_encoded_bytes();
+                    if path == prefix
+                        || path
+                            .strip_prefix(prefix)
+                            .is_some_and(|tail| tail.starts_with(b"/"))
+                    {
+                        continue;
+                    }
+                }
+                paths.write_all(path).map_err(|error| error.to_string())?;
+                paths.write_all(&[0]).map_err(|error| error.to_string())?;
+            }
+        }
+        if paths
+            .as_file()
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .len()
+            != 0
+        {
+            let command = format!(
+                "GIT_LITERAL_PATHSPECS=1 {}",
+                invocation(&[
+                    "add",
+                    "--renormalize",
+                    "--ignore-errors",
+                    &format!("--pathspec-from-file={}", paths.path().to_string_lossy()),
+                    "--pathspec-file-nul",
+                ])
+            );
+            self.run(command, 1024, &self.cancellation, Some(&lease), paths)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        command: String,
+        limit: usize,
+        cancellation: &ProcessSignal,
+        attempt: Option<&Arc<SnapshotLease>>,
+        keepalive: impl Send + 'static,
+    ) -> Result<Vec<u8>, String> {
+        if cancellation.is_cancelled() {
+            return Err("Git snapshot was cancelled".into());
+        }
+        let mut environment = environment();
+        let git = self.scratch.path().join("git");
+        let retained = git.join("objects");
+        let working = attempt.map_or(git.as_path(), |attempt| attempt.stage.path());
+        // Git accepts C-quoted alternates, including colons/newlines.
+        let source = serde_json::to_string(&self.objects).map_err(|error| error.to_string())?;
+        let alternates = if attempt.is_some() {
+            let retained = serde_json::to_string(&retained).map_err(|error| error.to_string())?;
+            format!("{retained}:{source}")
+        } else {
+            source
+        };
+        environment.extend([
+            ("GIT_DIR".into(), git.to_string_lossy().into_owned()),
+            (
+                "GIT_WORK_TREE".into(),
+                self.root.to_string_lossy().into_owned(),
+            ),
+            (
+                "GIT_INDEX_FILE".into(),
+                working.join("index").to_string_lossy().into_owned(),
+            ),
+            (
+                "GIT_OBJECT_DIRECTORY".into(),
+                working.join("objects").to_string_lossy().into_owned(),
+            ),
+            ("GIT_ALTERNATE_OBJECT_DIRECTORIES".into(), alternates),
+        ]);
+        #[cfg(test)]
+        self.commands
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (code, output, stderr) = super::command::run(
+            SupervisedCommandSpec {
+                command,
+                cwd: self.root.clone(),
+                command_environment: environment,
+                timeout: Some(Duration::from_secs(30)),
+                cancellation: cancellation.child(),
+            },
+            limit,
+            (Arc::clone(&self.scratch), attempt.cloned(), keepalive),
+        )
+        .await?;
+        if code != 0 {
+            return Err(format!(
+                "Git observation failed ({code}): {}",
+                String::from_utf8_lossy(&stderr).trim()
+            ));
+        }
+        Ok(output)
+    }
+
+    fn add_command(&self) -> String {
+        let add = invocation(&["add", "--all", "--ignore-errors", "--", &self.pathspec]);
+        let exclusion = self.exclusion.strip_prefix(&self.root);
+        match exclusion {
+            Ok(relative) => format!(
+                "{add} {}",
+                quote(&format!(
+                    ":(top,literal,exclude){}",
+                    relative.to_string_lossy()
+                ))
+            ),
+            Err(_) => add,
+        }
+    }
+
+    pub async fn snapshot(&self) -> Result<String, String> {
+        // The physical command driver owns the lock until it has reaped Git,
+        // even when an attempt abandons its waiter during cancellation.
+        let usage = Arc::clone(&self.gate).lock_owned().await;
+        let git = self.scratch.path().join("git");
+        let stage = tempfile::tempdir_in(self.scratch.path()).map_err(|error| error.to_string())?;
+        std::fs::create_dir(stage.path().join("objects")).map_err(|error| error.to_string())?;
+        stage_index(&git.join("index"), &stage.path().join("index"))
+            .map_err(|error| error.to_string())?;
+        let mut attempt = Arc::new(SnapshotLease { stage, usage });
+        if !self.index_ready.load(Ordering::Acquire) {
+            self.normalize_imported_index(Arc::clone(&attempt)).await?;
+        }
+        let add = self.add_command();
+        let command = format!(
+            "{add}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi; exec {}",
+            invocation(&["write-tree"])
+        );
+        let output = self
+            .run(command, 1024, &self.cancellation, Some(&attempt), ())
+            .await?;
+        let tree = std::str::from_utf8(&output)
+            .map_err(|error| error.to_string())?
+            .trim();
+        if ![40, 64].contains(&tree.len()) || !tree.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("invalid Git snapshot tree".into());
+        }
+        if self.cancellation.is_cancelled() {
+            return Err("Git snapshot was cancelled".into());
+        }
+        let attempt = Arc::get_mut(&mut attempt).ok_or("Git snapshot process is unresolved")?;
+        publish_objects(
+            &attempt.stage.path().join("objects"),
+            &git.join("objects"),
+            &mut attempt.usage,
+            MAX_RETAINED_OBJECT_BYTES,
+            MAX_RETAINED_OBJECTS,
+        )?;
+        std::fs::rename(attempt.stage.path().join("index"), git.join("index"))
+            .map_err(|error| error.to_string())?;
+        self.index_ready.store(true, Ordering::Release);
+        Ok(tree.to_owned())
+    }
+
+    pub async fn changes(
+        &self,
+        before: &str,
+        after: &str,
+    ) -> Result<BTreeMap<String, Change>, String> {
+        if before == after {
+            return Ok(BTreeMap::new());
+        }
+        let output = self
+            .run(
+                format!(
+                    "exec {}",
+                    invocation(&[
+                        "diff-tree",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "-r",
+                        "-M",
+                        "--numstat",
+                        "-z",
+                        before,
+                        after,
+                        "--",
+                        &self.pathspec,
+                    ])
+                ),
+                8 * 1024 * 1024,
+                &self.cancellation,
+                None,
+                (),
+            )
+            .await?;
+        parse_numstat(&output)
+    }
+
+    pub async fn bytes(
+        &self,
+        tree: &str,
+        path: &str,
+        cancellation: &ProcessSignal,
+    ) -> Result<Option<Vec<u8>>, String> {
+        // Diff endpoints are repository-relative. A rename crossing the Workspace
+        // edge is an addition/deletion, and comparisons may never read its far side.
+        let path = Path::new(path);
+        if !self.root.join(path).starts_with(&self.workspace)
+            || crate::relative_entry(path).is_err()
+        {
+            return Err("Git comparison path is outside the Workspace".to_owned());
+        }
+        let path = path.to_str().ok_or("Git source is not a UTF-8 path")?;
+        let output = self
+            .run(
+                format!(
+                    "GIT_LITERAL_PATHSPECS=1 exec {}",
+                    invocation(&["ls-tree", "-z", "-l", tree, "--", path])
+                ),
+                8 * 1024 * 1024,
+                cancellation,
+                None,
+                (),
+            )
+            .await?;
+        let entry = output
+            .split(|byte| *byte == b'\t')
+            .next()
+            .unwrap_or_default();
+        let entry = std::str::from_utf8(entry).map_err(|error| error.to_string())?;
+        let fields = entry.split_whitespace().collect::<Vec<_>>();
+        if fields.get(1) != Some(&"blob") {
+            return Ok(Some(Vec::new()));
+        }
+        let size: usize = fields
+            .get(3)
+            .ok_or("missing Git blob size")?
+            .parse()
+            .map_err(|_| "invalid Git blob size")?;
+        if size > MAX_FILE_BYTES {
+            return Ok(None);
+        }
+        self.run(
+            format!("exec {}", invocation(&["cat-file", "blob", fields[2]])),
+            MAX_FILE_BYTES,
+            cancellation,
+            None,
+            (),
+        )
+        .await
+        .map(Some)
+    }
+
+    /// DSH coverage: final private-index gitlinks are opaque; only ignored
+    /// paths and paths outside the repository use file-tool copies.
+    pub async fn uncovered(&self, paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+        let mut uncovered = paths
+            .iter()
+            .filter(|path| !path.starts_with(&self.root))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let inside = paths
+            .iter()
+            .filter(|path| path.starts_with(&self.root))
+            .collect::<Vec<_>>();
+        if inside.is_empty() {
+            return Ok(uncovered);
+        }
+        let output = self
+            .run(
+                format!("exec {}", invocation(&["ls-files", "-z", "--stage"])),
+                8 * 1024 * 1024,
+                &self.cancellation,
+                None,
+                (),
+            )
+            .await?;
+        let links = output
+            .split(|byte| *byte == 0)
+            .filter(|entry| entry.starts_with(b"160000 "))
+            .filter_map(|entry| {
+                split_once(entry, b'\t')
+                    .map(|(_, path)| self.root.join(String::from_utf8_lossy(path).as_ref()))
+            })
+            .collect::<Vec<_>>();
+        let candidates = inside
+            .into_iter()
+            .filter(|path| !links.iter().any(|link| path.starts_with(link)))
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Ok(uncovered);
+        }
+        // Feed arbitrary filenames without shell interpretation or argv limits.
+        let input = tempfile::NamedTempFile::new_in(self.scratch.path())
+            .map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        for path in candidates {
+            bytes.extend_from_slice(
+                path.strip_prefix(&self.root)
+                    .map_err(|error| error.to_string())?
+                    .as_os_str()
+                    .as_encoded_bytes(),
+            );
+            bytes.push(0);
+        }
+        std::fs::write(input.path(), bytes).map_err(|error| error.to_string())?;
+        let command = format!(
+            "{} < {}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi",
+            invocation(&["check-ignore", "-z", "--stdin"]),
+            quote(&input.path().to_string_lossy())
+        );
+        let output = self
+            .run(command, 8 * 1024 * 1024, &self.cancellation, None, input)
+            .await?;
+        for path in output
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+        {
+            uncovered.insert(self.root.join(String::from_utf8_lossy(path).as_ref()));
+        }
+        Ok(uncovered)
+    }
+}
+
+/// Copy only data and allowlisted configuration, never filter/diff commands or
+/// includes. This keeps observation from executing user programs (including LFS).
+fn seed(
+    source: &Path,
+    destination: &Path,
+    config: &[u8],
+    format: &str,
+    info: &[PathBuf],
+) -> Result<(), String> {
+    let setup = || -> std::io::Result<()> {
+        std::fs::create_dir(destination)?;
+        for directory in ["objects", "refs", "info"] {
+            std::fs::create_dir(destination.join(directory))?;
+        }
+        std::fs::write(destination.join("HEAD"), "ref: refs/heads/snapshot\n")?;
+        let mut private = if format == "sha256" {
+            "[core]\nrepositoryformatversion=1\n[extensions]\nobjectFormat=sha256\n".to_owned()
+        } else {
+            "[core]\nrepositoryformatversion=0\n".to_owned()
+        };
+        // Snapshot objects are temporary: skip compression, retaining Git's
+        // object IDs and content while trading temporary space for CPU.
+        private.push_str("[core]\nbare=false\ncompression=0\n[index]\nthreads=1\n");
+        for entry in config.split(|byte| *byte == 0) {
+            let Some((key, value)) = split_once(entry, b'\n') else {
+                continue;
+            };
+            let key = std::str::from_utf8(key).map_err(std::io::Error::other)?;
+            if let Some(name) = key.strip_prefix("core.")
+                && [
+                    "filemode",
+                    "symlinks",
+                    "ignorecase",
+                    "excludesfile",
+                    "autocrlf",
+                    "eol",
+                    "sparsecheckout",
+                    "sparsecheckoutcone",
+                ]
+                .contains(&name)
+            {
+                let value = std::str::from_utf8(value).map_err(std::io::Error::other)?;
+                writeln!(private, "[core]\n{name}={}", serde_json::to_string(value)?)
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+        std::fs::write(destination.join("config"), private)?;
+        copy_if_present(&source.join("index"), &destination.join("index"))?;
+        for (name, path) in ["info/exclude", "info/attributes", "info/sparse-checkout"]
+            .iter()
+            .zip(info)
+        {
+            copy_if_present(path, &destination.join(name))?;
+        }
+        // Split indices refer to sharedindex files beside the index. Copying
+        // them first lets core.splitIndex=false expand only the private copy.
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("sharedindex.")
+            {
+                std::fs::copy(entry.path(), destination.join(entry.file_name()))?;
+            }
+        }
+        Ok(())
+    };
+    setup().map_err(|error| error.to_string())
+}
+
+// Git uses the index modification time to decide whether a cached entry
+// may have changed within the same filesystem clock tick. A fresh mtime
+// would incorrectly certify entries that Git previously considered racy.
+fn stage_index(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let metadata = match std::fs::metadata(source) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    std::fs::copy(source, destination)?;
+    std::fs::File::open(destination)?
+        .set_times(std::fs::FileTimes::new().set_modified(metadata.modified()?))
+}
+
+fn copy_if_present(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match std::fs::copy(source, destination) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn split_once(bytes: &[u8], separator: u8) -> Option<(&[u8], &[u8])> {
+    let index = bytes.iter().position(|byte| *byte == separator)?;
+    Some((&bytes[..index], &bytes[index + 1..]))
+}
+
+fn parse_numstat(output: &[u8]) -> Result<BTreeMap<String, Change>, String> {
+    let output = std::str::from_utf8(output).map_err(|error| error.to_string())?;
+    if !output.is_empty() && !output.ends_with('\0') {
+        return Err("numstat output is not NUL-terminated".into());
+    }
+    let mut records = output.split_terminator('\0');
+    let mut changes = BTreeMap::new();
+    while let Some(record) = records.next() {
+        let mut fields = record.splitn(3, '\t');
+        let added = fields.next().ok_or("missing addition count")?;
+        let deleted = fields.next().ok_or("missing deletion count")?;
+        let initial = fields.next().ok_or("missing file path")?;
+        let (old_path, path) = if initial.is_empty() {
+            (
+                records.next().ok_or("missing rename source")?,
+                records.next().ok_or("missing rename target")?,
+            )
+        } else {
+            (initial, initial)
+        };
+        let binary = added == "-" || deleted == "-";
+        changes.insert(
+            path.to_owned(),
+            Change {
+                path: path.into(),
+                old_path: old_path.into(),
+                binary,
+                added: if binary {
+                    0
+                } else {
+                    added.parse().map_err(|_| "invalid addition count")?
+                },
+                deleted: if binary {
+                    0
+                } else {
+                    deleted.parse().map_err(|_| "invalid deletion count")?
+                },
+            },
+        );
+    }
+    Ok(changes)
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+
+    #[test]
+    fn staging_the_index_preserves_gits_racy_stat_timestamp() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("source");
+        let staged = scratch.path().join("staged");
+        std::fs::write(&source, b"index").unwrap();
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(123_456);
+        std::fs::File::open(&source)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        stage_index(&source, &staged).unwrap();
+        assert_eq!(std::fs::read(&staged).unwrap(), b"index");
+        assert_eq!(std::fs::metadata(staged).unwrap().modified().unwrap(), old);
+    }
+
+    #[test]
+    fn retained_git_object_quota_checks_whole_attempt_and_deduplicates() {
+        let scratch = tempfile::tempdir().unwrap();
+        let stage = scratch.path().join("attempt");
+        let retained = scratch.path().join("objects");
+        let first = PathBuf::from("12").join("a".repeat(38));
+        let second = PathBuf::from("34").join("b".repeat(38));
+        let third = PathBuf::from("56").join("c".repeat(38));
+        for relative in [&first, &second, &third] {
+            std::fs::create_dir_all(stage.join(relative.parent().unwrap())).unwrap();
+        }
+        let mut usage = ObjectUsage::default();
+        std::fs::write(stage.join(&first), b"1234").unwrap();
+        publish_objects(&stage, &retained, &mut usage, 8, 2).unwrap();
+        assert_eq!((usage.bytes, usage.count), (4, 1));
+
+        std::fs::write(stage.join(&second), b"ab").unwrap();
+        std::fs::write(stage.join(&third), b"XYZ").unwrap();
+        assert!(
+            publish_objects(&stage, &retained, &mut usage, 8, 3)
+                .unwrap_err()
+                .contains("object limit")
+        );
+        assert!(
+            publish_objects(&stage, &retained, &mut usage, 9, 2)
+                .unwrap_err()
+                .contains("object limit")
+        );
+        assert_eq!((usage.bytes, usage.count), (4, 1));
+        assert!(!retained.join(&second).exists());
+        assert!(!retained.join(&third).exists());
+        std::fs::remove_file(stage.join(&third)).unwrap();
+        publish_objects(&stage, &retained, &mut usage, 8, 2).unwrap();
+        assert_eq!((usage.bytes, usage.count), (6, 2));
+        assert_eq!(std::fs::read(retained.join(first)).unwrap(), b"1234");
+        assert_eq!(std::fs::read(retained.join(second)).unwrap(), b"ab");
+    }
+}

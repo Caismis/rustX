@@ -53,6 +53,7 @@ pub mod session;
 pub(crate) mod session_activity;
 pub mod session_controller;
 pub(crate) mod session_display_projection;
+pub mod session_inputs;
 pub mod session_runtime_manager;
 pub(crate) mod session_title;
 pub mod settings;

@@ -88,7 +88,16 @@ impl SessionCatalog {
         template: &SessionPersistentState,
         seed: &[MessageBlock],
     ) -> Result<PreparedLineage, SessionError> {
-        let (session_id, node_id, conversation_id) = self.allocate_ids()?;
+        self.prepare_session_for(template, seed, None)
+    }
+
+    pub(crate) fn prepare_session_for(
+        &self,
+        template: &SessionPersistentState,
+        seed: &[MessageBlock],
+        session: Option<&SessionId>,
+    ) -> Result<PreparedLineage, SessionError> {
+        let (session_id, node_id, conversation_id) = self.allocate_ids_for(session)?;
         self.prepare_session_with_ids(
             template,
             session_id,

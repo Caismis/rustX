@@ -5,8 +5,7 @@
 //! end to end, deterministically and without sleeps:
 //!
 //! 1. A background Bash execution whose combined output crosses the preview
-//!    bound spills the complete text into the conversation's managed
-//!    tool-output root and publishes a **text-only** terminal inbound
+//!    bound retains the complete text on the Session Execution Client and publishes a **text-only** terminal inbound
 //!    message — no `UserContentBlock::File` is ever created for textual
 //!    overflow. After that message is adopted into the canonical
 //!    conversation, the next text-only model invocation passes local
@@ -28,14 +27,14 @@ use rustx::events::types::AttemptOutcome;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
 use rustx::model::{OpenAiAdapterConfig, OpenAiChatCompletionsAdapter};
-use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::{
     AgentId, ArtifactId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
 };
 use rustx::runtime::types::CancellationReason;
+use rustx::runtime::{CancellationSignal, ExecutionCancellation};
 use rustx::tools::executor::{PreflightOutcome, ToolExecutor, ToolRegistry};
 use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
-use rustx::tools::runtime::ConversationToolRuntime;
+use rustx::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};
 use rustx::tools::types::{
     ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
     ToolInvocationMode, ToolInvocationPolicy,
@@ -50,19 +49,51 @@ const BIG_OUTPUT_COMMAND: &str = "for i in $(seq 1 300000); do echo line-$i; don
 /// One conversation runtime with the native tool plane registered under a
 /// model-selectable policy, so a scripted call can choose background Bash.
 struct IssueFixture {
-    _dir: tempfile::TempDir,
     runtime: ConversationToolRuntime,
     registry: ToolRegistry,
+    execution: crate::session_execution_support::ExecutionFixture,
+    _dir: tempfile::TempDir,
+}
+
+impl IssueFixture {
+    async fn read_output(
+        &self,
+        locator: &str,
+        offset: u64,
+        limit: u64,
+    ) -> rustx_confined_fs::TextPage {
+        let operation = rustx::tools::native::bash_operation_at(std::path::Path::new(locator))
+            .expect("a Client Bash output locator");
+        self.execution
+            .scope
+            .read_bash_output(
+                operation,
+                self.runtime.conversation_id().as_str().to_owned(),
+                offset,
+                Some(limit),
+                &execution_cancellation(),
+            )
+            .await
+            .expect("Client Bash output")
+    }
+}
+
+fn execution_cancellation() -> ExecutionCancellation {
+    ExecutionCancellation::detached(CancellationSignal::new(), CancellationReason::UserRequested)
 }
 
 fn fixture() -> IssueFixture {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let runtime = ConversationToolRuntime::new(
+    let workspace_root = workspace_root.canonicalize().expect("workspace root");
+    let execution = crate::session_execution_support::ExecutionFixture::new(&workspace_root);
+    let runtime = ConversationToolRuntime::from_config(
         ConversationId::new("conv_f2710279-97d1-7bb2-8e2f-9486d337458e"),
-        &workspace_root,
-        dir.path().join("artifacts"),
+        ConversationRuntimeConfig {
+            execution_scope: Some(execution.scope.clone()),
+            ..ConversationRuntimeConfig::new(&workspace_root, dir.path().join("artifacts"))
+        },
     )
     .expect("tool runtime");
     let mut registry = ToolRegistry::new();
@@ -79,9 +110,10 @@ fn fixture() -> IssueFixture {
     )
     .expect("native tools");
     IssueFixture {
-        _dir: dir,
         runtime,
         registry,
+        execution,
+        _dir: dir,
     }
 }
 
@@ -105,20 +137,21 @@ async fn dispatch_big_background_bash(
     let PreflightOutcome::Ready(prepared) = outcome else {
         panic!("the background bash call preflights as ready");
     };
-    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
     let prepared_dispatch = fixture
         .runtime
         .background()
-        .prepare_dispatch(
+        .prepare_native_bash(
             &prepared.invocation,
-            &executor,
-            rustx::tools::environment::ToolEnvironment::new(),
+            fixture.runtime.environment().clone(),
+            &execution_cancellation(),
         )
+        .await
         .expect("dispatch prepared");
     let committed = fixture
         .runtime
         .background()
-        .commit_dispatch(prepared_dispatch, &CancellationSignal::new())
+        .commit_dispatch_owned(prepared_dispatch, &CancellationSignal::new())
+        .await
         .expect("dispatch committed");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted {
         execution_id,
@@ -137,20 +170,7 @@ async fn dispatch_big_background_bash(
         other => panic!("the accepted result is JSON: {other:?}"),
     };
     assert!(std::path::Path::new(&advertised).is_absolute());
-    assert!(
-        advertised.ends_with(".output")
-            && std::path::Path::new(&advertised)
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("e-"),
-        "{advertised}"
-    );
-    assert!(
-        std::path::Path::new(&advertised).exists(),
-        "the advertised path exists from the dispatch commit point on"
-    );
+    assert!(!std::path::Path::new(&advertised).exists());
     let terminal = fixture
         .runtime
         .background()
@@ -176,8 +196,8 @@ fn terminal_message(fixture: &IssueFixture) -> UserMessageBlock {
     batch.items()[0].message().clone()
 }
 
-/// Oversized textual output of a background Bash execution spills into the
-/// managed tool-output root and publishes a text-only terminal inbound
+/// Oversized textual output of a background Bash execution stays on the
+/// Session Execution Client and publishes a text-only terminal inbound
 /// message: no `UserContentBlock::File` is created by textual overflow.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -223,11 +243,7 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
         full_output, advertised,
         "settlement reuses the dispatch-time live-output locator: no second file for the same payload"
     );
-    assert!(
-        std::path::Path::new(full_output)
-            .starts_with(fixture.runtime.tool_output().root().unwrap()),
-        "the output lives in the managed tool-output root: {full_output}"
-    );
+    assert!(!std::path::Path::new(full_output).exists());
     // A very large background output is exactly one file: no duplicate
     // result spill was created for the same payload.
     assert!(
@@ -239,9 +255,14 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
             .is_none(),
         "background execution output never becomes a second result spill"
     );
-    let spilled = std::fs::read_to_string(full_output).expect("output text");
-    assert!(spilled.starts_with("line-1\n"));
-    assert!(spilled.ends_with("line-300000\n"));
+    let first = fixture.read_output(full_output, 1, 1).await;
+    let last = fixture.read_output(full_output, 300_000, 2).await;
+    assert_eq!(first.text, "line-1");
+    assert_eq!(last.text, "line-300000\n");
+    assert_eq!(first.total_lines, 300_001);
+    assert_eq!(last.total_lines, first.total_lines);
+    assert_eq!(first.original_bytes, 3_488_895);
+    assert_eq!(last.original_bytes, first.original_bytes);
 
     // The terminal inbound message is text-only AND carries the exact
     // absolute spill locator plus the Read/Grep continuation instruction:
@@ -275,7 +296,7 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
                 text.text.len() <= rustx::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256,
                 "the canonical inbound is the bounded projection ({} bytes), never the complete {}-byte output",
                 text.text.len(),
-                spilled.len()
+                first.original_bytes
             );
         }
     }
@@ -575,20 +596,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
     assert!(std::path::Path::new(&output_path).is_absolute());
     let execution_id: rustx::runtime::identity::ToolExecutionId =
         serde_json::from_value(accepted["job_id"].clone()).unwrap();
-    assert!(
-        output_path.ends_with(".output")
-            && std::path::Path::new(&output_path)
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("e-"),
-        "{output_path}"
-    );
-    assert!(
-        std::path::Path::new(&output_path).exists(),
-        "the advertised path exists before the process completes"
-    );
+    assert!(!std::path::Path::new(&output_path).exists());
     assert!(
         accepted["note"]
             .as_str()
@@ -619,6 +627,20 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         "the execution is still running: {:?}",
         running.state
     );
+
+    // The FIFO keeps the command alive while the Client capture catches up.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let page = fixture.read_output(&output_path, 1, 2).await;
+            if !page.text.is_empty() {
+                assert_eq!(page.text, "turn-marker-A\n");
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("initial output becomes readable before FIFO release");
 
     // Release the barrier; the terminal runtime message references the
     // EXACT same path as the complete output.
@@ -661,9 +683,9 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         "the terminal guidance survives: {terminal_text}"
     );
     assert_eq!(
-        std::fs::read_to_string(&output_path).expect("final output"),
+        fixture.read_output(&output_path, 1, 3).await.text,
         "turn-marker-A\nturn-marker-B\n",
-        "the settled file holds the complete output"
+        "the Client returns the complete settled output"
     );
 }
 

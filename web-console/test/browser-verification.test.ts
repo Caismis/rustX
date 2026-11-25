@@ -200,6 +200,7 @@ describe('prepared browser inputs', () => {
     const root = directory();
     install(stage, root, identity);
     expect(record(join(root, 'target/debug/workflow-renderer')).executable).toBe(true);
+    expect(record(join(root, 'target/debug/rustx-execution-client')).executable).toBe(true);
     expect(check(root, identity).identity).toEqual(identity);
     writeFileSync(join(root, 'target/debug/rustx'), 'tampered');
     expect(() => check(root, identity)).toThrow('target/debug/rustx: content differs from the prepared checksum');

@@ -19,6 +19,14 @@ enum HeldPhase {
     None,
     Negotiation,
     SecondPage,
+    FirstPage,
+    RepeatedCursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObservedCredential {
+    Old,
+    Rotated,
 }
 
 #[derive(Clone)]
@@ -28,6 +36,7 @@ struct Peer {
     release: watch::Sender<bool>,
     discoveries: Arc<AtomicUsize>,
     lists: Arc<AtomicUsize>,
+    calls: Arc<std::sync::Mutex<Vec<ObservedCredential>>>,
 }
 
 impl Peer {
@@ -67,7 +76,9 @@ impl ServerHandler for Peer {
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
         self.lists.fetch_add(1, Ordering::SeqCst);
         let second = request.and_then(|request| request.cursor).is_some();
-        if self.phase == HeldPhase::SecondPage && second {
+        if (self.phase == HeldPhase::SecondPage && second)
+            || (self.phase == HeldPhase::FirstPage && !second)
+        {
             self.hold(context).await?;
         }
         Ok(ListToolsResult {
@@ -76,10 +87,43 @@ impl ServerHandler for Peer {
             } else {
                 "first"
             })],
-            next_cursor: (self.phase == HeldPhase::SecondPage && !second)
+            next_cursor: ((self.phase == HeldPhase::SecondPage && !second)
+                || self.phase == HeldPhase::RepeatedCursor)
                 .then(|| "second-page".to_owned()),
             ..Default::default()
         })
+    }
+    fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::CallToolResponse, rmcp::ErrorData>>
+    {
+        std::future::ready((|| {
+            if request.name != "first" {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "unexpected fixture tool",
+                    None,
+                ));
+            }
+            let header = context
+                .extensions
+                .get::<http::request::Parts>()
+                .and_then(|parts| parts.headers.get(http::header::AUTHORIZATION))
+                .and_then(|header| header.to_str().ok());
+            let credential = match header {
+                Some("Bearer rotation-old-fixture") => ObservedCredential::Old,
+                Some("Bearer rotation-new-fixture") => ObservedCredential::Rotated,
+                _ => {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        "missing fixture credential",
+                        None,
+                    ));
+                }
+            };
+            self.calls.lock().unwrap().push(credential);
+            Ok(rmcp::model::CallToolResult::success(vec![]).into())
+        })())
     }
 }
 
@@ -101,6 +145,7 @@ impl HttpFixture {
             release: watch::channel(false).0,
             discoveries: Arc::default(),
             lists: Arc::default(),
+            calls: Arc::default(),
         };
         let shutdown = tokio_util::sync::CancellationToken::new();
         let mut config = StreamableHttpServerConfig::default();
@@ -529,4 +574,258 @@ fn assert_timed_out_batch(
             .borrow(),
         0
     );
+}
+
+#[tokio::test]
+async fn same_authority_can_publish_declarations_without_waiting_for_live_http() {
+    let fixture = HttpFixture::new(HeldPhase::FirstPage).await;
+    fixture.peer.release.send_replace(true);
+    let dir = tempfile::tempdir().unwrap();
+    let make_coordinator = || {
+        let (coordinator, id) = super::super::mcp_race_tests::coordinator_with_fixture(
+            &dir,
+            "cache",
+            "must-not-spawn-stdio",
+        );
+        coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .unwrap()
+            .mcp_servers
+            .insert(id.clone(), fixture.binding.clone());
+        (coordinator, id)
+    };
+    let prepare = |coordinator: CapabilityCoordinator| async move {
+        let skills = SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover();
+        coordinator
+            .prepare_startup_candidate(
+                skills,
+                McpStartupDeadline::default(),
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap()
+    };
+    let (initial, _) = make_coordinator();
+    let initial_candidate = prepare(initial.clone()).await;
+    assert_eq!(initial_candidate.available_tools().tools().len(), 1);
+    initial_candidate.retire_uncommitted().await;
+    assert_eq!(fixture.peer.discoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.peer.lists.load(Ordering::SeqCst), 1);
+
+    fixture.peer.release.send_replace(false);
+    fixture.peer.entered.send_replace(false);
+    let (next, id) = make_coordinator();
+    let cached = prepare(next.clone()).await;
+    assert_eq!(cached.available_tools().tools().len(), 1);
+    assert_eq!(fixture.peer.discoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.peer.lists.load(Ordering::SeqCst), 1);
+    let connection = cached.mcp_runtimes[0].connection().clone();
+    assert!(connection.catalog_snapshot().is_none());
+
+    let fresh = tokio::spawn(async move { connection.discover_catalog().await.unwrap() });
+    fixture
+        .peer
+        .entered
+        .subscribe()
+        .wait_for(|entered| *entered)
+        .await
+        .unwrap();
+    assert!(!fresh.is_finished());
+    assert_eq!(fixture.peer.discoveries.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.peer.lists.load(Ordering::SeqCst), 2);
+    fixture.peer.release.send_replace(true);
+    assert_eq!(fresh.await.unwrap()[0].name, "first");
+    cached.retire_uncommitted().await;
+
+    let (workflow, _) = make_coordinator();
+    workflow
+        .inner
+        .resource_inputs
+        .lock()
+        .unwrap()
+        .source_demand
+        .live_mcp
+        .insert(ToolSourceId::Mcp(id));
+    let current = prepare(workflow).await;
+    assert_eq!(current.available_tools().tools().len(), 1);
+    assert_eq!(fixture.peer.discoveries.load(Ordering::SeqCst), 3);
+    assert_eq!(fixture.peer.lists.load(Ordering::SeqCst), 3);
+    assert!(
+        current.mcp_runtimes[0]
+            .connection()
+            .catalog_snapshot()
+            .is_some()
+    );
+    current.retire_uncommitted().await;
+}
+
+#[tokio::test]
+async fn repeated_http_catalog_cursor_refuses_declarations_without_more_requests() {
+    let fixture = HttpFixture::new(HeldPhase::RepeatedCursor).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (coordinator, id) = super::super::mcp_race_tests::coordinator_with_fixture(
+        &dir,
+        "repeated-cursor",
+        "must-not-spawn-stdio",
+    );
+    coordinator
+        .inner
+        .resource_inputs
+        .lock()
+        .unwrap()
+        .mcp_servers
+        .insert(id.clone(), fixture.binding.clone());
+    let skills = SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover();
+    let candidate = coordinator
+        .prepare_startup_candidate(
+            skills,
+            McpStartupDeadline::default(),
+            &CancellationSignal::new(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(candidate.availability().get(&ToolSourceId::Mcp(id)),
+        Some(CapabilitySourceState::Unavailable { reason }) if reason.contains("repeated a cursor"))
+    );
+    assert_eq!(candidate.available_tools().tools(), []);
+    assert_eq!(fixture.peer.discoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.peer.lists.load(Ordering::SeqCst), 2);
+    candidate.retire_uncommitted().await;
+    assert_eq!(coordinator.pending_mcp_retirements(), 0);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Scoped fixture compares two physical admissions and their close.
+async fn rotation_with_identical_http_declarations_keeps_old_lease_and_fences_new_admissions() {
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolRegistration};
+    use crate::tools::types::{
+        ToolExecutionStatus, ToolInvocation, ToolInvocationId, ToolInvocationMode,
+    };
+    struct Silent;
+    impl ProgressReporter for Silent {
+        fn report(&self, _: crate::tools::types::ToolProgress) {}
+    }
+    let fixture = HttpFixture::new(HeldPhase::None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (coordinator, id) = super::super::mcp_race_tests::coordinator_with_fixture(
+        &dir,
+        "rotation",
+        "must-not-spawn-stdio",
+    );
+    let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+    let binding = |secret: Option<&str>| {
+        let mut binding = fixture.binding.clone();
+        binding.credentials = serde_json::from_value(serde_json::json!({
+            "headers": {"authorization": "$ROTATION_TOKEN"}
+        }))
+        .unwrap();
+        binding
+            .credentials
+            .capture(crate::credentials::CredentialSnapshot::new(
+                secret.map(|secret| ("ROTATION_TOKEN".into(), secret.into())),
+            ));
+        binding
+    };
+    inputs
+        .mcp_servers
+        .insert(id.clone(), binding(Some("Bearer rotation-old-fixture")));
+    let first = coordinator
+        .prepare_candidate_with_inputs(inputs.clone())
+        .await
+        .unwrap();
+    let old = coordinator.commit(first).unwrap();
+    let old_leases = old.acquire_mcp_leases().unwrap();
+
+    inputs.mcp_servers.insert(id.clone(), binding(None));
+    assert!(
+        coordinator
+            .prepare_candidate_with_inputs(inputs.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(coordinator.current_snapshot().revision(), old.revision());
+
+    inputs
+        .mcp_servers
+        .insert(id, binding(Some("Bearer rotation-new-fixture")));
+    let candidate = coordinator
+        .prepare_candidate_with_inputs(inputs)
+        .await
+        .unwrap();
+    assert_eq!(
+        candidate.candidate_registry.definitions(),
+        old.tool_registry().definitions()
+    );
+    let new = coordinator.commit(candidate).unwrap();
+    assert_eq!(new.revision().get(), old.revision().get() + 1);
+    assert_eq!(coordinator.pending_mcp_retirements(), 1);
+
+    let tools = crate::tools::runtime::ConversationToolRuntime::new(
+        coordinator.inner.conversation_id.clone(),
+        coordinator.inner.workspace.root(),
+        dir.path().join("artifacts"),
+    )
+    .unwrap();
+    let run = |entry: ToolRegistration, call_id: &'static str| {
+        let tools = &tools;
+        async move {
+            entry
+                .executor
+                .start(
+                    ToolInvocation {
+                        id: ToolInvocationId::Agent {
+                            call_id: crate::runtime::identity::ToolCallId::new(call_id),
+                        },
+                        tool_id: entry.definition.id,
+                        tool_name: entry.definition.name,
+                        mode: ToolInvocationMode::Foreground,
+                        arguments: serde_json::json!({}),
+                    },
+                    ToolExecutionContext::new(
+                        tools.conversation_id(),
+                        None,
+                        crate::runtime::ExecutionCancellation::detached(
+                            CancellationSignal::new(),
+                            crate::runtime::types::CancellationReason::UserRequested,
+                        ),
+                        tools.workspace(),
+                        &Silent,
+                        tools.artifacts(),
+                        tools.tool_output(),
+                        tools.environment(),
+                    ),
+                )
+                .completion
+                .await
+        }
+    };
+    let current = new.available_tools().registrations()[0].clone();
+    let frozen = old.available_tools().registrations()[0].clone();
+    assert_eq!(
+        run(current, "new").await.status,
+        ToolExecutionStatus::Success
+    );
+    assert_eq!(
+        run(frozen.clone(), "old").await.status,
+        ToolExecutionStatus::Success
+    );
+    assert_eq!(
+        *fixture.peer.calls.lock().unwrap(),
+        [ObservedCredential::Rotated, ObservedCredential::Old]
+    );
+    assert_eq!(fixture.peer.discoveries.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.peer.lists.load(Ordering::SeqCst), 2);
+
+    drop(old_leases);
+    coordinator.settle_ready_mcp_runtimes().await.unwrap();
+    assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    assert!(matches!(
+        run(frozen, "retired").await.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
+    assert_eq!(fixture.peer.calls.lock().unwrap().len(), 2);
+    coordinator.drain_conversation_owned().await.unwrap();
 }

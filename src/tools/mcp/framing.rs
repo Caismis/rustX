@@ -1,64 +1,41 @@
 //! The generic stdio protocol-corruption observation seam (Issue #174).
 //!
-//! rmcp's [`AsyncRwTransport`] is the one MCP framing/protocol authority: it
-//! decodes newline-delimited JSON-RPC/MCP messages with its
-//! [`JsonRpcMessageCodec`]. On a decode failure it deliberately keeps the
-//! failure to itself (rmcp 3.1.3, `transport/async_rw.rs`):
-//!
-//! - serde `Syntax`/`Eof` input (plain non-JSON noise) is ignored, matching
-//!   the other official MCP SDKs;
-//! - serde `Data`/`Io` input — well-formed JSON that is not a valid
-//!   MCP/JSON-RPC message — is answered with a bounded `Invalid Request`
-//!   reply *to the peer*, and the exchange then continues as though
-//!   healthy.
-//!
-//! The peer observing that reply is not a rustX diagnostic: without this
-//! module the protocol violation disappears from rustX's point of view.
-//! rmcp exposes no error/event/callback seam for these failures (its
-//! `Transport::receive` returns `Option`, so a violation can only ever
-//! surface as stream termination), so the narrowest possible observation
-//! seam is installed *around* the unmodified rmcp transport: an `AsyncRead`
-//! tee between the child stdout pipe and rmcp's reader.
-//!
-//! The tee classifies each completed line with rmcp's own codec — the same
-//! decoder type, the same compatibility accept set — so there is still
-//! exactly one framing authority and no second MCP implementation: the tee
-//! never delivers, correlates, or handles a message. On a
-//! confirmed structurally invalid message it records a bounded
-//! [`ProtocolViolationRecorder`] fact and then ends the byte stream (EOF)
-//! immediately after the offending line, so rmcp's service loop terminates
-//! and every pending and future operation on the connection resolves
-//! through the recorder as an explicit rustX protocol failure instead of a
-//! silently healthy exchange.
-//!
-//! rmcp's own peer-facing `Invalid Request` reply for that line is written
-//! inline as it decodes it, one layer above this tee. Whether the violating
-//! peer ever *reads* it is not a rustX guarantee and is not depended on
-//! anywhere: this seam records the violation from the same line before rmcp
-//! decodes it, so rustX is already fencing the boundary — the generation is
-//! poisoned and its owned stdio unit is asked to retire — while that reply
-//! is still on its way. The courtesy is rmcp's; the contract is the
-//! recorder.
+//! The bound Client reports the first malformed or oversized record.
+//! The direct stdio fixture additionally retains a redacted diagnosis from
+//! the same codec used by rmcp. It exercises diagnostic projection without
+//! replacing the product's Client-owned protocol machine.
 
+#[cfg(any(test, feature = "test-support"))]
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+#[cfg(any(test, feature = "test-support"))]
 use std::task::{Context, Poll};
 
+#[cfg(any(test, feature = "test-support"))]
 use rmcp::service::{RoleClient, RxJsonRpcMessage};
+#[cfg(any(test, feature = "test-support"))]
 use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
+#[cfg(any(test, feature = "test-support"))]
 use serde_json::error::Category;
+#[cfg(any(test, feature = "test-support"))]
 use tokio::io::{AsyncRead, ReadBuf};
+#[cfg(any(test, feature = "test-support"))]
 use tokio_util::bytes::BytesMut;
+#[cfg(any(test, feature = "test-support"))]
 use tokio_util::codec::Decoder as _;
 
+#[cfg(any(test, feature = "test-support"))]
 use crate::credentials::SourceCredentials;
+#[cfg(any(test, feature = "test-support"))]
 use crate::tools::limits::bounded_text_preview;
 
 /// The bounded serde diagnostic retained for a protocol violation.
+#[cfg(any(test, feature = "test-support"))]
 const VIOLATION_REASON_BYTES: usize = 256;
 /// The bounded preview of the offending wire line retained for a protocol
 /// violation. Peer output is evidence, not a log stream: diagnostics never
 /// echo unlimited stdout.
+#[cfg(any(test, feature = "test-support"))]
 const VIOLATION_LINE_PREVIEW_BYTES: usize = 160;
 
 /// The recorded fact that one connection observed a structurally invalid
@@ -66,19 +43,33 @@ const VIOLATION_LINE_PREVIEW_BYTES: usize = 160;
 /// machine acted on, and later lines were never delivered.
 pub(crate) struct ProtocolViolationRecorder {
     first: Mutex<Option<String>>,
+    #[cfg(any(test, feature = "test-support"))]
     credentials: SourceCredentials,
 }
 
 impl ProtocolViolationRecorder {
-    pub(crate) fn new(credentials: SourceCredentials) -> Arc<Self> {
+    pub(crate) fn new(
+        #[cfg(any(test, feature = "test-support"))] credentials: SourceCredentials,
+    ) -> Arc<Self> {
         Arc::new(Self {
             first: Mutex::new(None),
+            #[cfg(any(test, feature = "test-support"))]
             credentials,
         })
     }
 
+    pub(super) fn record_client_rejection(&self) {
+        self.first
+            .lock()
+            .expect("MCP protocol violation recorder lock poisoned")
+            .get_or_insert_with(|| {
+                "Client stdio MCP rejected a malformed or oversized record".to_owned()
+            });
+    }
+
     /// Records the first confirmed violation. Later violations are
     /// irrelevant: the stream ended at the first one.
+    #[cfg(any(test, feature = "test-support"))]
     fn record(&self, error: &serde_json::Error, line: &[u8]) {
         let mut first = self
             .first
@@ -116,6 +107,7 @@ impl ProtocolViolationRecorder {
 
 /// How one completed wire line classifies under the framing authority's
 /// own accept set.
+#[cfg(any(test, feature = "test-support"))]
 enum LineVerdict {
     /// A valid MCP message, or a notification rmcp deliberately ignores for
     /// compatibility — the codec's accept set is the authority.
@@ -132,6 +124,7 @@ enum LineVerdict {
 /// Classifies one completed line with rmcp's own codec, so the accept set —
 /// including rmcp's compatibility-ignored notifications — is exactly the
 /// transport's own.
+#[cfg(any(test, feature = "test-support"))]
 fn classify_line(line: &[u8]) -> LineVerdict {
     let mut codec = JsonRpcMessageCodec::<RxJsonRpcMessage<RoleClient>>::new();
     let mut frame = BytesMut::from(line);
@@ -154,6 +147,7 @@ fn classify_line(line: &[u8]) -> LineVerdict {
 /// confirmed protocol violation the reader delivers exactly the bytes up to
 /// and including the offending line and then reports EOF, terminating the
 /// connection's protocol machine.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) struct ViolationObservingReader<R> {
     inner: R,
     /// Bytes read from `inner` but not yet delivered downstream.
@@ -171,6 +165,7 @@ pub(crate) struct ViolationObservingReader<R> {
     recorder: Arc<ProtocolViolationRecorder>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl<R> ViolationObservingReader<R> {
     pub(crate) fn new(inner: R, recorder: Arc<ProtocolViolationRecorder>) -> Self {
         Self {
@@ -209,6 +204,7 @@ impl<R> ViolationObservingReader<R> {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl<R: AsyncRead + Unpin> AsyncRead for ViolationObservingReader<R> {
     fn poll_read(
         self: Pin<&mut Self>,

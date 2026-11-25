@@ -44,20 +44,25 @@ impl Peer {
         serde_json::from_str(&text).unwrap()
     }
     pub async fn response(&mut self, call: Method) -> Response {
+        let request = serde_json::to_value(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(0),
+            call,
+        })
+        .unwrap();
+        self.raw_request(request).await
+    }
+
+    pub fn next_request_bytes(&self, mut message: serde_json::Value) -> usize {
+        message["id"] = serde_json::to_value(RequestId::Integer(self.next + 1)).unwrap();
+        message.to_string().len()
+    }
+
+    pub async fn raw_request(&mut self, mut message: serde_json::Value) -> Response {
         self.next += 1;
         let id = RequestId::Integer(self.next);
-        self.socket
-            .send(Message::Text(
-                serde_json::to_string(&Request {
-                    jsonrpc: JsonRpcVersion::V2,
-                    id: id.clone(),
-                    call,
-                })
-                .unwrap()
-                .into(),
-            ))
-            .await
-            .unwrap();
+        message["id"] = serde_json::to_value(&id).unwrap();
+        self.reply(message).await;
         loop {
             match self.receive().await {
                 ServerOutput::Response(response) => {

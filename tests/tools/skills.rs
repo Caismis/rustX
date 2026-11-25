@@ -430,96 +430,37 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
 #[cfg(unix)]
 #[tokio::test]
 async fn bash_reaches_skill_assets_through_the_published_location() {
-    let (dir, workspace) = fixture();
+    let fixture = crate::common::native_fixture_with_execution(Vec::new());
+    let workspace = fixture.runtime.workspace();
     write_skill(
-        dir.path(),
+        workspace.root(),
         "deck",
         "Builds decks.",
         &[],
         "Copy assets/template.html into the workspace.\n",
     );
-    let assets = dir.path().join(".agents/skills/deck/assets");
+    let assets = workspace.root().join(".agents/skills/deck/assets");
     std::fs::create_dir_all(&assets).expect("assets dir");
     std::fs::write(assets.join("template.html"), "<!-- deck template -->\n").expect("template");
 
-    let packages = discover(&workspace);
+    let packages = discover(workspace);
     let snapshot =
         rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
     let location = snapshot.catalog_entries()[0].location.clone();
     let skill_dir = std::path::Path::new(&location)
         .parent()
-        .expect("skill directory")
-        .to_path_buf();
-
-    let conversation_id =
-        rustx::runtime::identity::ConversationId::new("conv_8ecf8c4f-141c-7493-8f52-692cc55da299");
-    let artifacts = dir.path().join("artifacts");
-    let artifacts_store =
-        rustx::tools::artifacts::ArtifactStore::new(conversation_id.clone(), &artifacts)
-            .expect("artifacts");
-    let tool_output = rustx::tools::managed_output::ManagedToolOutput::new(
-        conversation_id.clone(),
-        artifacts.join("tool-output"),
-    )
-    .expect("managed tool output");
-    let environment = rustx::tools::environment::ToolEnvironment::new();
-    let mut registry = rustx::tools::executor::ToolRegistry::new();
-    rustx::tools::native::register_native_tools(
-        &mut registry,
-        rustx::tools::native::NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
-            background: rustx::tools::background::ConversationBackgroundRegistry::new(
-                conversation_id.clone(),
-                rustx::tools::background::BackgroundResources {
-                    mailbox: rustx::runtime::inbound::ConversationInboundMailbox::new(
-                        conversation_id.clone(),
-                    ),
-                    workspace: workspace.clone(),
-                    artifacts: artifacts_store.clone(),
-                    tool_output: tool_output.clone(),
-                    clock: std::sync::Arc::new(rustx::runtime::SystemClock),
-                    event_sink: None,
-                },
+        .expect("skill directory");
+    let result = crate::common::run_tool(
+        &fixture,
+        "bash",
+        serde_json::json!({
+            "command": format!(
+                "cp {}/assets/template.html ./index.html && cat ./index.html",
+                skill_dir.display()
             ),
-            subagents: None,
-        },
-        rustx::tools::native::NativeToolPolicies::default(),
+        }),
     )
-    .expect("native tools");
-    let executor = registry.executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
-    let context = rustx::tools::executor::ToolExecutionContext::new(
-        &conversation_id,
-        None,
-        rustx::runtime::ExecutionCancellation::detached(
-            rustx::runtime::CancellationSignal::new(),
-            rustx::runtime::types::CancellationReason::UserRequested,
-        ),
-        &workspace,
-        &crate::common::NoopProgress,
-        &artifacts_store,
-        &tool_output,
-        &environment,
-    );
-    let result = executor
-        .start(
-            rustx::tools::types::ToolInvocation {
-                id: rustx::tools::types::ToolInvocationId::Agent {
-                    call_id: rustx::runtime::identity::ToolCallId::new("call-copy"),
-                },
-                tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
-                tool_name: "bash".to_owned(),
-                mode: rustx::tools::types::ToolInvocationMode::Foreground,
-                arguments: serde_json::json!({
-                    "command": format!(
-                        "cp {}/assets/template.html ./index.html && cat ./index.html",
-                        skill_dir.display()
-                    )
-                }),
-            },
-            context,
-        )
-        .completion
-        .await;
+    .await;
 
     assert_eq!(
         result.status,
@@ -537,84 +478,20 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
 #[cfg(unix)]
 #[tokio::test]
 async fn bash_cd_cannot_redefine_the_skill_root() {
-    let (dir, workspace) = fixture();
-    write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
-    let conversation_id =
-        rustx::runtime::identity::ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834");
-    let artifacts = dir.path().join("artifacts");
-    let registry = rustx::tools::executor::ToolRegistry::new();
-    let mut registry = registry;
-    rustx::tools::native::register_native_tools(
-        &mut registry,
-        rustx::tools::native::NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
-            background: rustx::tools::background::ConversationBackgroundRegistry::new(
-                conversation_id.clone(),
-                rustx::tools::background::BackgroundResources {
-                    mailbox: rustx::runtime::inbound::ConversationInboundMailbox::new(
-                        conversation_id.clone(),
-                    ),
-                    workspace: workspace.clone(),
-                    artifacts: rustx::tools::artifacts::ArtifactStore::new(
-                        conversation_id.clone(),
-                        &artifacts,
-                    )
-                    .expect("artifacts"),
-                    tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
-                        conversation_id.clone(),
-                        artifacts.join("tool-output"),
-                    )
-                    .expect("managed tool output"),
-                    clock: std::sync::Arc::new(rustx::runtime::SystemClock),
-                    event_sink: None,
-                },
-            ),
-            subagents: None,
-        },
-        rustx::tools::native::NativeToolPolicies::default(),
+    let fixture = crate::common::native_fixture_with_execution(Vec::new());
+    let workspace = fixture.runtime.workspace();
+    write_skill(workspace.root(), "pdf", "PDF skill.", &[], "body\n");
+    let result = crate::common::run_tool(
+        &fixture,
+        "bash",
+        serde_json::json!({"command": "cd /tmp && pwd"}),
     )
-    .expect("native tools");
-    let executor = registry.executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
-    let invocation = rustx::tools::types::ToolInvocation {
-        id: rustx::tools::types::ToolInvocationId::Agent {
-            call_id: rustx::runtime::identity::ToolCallId::new("call-1"),
-        },
-        tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
-        tool_name: "bash".to_owned(),
-        mode: rustx::tools::types::ToolInvocationMode::Foreground,
-        arguments: serde_json::json!({"command": "cd /tmp && pwd"}),
-    };
-    let result = {
-        let artifacts_store =
-            rustx::tools::artifacts::ArtifactStore::new(conversation_id.clone(), &artifacts)
-                .expect("artifacts");
-        let tool_output = rustx::tools::managed_output::ManagedToolOutput::new(
-            conversation_id.clone(),
-            artifacts.join("tool-output"),
-        )
-        .expect("managed tool output");
-        let environment = rustx::tools::environment::ToolEnvironment::new();
-        let context = rustx::tools::executor::ToolExecutionContext::new(
-            &conversation_id,
-            None,
-            rustx::runtime::ExecutionCancellation::detached(
-                rustx::runtime::CancellationSignal::new(),
-                rustx::runtime::types::CancellationReason::UserRequested,
-            ),
-            &workspace,
-            &crate::common::NoopProgress,
-            &artifacts_store,
-            &tool_output,
-            &environment,
-        );
-        executor.start(invocation, context).completion.await
-    };
+    .await;
     assert!(matches!(
         result.status,
         rustx::tools::types::ToolExecutionStatus::Success
     ));
-    // Discovery after the `cd` still resolves the canonical root.
-    let packages = discover(&workspace);
+    let packages = discover(workspace);
     let names: Vec<&str> = packages
         .iter()
         .map(rustx::skills::SkillPackage::name)

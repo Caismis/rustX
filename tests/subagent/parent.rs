@@ -46,6 +46,8 @@ pub(crate) struct ParentBindings {
     pub(crate) runtime_root: PathBuf,
     pub(crate) workspace: PathBuf,
     pub(crate) home: PathBuf,
+    pub(crate) execution: bool,
+    pub(crate) program: PathBuf,
 }
 
 impl Parent {
@@ -80,7 +82,7 @@ impl Parent {
             session.id
         };
         std::fs::create_dir_all(&bindings.home).expect("isolated home");
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
+        let mut command = tokio::process::Command::new(&bindings.program);
         command
             .args(["app-server", "--listen", "stdio", "--config"])
             .arg(&bindings.config)
@@ -94,6 +96,13 @@ impl Parent {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if bindings.execution {
+            command
+                .arg("--local-execution-session")
+                .arg(session_id.as_str())
+                .arg("--local-execution-workspace")
+                .arg(bindings.workspace.canonicalize().expect("bound Workspace"));
+        }
         for (key, value) in environment {
             command.env(key, value);
         }
@@ -473,6 +482,8 @@ impl ParentBindings {
             config: root.join("rustx.toml"),
             runtime_root: root.join("private"),
             workspace: workspace.to_path_buf(),
+            execution: false,
+            program: PathBuf::from(env!("CARGO_BIN_EXE_rustx")),
             home: root.join("host"),
         }
     }

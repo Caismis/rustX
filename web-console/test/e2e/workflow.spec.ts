@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { openEmptySession, returnHome, openResourceModule, openWorkspaceSettings } from './shell-actions';
+import { createBoundSession, openExistingSession, returnHome, openResourceModule, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,8 +28,10 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     if (session) await wire.attachedTarget(session);
   };
   try {
+    const initialSession = await createBoundSession(fixture);
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    session = await openEmptySession(page, fixture, 'Workspace A');
+    await openExistingSession(page, initialSession);
+    session = initialSession;
     await page.getByLabel('Message', { exact: true }).fill('workflow conformance request');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('workflow-child-admitted');

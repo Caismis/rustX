@@ -278,6 +278,8 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         let created = f
             .manager
             .create_session(crate::local_runtime::session::SessionPersistentState {
+                session_config: None,
+                session_resources: None,
                 cwd: f.workspaces[0].clone(),
                 model: None,
             })

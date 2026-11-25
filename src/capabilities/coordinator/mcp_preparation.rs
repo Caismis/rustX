@@ -130,9 +130,71 @@ impl McpPreparationOwner {
         let (epoch, generation, discovery) = self
             .prepare_mcp_generation(server_id, generation, preparation_cancellation)
             .await?;
-        // Validate the canonical registration while this source still owns its
-        // preparation slot and deadline. Final profile selection can then use
-        // only already-validated live declarations.
+        Self::validate_registrations(server_id, binding, epoch, generation, discovery).await
+    }
+
+    pub(super) async fn prepare_startup_mcp_server(
+        &self,
+        server: &McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
+        cancellation: &CancellationSignal,
+        key: crate::tools::mcp::declaration_cache::DeclarationKey,
+        require_live: bool,
+    ) -> McpPreparationOutcome {
+        use crate::tools::mcp::{McpConnection, declaration_cache};
+        if cancellation.is_cancelled() || self.preparation_cancellation.is_cancelled() {
+            return Err("MCP preparation cancelled".to_owned());
+        }
+        if !require_live && let Some(declarations) = declaration_cache::get(key) {
+            let counted = self
+                .preparation_lifecycle()
+                .map(|lifecycle| lifecycle.try_enter_preparation())
+                .transpose()
+                .map_err(|_| "MCP preparation cancelled".to_owned())?;
+            let connection = McpConnection::lazy(
+                server.clone(),
+                binding.clone(),
+                self.workspace.clone(),
+                self.mcp_invalidation.clone(),
+                self.preparation_cancellation.child(),
+            );
+            connection.configure_declaration_cache(key);
+            let generation = McpRuntimeGeneration::from_connection(
+                server.clone(),
+                connection,
+                counted,
+                tokio::runtime::Handle::current(),
+                &self.mcp_retirements,
+            );
+            return Self::validate_registrations(
+                server,
+                binding,
+                self.mcp_invalidation.epoch(server),
+                generation,
+                declarations,
+            )
+            .await;
+        }
+        #[cfg(test)]
+        self.mcp_preparations.fetch_add(1, Ordering::Relaxed);
+        let generation = self
+            .connect_conversation_owned(server, binding, Some(cancellation))
+            .await
+            .map_err(|error| error.to_string())?;
+        generation.connection().configure_declaration_cache(key);
+        let (epoch, generation, discovery) = self
+            .prepare_mcp_generation(server, generation, Some(cancellation))
+            .await?;
+        Self::validate_registrations(server, binding, epoch, generation, discovery).await
+    }
+
+    async fn validate_registrations(
+        server_id: &McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
+        epoch: u64,
+        generation: McpRuntimeGeneration,
+        discovery: crate::tools::mcp::McpDiscoveryOutcome,
+    ) -> McpPreparationOutcome {
         let registrations = crate::tools::mcp::definitions_owned_for_source(
             &ToolSourceId::Mcp(server_id.clone()),
             server_id,

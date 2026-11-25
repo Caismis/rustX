@@ -33,6 +33,7 @@ pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 11]) {
             COUNTS.with(|counts| *counts.borrow_mut() = None);
         }
     }
+    rustx_process_supervisor::effects::set_process_effect_observer(|| observe(Effect::Process));
     COUNTS.with(|counts| {
         assert!(counts.borrow().is_none());
         *counts.borrow_mut() = Some([0; 11]);

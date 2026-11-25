@@ -1309,7 +1309,7 @@ impl UserConfigManager {
             }
             // Staging failed, or the source directory's path could not be
             // confirmed durable: nothing was published.
-            Err(SettingsError::Io) => (
+            Err(SettingsError::Io | SettingsError::ExecutionUnavailable) => (
                 ConfigRepairStatus::Unresolved,
                 None,
                 Some(
@@ -1338,9 +1338,9 @@ impl UserConfigManager {
         );
         format!(
             "{}-{}-{}.toml",
-            match target.scope() {
-                SourceScope::User => "user",
-                SourceScope::Workspace => "workspace",
+            match target {
+                SourceTarget::User => "user",
+                SourceTarget::Workspace { .. } => "workspace",
             },
             &source[..16],
             before.trim_start_matches("sha256:")

@@ -1,7 +1,11 @@
 //! Bounded live-incarnation callbacks. Selection is not native settlement.
+mod upload;
+
+use super::host_upload::HostUploadScope;
 use super::protocol::{
     ClientReply, JsonRpcVersion, RequestId, ServerMessage, ServerRequest, ServerRequestMethod,
 };
+use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
 use crate::runtime::identity::ConversationId;
 use std::{
     collections::BTreeMap,
@@ -32,9 +36,25 @@ struct Pending {
     validity: Option<Validity>,
     dispatched: Arc<std::sync::atomic::AtomicBool>,
     thread: ConversationId,
+    execution: Option<SessionExecutionScope>,
     request: ServerRequest,
     recipients: BTreeMap<String, String>,
-    reply: oneshot::Sender<ClientReply>,
+    uploads: BTreeMap<String, upload::Candidate>,
+    reply: oneshot::Sender<CallbackReply>,
+}
+
+pub(crate) enum CallbackReply {
+    Message(ClientReply),
+    Upload(Box<upload::CompletedUpload>),
+}
+
+impl CallbackReply {
+    fn id(&self) -> &RequestId {
+        match self {
+            Self::Message(reply) => reply.id(),
+            Self::Upload(upload) => upload.request_id(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,6 +75,7 @@ struct State {
 
 pub(crate) struct Callbacks {
     incarnation: String,
+    upload_budget: Arc<tokio::sync::Semaphore>,
     state: Mutex<State>,
     interactions: Mutex<BTreeMap<crate::runtime::interaction::InteractionRef, RequestId>>,
 }
@@ -184,7 +205,7 @@ impl Drop for Client {
 /// deadline, native terminal cleanup, or abandonment; it never replays work.
 pub(crate) struct Ticket {
     pub(crate) id: RequestId,
-    pub(crate) reply: oneshot::Receiver<ClientReply>,
+    pub(crate) reply: oneshot::Receiver<CallbackReply>,
     dispatched: Arc<std::sync::atomic::AtomicBool>,
     callbacks: Arc<Callbacks>,
 }
@@ -198,6 +219,7 @@ impl Default for Callbacks {
     fn default() -> Self {
         Self {
             incarnation: uuid::Uuid::new_v4().to_string(),
+            upload_budget: Arc::new(tokio::sync::Semaphore::new(upload::MAX_ACTIVE)),
             state: Mutex::default(),
             interactions: Mutex::default(),
         }
@@ -254,10 +276,10 @@ impl Callbacks {
                     return;
                 };
                 let response = match reply {
-                    ClientReply::Success(reply) => {
+                    CallbackReply::Message(ClientReply::Success(reply)) => {
                         super::wire::interaction_response_from_value(reply.result).ok()
                     }
-                    ClientReply::Error(_) => None,
+                    _ => None,
                 };
                 if let Some(response) = response {
                     if owner
@@ -353,7 +375,11 @@ impl Callbacks {
         {
             if sender
                 .try_send(Queued {
-                    message: ServerMessage::Request(pending.request.clone()),
+                    message: ServerMessage::Request(self.address(
+                        &pending.request,
+                        client,
+                        &subscription.id,
+                    )),
                     publication: Some(Publication {
                         callbacks: self.clone(),
                         client: client.to_owned(),
@@ -369,6 +395,7 @@ impl Callbacks {
                 pending
                     .recipients
                     .insert(client.to_owned(), subscription.id.clone());
+                pending.uploads.remove(client);
                 waker.wake();
             } else {
                 closed.cancel();
@@ -392,6 +419,7 @@ impl Callbacks {
             .filter(|pending| pending.thread == *thread)
         {
             if pending.recipients.remove(client).is_some() {
+                pending.uploads.remove(client);
                 // This subscriber can no longer answer. Retire its local
                 // correlation without settling the shared native request.
                 Self::resolved_for(participant, &pending.request.id, thread);
@@ -408,8 +436,21 @@ impl Callbacks {
         }
         for pending in state.pending.values_mut() {
             pending.recipients.remove(client);
+            pending.uploads.remove(client);
         }
         // An accepted invocation remains server-owned, even with no clients.
+    }
+
+    fn address(&self, request: &ServerRequest, client: &str, subscription: &str) -> ServerRequest {
+        let mut addressed = request.clone();
+        if let ServerRequestMethod::ToolCall(call) = &mut addressed.call {
+            call.upload_scope = Some(Box::new(HostUploadScope {
+                callback_incarnation: self.incarnation.clone(),
+                connection_incarnation: client.to_owned(),
+                subscription_incarnation: subscription.to_owned(),
+            }));
+        }
+        addressed
     }
 
     fn request(
@@ -417,6 +458,16 @@ impl Callbacks {
         thread: ConversationId,
         method: ServerRequestMethod,
         validity: Option<Validity>,
+    ) -> Result<Ticket, &'static str> {
+        self.request_scoped(thread, method, validity, None)
+    }
+
+    fn request_scoped(
+        self: &Arc<Self>,
+        thread: ConversationId,
+        method: ServerRequestMethod,
+        validity: Option<Validity>,
+        execution: Option<SessionExecutionScope>,
     ) -> Result<Ticket, &'static str> {
         let mut state = self.state.lock().expect("callbacks");
         if state.pending.len() >= MAX_PENDING {
@@ -433,8 +484,14 @@ impl Callbacks {
             call: method,
         };
         // The same complete bound applies before copying into client queues.
-        super::transport::serialize_record(&request)
-            .map_err(|_| "server request exceeds message limit")?;
+        // Broker, connection and subscription incarnations are all 36-byte
+        // UUIDs. Include the per-recipient address in the encoded budget.
+        super::transport::serialize_record(&self.address(
+            &request,
+            &self.incarnation,
+            &self.incarnation,
+        ))
+        .map_err(|_| "server request exceeds message limit")?;
         let mut recipients = BTreeMap::new();
         let dispatched = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for (client, participant) in &state.clients {
@@ -445,7 +502,11 @@ impl Callbacks {
                 if participant
                     .sender
                     .try_send(Queued {
-                        message: ServerMessage::Request(request.clone()),
+                        message: ServerMessage::Request(self.address(
+                            &request,
+                            client,
+                            &subscription.id,
+                        )),
                         publication: Some(Publication {
                             callbacks: self.clone(),
                             client: client.clone(),
@@ -476,8 +537,10 @@ impl Callbacks {
                 validity,
                 dispatched: dispatched.clone(),
                 thread,
+                execution,
                 request,
                 recipients,
+                uploads: BTreeMap::new(),
                 reply,
             },
         );
@@ -492,6 +555,15 @@ impl Callbacks {
     /// The sole response linearization. Envelope validation precedes this call;
     /// domain validation follows acquisition and cannot reopen this entry.
     pub(crate) fn respond(&self, client: &str, response: ClientReply) -> bool {
+        self.respond_for(client, CallbackReply::Message(response), None)
+    }
+
+    fn respond_for(
+        &self,
+        client: &str,
+        response: CallbackReply,
+        expected_subscription: Option<&str>,
+    ) -> bool {
         let (validity, subscription) = {
             let state = self.state.lock().expect("callbacks");
             let Some(pending) = state.pending.get(response.id()) else {
@@ -504,7 +576,9 @@ impl Callbacks {
             else {
                 return false;
             };
-            if pending.recipients.get(client) != Some(&subscription.id) {
+            if pending.recipients.get(client) != Some(&subscription.id)
+                || expected_subscription.is_some_and(|id| id != subscription.id)
+            {
                 return false;
             }
             (pending.validity.clone(), subscription.clone())
@@ -518,25 +592,28 @@ impl Callbacks {
                     .upgrade()
                     .and_then(|owner| {
                         owner.with_pending_interaction_header(&interaction, |_| {
-                            self.claim(client, response)
+                            self.claim(client, &subscription.id, response)
                         })
                     })
                     .unwrap_or(false),
                 Some(Validity::Tool(cancellation)) => cancellation
-                    .with_active(|| self.claim(client, response))
+                    .with_active(|| self.claim(client, &subscription.id, response))
                     .unwrap_or(false),
-                None => self.claim(client, response),
+                None => self.claim(client, &subscription.id, response),
             })
             .unwrap_or(false)
     }
 
-    fn claim(&self, client: &str, response: ClientReply) -> bool {
+    fn claim(&self, client: &str, subscription: &str, response: CallbackReply) -> bool {
         let mut state = self.state.lock().expect("callbacks");
         let id = response.id();
         let Some(pending) = state.pending.get(id) else {
             return false;
         };
-        if !pending.recipients.contains_key(client)
+        if matches!(&response, CallbackReply::Upload(upload) if upload.expired()) {
+            return false;
+        }
+        if pending.recipients.get(client).map(String::as_str) != Some(subscription)
             || !state.clients.get(client).is_some_and(|p| {
                 !p.closed.is_cancelled()
                     && p.threads.get(&pending.thread).map(|value| &value.id)
@@ -605,6 +682,7 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
         definition: &'a crate::tools::host::HostToolDefinition,
         invocation: crate::tools::ToolInvocation,
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
+        execution: Option<SessionExecutionScope>,
     ) -> futures_util::future::BoxFuture<'a, crate::tools::ToolExecutionResult> {
         Box::pin(async move {
             use crate::tools::{ToolExecutionStatus as Status, host::result};
@@ -635,12 +713,14 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
                 namespace: definition.namespace.clone(),
                 tool: definition.name.clone(),
                 arguments: invocation.arguments,
+                upload_scope: None,
             });
             let mut ticket = match cancellation.with_active(|| {
-                self.request(
+                self.request_scoped(
                     conversation.clone(),
                     request,
                     Some(Validity::Tool(cancellation.clone())),
+                    execution.clone(),
                 )
             }) {
                 Some(Ok(ticket)) => ticket,
@@ -667,33 +747,33 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
             let unknown = || {
                 Status::OutcomeUnknown { detail: "application callbacks may have external effects; no authoritative valid result was obtained".into() }
             };
-            let (status, content) = tokio::select! {
+            let duration = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let settled = tokio::select! {
                 biased;
                 reply = &mut ticket.reply => match reply {
-                    Ok(ClientReply::Success(reply)) => match serde_json::from_value::<super::protocol::HostToolResponse>(reply.result) {
-                        Ok(response) => (
-                            if response.success { Status::Success } else { Status::Failed { error: "application reported a failed tool result".into() } },
-                            response.content_items.into_iter().map(|item| match item {
-                                super::protocol::HostToolContent::Text { text } => crate::tools::ToolResultContent::Text(crate::message::content::TextBlock { text }),
-                            }).collect(),
-                        ),
-                        Err(_) => (unknown(), Vec::new()),
+                    Ok(CallbackReply::Upload(mut upload)) => {
+                        let locator = upload.publish().await;
+                        upload.into_result(duration(), locator)
                     },
-                    Ok(ClientReply::Error(_)) | Err(_) => (unknown(), Vec::new()),
+                    Ok(CallbackReply::Message(ClientReply::Success(reply))) => match serde_json::from_value::<super::protocol::HostToolResponse>(reply.result) {
+                        Ok(response) => upload::complete_message(
+                            response, execution, conversation, &cancellation, duration,
+                        ).await,
+                        Err(_) => result(unknown(), Vec::new(), duration()),
+                    },
+                    Ok(CallbackReply::Message(ClientReply::Error(_))) | Err(_) => {
+                        result(unknown(), Vec::new(), duration())
+                    },
                 },
-                () = cancellation.cancelled() => (
+                () = cancellation.cancelled() => result(
                     if ticket.dispatched.load(std::sync::atomic::Ordering::Acquire) { unknown() }
                     else { Status::Cancelled { reason:cancellation.reason(), phase:crate::tools::ToolCancellationPhase::BeforeStart } },
-                    Vec::new()),
+                    Vec::new(), duration()),
             };
             // Ticket retirement synchronously clears callbacks before native
             // Tool Runtime validation, output bounds and result commitment.
             drop(ticket);
-            result(
-                status,
-                content,
-                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            )
+            settled
         })
     }
 }
@@ -702,6 +782,7 @@ impl crate::tools::host::HostToolDispatcher for Arc<Callbacks> {
 mod tests {
     use super::*;
     use crate::app_server::protocol::{ClientSuccess, HostToolCall};
+    use std::time::Duration;
     fn running_lifecycle() -> crate::runtime::types::ConversationLifecycle {
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
         assert!(lifecycle.activate());
@@ -720,6 +801,7 @@ mod tests {
             namespace: Some("business".into()),
             tool: "lookup".into(),
             arguments: serde_json::json!({}),
+            upload_scope: None,
         })
     }
     fn reply(id: RequestId, value: serde_json::Value) -> ClientReply {
@@ -729,6 +811,308 @@ mod tests {
             result: value,
         })
     }
+
+    fn upload_candidate(
+        callbacks: &Callbacks,
+        client: &str,
+        id: &RequestId,
+    ) -> crate::app_server::host_upload::HostUploadCandidate {
+        let state = callbacks.state.lock().unwrap();
+        let pending = &state.pending[id];
+        let ServerRequestMethod::ToolCall(call) = &pending.request.call else {
+            unreachable!()
+        };
+        crate::app_server::host_upload::HostUploadCandidate {
+            callback_incarnation: callbacks.incarnation.clone().try_into().unwrap(),
+            connection_incarnation: client.to_owned().try_into().unwrap(),
+            subscription_incarnation: pending.recipients[client].clone().try_into().unwrap(),
+            request_id: id.clone(),
+            thread_id: call.thread_id.clone(),
+            turn_id: call.turn_id.clone(),
+            call_id: call.call_id.clone(),
+            upload_id: uuid::Uuid::new_v4().to_string().try_into().unwrap(),
+        }
+    }
+
+    /// Races one ordinary reply (success or a valid JSON-RPC error) against a
+    /// verified End, in either order and with the subscription optionally
+    /// replaced, and asserts exactly one winner.
+    fn race_case(end_first: bool, small_error: bool, replace: bool) {
+        use crate::app_server::host_upload::{
+            HostUploadBeginParams, HostUploadEndParams, HostUploadMethod, HostUploadRefusal,
+            canonical_digest,
+        };
+        use crate::app_server::protocol::{ClientError, ClientRpcError};
+        let callbacks = Arc::new(Callbacks::default());
+        let thread = ConversationId::generate();
+        let host = callbacks.connect();
+        let other = callbacks.connect();
+        callbacks.subscribe_test(&host.id, &thread);
+        callbacks.subscribe_test(&other.id, &thread);
+        let mut ticket = callbacks
+            .request(thread.clone(), method(thread.clone()), None)
+            .unwrap();
+        let candidate = upload_candidate(&callbacks, &host.id, &ticket.id);
+        let begin = HostUploadMethod::Begin(HostUploadBeginParams {
+            candidate: candidate.clone(),
+            success: true,
+            items: vec![],
+        });
+        let end = |digest: [u8; 32]| {
+            HostUploadMethod::End(HostUploadEndParams {
+                candidate: candidate.clone(),
+                success: true,
+                items: vec![],
+                total: "0".to_owned().try_into().unwrap(),
+                digest: format!("{:x}", sha2::digest::Output::<sha2::Sha256>::from(digest))
+                    .try_into()
+                    .unwrap(),
+            })
+        };
+        assert_eq!(callbacks.upload(&host.id, begin), Ok(false));
+        assert_eq!(
+            callbacks.upload(&host.id, end([0; 32])),
+            Err(HostUploadRefusal::DigestMismatch)
+        );
+        assert!(matches!(
+            ticket.reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        if replace {
+            callbacks.unsubscribe(&host.id, &thread);
+            callbacks.subscribe_test(&host.id, &thread);
+        }
+        let small = if small_error {
+            ClientReply::Error(ClientError {
+                jsonrpc: JsonRpcVersion::V2,
+                id: ticket.id.clone(),
+                error: ClientRpcError {
+                    code: -32000,
+                    message: "fixture".into(),
+                    data: None,
+                },
+            })
+        } else {
+            // Correlated and complete but rejected by domain decoding AFTER the claim.
+            reply(ticket.id.clone(), serde_json::json!({"invalid":true}))
+        };
+        let end_wins = end_first && !replace;
+        let end = end(canonical_digest(&[]));
+        if end_first {
+            assert_eq!(
+                callbacks.upload(&host.id, end.clone()),
+                if replace {
+                    Err(HostUploadRefusal::Foreign)
+                } else {
+                    Ok(false)
+                }
+            );
+        }
+        assert_eq!(callbacks.respond(&other.id, small), !end_wins);
+        match ticket.reply.try_recv().expect("exactly one winner") {
+            CallbackReply::Upload(value) => {
+                assert!(end_wins);
+                assert_eq!(value.into_result(0, None).content, Vec::new());
+            }
+            CallbackReply::Message(ClientReply::Error(_)) => assert!(small_error && !end_wins),
+            CallbackReply::Message(ClientReply::Success(value)) => {
+                assert!(!small_error && !end_wins);
+                assert_eq!(value.result, serde_json::json!({"invalid":true}));
+            }
+        }
+        assert_eq!(
+            callbacks.upload(&host.id, end),
+            Err(HostUploadRefusal::Late),
+            "no reopening after the winner"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_verified_end_can_compete_with_an_ordinary_reply() {
+        for (end_first, small_error, replace) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            race_case(end_first, small_error, replace);
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn duplicate_chunks_do_not_refresh_idle_and_fresh_chunks_do_not_extend_total() {
+        use crate::app_server::host_upload::{
+            HostUploadBeginParams, HostUploadChunkParams, HostUploadItem, HostUploadMethod,
+            HostUploadRefusal,
+        };
+        for idle in [true, false] {
+            let callbacks = Arc::new(Callbacks::default());
+            let thread = ConversationId::generate();
+            let host = callbacks.connect();
+            callbacks.subscribe_test(&host.id, &thread);
+            let mut ticket = callbacks
+                .request(thread.clone(), method(thread), None)
+                .unwrap();
+            let candidate = upload_candidate(&callbacks, &host.id, &ticket.id);
+            let numeric = |n: usize| n.to_string().try_into().unwrap();
+            let begin = HostUploadMethod::Begin(HostUploadBeginParams {
+                candidate: candidate.clone(),
+                success: true,
+                items: vec![HostUploadItem {
+                    type_tag: 1,
+                    length: numeric(12),
+                }],
+            });
+            let chunk = |offset: usize| {
+                HostUploadMethod::Chunk(HostUploadChunkParams {
+                    candidate: candidate.clone(),
+                    item_index: 0,
+                    sequence: numeric(offset + 1),
+                    offset: numeric(offset),
+                    data_base64: "YQ==".into(),
+                    sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+                        .to_owned()
+                        .try_into()
+                        .unwrap(),
+                })
+            };
+            assert_eq!(callbacks.upload(&host.id, begin.clone()), Ok(false));
+            assert_eq!(callbacks.upload(&host.id, chunk(0)), Ok(false));
+            if idle {
+                tokio::time::advance(Duration::from_secs(9)).await;
+                assert_eq!(callbacks.upload(&host.id, chunk(0)), Ok(true));
+                tokio::time::advance(Duration::from_secs(1)).await;
+            } else {
+                for offset in 1..=6 {
+                    tokio::time::advance(Duration::from_secs(9)).await;
+                    assert_eq!(callbacks.upload(&host.id, chunk(offset)), Ok(false));
+                }
+                tokio::time::advance(Duration::from_secs(6)).await;
+            }
+            assert_eq!(
+                callbacks.upload(&host.id, begin),
+                Err(HostUploadRefusal::Expired)
+            );
+            assert!(matches!(
+                ticket.reply.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert!(callbacks.respond(&host.id, reply(ticket.id.clone(), serde_json::json!({}))));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn upload_begin_cannot_renew_the_original_invocation_deadline() {
+        use crate::app_server::host_upload::{
+            HostUploadBeginParams, HostUploadItem, HostUploadMethod, HostUploadRefusal,
+        };
+        use crate::runtime::{
+            CancellationSignal, ExecutionCancellation, types::CancellationReason,
+        };
+        let callbacks = Arc::new(Callbacks::default());
+        let conversation = ConversationId::generate();
+        let host = callbacks.connect();
+        callbacks.subscribe_test(&host.id, &conversation);
+        let cutoff = tokio::time::Instant::now() + Duration::from_secs(4);
+        let cancellation = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        )
+        .with_hard_deadline(cutoff);
+        let mut ticket = callbacks
+            .request_scoped(
+                conversation.clone(),
+                method(conversation),
+                Some(Validity::Tool(cancellation.clone())),
+                None,
+            )
+            .unwrap();
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let begin = HostUploadMethod::Begin(HostUploadBeginParams {
+            candidate: upload_candidate(&callbacks, &host.id, &ticket.id),
+            success: true,
+            items: vec![HostUploadItem {
+                type_tag: 1,
+                length: "1".to_owned().try_into().unwrap(),
+            }],
+        });
+        assert_eq!(callbacks.upload(&host.id, begin.clone()), Ok(false));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(tokio::time::Instant::now(), cutoff);
+        // Expiry must be checked even before the execution owner has woken
+        // to request cancellation.
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(
+            callbacks.upload(&host.id, begin),
+            Err(HostUploadRefusal::Expired)
+        );
+        assert!(matches!(
+            ticket.reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn saturated_host_can_abort_one_candidate_and_another_host_can_still_claim() {
+        use crate::app_server::host_upload::{
+            HostUploadAbortParams, HostUploadBeginParams, HostUploadMethod, HostUploadRefusal,
+        };
+        let callbacks = Arc::new(Callbacks::default());
+        let thread = ConversationId::generate();
+        let a = callbacks.connect();
+        let b = callbacks.connect();
+        callbacks.subscribe_test(&a.id, &thread);
+        callbacks.subscribe_test(&b.id, &thread);
+        let mut tickets = (0..5)
+            .map(|_| {
+                callbacks
+                    .request(thread.clone(), method(thread.clone()), None)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let begin = |client: &str, id: &RequestId| {
+            HostUploadMethod::Begin(HostUploadBeginParams {
+                candidate: upload_candidate(&callbacks, client, id),
+                success: true,
+                items: vec![],
+            })
+        };
+        let first = begin(&a.id, &tickets[0].id);
+        assert_eq!(callbacks.upload(&a.id, first.clone()), Ok(false));
+        for ticket in &tickets[1..4] {
+            assert_eq!(callbacks.upload(&a.id, begin(&a.id, &ticket.id)), Ok(false));
+        }
+        let overflow = begin(&a.id, &tickets[4].id);
+        assert_eq!(
+            callbacks.upload(&a.id, overflow.clone()),
+            Err(HostUploadRefusal::Capacity)
+        );
+        assert_eq!(
+            callbacks.upload(&b.id, begin(&b.id, &tickets[4].id)),
+            Ok(false)
+        );
+        assert_eq!(
+            callbacks.upload(
+                &a.id,
+                HostUploadMethod::Abort(HostUploadAbortParams {
+                    candidate: first.candidate().clone(),
+                })
+            ),
+            Ok(false)
+        );
+        assert_eq!(callbacks.upload(&a.id, first), Err(HostUploadRefusal::Late));
+        assert_eq!(callbacks.upload(&a.id, overflow), Ok(false));
+        assert!(callbacks.respond(&b.id, reply(tickets[4].id.clone(), serde_json::json!({}))));
+        assert!(matches!(
+            tickets[4].reply.try_recv(),
+            Ok(CallbackReply::Message(_))
+        ));
+        assert_eq!(
+            callbacks.upload_budget.available_permits(),
+            upload::MAX_ACTIVE - 3
+        );
+    }
+
     #[tokio::test]
     async fn detach_revokes_only_the_departing_subscriber_without_leaking_capacity() {
         let callbacks = Arc::new(Callbacks::default());
@@ -793,7 +1177,16 @@ mod tests {
         else {
             panic!()
         };
-        assert_eq!(replayed, first);
+        let expected_replay = {
+            let state = callbacks.state.lock().unwrap();
+            callbacks.address(
+                &first,
+                &resumed.id,
+                &state.pending[&first.id].recipients[&resumed.id],
+            )
+        };
+        assert_eq!(replayed, expected_replay);
+        assert_ne!(replayed, first);
         // A syntactically valid but domain-invalid answer still wins.
         assert!(callbacks.respond(
             &b.id,
@@ -805,7 +1198,7 @@ mod tests {
         ));
         assert!(matches!(
             (&mut ticket.reply).await.unwrap(),
-            ClientReply::Success(_)
+            CallbackReply::Message(ClientReply::Success(_))
         ));
         assert!(matches!(
             resumed
@@ -924,7 +1317,7 @@ mod tests {
         assert!(!callbacks.respond(&client.id, reply(ticket.id.clone(), serde_json::json!({}))));
         assert!(matches!(
             (&mut ticket.reply).await.unwrap(),
-            ClientReply::Error(_)
+            CallbackReply::Message(ClientReply::Error(_))
         ));
         let next = callbacks
             .request(thread.clone(), method(thread), None)
@@ -1027,8 +1420,14 @@ mod tests {
                 mode: ToolInvocationMode::Foreground,
                 arguments: serde_json::json!({}),
             };
-            let mut operation =
-                callbacks.call(&thread, &attempt, &definition, invocation, cancellation);
+            let mut operation = callbacks.call(
+                &thread,
+                &attempt,
+                &definition,
+                invocation,
+                cancellation,
+                None,
+            );
             assert!(futures_util::poll!(&mut operation).is_pending());
             let queued = client.messages.lock().await.recv().await.unwrap();
             let ServerMessage::Request(request) = queued.message else {

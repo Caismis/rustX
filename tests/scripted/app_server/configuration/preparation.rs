@@ -387,6 +387,8 @@ async fn t09_unselected_model_and_default_edits_publish_without_adoption_t15_new
     let created = fixture
         .manager
         .create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })
@@ -623,6 +625,8 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
     );
     let create = || {
         fixture.manager.create_session(SessionPersistentState {
+            session_config: None,
+            session_resources: None,
             cwd: fixture.workspaces[0].clone(),
             model: None,
         })

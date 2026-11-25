@@ -143,6 +143,16 @@ async fn launch_parent_with_environment(
     environment: &[(&str, &str)],
     resume: Option<&rustx::local_runtime::SessionId>,
 ) -> Parent {
+    write_parent_fixture(root, workspace, models, session);
+    Parent::spawn(&ParentBindings::under(root, workspace), environment, resume).await
+}
+
+fn write_parent_fixture(
+    root: &std::path::Path,
+    workspace: &std::path::Path,
+    models: &str,
+    session: &str,
+) {
     std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
     std::fs::write(
         workspace.join(".agents/agents/explore.toml"),
@@ -156,7 +166,6 @@ async fn launch_parent_with_environment(
         format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
     )
     .expect("rustx.toml");
-    Parent::spawn(&ParentBindings::under(root, workspace), environment, resume).await
 }
 
 /// Launches a new parent Session over `<root>/workspace`.
@@ -399,14 +408,17 @@ async fn a_real_child_shares_the_session_workspace_subdirectory() {
     .expect("uncommitted parent state");
 
     let models = models_json(&server.url("/v1"));
-    let mut process = launch_parent(
-        root.path(),
-        &logical_parent,
-        &models,
-        SHARED_SUBDIRECTORY_SESSION_TOML,
-        "subagent-secret",
+    std::fs::write(
+        root.path().join("rustx.toml"),
+        format!("{}\n{models}", toml::to_string_pretty(&session).unwrap()),
+    )
+    .unwrap();
+    let mut bindings = ParentBindings::under(root.path(), &logical_parent);
+    bindings.execution = true;
+    let mut process = Parent::spawn(
+        &bindings,
+        &[("RUSTX_SUBAGENT_TEST_KEY", "subagent-secret")],
         None,
-        false,
     )
     .await;
     process.attach().await;
@@ -594,16 +606,21 @@ async fn original_child_request_messages(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
-    Box::pin(subagent_process_stack(false)).await;
+    Box::pin(subagent_process_stack(false, false)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn alias_product_root_child_startup_and_historical_inspection_share_authority() {
-    Box::pin(subagent_process_stack(true)).await;
+    Box::pin(subagent_process_stack(true, false)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_delegated_model_change_resolves_its_own_profile_in_the_real_child() {
+    Box::pin(subagent_process_stack(false, true)).await;
 }
 
 #[allow(clippy::too_many_lines)]
-async fn subagent_process_stack(alias_root: bool) {
+async fn subagent_process_stack(alias_root: bool, explicit_model: bool) {
     let server =
         crate::common::FixtureServer::start_with_body(|_attempt, _head, body| route(body)).await;
     let root = tempfile::tempdir().expect("temp root");
@@ -615,8 +632,44 @@ async fn subagent_process_stack(alias_root: bool) {
         )
         .unwrap();
     }
-    let models = models_json(&server.url("/v1"));
-    let mut process = spawn_parent(root.path(), &models, SESSION_TOML, "subagent-secret").await;
+    let mut models = models_json(&server.url("/v1")).replace(
+        r#"request_params = '{"temperature":0.11}'"#,
+        r#"default_profile = "high""#,
+    );
+    models.push_str(
+        r#"
+[models."fixture/subagent-model".profiles.high]
+request_params = '{"reasoning_effort":"high"}'
+
+[models."fixture/delegated-model"]
+provider = "fixture"
+id = "delegated-model"
+context_window = 128000
+max_output_tokens = 512
+default_profile = "native"
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+compat = { chat_reasoning_replay = "omit" }
+
+[models."fixture/delegated-model".profiles.high]
+max_output_tokens = 64
+
+[models."fixture/delegated-model".profiles.native]
+request_params = '{"reasoning_effort":"medium","temperature":0.6}'
+max_output_tokens = 200
+"#,
+    );
+    let mut session = SESSION_TOML.replace(
+        "model = \"fixture/subagent-model\"",
+        r#"model = "fixture/subagent-model"
+profile = "high"
+request_params = '{"temperature":0.37,"seed":17}'
+max_output_tokens = { mode = "limit", tokens = 333 }"#,
+    );
+    if explicit_model {
+        session
+            .push_str("\n[subagents.roles.explore.model]\nmodel = \"fixture/delegated-model\"\n");
+    }
+    let mut process = spawn_parent(root.path(), &models, &session, "subagent-secret").await;
 
     // start -> initialize -> attach the parent Session
     let snapshot = process.attach().await;
@@ -710,6 +763,38 @@ async fn subagent_process_stack(alias_root: bool) {
             body.contains("count the workspace files") && !body.contains("please delegate")
         })
         .expect("the child's own model request was observed");
+    let parent_requests = bodies
+        .iter()
+        .filter(|body| body.contains("please delegate"));
+    assert_eq!(bodies.len(), 4);
+    assert_eq!(parent_requests.clone().count(), 3);
+    let budget = |request: &serde_json::Value| {
+        request["max_tokens"]
+            .as_u64()
+            .or_else(|| request["max_completion_tokens"].as_u64())
+    };
+    for body in parent_requests {
+        let request: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(request["model"], "subagent-model");
+        assert_eq!(request["reasoning_effort"], "high");
+        assert_eq!(request["temperature"], 0.37);
+        assert_eq!(request["seed"], 17);
+        assert_eq!(budget(&request), Some(333));
+    }
+    let child: serde_json::Value = serde_json::from_str(child_request).unwrap();
+    if explicit_model {
+        assert_eq!(child["model"], "delegated-model");
+        assert_eq!(child["reasoning_effort"], "medium");
+        assert_eq!(child["temperature"], 0.6);
+        assert!(child.get("seed").is_none());
+        assert_eq!(budget(&child), Some(200));
+    } else {
+        assert_eq!(child["model"], "subagent-model");
+        assert_eq!(child["reasoning_effort"], "high");
+        assert_eq!(child["temperature"], 0.37);
+        assert_eq!(child["seed"], 17);
+        assert_eq!(budget(&child), Some(333));
+    }
     assert!(
         child_request.contains(EXPLORE_INSTRUCTIONS),
         "the child request carries the frozen user-authored instructions"

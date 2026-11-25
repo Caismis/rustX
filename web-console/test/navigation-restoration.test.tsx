@@ -12,7 +12,7 @@ function newServer() {
     if (request.method !== 'workflow/list') throw new Error('Expected Workflow library read');
     return {type:'workflow_library',library:{target:request.params.target,directory:'/workflows',absent_revision:'empty',files:[],diagnostic:null}};
   });
-  s.handlers.set('skills/list', () => ({ type: 'skills', page: { data: [], revision: 'skills-empty', diagnostics: [], diagnostics_truncated: false, next_offset: null } }));
+  s.handlers.set('skills/list', () => ({ type: 'skills', authority: 'authoring', page: { data: [], revision: 'skills-empty', diagnostics: [], diagnostics_truncated: false, next_offset: null } }));
   return s;
 }
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });

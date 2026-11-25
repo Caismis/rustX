@@ -30,6 +30,11 @@
 
 pub mod provider_emulator;
 
+/// The shared real Session-execution test rig — the same source the root
+/// crate's unit tests compile as `session_execution_support`.
+#[path = "../support/session_execution.rs"]
+pub mod session_execution;
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -914,6 +919,11 @@ pub struct ToolRuntimeFixture {
     /// The conversation tool runtime. Declared FIRST so it — and the file
     /// handles reachable from it — drops before the directory is removed.
     runtime: rustx::tools::runtime::ConversationToolRuntime,
+    /// The admitted Execution Client route, when the fixture was built
+    /// with one: declared after `runtime` so the scope's `Weak` never
+    /// outlives the manager that owns the endpoint.
+    #[allow(clippy::used_underscore_binding)]
+    _execution: Option<session_execution::ExecutionFixture>,
     /// The storage-root owner; dropping it removes the whole directory.
     /// Never move this field above `runtime`.
     #[allow(clippy::used_underscore_binding)]
@@ -965,7 +975,11 @@ pub fn tool_runtime_with_store(
         },
     )
     .expect("tool runtime");
-    ToolRuntimeFixture { runtime, temp }
+    ToolRuntimeFixture {
+        runtime,
+        _execution: None,
+        temp,
+    }
 }
 
 /// A conversation tool runtime over a unique temporary workspace whose
@@ -973,6 +987,48 @@ pub fn tool_runtime_with_store(
 #[must_use]
 pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
     tool_runtime_with_store(conversation_id, None)
+}
+
+/// [`tool_runtime`] with the Session's real execution route admitted:
+/// the fixture spawns and holds the staged `rustx-execution-client`
+/// bound to its temporary workspace, so builtin Write/Edit invocations
+/// prepare, authorize, and settle through the actual Client. The child
+/// is killed and reaped when the fixture drops.
+#[must_use]
+pub fn tool_runtime_with_execution(conversation_id: &str) -> ToolRuntimeFixture {
+    tool_runtime_with_store_and_execution(conversation_id, None)
+}
+
+/// [`tool_runtime_with_execution`] with an explicitly configured durable
+/// authority, for suites that need both the admitted Client route and a
+/// durable store binding.
+#[must_use]
+pub fn tool_runtime_with_store_and_execution(
+    conversation_id: &str,
+    store: Option<Arc<dyn ConversationStore>>,
+) -> ToolRuntimeFixture {
+    let mut fixture = tool_runtime_with_store(conversation_id, store.clone());
+    let workspace = fixture
+        .storage_root()
+        .join("workspace")
+        .canonicalize()
+        .unwrap();
+    let execution = session_execution::ExecutionFixture::new(&workspace);
+    let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        fixture.runtime.conversation_id().clone(),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            durable_binding: store.map(rustx::durable::ConversationStoreBinding::new),
+            execution_scope: Some(execution.scope.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                workspace,
+                fixture.storage_root().join("artifacts"),
+            )
+        },
+    )
+    .expect("tool runtime");
+    fixture.runtime = runtime;
+    fixture._execution = Some(execution);
+    fixture
 }
 
 /// A canonical tool definition with an explicit execution-ownership policy.
@@ -1019,6 +1075,12 @@ pub struct NativeFixture {
     /// Tool/runtime code receives only the mailbox capability; the test
     /// harness passes this handle explicitly at the execution boundary.
     pub store: Arc<rustx::durable::SqliteConversationStore>,
+    /// The live Session execution route, when this fixture is bound to a
+    /// real admitted Execution Client (`native_fixture_with_execution`).
+    /// Kept alive for the fixture's lifetime: dropping it unclaims the
+    /// endpoint and reaps the Client child.
+    #[allow(clippy::used_underscore_binding)]
+    _execution: Option<session_execution::ExecutionFixture>,
     /// The temporary directory owner, declared LAST: struct fields drop in
     /// declaration order, so the runtime and every handle obtained from it
     /// drop before the directory is removed.
@@ -1027,6 +1089,11 @@ pub struct NativeFixture {
 }
 
 impl NativeFixture {
+    /// Reaps the real Client while the native runtime and artifacts remain pinned.
+    pub fn disconnect_execution(&mut self) {
+        drop(self._execution.take().expect("live Execution Client"));
+    }
+
     /// The temporary directory backing this fixture.
     #[must_use]
     pub fn dir(&self) -> &tempfile::TempDir {
@@ -1056,11 +1123,14 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
 #[must_use]
 pub fn model_selectable_native_fixture() -> NativeFixture {
     use rustx::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
-    native_fixture_with(
+    native_fixture_inner(
         Vec::new(),
         rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
         )),
+        &rustx::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(rustx::context::AgentStatusConfig::default()),
+        true,
     )
 }
 
@@ -1111,10 +1181,40 @@ pub fn native_fixture_with_extensions(
     policies: rustx::tools::native::NativeToolPolicies,
     extensions: &rustx::extensions::NativeAgentExtensions,
 ) -> NativeFixture {
+    native_fixture_inner(environment, policies, extensions, false)
+}
+
+/// A native tool fixture whose conversation runtime is bound to a real
+/// Session execution route: an actual catalog Session, a reserved local
+/// endpoint, and an admitted staged `rustx-execution-client` child — the
+/// exact production route a Session-loaded conversation composes.
+///
+/// Fixtures that exercise Session-bound filesystem tools or native Bash
+/// use this route. Other tool tests can compose with [`native_fixture`].
+#[must_use]
+pub fn native_fixture_with_execution(environment: Vec<(String, String)>) -> NativeFixture {
+    native_fixture_inner(
+        environment,
+        rustx::tools::native::NativeToolPolicies::default(),
+        &rustx::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(rustx::context::AgentStatusConfig::default()),
+        true,
+    )
+}
+
+pub(crate) fn native_fixture_inner(
+    environment: Vec<(String, String)>,
+    policies: rustx::tools::native::NativeToolPolicies,
+    extensions: &rustx::extensions::NativeAgentExtensions,
+    execution: bool,
+) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
+    let workspace_root = workspace_root
+        .canonicalize()
+        .expect("fixture workspace identity");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).expect("artifact directory");
     let conversation_id =
@@ -1128,11 +1228,16 @@ pub fn native_fixture_with_extensions(
     );
     let environment = rustx::tools::environment::ToolEnvironment::from_authorized(environment)
         .expect("authorized environment");
+    // The execution route is reserved for exactly the Session's workspace
+    // before the runtime is composed — the same order production
+    // composition binds it.
+    let execution = execution.then(|| session_execution::ExecutionFixture::new(&workspace_root));
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
         ConversationRuntimeConfig {
             durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store.clone())),
             environment: Some(environment),
+            execution_scope: execution.as_ref().map(|fixture| fixture.scope.clone()),
             ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
                 .with_extensions(extensions.clone())
         },
@@ -1161,6 +1266,7 @@ pub fn native_fixture_with_extensions(
     let mailbox = runtime.mailbox();
     NativeFixture {
         _dir: dir,
+        _execution: execution,
         runtime,
         registry,
         ordinary_registry,
@@ -1259,7 +1365,7 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    let context = match context.bind_mutation_target(&prepared) {
+    let context = match context.bind_mutation_target(&prepared).await {
         Ok(context) => context,
         Err(error) => {
             return rustx::tools::types::ToolExecutionResult {

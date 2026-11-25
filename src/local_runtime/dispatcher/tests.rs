@@ -1,11 +1,9 @@
 use super::{ChildControlDispatcher, ChildControlEvent};
-use crate::runtime::identity::ProcessUnitId;
 use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
 use crate::runtime::interaction::{
     ApprovalDecision, InteractionAdmissionError, InteractionKind, InteractionOutcome,
     InteractionRef, InteractionRequest, InteractionResponse,
 };
-use crate::runtime::nested_containment::AnchorError;
 use crate::runtime::subagent::activity::SubagentObservation;
 use crate::runtime::subagent::ipc::{
     ActivityFrame, ChildFrame, DelegationFrame, DiagnosticFrame,
@@ -15,6 +13,8 @@ use crate::runtime::subagent::ipc::{
 use crate::runtime::types::CancellationReason;
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 use futures_util::FutureExt;
+use rustx_process_supervisor::identity::ProcessUnitId;
+use rustx_process_supervisor::nested_containment::AnchorError;
 
 fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
     tokio::net::UnixStream::pair().expect("control socket pair")
@@ -833,7 +833,12 @@ async fn an_unproven_owner_loss_never_releases_the_retained_anchor() {
             let authority = authority.clone();
             let unit = unit.clone();
             async move {
-                crate::runtime::nested_containment::retain_with(unit, pgid, Some(authority)).await
+                rustx_process_supervisor::nested_containment::retain_with(
+                    unit,
+                    pgid,
+                    Some(authority),
+                )
+                .await
             }
         });
         assert!(matches!(

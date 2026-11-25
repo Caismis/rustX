@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AttachmentTarget } from '../../protocol/app-server/v80';
+import type { AttachmentTarget } from '../../protocol/app-server/v81';
 import { RecentInactiveViews, RECENT_INACTIVE_VIEW_LIMIT, recentViewSnapshot, type HeldView, type RecentViewSnapshot } from '../src/app/navigation/recent-views';
 import type { ClientView } from '../src/client/contracts';
 

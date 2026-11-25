@@ -24,6 +24,7 @@ use crate::events::interaction::{
     AnswerSpecification, OptionAnswer, OptionSpecification, QuestionSpecification,
     QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSubmission,
 };
+use crate::local_runtime::session_runtime_manager::StandaloneExecution;
 use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, McpServerId, ToolCallId};
 use crate::runtime::interaction::{
     InteractionCoordinator, InteractionObserver, InteractionRequest, InteractionResponse,
@@ -128,6 +129,7 @@ struct Harness {
     server: String,
     _directory: tempfile::TempDir,
     runtime: Arc<McpServerRuntime>,
+    execution: Option<StandaloneExecution>,
     tool_runtime: ConversationToolRuntime,
     coordinator: Arc<InteractionCoordinator>,
     audit: Arc<RecordingInteractionAudit>,
@@ -136,9 +138,17 @@ struct Harness {
     owner: crate::agent::cancellation::AgentCancellation,
 }
 
+#[derive(Default)]
+enum ExecutionOwner {
+    #[default]
+    Fixture,
+    Client,
+}
+
 /// The environment overlay one fixture launch runs with.
 #[derive(Default)]
 struct FixtureOptions {
+    execution_owner: ExecutionOwner,
     /// Publish the Tasks guard tools **without** advertising the extension.
     unadvertised: bool,
     /// Narrow the fixture to one legacy MCP revision.
@@ -161,6 +171,7 @@ impl Harness {
         let directory = tempfile::tempdir().expect("fixture root");
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace_root = workspace_root.canonicalize().expect("workspace identity");
         let observations = directory.path().join("task-observations.jsonl");
         let prefix = tool_prefix(test_name);
         let server = server_id(test_name);
@@ -204,8 +215,27 @@ impl Harness {
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
         };
-        let workspace = Workspace::new(&workspace_root).expect("workspace");
-        let runtime = McpServerRuntime::connect(
+        let execution = if matches!(options.execution_owner, ExecutionOwner::Client) {
+            let execution_root = directory.path().join("execution");
+            std::fs::create_dir(&execution_root).expect("private execution root");
+            Some(
+                StandaloneExecution::start(
+                    crate::runtime::identity::SessionId::generate(),
+                    workspace_root.clone(),
+                    execution_root,
+                )
+                .await
+                .expect("paired Execution Client"),
+            )
+        } else {
+            None
+        };
+        let workspace = match &execution {
+            Some(client) => Workspace::for_session(&workspace_root, client.scope()),
+            None => Workspace::new(&workspace_root),
+        }
+        .expect("workspace");
+        let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new(&server),
             &binding,
             &workspace,
@@ -246,6 +276,7 @@ impl Harness {
             server,
             _directory: directory,
             runtime,
+            execution,
             tool_runtime,
             coordinator,
             audit,
@@ -388,7 +419,11 @@ impl Harness {
     }
 
     async fn shutdown(&self) {
-        let _ = self.runtime.close().await;
+        let settlement = self.runtime.close().await;
+        if let Some(client) = &self.execution {
+            settlement.expect("stdio process settled before Client revocation");
+            client.shutdown().await.expect("paired Client exited");
+        }
     }
 }
 
@@ -695,7 +730,10 @@ async fn a_continuation_round_may_materialize_the_task() {
     }
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::a_continuation_round_may_materialize_the_task",
-        FixtureOptions::default(),
+        FixtureOptions {
+            execution_owner: ExecutionOwner::Client,
+            ..FixtureOptions::default()
+        },
     )
     .await;
     let progress = RecordingProgress::default();
@@ -742,7 +780,10 @@ async fn task_input_uses_the_existing_questionnaire_owner() {
     }
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::task_input_uses_the_existing_questionnaire_owner",
-        FixtureOptions::default(),
+        FixtureOptions {
+            execution_owner: ExecutionOwner::Client,
+            ..FixtureOptions::default()
+        },
     )
     .await;
     let progress = RecordingProgress::default();
@@ -1080,7 +1121,10 @@ async fn cancellation_before_the_next_poll_dispatches_no_further_get() {
     }
     let harness = Harness::connect(
         "boundary_suites::mcp_tasks::cancellation_before_the_next_poll_dispatches_no_further_get",
-        FixtureOptions::default(),
+        FixtureOptions {
+            execution_owner: ExecutionOwner::Client,
+            ..FixtureOptions::default()
+        },
     )
     .await;
     // The first poll runs to completion; the second is held at its frontier.
@@ -1302,16 +1346,15 @@ async fn connection_loss_after_task_creation_never_replays_the_tool_call() {
 // Foreground / background orthogonality
 // ---------------------------------------------------------------------------
 
-/// A task admitted for rustX background execution is driven by the **existing**
-/// background owner: one detached identity, one settlement, no second
-/// background record, and no interaction authority.
+/// An attempted background task cannot establish a remote task or an
+/// interaction. The originating Job gets exactly one classified refusal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_background_execution_drives_the_task_through_its_existing_owner() {
+async fn a_background_invocation_cannot_start_a_remote_task() {
     if serve_if_fixture_mode(FixtureServer::from_env()).await {
         return;
     }
     let harness = Harness::connect(
-        "boundary_suites::mcp_tasks::a_background_execution_drives_the_task_through_its_existing_owner",
+        "boundary_suites::mcp_tasks::a_background_invocation_cannot_start_a_remote_task",
         FixtureOptions::default(),
     )
     .await;
@@ -1376,29 +1419,15 @@ async fn a_background_execution_drives_the_task_through_its_existing_owner() {
     // The same detached identity throughout, and exactly one settlement.
     assert_eq!(snapshot.execution_id, execution_id);
     let result = snapshot.result.expect("one terminal result");
+    assert!(matches!(
+        result.status,
+        ToolExecutionStatus::Failed { ref error }
+            if error == "MCP tools require foreground execution"
+    ));
     assert!(
-        matches!(result.status, ToolExecutionStatus::Success),
-        "the background owner drove the whole task lifecycle: {:?}",
-        result.status
+        harness.observed().is_empty(),
+        "the real MCP peer receives no task request"
     );
-    // The remote task id never became a rustX identity of any kind.
-    let task_id = harness.task_id(TASK_SIMPLE_TOOL);
-    assert_ne!(execution_id.to_string(), task_id);
-    let published = format!("{:?}{:?}", result.status, result.content);
-    assert!(
-        !published.contains(&task_id),
-        "the remote task id never reaches a published fact: {published}"
-    );
-    for observation in &harness.observed() {
-        assert!(
-            observation.tasks_advertised,
-            "a detached execution still drives tasks: {observation:?}"
-        );
-        assert!(
-            !observation.elicitation_advertised,
-            "a detached execution never advertises interaction authority: {observation:?}"
-        );
-    }
     assert_eq!(harness.coordinator.pending_count(), 0);
     assert_eq!(
         harness.audit.events(),
@@ -1538,7 +1567,7 @@ async fn cancellation_releases_the_in_flight_http_task_request() {
     let workspace_root = directory.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let runtime = McpServerRuntime::connect(
+    let runtime = McpServerRuntime::connect_fixture(
         &McpServerId::new("tasks-http"),
         &server.binding(),
         &workspace,

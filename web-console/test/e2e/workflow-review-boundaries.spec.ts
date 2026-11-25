@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { emptyEnumCatalog, pagedCatalog } from './workflow-mcp-catalog';
 import { parse } from 'yaml';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -45,12 +45,21 @@ for (const width of [1440, 390]) test(`focused Human Input fields save and follo
   } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
-test('a catalog larger than one RPC resolves a tool on the final page', async ({ page }) => {
+test('a catalog larger than one Workflow page resolves a tool on the final page', async ({ page }) => {
+  let bytes = 0;
+  for (let cursor: string | undefined, next = true; next;) {
+    const record = pagedCatalog(cursor);
+    bytes += Buffer.byteLength(JSON.stringify(record));
+    cursor = record.nextCursor;
+    next = cursor !== undefined;
+  }
+  expect(bytes).toBeGreaterThan(256 * 1024);
+  expect(bytes).toBeLessThan(1024 * 1024);
   const fixture = await startDogfood('web_console_dogfood');
   try {
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
-    const server = fileURLToPath(new URL('./workflow-json-mcp.py', import.meta.url));
-    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.large]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(server)}, "--large-catalog"]\n`);
+    const url = await fixture.serveMcpCatalog(pagedCatalog);
+    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.large]\nurl = "${url}"\n`);
     const file = join(directory, 'large_catalog.yaml');
     writeFileSync(file, JSON.stringify({ description: 'Large catalog', block: { input: { type: 'object', properties: {}, additionalProperties: false },
       nodes: { start: { type: 'start' }, last: { type: 'tool', selector: { origin: 'source', source_id: 'large', name: 'tool_127' }, arguments: { type: 'object', fields: {} }, result: { type: 'text' } }, done: { type: 'return', outputs: [] } },
@@ -145,8 +154,8 @@ for (const kind of ['required', 'optional']) test(`catalog ${kind} enum saves an
   const fixture = await startDogfood('web_console_dogfood');
   try {
     const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
-    const server = fileURLToPath(new URL('./workflow-json-mcp.py', import.meta.url));
-    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.enums]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(server)}, "--empty-enum"]\n`);
+    const url = await fixture.serveMcpCatalog(emptyEnumCatalog);
+    writeFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), `[mcp_servers.enums]\nurl = "${url}"\n`);
     const file = join(directory, 'empty_enum.yaml');
     writeFileSync(file, JSON.stringify({ description: 'Empty enum business value', block: { input: { type: 'object', properties: {}, additionalProperties: false },
       nodes: { start: { type: 'start' }, call: { type: 'tool', selector: { origin: 'source', source_id: 'enums', name: `empty_${kind}` }, arguments: { type: 'object', fields: { mode: { type: 'literal', value: 'explicit' } } }, result: { type: 'text' } }, done: { type: 'return', outputs: [] } }, edges: [{ from: 'start', to: 'call' }, { from: 'call', to: 'done' }] } }));

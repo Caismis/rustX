@@ -230,7 +230,7 @@ fn enabled_programs<'a>(
     catalog
         .locations
         .keys()
-        .filter(|id| catalog.enabled_by_owning_scope(id, user_selected, workspace_selected))
+        .filter(|id| catalog.enabled_by_owning_scope(id, user_selected, workspace_selected, None))
         .filter_map(|id| catalog.get(id).map(AsRef::as_ref))
         .collect()
 }

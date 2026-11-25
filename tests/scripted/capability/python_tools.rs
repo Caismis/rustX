@@ -58,12 +58,15 @@ impl RecordedRunner {
     }
 }
 
-impl crate::runtime::process_runner::SupervisedProcessRunner for RecordedRunner {
+impl rustx_process_supervisor::process_runner::SupervisedProcessRunner for RecordedRunner {
     fn run(
         &self,
-        spec: crate::runtime::process_runner::SupervisedCommandSpec,
-        _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-    ) -> BoxFuture<'_, Result<crate::runtime::process_runner::CapturedProcessResult, String>> {
+        spec: rustx_process_supervisor::process_runner::SupervisedCommandSpec,
+        _control: Option<rustx_process_supervisor::process_runner::RunnerTestControl>,
+    ) -> BoxFuture<
+        '_,
+        Result<rustx_process_supervisor::process_runner::CapturedProcessResult, String>,
+    > {
         self.commands
             .lock()
             .expect("commands")
@@ -81,9 +84,10 @@ impl crate::runtime::process_runner::SupervisedProcessRunner for RecordedRunner 
             std::fs::write(program, b"scripted stub interpreter\n").expect("stub interpreter");
         }
         let result = if spec.command.contains(" lock ") && self.fail_lock.load(Ordering::Acquire) {
-            crate::runtime::process_runner::CapturedProcessResult {
+            rustx_process_supervisor::process_runner::CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(1),
-                intent: crate::runtime::process_runner::ProcessOutcomeIntent::Completed,
+                intent: rustx_process_supervisor::process_runner::ProcessOutcomeIntent::Completed,
                 stdout: Vec::new(),
                 stderr: b"injected build failure\n".to_vec(),
             }
@@ -95,9 +99,10 @@ impl crate::runtime::process_runner::SupervisedProcessRunner for RecordedRunner 
             } else {
                 Vec::new()
             };
-            crate::runtime::process_runner::CapturedProcessResult {
+            rustx_process_supervisor::process_runner::CapturedProcessResult {
+                physical_settlement_proven: true,
                 exit_code: Some(0),
-                intent: crate::runtime::process_runner::ProcessOutcomeIntent::Completed,
+                intent: rustx_process_supervisor::process_runner::ProcessOutcomeIntent::Completed,
                 stdout,
                 stderr: Vec::new(),
             }

@@ -49,6 +49,7 @@ async fn compose_admitted_with_controller(
         super::composition::McpInitialSubmission::default(),
         &crate::runtime::cancellation::CancellationSignal::new(),
         &[],
+        None,
     )
     .await?
     .into_interactive()
@@ -1099,6 +1100,48 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
     fixture.shutdown().await;
 }
 
+#[tokio::test]
+async fn doctor_refuses_replaced_workspace_before_preparation() {
+    use super::probes::{ProbeState, execute, plan};
+
+    let fixture = Fixture::new();
+    let workspace = &fixture.host.launch_directory;
+    let marker = fixture.root.path().join("probe-started");
+    fixture.mcp(false, json!({
+        "local": {"command": "/bin/sh", "args": ["-c", format!("touch -- {}", marker.display())]}
+    }));
+    fixture.project(json!({"agent": {"tools": {"sources": {"local": "all"}}}}));
+    let launch = analyze(&fixture.request, &fixture.host).unwrap();
+    let prepared = plan(&launch, false);
+    assert!(
+        prepared
+            .targets
+            .iter()
+            .any(|target| target.target == "local" && target.spawn_process)
+    );
+    std::fs::rename(workspace, fixture.root.path().join("retained")).unwrap();
+    std::fs::create_dir(workspace).unwrap();
+
+    let mut effect = std::pin::pin!(execute(
+        &launch,
+        &prepared,
+        crate::runtime::CancellationSignal::new()
+    ));
+    let std::task::Poll::Ready(results) = futures_util::poll!(&mut effect) else {
+        panic!("a replaced Workspace must fail before Client admission");
+    };
+    let local = results
+        .iter()
+        .find(|result| result.target == "local")
+        .unwrap();
+    assert_eq!(local.state, ProbeState::Unavailable);
+    assert_eq!(
+        local.reason,
+        "workspace resource authority changed before effects"
+    );
+    assert!(!marker.exists());
+}
+
 #[test]
 fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
     let f = Fixture::new();
@@ -1131,35 +1174,52 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
 #[tokio::test]
 async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
     use super::probes::{ProbeState, execute, plan};
-    use crate::tools::mcp::fixture::{
-        FIXTURE_MODE_ENV, FixtureServer, fixture_spawn_args, serve_if_fixture_mode,
-    };
     use std::sync::Arc;
-    if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
-        return;
-    }
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+    let script = r"
+import os, signal, socket, sys
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with socket.socket(socket.AF_UNIX) as witness:
+    witness.connect(sys.argv[1])
+    witness.sendall(str(os.getpid()).encode() + b'\n')
+    witness.recv(1)
+";
     for timed_out in [false, true] {
         let f = Fixture::new();
-        f.mcp(true, json!({"owned":{
-            "command":std::env::current_exe().unwrap(),
-            "args":fixture_spawn_args("local_runtime::launch_tests::cfg235_probe_stdio_timeout_and_cancel_reap_owned_process"),
-            "env":{FIXTURE_MODE_ENV:"1"}
-        }}));
+        let witness_root = tempfile::tempdir_in("/tmp").unwrap();
+        let witness = witness_root.path().join("stdio");
+        let listener = tokio::net::UnixListener::bind(&witness).unwrap();
+        f.mcp(
+            true,
+            json!({"owned":{
+                "command": "/usr/bin/python3",
+                "args": ["-c", script, witness.to_str().unwrap()],
+            }}),
+        );
         f.user(
             json!({ "agent": {"model": {"model":"host/one"}, "tools":{"sources":{"owned":"all"}}}}),
         );
         let launch = analyze(&f.request, &f.host).unwrap();
         let mut plan = plan(&launch, false);
-        let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
         let expire = Arc::new(tokio::sync::Notify::new());
-        plan.hooks.ownership_pause = Some(pause.clone());
         plan.hooks.expire = Some(expire.clone());
         let cancellation = crate::runtime::CancellationSignal::new();
         let work = execute(&launch, &plan, cancellation.clone());
         tokio::pin!(work);
-        tokio::select! { () = pause.wait_entered() => {}, _ = &mut work => panic!("probe returned before owned pause") }
-        let pid =
-            nix::unistd::Pid::from_raw(i32::try_from(pause.supervisor_pid().unwrap()).unwrap());
+        let mut peer = tokio::select! {
+            witness = listener.accept() => BufReader::new(witness.unwrap().0),
+            result = &mut work => panic!("probe returned before the real stdio child started: {result:?}"),
+        };
+        let mut pid = String::new();
+        peer.read_line(&mut pid).await.unwrap();
+        let pid = nix::unistd::Pid::from_raw(
+            peer.get_ref()
+                .peer_cred()
+                .unwrap()
+                .pid()
+                .unwrap_or_else(|| pid.trim_end().parse().unwrap()),
+        );
+        assert_eq!(nix::sys::signal::kill(pid, None), Ok(()));
         if timed_out {
             expire.notify_one();
         } else {
@@ -1169,8 +1229,12 @@ async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
             futures_util::poll!(&mut work).is_pending(),
             "caller must await physical owner"
         );
-        pause.release();
         let results = work.await;
+        assert_eq!(
+            peer.read(&mut [0]).await.unwrap(),
+            0,
+            "stdio child physically exited"
+        );
         let result = results
             .iter()
             .find(|result| result.target == "owned")
@@ -1322,25 +1386,6 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
 
 #[tokio::test]
 async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
-    use crate::runtime::process_runner::{
-        CapturedProcessResult, RunnerTestControl, SupervisedCommandSpec, SupervisedProcessRunner,
-    };
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    #[derive(Default)]
-    struct FailingRunner(AtomicUsize);
-    impl SupervisedProcessRunner for FailingRunner {
-        fn run(
-            &self,
-            _: SupervisedCommandSpec,
-            _: Option<RunnerTestControl>,
-        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Err("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK".into()) })
-        }
-    }
     let f = Fixture::new();
     let package = f.host.launch_directory.join(".agents/tools/optional");
     std::fs::create_dir_all(&package).unwrap();
@@ -1348,30 +1393,21 @@ async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
     std::fs::write(package.join("requirements.txt"), "").unwrap();
     f.project(json!({}));
     let launch = analyze(&f.request, &f.host).unwrap();
-    let runner = Arc::new(FailingRunner::default());
-    let store = crate::tools::python::PythonToolStore::with_binaries_and_runner(
-        f.root.path().join("recorded-store"),
-        "/fixture/uv".into(),
-        "/fixture/python3".into(),
-        runner.clone(),
-    )
-    .unwrap();
     for authorized in [false, true, true] {
-        let before = runner.0.load(Ordering::SeqCst);
-        let mut plan = super::probes::plan(&launch, authorized);
-        plan.hooks.python_store = Some(store.clone());
+        let plan = super::probes::plan(&launch, authorized);
+        let target = plan
+            .targets
+            .iter()
+            .find(|target| target.target == "python:optional")
+            .unwrap();
+        assert!(!target.admitted && !target.spawn_process && !target.prepare_environment);
         let results =
             super::probes::execute(&launch, &plan, crate::runtime::CancellationSignal::new()).await;
         let result = results
             .iter()
             .find(|result| result.target == "python:optional")
             .unwrap();
-        assert_eq!(runner.0.load(Ordering::SeqCst), before);
         assert_eq!(result.state, super::probes::ProbeState::Skipped);
-        assert!(
-            !super::probes::render_results(&results, true)
-                .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
-        );
         assert!(!launch.runtime_root.exists());
     }
 }
@@ -2387,7 +2423,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     .unwrap();
     assert!(
         crate::runtime::load_project_context_files(
-            &f.host.launch_directory,
+            Some(&f.host.launch_directory),
             &f.host.home_directory.join("rustx/.agents"),
         )
         .unwrap_err()
@@ -2404,6 +2440,20 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
             .validate_resource_authority()
             .unwrap_err()
             .contains("physical binding changed")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_authored_configuration_requires_a_workspace_directory() {
+    let fixture = Fixture::new();
+    let launch = fixture.resolve();
+    let workspace = &fixture.host.launch_directory;
+    std::fs::rename(workspace, fixture.root.path().join("previous-workspace")).unwrap();
+    std::fs::write(workspace, "a file at the former Workspace path").unwrap();
+    assert_eq!(
+        launch.validate_resource_authority().unwrap_err(),
+        "Workspace physical binding changed after capture"
     );
 }
 

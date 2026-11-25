@@ -1,8 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
-import {expect,test,type Locator,type Page} from '@playwright/test';
+import {expect,test,type Locator,type Page,type Route} from '@playwright/test';
 import {existsSync,mkdirSync,readdirSync,readFileSync,statSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {PNG} from 'pngjs';
 import {startDogfood} from './dogfood-server';
 import {routeWorkspaceHost} from './workspace-host';
@@ -223,7 +222,6 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     const transfer = async (row: Locator, name: string, operation: 'Copy' | 'Move') => {
       await action(row, name);
       const dialog = page.getByRole('dialog', {name: `${operation} resource`, exact: true});
-      // The stale-revision write must not run until this dialog is actually open.
       await expect(dialog).toBeVisible();
       return dialog;
     };
@@ -266,11 +264,35 @@ test('skill directories copy, move and delete from their exact scopes', async ({
 
     const moveToWorkspace = await transfer(globalGuide, 'Move to Workspace', 'Move');
     const globalMarker = join(globalOriginal, 'SKILL.md');
-    writeFileSync(globalMarker, readFileSync(globalMarker, 'utf8') + '\r\nUpdated outside the editor.\r\n');
-    await moveToWorkspace.getByRole('button', {name: 'Move', exact: true}).click();
-    await expect(moveToWorkspace.getByRole('alert')).toContainText('changed');
-    expect(existsSync(join(local, 'global-guide'))).toBe(false);
-    await moveToWorkspace.getByRole('button', {name: 'Cancel', exact: true}).click();
+    const configuration = '**/product-host/configuration';
+    let staleMoves = 0;
+    const changeSourceAfterSubmit = async (route: Route) => {
+      const operation = route.request().postDataJSON()?.operation;
+      if (operation?.kind === 'transfer' && operation.mutation?.operation === 'move'
+          && operation.mutation.resource?.source === 'global-guide') {
+        expect(++staleMoves).toBe(1);
+        writeFileSync(globalMarker, readFileSync(globalMarker, 'utf8') + '\r\nUpdated outside the editor.\r\n');
+      }
+      await route.fallback();
+    };
+    // Let the browser submit its captured revision, then change the actual
+    // source before the Product Host receives that request.
+    await page.route(configuration, changeSourceAfterSubmit);
+    const conflict = skills.getByRole('alert').filter({hasText: 'The source changed.'});
+    try {
+      await moveToWorkspace.getByRole('button', {name: 'Move', exact: true}).click();
+      await expect(conflict).toContainText('global-guide');
+      await expect(conflict).toContainText('reopen the transfer');
+      await expect(conflict).toContainText('Move from Global to global-guide in Workspace A.');
+      await expect(moveToWorkspace).toHaveCount(0);
+      expect(staleMoves).toBe(1);
+      expect(existsSync(globalOriginal)).toBe(true);
+      expect(existsSync(join(local, 'global-guide'))).toBe(false);
+    } finally {
+      await page.unroute(configuration, changeSourceAfterSubmit);
+    }
+    await conflict.getByRole('button', {name: 'Close', exact: true}).click();
+    await expect(conflict).toHaveCount(0);
     const globalText = readFileSync(globalMarker);
     await expect(globalGuide.getByRole('switch')).toBeChecked();
     await submit(await transfer(globalGuide, 'Move to Workspace', 'Move'), 'Move');
@@ -324,7 +346,9 @@ for(const width of [1440,390]) test(`independent resources have exact global and
  try {
   const userRoot=join(f.directory,'home/rustx/.agents');
   const workspaceRoot=join(f.workspaceA,'.agents');
-  const mcpScript=fileURLToPath(new URL('./image-mcp.py',import.meta.url));
+  const toolCatalog = () => ({ tools: [{ name: 'render_image', description: 'Produce a deterministic one-pixel PNG', inputSchema: { type: 'object', properties: {} } }] });
+  const globalMcpUrl = await f.serveMcpCatalog(toolCatalog);
+  const localMcpUrl = await f.serveMcpCatalog(toolCatalog);
   const workflow=readFileSync(new URL('../../../examples/local-runtime/workflow-templates/.agents/workflows/typed_agent.yaml',import.meta.url));
   for(const [root,prefix] of [[userRoot,'global'],[workspaceRoot,'local']]) {
    const skill = join(root,'skills','team',`${prefix}-guide`);
@@ -336,7 +360,8 @@ for(const width of [1440,390]) test(`independent resources have exact global and
    const instructionFile=prefix==='global'?join(f.directory,'shared-global-guide.md'):skillFile;
    writeFileSync(instructionFile,`---\nname: ${prefix}-guide\ndescription: A ${prefix} skill for reviewing changes.\n---\n# ${prefix} guide\n${prefix} guide instructions.\n`);
    if(instructionFile!==skillFile)symlinkSync(instructionFile,skillFile);
-   writeFileSync(join(root,'mcp.toml'),`[mcp_servers.${prefix}-server]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(mcpScript)}]\n`);
+   const url = prefix === 'global' ? globalMcpUrl : localMcpUrl;
+   writeFileSync(join(root,'mcp.toml'),`[mcp_servers.${prefix}-server]\nurl = "${url}"\n`);
   }
   const localMcp = join(workspaceRoot, 'mcp.toml');
   writeFileSync(localMcp, readFileSync(localMcp, 'utf8') + '\n[mcp_servers.offline-server]\ntype = "stdio"\ncommand = "/missing-mcp-fixture"\n');
@@ -559,14 +584,15 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await captureEvidence(mcp,`workspace-mcp-${width}`);
   const localDefinition = readFileSync(join(workspaceRoot, 'mcp.toml'), 'utf8');
   await inheritedServer.getByRole('button',{name:'MCP global-server',exact:true}).click();
-  const command = mcp.getByLabel('Command', { exact: true });
-  await expect(command).toBeEnabled();
-  await expect(command).toHaveValue('python3');
+  const serverUrl = mcp.getByLabel('URL', { exact: true });
+  await expect(serverUrl).toBeEnabled();
+  await expect(serverUrl).toHaveValue(globalMcpUrl);
   await expect(mcp.getByRole('button', { name: 'JSON', exact: true })).toBeEnabled();
-  await command.fill('/usr/bin/python3');
+  const replacementUrl = await f.serveMcpCatalog(toolCatalog);
+  await serverUrl.fill(replacementUrl);
   await mcp.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(inheritedServer).toBeVisible();
-  expect(readFileSync(join(userRoot, 'mcp.toml'), 'utf8')).toContain('command = "/usr/bin/python3"');
+  expect(readFileSync(join(userRoot, 'mcp.toml'), 'utf8')).toContain(`url = "${replacementUrl}"`);
   expect(readFileSync(join(workspaceRoot, 'mcp.toml'), 'utf8')).toBe(localDefinition);
   const accessibility=await new AxeBuilder({page}).include('[data-resource-module="mcp"]').withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
   expect(accessibility.violations.filter(row=>['serious','critical'].includes(row.impact??'')).map(row=>row.id)).toEqual([]);

@@ -57,7 +57,8 @@ use crate::tools::workspace::Workspace;
 /// `task=True` is a declaration of intent — the server decides per call —
 /// and the client's per-request Tasks capability is what makes tasking
 /// applicable at all. rustX advertises it on every `2026-07-28` request.
-const TASK_SERVER: &str = r#"from fastmcp import FastMCP
+const TASK_SERVER: &str = r#"from pathlib import Path
+from fastmcp import FastMCP
 from fastmcp_tasks import TasksExtension
 
 mcp = FastMCP("tasks-tool")
@@ -67,6 +68,8 @@ mcp.add_extension(TasksExtension())
 @mcp.tool(task=True)
 async def analyze(dataset: str) -> str:
     """Run a long analysis as a background MCP task."""
+    with Path("tasks-calls.log").open("a") as calls:
+        calls.write(f"{dataset}\n")
     return f"analyzed {dataset}"
 "#;
 
@@ -99,30 +102,31 @@ async fn a_real_managed_fastmcp_task_completes_through_one_tool_result() {
     )
     .expect("requirements");
 
-    let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let discovered = crate::boundary_suites::common::discover_python_packages(&workspace)
-        .expect("package discovery");
-    let package = discovered
-        .into_iter()
-        .find(|entry| entry.server_id == crate::tools::python::python_server_id("tasks-tool"))
-        .expect("the task package is discovered")
-        .outcome
-        .expect("the task package is valid");
-    let store = crate::tools::python::PythonToolStore::new(directory.path().join("runtime"))
-        .expect("python tool store");
-    let prepared = store
-        .ensure_prepared(&package, &crate::runtime::CancellationSignal::new())
+    let execution =
+        crate::session_execution_support::ExecutionFixture::for_managed_python(&workspace_root);
+    let workspace = Workspace::for_session(
+        &workspace_root.canonicalize().unwrap(),
+        execution.scope.clone(),
+    )
+    .expect("Session Workspace");
+    let source = crate::capabilities::ToolSourceId::ManagedPython("tasks-tool".into());
+    let demand = execution.managed_demand([source.to_string()]).await;
+    let binding = demand.managed_python.packages()[&source]
+        .as_ref()
+        .expect("Client captured package")
+        .prepare_on_client(&crate::runtime::CancellationSignal::new())
         .await
-        .expect("the managed FastMCP environment materializes");
+        .expect("exact Client source")
+        .expect("Client prepares the managed environment");
     eprintln!(
         "managed FastMCP pin: {}",
         crate::tools::python::MANAGED_FASTMCP_VERSION
     );
 
     let server_id = crate::tools::python::python_server_id("tasks-tool");
-    let runtime = McpServerRuntime::connect(
+    let runtime = McpServerRuntime::connect_fixture(
         &server_id,
-        &prepared.server_binding(),
+        &binding,
         &workspace,
         Arc::new(McpInvalidationState::new()),
     )
@@ -207,5 +211,10 @@ async fn a_real_managed_fastmcp_task_completes_through_one_tool_result() {
         "the task's own final CallToolResult is projected through the ordinary \
          MCP result path: {text}"
     );
-    let _ = runtime.close().await;
+    assert_eq!(
+        std::fs::read(workspace_root.join("tasks-calls.log")).unwrap(),
+        b"orders\n"
+    );
+    runtime.close().await.expect("physical MCP settlement");
+    execution.settle().await;
 }

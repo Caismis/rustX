@@ -1,7 +1,7 @@
 import {readFile, writeFile} from 'node:fs/promises';
 import {compile} from 'json-schema-to-typescript';
 
-const schema = JSON.parse(await readFile(new URL('v80.schema.json', import.meta.url), 'utf8'));
+const schema = JSON.parse(await readFile(new URL('v81.schema.json', import.meta.url), 'utf8'));
 // Schemars emits draft-2020-12 $ref siblings for internally tagged newtypes.
 // json-schema-to-typescript's ref resolver merges (and overwrites) their `properties`, losing the
 // referenced content. Express the same conjunction using supported allOf.
@@ -24,6 +24,16 @@ function normalizeRefSiblings(value) {
 // A union root does not emit unreachable definitions in the generator. The
 // object catalog exports native DomainPage display DTOs alongside the exact
 // ProtocolMessage union; it is generation input, never an accepted wire record.
+// The flattened host-upload envelope keeps shared properties beside its method
+// oneOf; json-schema-to-typescript drops those siblings. Express the same
+// conjunction with allOf on that one definition only, as compiler input.
+{
+  const envelope = schema.$defs?.HostUploadEnvelope;
+  if (envelope?.oneOf && envelope.properties) {
+    const {oneOf, description, ...siblings} = envelope;
+    schema.$defs.HostUploadEnvelope = {...(description ? {description} : {}), allOf: [siblings, {oneOf}]};
+  }
+}
 const {$defs, ...messageSchema}=normalizeRefSiblings(schema);
 const typeCatalog={type:'object',properties:{message:{$ref:'#/$defs/ProtocolMessage'}},required:['message'],additionalProperties:false,$defs:{...$defs,ProtocolMessage:messageSchema}};
 const types = await compile(typeCatalog, 'ProtocolTypes', {
@@ -35,8 +45,12 @@ const types = await compile(typeCatalog, 'ProtocolTypes', {
   additionalProperties: false,
   style: {singleQuote: true, printWidth: 100, tabWidth: 2},
 });
-await writeFile(new URL('v80.ts', import.meta.url), types);
+await writeFile(new URL('v81.ts', import.meta.url), types);
 const fixtures = await readFile(new URL('fixtures.json', import.meta.url), 'utf8');
 await writeFile(new URL('fixtures.ts', import.meta.url),
-  "// Generated from serialized Rust DTOs.\nimport type {ProtocolMessage} from './v80.js';\n" +
+  "// Generated from serialized Rust DTOs.\nimport type {ProtocolMessage} from './v81.js';\n" +
   `export const fixtures = ${fixtures.trim()} satisfies ProtocolMessage[];\n`);
+const uploads = await readFile(new URL('host-upload-fixtures.json', import.meta.url), 'utf8');
+await writeFile(new URL('host-upload-fixtures.ts', import.meta.url),
+  "// Generated examples of incremental Hosted result requests.\nimport type {HostUploadEnvelope} from './v81.js';\n" +
+  `export const hostUploads = ${uploads.trim()} satisfies HostUploadEnvelope[];\n`);

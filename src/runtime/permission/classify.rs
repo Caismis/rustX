@@ -102,9 +102,13 @@ pub(crate) fn supports_elevation(tool: &ToolDefinition) -> bool {
 
 /// True only when the mutation target is exactly `<workspace>/PLAN.md`.
 ///
-/// `mutation_target` must already be the Write/Edit effective path (symlink
-/// ancestors and dangling final links resolved). A dangling `PLAN.md` symlink
-/// that resolves outside the workspace therefore never matches.
+/// `mutation_target` is the Write/Edit *logical* path — the
+/// Client-proved `interpret_path` target anchored at the same lexical
+/// workspace root — so the comparison is a pure join-equality with no
+/// canonicalization, `stat`, or Server-side filesystem probe of any
+/// kind. A symlinked `PLAN.md` still classifies as the plan file; the
+/// no-follow leaf open in the Execution Client refuses the physical
+/// mutation at prepare.
 #[must_use]
 pub fn is_workspace_plan_file(
     workspace_root: Option<&Path>,
@@ -113,18 +117,7 @@ pub fn is_workspace_plan_file(
     let (Some(root), Some(target)) = (workspace_root, mutation_target) else {
         return false;
     };
-    let Ok(canonical_root) = root
-        .canonicalize()
-        .or_else(|_| crate::tools::native::support::resolve_effective_path(root).map_err(|_| ()))
-    else {
-        return false;
-    };
-    let expected = canonical_root.join("PLAN.md");
-    // The expected plan path is a real workspace file name, not a symlink we
-    // follow: PLAN.md itself must be the mutation target, never a link hop.
-    target == expected
-        && target.starts_with(&canonical_root)
-        && target.file_name().is_some_and(|name| name == "PLAN.md")
+    target == root.join("PLAN.md")
 }
 
 #[cfg(test)]
@@ -133,9 +126,7 @@ mod tests {
     #[test]
     fn only_exact_workspace_plan_file_counts() {
         let root = tempfile::tempdir().expect("workspace");
-        let canonical_root = root.path().canonicalize().expect("canonical workspace");
-        let plan = canonical_root.join("PLAN.md");
-        std::fs::write(&plan, "plan").expect("plan file");
+        let plan = root.path().join("PLAN.md");
         assert!(is_workspace_plan_file(Some(root.path()), Some(&plan)));
         assert!(!is_workspace_plan_file(
             Some(root.path()),
@@ -156,21 +147,17 @@ mod tests {
     }
 
     #[test]
-    fn dangling_plan_symlink_to_outside_is_not_the_plan_file() {
+    fn a_symlinked_plan_file_still_classifies_as_the_plan_file() {
+        // The logical comparison never follows the link: the Client's
+        // no-follow leaf open is what refuses the physical mutation.
         let workspace = tempfile::tempdir().expect("workspace");
         let outside = tempfile::tempdir().expect("outside");
         let dangling = outside.path().join("new.txt");
         let plan_link = workspace.path().join("PLAN.md");
         std::os::unix::fs::symlink(&dangling, &plan_link).expect("symlink");
-        let effective =
-            crate::tools::native::support::resolve_effective_path(&plan_link).expect("resolve");
-        assert_eq!(
-            effective,
-            outside.path().canonicalize().unwrap().join("new.txt")
-        );
-        assert!(!is_workspace_plan_file(
+        assert!(is_workspace_plan_file(
             Some(workspace.path()),
-            Some(&effective)
+            Some(&plan_link)
         ));
     }
 

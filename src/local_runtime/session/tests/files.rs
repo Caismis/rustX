@@ -21,7 +21,10 @@ async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
     let database = catalog.database_path(&session, &conversation);
     let artifacts = ArtifactStore::new(conversation.clone(), database.parent().unwrap()).unwrap();
     artifacts.put_bounded(b"irrelevant").unwrap();
-    let fixture = common::native_fixture();
+    // Native Read dispatches only through the Session's admitted
+    // Execution Client — the fixture binds the real route, like
+    // production composition.
+    let fixture = common::native_fixture_with_execution(Vec::new());
     let path = fixture.runtime.workspace().root().join("snapshot.png");
     let mut bytes = Vec::new();
     png::Encoder::new(&mut bytes, 1, 1)

@@ -1,6 +1,22 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+
+async function zoomInAndSettle(dialog: Locator) {
+  const canvas = dialog.getByRole('region', { name: 'Workflow canvas', exact: true });
+  await expect(canvas).toHaveAttribute('aria-busy', 'false');
+  await canvas.evaluate(element => {
+    element.removeAttribute('data-test-zoom-settled');
+    const observer = new MutationObserver(records => {
+      if (element.getAttribute('aria-busy') !== 'false' || !records.some(record => record.oldValue === 'true')) return;
+      observer.disconnect();
+      element.setAttribute('data-test-zoom-settled', 'true');
+    });
+    observer.observe(element, { attributes: true, attributeFilter: ['aria-busy'], attributeOldValue: true });
+  });
+  await dialog.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect(canvas).toHaveAttribute('data-test-zoom-settled', 'true');
+}
 
 for (const width of [1440, 390]) {
   test(`workflow run canvas renders immutable graph, preserves viewport and focus, supports keyboard, EN/ZH, and themes at ${width}px`, async ({ page }) => {
@@ -64,11 +80,10 @@ for (const width of [1440, 390]) {
     expect(await page.evaluate(() => window.runCanvasFixture.valueReads().length)).toBe(1);
 
     // Capture the viewport after React Flow's actual movement completion.
-    await dialog.getByRole('button', { name: 'Zoom in', exact: true }).click();
+    await zoomInAndSettle(dialog);
     const zoomLevel = dialog.getByRole('button', { name: 'Zoom', exact: true });
     await expect(zoomLevel).not.toHaveText('100%');
     const viewport = dialog.locator('.react-flow__viewport');
-    await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
     const transformBefore = await viewport.getAttribute('style');
     expect(transformBefore).toBeTruthy();
 
@@ -149,17 +164,9 @@ test('paging trace visits and live cut advancement keep viewport transform, lazy
   // Zoom in so viewport transform is non-default before paging & live advancement, then wait for its transition to settle.
   const viewport = dialog.locator('.react-flow__viewport');
   const beforeZoom = await viewport.evaluate(el => el.style.transform);
-  const zoomIn = dialog.getByRole('button', { name: 'Zoom in', exact: true });
-  await zoomIn.click();
-  await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
-  let transformBefore = beforeZoom;
-  await expect.poll(async () => {
-    const first = await viewport.evaluate(el => el.style.transform);
-    await page.waitForTimeout(50);
-    const second = await viewport.evaluate(el => el.style.transform);
-    transformBefore = second;
-    return first !== beforeZoom && first === second;
-  }).toBe(true);
+  await zoomInAndSettle(dialog);
+  const transformBefore = await viewport.evaluate(el => el.style.transform);
+  expect(transformBefore).not.toBe(beforeZoom);
 
   // Paging trace visits expands count while keeping exact viewport transform and dialog focus.
   const loadMore = dialog.getByRole('button', { name: 'Load more trace visits' });
@@ -240,15 +247,11 @@ for (const width of [1440, 390]) {
     expect(await page.evaluate(() => window.runCanvasFixture.valueReads())).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
-    // Zoom in so camera transform is non-default, wait for animation frames / idle aria-busy witness, and capture layout instance + transform.
+    // Capture the layout instance and non-default viewport after the zoom ends.
     const viewport = dialog.locator('.react-flow__viewport');
     const zoomLevel = dialog.getByRole('button', { name: 'Zoom', exact: true });
-    await dialog.getByRole('button', { name: 'Zoom in', exact: true }).click();
+    await zoomInAndSettle(dialog);
     await expect(zoomLevel).not.toHaveText('100%');
-    await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
-    await page.evaluate(() => new Promise<void>(resolve => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    }));
     const transformBefore = await viewport.evaluate(el => el.style.transform);
     expect(transformBefore).toBeTruthy();
     await page.evaluate(() => {

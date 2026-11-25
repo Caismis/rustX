@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { mcpStartupGate, startupToolSchema, startupWait } from '../../../tui/test/support/mcp-startup-gate';
+import { startupToolSchema, startupWait } from '../../../tui/test/support/mcp-startup-gate';
+import { mcpHttpStartupGate } from './http-mcp-startup-gate';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, connectionAction, returnHome } from './shell-actions';
@@ -11,11 +12,11 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
   const fixture = await startDogfood('mcp_startup');
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
-  let gate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let gate: Awaited<ReturnType<typeof mcpHttpStartupGate>> | undefined;
   let native: AppServerHost | undefined;
   let passed = false;
   try {
-    gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    gate = await mcpHttpStartupGate(fixture.workspaceA, cancellation.signal);
     native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const source = (await native.createSession({ cwd: fixture.workspaceB })).session;
     const target = (await native.createSession({ cwd: fixture.workspaceA })).session;
@@ -119,11 +120,11 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const cancellation = new AbortController();
   page.once('close', () => cancellation.abort(new Error('Browser test retired')));
-  let gate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let gate: Awaited<ReturnType<typeof mcpHttpStartupGate>> | undefined;
   let native: AppServerHost | undefined;
   let passed = false;
   try {
-    gate = await mcpStartupGate(fixture.workspaceA, cancellation.signal);
+    gate = await mcpHttpStartupGate(fixture.workspaceA, cancellation.signal);
     native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const source = (await native.createSession({ cwd: fixture.workspaceB })).session;
     const target = (await native.createSession({ cwd: fixture.workspaceA })).session;

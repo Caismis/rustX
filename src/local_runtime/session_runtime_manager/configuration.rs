@@ -2,11 +2,34 @@
 //! gates, process limits, configuration hosts and applications,
 //! reconciliation, and source repair/read/write.
 
-use super::super::session::SessionId;
+use super::super::{configuration::application::BoundObservationMode, session::SessionId};
 use super::Entry;
 use super::SessionRuntimeManager;
 use crate::runtime::conversation_runtime::ConversationRuntime;
+use std::sync::Arc;
 use tokio::sync::watch;
+
+pub(super) struct BoundCapture {
+    session: SessionId,
+    input: super::super::configuration::SessionConfigInput,
+    endpoint: Arc<super::LocalExecutionEndpoint>,
+    watch: Option<rustx_execution_server::ControlHandle>,
+    mode: BoundObservationMode,
+    ticket: u64,
+    prefetched_python: Option<PrefetchedPython>,
+}
+
+#[derive(Default)]
+struct BoundCaptureOutcome {
+    retained: bool,
+    published: bool,
+}
+
+struct PrefetchedPython {
+    catalog: crate::runtime::resources::ManagedPythonCatalog,
+    source_attempt: u64,
+    settings_revision: u64,
+}
 
 impl SessionRuntimeManager {
     /// Register the inert observer before activation; its first poll belongs
@@ -250,6 +273,45 @@ impl SessionRuntimeManager {
         resident.and_then(|resident| resident.shutdown_runtime())
     }
 
+    fn refresh_reconciled_catalog(
+        &self,
+        session: &SessionId,
+        incarnation: super::RuntimeIncarnationId,
+    ) {
+        let resident = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            let Some(id) = state.by_session.get(session) else {
+                return;
+            };
+            let Some(Entry::Loaded(resident)) = state.entries.get(id) else {
+                return;
+            };
+            if resident.identity.incarnation != incarnation || state.fenced(id) {
+                return;
+            }
+            Arc::clone(resident)
+        };
+        let retained = {
+            let composition = resident.composition.lock().expect("composition mutex");
+            let Some(composition) = composition.as_ref() else {
+                return;
+            };
+            let runtime = composition.runtime();
+            let Ok(admission) = runtime.lifecycle().try_enter_preparation() else {
+                return;
+            };
+            // Drop the native handle before releasing the admission, including
+            // when the spawned future terminates before its first poll.
+            (runtime.clone(), admission.into_resident_resource())
+        };
+        if retained.0.needs_mcp_refresh() {
+            tokio::runtime::Handle::current().spawn(async move {
+                let (runtime, _admission) = &retained;
+                let _ = runtime.refresh_runtime_catalogs().await;
+            });
+        }
+    }
+
     /// The resident runtime together with the resource preparation of the
     /// same composition, read under one composition lock.
     /// The resident allocation a preparation runs against, with the
@@ -442,15 +504,20 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            if target.validate().is_err() {
+            if target
+                .workspace()
+                .is_some_and(|path| owner.execution.reserves_workspace(path))
+                || target.validate().is_err()
+            {
                 return;
             }
             owner.repair_sources(&target);
             let mut application = owner.applications.lock();
-            owner.capture_source_consumers(&mut application, &target);
+            let bound = owner.capture_source_consumers(&mut application, &target);
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
+            owner.capture_bound_consumers(bound);
         })
         .await;
     }
@@ -462,12 +529,19 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
-            target.validate().map_err(SourceSettingsError::Source)?;
-            // Explicit reconciliation observes external edits: the User source
-            // composes every target, the Workspace only its own.
-            owner.repair_sources(&target);
+            let authored = !target
+                .workspace()
+                .is_some_and(|path| owner.execution.reserves_workspace(path));
+            if authored {
+                target.validate().map_err(SourceSettingsError::Source)?;
+                owner.repair_sources(&target);
+            }
             let mut application = owner.applications.lock();
-            owner.capture_source_consumers(&mut application, &target);
+            let bound = if authored {
+                owner.capture_source_consumers(&mut application, &target)
+            } else {
+                owner.collect_configuration_consumers(&mut application, &target, false)
+            };
             // Reconciliation is an explicit recovery boundary. Ordinary
             // source capture deduplicates unchanged files, but invalidated or
             // unavailable MCP catalogs still require fresh discovery. Completed
@@ -483,23 +557,33 @@ impl SessionRuntimeManager {
                         .workspace()
                         .is_none_or(|directory| directory == binding.input.cwd)
                 })
-                .map(|(session, binding)| (session.clone(), binding.clone()))
+                .map(|(session, _)| session.clone())
                 .collect::<Vec<_>>();
             let recoveries = sessions
                 .into_iter()
-                .filter_map(|(session, _)| {
+                .filter_map(|session| {
                     owner
-                        .configuration_runtime(&session)
-                        .filter(ConversationRuntime::needs_mcp_refresh)
+                        .resident_incarnation(&session)
+                        .map(|incarnation| (session, incarnation))
                 })
                 .collect::<Vec<_>>();
             owner.applications.notify(&application);
             drop(application);
             owner.applications.run(owner.clone());
-            for runtime in recoveries {
-                tokio::runtime::Handle::current().spawn(async move {
-                    let _ = runtime.refresh_runtime_catalogs().await;
-                });
+            let bound_sessions = (!authored).then(|| {
+                bound
+                    .iter()
+                    .map(|capture| capture.session.clone())
+                    .collect::<Vec<_>>()
+            });
+            owner.capture_bound_consumers(bound);
+            if let Some((sessions, directory)) = bound_sessions.as_deref().zip(target.workspace()) {
+                let mut application = owner.applications.lock();
+                application.record_bound_reconciliation(&target, directory, sessions);
+                owner.applications.notify(&application);
+            }
+            for (session, incarnation) in recoveries {
+                owner.refresh_reconciled_catalog(&session, incarnation);
             }
             Ok(())
         })
@@ -538,12 +622,11 @@ impl SessionRuntimeManager {
             let mut application = self.applications.lock();
             let outcome = self.configuration.repair_source(&target, &scope);
             if outcome == RepairOutcome::Committed {
-                self.capture_source_consumers(&mut application, &target);
+                let bound = self.capture_source_consumers(&mut application, &target);
                 self.applications.notify(&application);
-            }
-            drop(application);
-            if outcome == RepairOutcome::Committed {
+                drop(application);
                 self.applications.run(self.clone());
+                self.capture_bound_consumers(bound);
             }
         }
     }
@@ -571,7 +654,7 @@ impl SessionRuntimeManager {
         &self,
         application: &mut super::super::configuration::application::ApplicationState,
         target: &super::super::configuration::settings::SourceTarget,
-    ) {
+    ) -> Vec<BoundCapture> {
         use super::super::configuration::settings::SourceTarget;
         let captured = self.configuration.capture_source_settings(target);
         let revision = captured.as_ref().ok().map(|(_, revision)| revision.clone());
@@ -583,7 +666,9 @@ impl SessionRuntimeManager {
             .ok_or_else(|| "User process policy source is invalid or unreadable".into())
             .and_then(|policy| policy.validate().map(|()| policy));
         application.capture_source(target, revision, process);
-        if let SourceTarget::Workspace { directory } = target {
+        if let SourceTarget::Workspace { directory } = target
+            && !self.execution.reserves_workspace(directory)
+        {
             let input = super::super::configuration::SessionConfigInput::new(directory.clone());
             application.record_source(
                 directory,
@@ -598,6 +683,9 @@ impl SessionRuntimeManager {
             // those without any live Session. This never touches `available`;
             // only successful fenced preparation publishes there.
             for directory in application.known_source_directories() {
+                if self.execution.reserves_workspace(&directory) {
+                    continue;
+                }
                 let input = super::super::configuration::SessionConfigInput::new(directory.clone());
                 application.record_source(
                     &directory,
@@ -607,7 +695,16 @@ impl SessionRuntimeManager {
                 );
             }
         }
-        let inputs: Vec<_> = self
+        self.collect_configuration_consumers(application, target, true)
+    }
+
+    fn collect_configuration_consumers(
+        &self,
+        application: &mut super::super::configuration::application::ApplicationState,
+        target: &super::super::configuration::settings::SourceTarget,
+        authored: bool,
+    ) -> Vec<BoundCapture> {
+        let retained: Vec<_> = self
             .sessions
             .configuration_bindings
             .lock()
@@ -616,18 +713,351 @@ impl SessionRuntimeManager {
             .filter(|(_, binding)| {
                 target
                     .workspace()
-                    .is_none_or(|directory| directory == binding.input.cwd)
+                    .is_none_or(|directory| directory.as_os_str() == binding.input.cwd.as_os_str())
             })
             .map(|(session, binding)| (session.clone(), binding.input.clone()))
             .collect();
-        for (session, input) in inputs {
-            application.capture(
-                session.to_string(),
-                &input.cwd,
-                self.configuration
-                    .capture_session_application(&input, &self.credentials),
-            );
+        if retained.is_empty() {
+            return Vec::new();
         }
+        let inputs: Vec<_> = {
+            let catalog = self.sessions.catalog.blocking_lock();
+            retained
+                .into_iter()
+                .filter_map(|(session, mut input)| {
+                    let (_, settings) = catalog.lineage(&session, None).ok()?;
+                    input.authoring = settings.input().authoring;
+                    Some((session, input))
+                })
+                .collect()
+        };
+        let mut bound = Vec::new();
+        for (session, input) in inputs {
+            application.cancel_bound_capture(&session);
+            match self.configuration_endpoint(&session) {
+                Ok(None) if authored => {
+                    let capture = self.configuration.capture_session_application(
+                        &input,
+                        &self.credentials,
+                        None,
+                    );
+                    if input.authoring.is_empty() {
+                        application.capture(session.to_string(), &input.cwd, capture);
+                    } else {
+                        application.capture_bound_source(session.to_string(), &input.cwd, capture);
+                    }
+                }
+                Ok(None) => {}
+                Ok(Some(endpoint)) => {
+                    let ticket = application.begin_bound_capture(session.clone());
+                    bound.push(BoundCapture {
+                        session,
+                        input,
+                        endpoint,
+                        watch: None,
+                        mode: BoundObservationMode::Explicit,
+                        ticket,
+                        prefetched_python: None,
+                    });
+                }
+                Err(error) => {
+                    application.capture_bound_source(
+                        session.to_string(),
+                        &input.cwd,
+                        Err(error.to_string()),
+                    );
+                }
+            }
+        }
+        bound
+    }
+
+    /// A watch hint belongs to the exact endpoint that observed it. A
+    /// replacement cannot be captured or published through a retired owner.
+    pub(super) fn observe_bound_source(
+        &self,
+        session: &SessionId,
+        endpoint: &Arc<super::LocalExecutionEndpoint>,
+        watch: rustx_execution_server::ControlHandle,
+        native_change: bool,
+    ) -> bool {
+        let mut application = self.applications.lock();
+        if !self
+            .execution
+            .configuration_endpoint(session)
+            .ok()
+            .flatten()
+            .is_some_and(|current| {
+                Arc::ptr_eq(endpoint, &current)
+                    && current
+                        .control()
+                        .is_some_and(|current| current.same_pair(&watch))
+            })
+        {
+            return false;
+        }
+        let Some(input) = self.bound_watch_input(session) else {
+            return false;
+        };
+        // A new watch plan also resynchronizes the source. The previous
+        // physical lane may still hold a ticket after a pair replacement.
+        let ticket = application.begin_bound_capture(session.clone());
+        drop(application);
+        self.capture_bound_consumers(vec![BoundCapture {
+            session: session.clone(),
+            input,
+            endpoint: endpoint.clone(),
+            watch: Some(watch),
+            mode: if native_change {
+                BoundObservationMode::NativeHint
+            } else {
+                BoundObservationMode::Recheck
+            },
+            ticket,
+            prefetched_python: None,
+        }])
+        .retained
+    }
+
+    fn bound_watch_input(
+        &self,
+        session: &SessionId,
+    ) -> Option<super::super::configuration::SessionConfigInput> {
+        let mut input = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)?
+            .input
+            .clone();
+        let catalog = self.sessions.catalog.blocking_lock();
+        let (_, settings) = catalog.lineage(session, None).ok()?;
+        input.authoring = settings.input().authoring;
+        Some(input)
+    }
+
+    pub(super) fn observe_incomplete_bound_python(
+        &self,
+        session: &SessionId,
+        endpoint: &Arc<super::LocalExecutionEndpoint>,
+        watch: rustx_execution_server::ControlHandle,
+        incomplete: &std::collections::BTreeSet<crate::capabilities::ToolSourceId>,
+    ) -> bool {
+        let same_binding = || {
+            self.execution
+                .configuration_endpoint(session)
+                .ok()
+                .flatten()
+                .is_some_and(|current| {
+                    Arc::ptr_eq(endpoint, &current)
+                        && current
+                            .control()
+                            .is_some_and(|current| current.same_pair(&watch))
+                })
+        };
+        let mut application = self.applications.lock();
+        if !same_binding() {
+            return false;
+        }
+        let Some((source, source_attempt)) = application.latest_bound_source(session.as_str())
+        else {
+            // Rebuild the source after a failed capture. An adopted catalog
+            // cannot serve as the baseline for a newer desired configuration.
+            let Some(input) = self.bound_watch_input(session) else {
+                return false;
+            };
+            let Some(ticket) = application.try_begin_bound_capture(session) else {
+                return false;
+            };
+            drop(application);
+            return self
+                .capture_bound_consumers(vec![BoundCapture {
+                    session: session.clone(),
+                    input,
+                    endpoint: endpoint.clone(),
+                    watch: Some(watch),
+                    mode: BoundObservationMode::Recheck,
+                    ticket,
+                    prefetched_python: None,
+                }])
+                .published;
+        };
+        let input = source.input.clone();
+        let retained_python = source.managed_python.clone();
+        let settings_revision = {
+            let catalog = self.sessions.catalog.blocking_lock();
+            let Ok((_, settings)) = catalog.lineage(session, None) else {
+                return false;
+            };
+            let Ok(revision) = catalog.settings_revision(session) else {
+                return false;
+            };
+            let authoring = settings.input().authoring;
+            if input.authoring != authoring {
+                return false;
+            }
+            revision
+        };
+        let Some(ticket) = application.try_begin_bound_capture(session) else {
+            return false;
+        };
+        drop(application);
+        #[cfg(test)]
+        self.configuration
+            .test_hooks
+            .reach("before_bound_python_fallback_read");
+        let Some(updated_python) =
+            crate::local_runtime::managed_python_resources::recapture_bound_subset(
+                endpoint,
+                &retained_python,
+                incomplete,
+                &self.configuration.resource_io,
+            )
+        else {
+            self.applications
+                .lock()
+                .finish_bound_capture(session, ticket);
+            return false;
+        };
+        self.capture_bound_consumers(vec![BoundCapture {
+            session: session.clone(),
+            input,
+            endpoint: endpoint.clone(),
+            watch: Some(watch),
+            mode: BoundObservationMode::Recheck,
+            ticket,
+            prefetched_python: Some(PrefetchedPython {
+                catalog: updated_python,
+                source_attempt,
+                settings_revision,
+            }),
+        }])
+        .published
+    }
+
+    fn bound_capture_baseline_current(
+        &self,
+        application: &super::super::configuration::application::ApplicationState,
+        session: &SessionId,
+        baseline: Option<(u64, u64)>,
+    ) -> bool {
+        baseline.is_none_or(|(attempt, settings_revision)| {
+            application
+                .latest_bound_source(session.as_str())
+                .map(|(_, attempt)| attempt)
+                == Some(attempt)
+                && self
+                    .sessions
+                    .catalog
+                    .blocking_lock()
+                    .settings_revision(session)
+                    .ok()
+                    == Some(settings_revision)
+        })
+    }
+
+    fn capture_bound_consumers(&self, bound: Vec<BoundCapture>) -> BoundCaptureOutcome {
+        let mut outcome = BoundCaptureOutcome::default();
+        for BoundCapture {
+            session,
+            input,
+            endpoint,
+            watch,
+            mode,
+            ticket,
+            prefetched_python,
+        } in bound
+        {
+            #[cfg(test)]
+            self.configuration
+                .test_hooks
+                .reach("before_bound_source_read");
+            let (python, baseline) = prefetched_python.map_or((None, None), |prefetched| {
+                (
+                    Some(prefetched.catalog),
+                    Some((prefetched.source_attempt, prefetched.settings_revision)),
+                )
+            });
+            #[cfg(all(test, target_os = "linux"))]
+            let watched = watch.is_some();
+            let lane = watch.or_else(|| endpoint.control());
+            let mut reads = super::super::configuration::application::BoundSourceReads::default();
+            let mut capture = self.configuration.capture_session_application_with_python(
+                &input,
+                &self.credentials,
+                Some(&endpoint),
+                python,
+                &mut reads,
+            );
+            #[cfg(all(test, target_os = "linux"))]
+            if watched {
+                self.configuration.test_hooks.reach("bound_watch_captured");
+            }
+            let mut application = self.applications.lock();
+            if !application.finish_bound_capture(&session, ticket) {
+                continue;
+            }
+            if !self.bound_capture_baseline_current(&application, &session, baseline) {
+                continue;
+            }
+            let binding = self
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings");
+            let Some(retained) = binding.get(&session) else {
+                continue;
+            };
+            if !self
+                .execution
+                .configuration_endpoint(&session)
+                .ok()
+                .flatten()
+                .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
+            {
+                continue;
+            }
+            if capture.is_ok() && endpoint.control().is_none() {
+                capture = Err(
+                    "Workspace configuration unavailable: the Execution Client disconnected".into(),
+                );
+            }
+            if let Ok(capture) = &mut capture
+                && let Ok(context) = &mut capture.context
+            {
+                context.input.model.clone_from(&retained.input.model);
+            }
+            drop(binding);
+            let scope = session.to_string();
+            let observed = if let Some(lane) = lane {
+                endpoint.with_control_lane(&lane, || {
+                    application.publish_bound_observation(
+                        scope,
+                        &input.cwd,
+                        capture,
+                        reads,
+                        lane.clone(),
+                        mode,
+                    )
+                })
+            } else {
+                application.capture_bound_source(scope, &input.cwd, capture);
+                Some(true)
+            };
+            let Some(published) = observed else {
+                continue;
+            };
+            outcome.retained = true;
+            if !published {
+                continue;
+            }
+            self.applications.notify(&application);
+            drop(application);
+            self.applications.run(self.clone());
+            outcome.published = true;
+        }
+        outcome
     }
 
     /// Source authoring never loads, creates, or derives authority from a Session.
@@ -782,22 +1212,24 @@ impl SessionRuntimeManager {
             super::super::configuration::settings::TransferOperation,
         )>,
         publish_catalog: Option<bool>,
-    ) {
+    ) -> Vec<BoundCapture> {
         use super::super::configuration::settings::{SourceTarget, TransferOperation};
         use crate::runtime::resources::SourceScope;
+        let mut bound = Vec::new();
         if let Some((from, operation)) = transfer {
             if from == SourceScope::User || operation == TransferOperation::Move {
-                self.capture_source_consumers(application, target);
+                bound.extend(self.capture_source_consumers(application, target));
             }
             if from == SourceScope::Workspace || operation == TransferOperation::Move {
-                self.capture_source_consumers(application, &SourceTarget::User);
+                bound.extend(self.capture_source_consumers(application, &SourceTarget::User));
             }
         } else {
-            self.capture_source_consumers(application, target);
+            bound.extend(self.capture_source_consumers(application, target));
         }
         if let Some(removing) = publish_catalog {
             application.publish_creation_catalog(target.workspace(), &self.credentials, removing);
         }
+        bound
     }
 
     /// Commit one source edit and transfer its application responsibility.
@@ -855,26 +1287,29 @@ impl SessionRuntimeManager {
                     .configuration
                     .write_source_settings(&target, &expected, mutation)
             };
-            if !display_only
+            let bound = if !display_only
                 && (result.is_ok()
                     || matches!(
                         &result,
                         Err(super::super::configuration::settings::SettingsError::Committed)
-                    ))
-            {
-                owner.capture_committed_source(
+                    )) {
+                let bound = owner.capture_committed_source(
                     &mut application,
                     &target,
                     transfer,
                     publish_catalog,
                 );
                 owner.applications.notify(&application);
-            }
+                bound
+            } else {
+                Vec::new()
+            };
             let configuration_revision = application
                 .view(&target.application_scope())
                 .map(|application| application.version);
             drop(application);
             owner.applications.run(owner.clone());
+            owner.capture_bound_consumers(bound);
             #[cfg(test)]
             owner
                 .configuration

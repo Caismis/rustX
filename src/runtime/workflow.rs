@@ -1509,7 +1509,9 @@ use compiler::{
 /// silently replace an earlier one. Stable node identity
 /// is part of the `WorkflowDefinition` contract, so duplicate keys are a
 /// definition error rather than a parser-specific last-write-wins detail.
-fn deserialize_unique_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+pub(crate) fn deserialize_unique_map<'de, D, K, V>(
+    deserializer: D,
+) -> Result<BTreeMap<K, V>, D::Error>
 where
     D: Deserializer<'de>,
     K: Deserialize<'de> + Ord,

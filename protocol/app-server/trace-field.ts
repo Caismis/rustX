@@ -1,5 +1,5 @@
 import { checkpointReadCutKey } from './content-identity.ts';
-import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from './v80.ts';
+import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from './v81.ts';
 
 export type TraceValueField=Extract<TraceFieldSource,{type:'value'}>;
 export type TraceValueSelector=Pick<TraceValueField,'domain'|'item_offset'|'path'>;

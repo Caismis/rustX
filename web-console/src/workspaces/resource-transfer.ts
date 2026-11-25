@@ -6,12 +6,12 @@ import { WorkspaceHostError, type ProductHostWorkspaces, type ResourceTransferMu
 export type TransferResource = (directory: string, revision: string, mutation: ResourceTransferMutation) => Promise<void>;
 
 export function bindResourceTransfer(client: AppServerClient, host: () => ProductHostWorkspaces | undefined,
-  authority: WorkspaceAuthorityObservation | undefined, workspaceId: string): TransferResource {
+  authority: WorkspaceAuthorityObservation | undefined, workspaceId: string, currentIntent?: () => boolean): TransferResource {
   const { endpoint, authorityRevision, authorityId } = client.getSnapshot();
   return async (directory, revision, mutation) => {
     const current = client.getSnapshot();
     const owner = host();
-    if (!authority?.current() || !endpoint || !authorityId || !sameEndpoint(authority.scope.endpoint, endpoint)
+    if (currentIntent?.() === false || !authority?.current() || !endpoint || !authorityId || !sameEndpoint(authority.scope.endpoint, endpoint)
       || current.endpoint !== endpoint || current.authorityRevision !== authorityRevision || current.connection !== 'connected'
       || !owner?.configureWorkspace) throw new WorkspaceHostError('Workspace or App Server authority changed', 'workspace_unavailable');
     const result = await owner.configureWorkspace(workspaceId, endpoint, {

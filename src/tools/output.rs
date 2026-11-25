@@ -4,8 +4,11 @@
 //! result fragments. This module owns the mode-independent representation
 //! policy and the mode-dependent storage lifecycle:
 //!
-//! - foreground output stays in a bounded preview until it crosses the shared
-//!   preview threshold, then allocates one complete result spill lazily;
+//! - MCP keeps a bounded model preview and can stream normalized text to
+//!   its separately owned Execution Client import;
+//! - the explicit supervisor regression fixture uses the standalone lazy
+//!   spill capture ([`ForegroundOutputCapture`]). Native Bash capture lives
+//!   in the Execution Client;
 //! - background output is written to the sink that the background registry
 //!   allocated and advertised at dispatch time.
 //!
@@ -19,11 +22,15 @@
 //! as the original structured return value.
 
 use std::io::Write;
+#[cfg(any(test, feature = "test-support"))]
 use std::path::PathBuf;
 
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
+#[cfg(any(test, feature = "test-support"))]
 use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSpill};
-use crate::tools::types::{ManagedOutputContinuation, TruncationState};
+#[cfg(test)]
+use crate::tools::types::ManagedOutputContinuation;
+use crate::tools::types::TruncationState;
 
 mod stdout;
 pub(crate) use stdout::BoundedStdoutCapture;
@@ -31,95 +38,16 @@ pub(crate) use stdout::BoundedStdoutCapture;
 /// Test-only observation seam for committed background appends.
 #[cfg(test)]
 type AppendWatch = Option<tokio::sync::watch::Sender<u64>>;
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "test-support"))]
 type AppendWatch = Option<std::convert::Infallible>;
 
-/// A bounded deterministic UTF-8 preview of one logical textual result.
-///
-/// The preview keeps the complete prefix while the result is within the
-/// bound. Once the bound is crossed it retains a deterministic head/tail
-/// projection with an explicit byte-count marker. The capture never stores an
-/// arbitrary complete result in memory after the foreground spill starts.
-#[derive(Clone, Debug)]
-pub(crate) struct TextPreviewCapture {
-    head: Vec<u8>,
-    tail: Vec<u8>,
-    total: u64,
-    limit: usize,
-}
-
-impl TextPreviewCapture {
-    /// Creates a preview with the supplied byte bound.
-    pub(crate) fn new(limit: usize) -> Self {
-        Self {
-            head: Vec::new(),
-            tail: Vec::new(),
-            total: 0,
-            limit,
-        }
-    }
-
-    /// Adds one already UTF-8-decoded fragment.
-    pub(crate) fn push(&mut self, text: &str) {
-        let bytes = text.as_bytes();
-        self.total = self.total.saturating_add(bytes.len() as u64);
-        let half = self.limit / 2;
-        if self.head.len() < self.limit {
-            let take = (self.limit - self.head.len()).min(bytes.len());
-            self.head.extend_from_slice(&bytes[..take]);
-        }
-        if bytes.len() >= half {
-            self.tail.clear();
-            self.tail.extend_from_slice(&bytes[bytes.len() - half..]);
-        } else {
-            self.tail.extend_from_slice(bytes);
-            let overflow = self.tail.len().saturating_sub(half);
-            if overflow > 0 {
-                self.tail.drain(..overflow);
-            }
-        }
-    }
-
-    /// Returns the deterministic preview and whether it crossed the bound.
-    pub(crate) fn finish(self) -> (String, bool) {
-        if self.total <= self.limit as u64 {
-            let text = String::from_utf8(self.head).expect("the retained preview is decoded text");
-            return (text, false);
-        }
-        let marker = format!(
-            "\n...[truncated {} bytes]...\n",
-            self.total - self.limit as u64
-        );
-        let content = self.limit.saturating_sub(marker.len());
-        if content == 0 {
-            let mut marker = marker;
-            marker.truncate(self.limit);
-            return (marker, true);
-        }
-        let head_end = floor_char_boundary(&self.head, self.head.len().min(content / 2));
-        let head = &self.head[..head_end];
-        let tail_keep = content - head.len();
-        let tail_start = ceil_char_boundary(&self.tail, self.tail.len().saturating_sub(tail_keep));
-        let mut out = Vec::with_capacity(self.limit);
-        out.extend_from_slice(head);
-        out.extend_from_slice(marker.as_bytes());
-        out.extend_from_slice(&self.tail[tail_start..]);
-        (
-            String::from_utf8(out).expect("the bounded preview is decoded text"),
-            true,
-        )
-    }
-
-    /// The complete logical byte count observed by the capture.
-    pub(crate) fn total(&self) -> u64 {
-        self.total
-    }
-}
+pub(crate) use rustx_process_supervisor::output_text::TextPreviewCapture;
 
 /// The settled state shared by foreground and background textual capture.
 #[derive(Debug)]
 pub(crate) struct CapturedOutput {
     /// The deterministic bounded UTF-8 preview.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) preview: String,
     /// Whether the complete logical representation crossed the preview bound.
     pub(crate) truncated: bool,
@@ -129,84 +57,75 @@ pub(crate) struct CapturedOutput {
     /// managed-output file exists.
     pub(crate) complete: bool,
     /// The managed-output locator, when a spill/sink was allocated.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) output_locator: Option<PathBuf>,
 }
 
-/// One Tool Plane capture with the invocation-mode-selected storage
-/// lifecycle. Origin adapters use this same seam; they do not select their
-/// own overflow policy.
-pub(crate) enum ToolOutputCapture {
-    Foreground(ForegroundOutputCapture),
-    Background(BackgroundOutputCapture),
-}
+/// A bounded Tool Plane preview with no file storage behind it.
+pub(crate) struct ToolOutputCapture(TextPreviewCapture);
 
 impl ToolOutputCapture {
-    /// Creates the lazy foreground capture.
-    pub(crate) fn foreground() -> Self {
-        Self::Foreground(ForegroundOutputCapture::new())
-    }
-
-    /// Creates a capture over an already dispatch-owned background sink.
-    pub(crate) fn background(sink: BackgroundOutput, watch: AppendWatch) -> Self {
-        Self::Background(BackgroundOutputCapture::new(
+    pub(crate) fn preview_only() -> Self {
+        Self(TextPreviewCapture::new(
             FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
-            sink,
-            watch,
         ))
     }
 
-    /// Whether this capture owns the background lifecycle.
-    pub(crate) fn is_background(&self) -> bool {
-        matches!(self, Self::Background(_))
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.0.total()
     }
 
-    /// Adds one logical UTF-8 fragment through the mode-specific storage
-    /// implementation.
-    pub(crate) fn push(
-        &mut self,
-        text: &str,
-        foreground_store: Option<&ManagedToolOutput>,
-    ) -> Result<(), String> {
-        match self {
-            Self::Foreground(capture) => capture.push(
-                text,
-                foreground_store.expect("foreground capture requires the managed-output store"),
-            ),
-            Self::Background(capture) => capture.push(text),
-        }
+    pub(crate) fn push(&mut self, text: &str) {
+        self.0.push(text);
     }
 
-    /// Settles the capture without changing the storage identity.
+    /// `complete` records that every observed fragment was normalized.
     pub(crate) fn finish(self, complete: bool) -> CapturedOutput {
-        match self {
-            Self::Foreground(capture) => capture.finish(complete),
-            Self::Background(capture) => capture.finish(complete),
+        let total_bytes = self.0.total();
+        let (preview, truncated) = self.0.finish();
+        #[cfg(not(any(test, feature = "test-support")))]
+        let _ = preview;
+        CapturedOutput {
+            #[cfg(any(test, feature = "test-support"))]
+            preview,
+            truncated,
+            total_bytes,
+            complete,
+            #[cfg(any(test, feature = "test-support"))]
+            output_locator: None,
         }
     }
 }
 
 /// An incremental JSON/text writer backed by the shared Tool Plane capture.
 ///
-/// JSON serializers may split a UTF-8 scalar across `Write` calls. This
-/// adapter retains only an incomplete scalar (at most three bytes) between
-/// calls, so structured MCP content can be serialized directly into the
-/// bounded preview/spill seam without first materializing an arbitrary-sized
-/// `String`.
+/// JSON serializers may split a UTF-8 scalar across `Write` calls. Each
+/// `write` is processed in bounded slices and this adapter retains only an
+/// incomplete scalar (at most three bytes) between calls, so structured MCP
+/// content can be serialized directly into the bounded preview seam without
+/// first materializing or parking an arbitrary-sized buffer.
+/// The bounded text sink a [`ToolOutputWriter`] drains into.
+type OutputSink<'a> = Box<dyn FnMut(&str) -> Result<(), String> + 'a>;
+
 pub(crate) struct ToolOutputWriter<'a> {
-    capture: &'a mut ToolOutputCapture,
-    foreground_store: Option<&'a ManagedToolOutput>,
+    push: OutputSink<'a>,
     pending: Vec<u8>,
 }
 
+/// The bounded slice size of one writer drain step.
+const WRITER_SLICE_BYTES: usize = 8192;
+
 impl<'a> ToolOutputWriter<'a> {
-    /// Creates a writer over one mode-selected Tool Plane capture.
-    pub(crate) fn new(
-        capture: &'a mut ToolOutputCapture,
-        foreground_store: Option<&'a ManagedToolOutput>,
-    ) -> Self {
+    /// Creates a writer over an arbitrary bounded text sink — for example a
+    /// closure tapping one serialization into both the aggregate capture
+    /// and a bounded display preview.
+    pub(crate) fn over_sink(push: impl FnMut(&str) -> Result<(), String> + 'a) -> Self {
+        Self::with_sink(push)
+    }
+
+    fn with_sink(push: impl FnMut(&str) -> Result<(), String> + 'a) -> Self {
         Self {
-            capture,
-            foreground_store,
+            push: Box::new(push),
             pending: Vec::new(),
         }
     }
@@ -221,7 +140,7 @@ impl<'a> ToolOutputWriter<'a> {
         match std::str::from_utf8(&self.pending) {
             Ok(text) => {
                 if !text.is_empty() {
-                    self.capture.push(text, self.foreground_store)?;
+                    (self.push)(text)?;
                 }
                 self.pending.clear();
                 Ok(())
@@ -231,7 +150,7 @@ impl<'a> ToolOutputWriter<'a> {
                 if valid > 0 {
                     let text =
                         std::str::from_utf8(&self.pending[..valid]).expect("valid UTF-8 prefix");
-                    self.capture.push(text, self.foreground_store)?;
+                    (self.push)(text)?;
                     self.pending.drain(..valid);
                 }
                 if error.error_len().is_some() {
@@ -250,10 +169,11 @@ impl<'a> ToolOutputWriter<'a> {
 
 impl Write for ToolOutputWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.pending.extend_from_slice(bytes);
-        self.drain(false)
-            .map_err(std::io::Error::other)
-            .map(|()| bytes.len())
+        for chunk in bytes.chunks(WRITER_SLICE_BYTES) {
+            self.pending.extend_from_slice(chunk);
+            self.drain(false).map_err(std::io::Error::other)?;
+        }
+        Ok(bytes.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -261,7 +181,11 @@ impl Write for ToolOutputWriter<'_> {
     }
 }
 
-/// Foreground Tool Plane capture with a lazy complete-result spill.
+/// Standalone foreground capture with a lazy complete-result spill.
+///
+/// The direct supervisor fixture uses this path to assert spill ownership
+/// under injected I/O faults. Product Bash uses the Execution Client.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct ForegroundOutputCapture {
     preview: TextPreviewCapture,
@@ -271,6 +195,7 @@ pub(crate) struct ForegroundOutputCapture {
     spill_started: Option<tokio::sync::watch::Sender<bool>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl ForegroundOutputCapture {
     /// Creates a capture using the shared foreground preview policy.
     pub(crate) fn new() -> Self {
@@ -306,7 +231,7 @@ impl ForegroundOutputCapture {
     /// complete-result buffer.
     pub(crate) fn push(&mut self, text: &str, store: &ManagedToolOutput) -> Result<(), String> {
         let crosses = self.spill.is_none()
-            && self.preview.total().saturating_add(text.len() as u64) > self.preview.limit as u64;
+            && self.preview.total().saturating_add(text.len() as u64) > self.preview.limit() as u64;
         self.preview.push(text);
         if let Some(spill) = &mut self.spill {
             return spill
@@ -360,6 +285,7 @@ impl ForegroundOutputCapture {
 }
 
 /// Background capture over an already dispatch-allocated output sink.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct BackgroundOutputCapture {
     preview: TextPreviewCapture,
@@ -370,6 +296,7 @@ pub(crate) struct BackgroundOutputCapture {
     watch: Option<tokio::sync::watch::Sender<u64>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl BackgroundOutputCapture {
     /// Creates a capture over the single dispatch-owned sink.
     pub(crate) fn new(limit: usize, sink: BackgroundOutput, watch: AppendWatch) -> Self {
@@ -415,7 +342,8 @@ impl BackgroundOutputCapture {
     }
 }
 
-/// Derives typed continuation metadata from one settled capture.
+/// Derives typed continuation metadata for the trace projection fixture.
+#[cfg(test)]
 pub(crate) fn continuation_for_capture(
     captured: &CapturedOutput,
     background: bool,
@@ -448,20 +376,6 @@ pub(crate) fn truncation_for_capture(captured: &CapturedOutput) -> Option<Trunca
         truncated: true,
         original_bytes: captured.complete.then_some(captured.total_bytes),
     })
-}
-
-fn floor_char_boundary(text: &[u8], mut index: usize) -> usize {
-    while index > 0 && std::str::from_utf8(&text[..index]).is_err() {
-        index -= 1;
-    }
-    index
-}
-
-fn ceil_char_boundary(text: &[u8], mut index: usize) -> usize {
-    while index < text.len() && std::str::from_utf8(&text[index..]).is_err() {
-        index += 1;
-    }
-    index
 }
 
 #[cfg(test)]
@@ -537,12 +451,42 @@ mod tests {
     }
 
     #[test]
-    fn structured_writer_streams_split_utf8_into_the_shared_capture() {
+    fn preview_only_capture_never_allocates_a_spill_on_overflow() {
         let directory = tempfile::tempdir().expect("directory");
         let root = directory.path().join("tool-output");
         let managed = store(&root);
-        let mut capture = ToolOutputCapture::Foreground(ForegroundOutputCapture::with_limit(8));
-        let mut writer = ToolOutputWriter::new(&mut capture, Some(&managed));
+        let mut capture = ToolOutputCapture::preview_only();
+        capture.push(&"x".repeat(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1));
+        let settled = capture.finish(true);
+        assert!(settled.complete, "input was fully normalized");
+        assert!(settled.truncated);
+        assert!(settled.output_locator.is_none());
+        assert!(
+            settled.preview.contains("truncated"),
+            "bounded marker retained: {}",
+            settled.preview
+        );
+        assert_eq!(
+            std::fs::read_dir(managed.root().unwrap())
+                .expect("results")
+                .filter(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
+                .count(),
+            0,
+            "preview-only foreground never allocates a result spill"
+        );
+    }
+
+    #[test]
+    fn structured_writer_streams_split_utf8_into_the_shared_capture() {
+        let mut capture = ToolOutputCapture(TextPreviewCapture::new(
+            FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
+        ));
+        let mut writer = ToolOutputWriter::over_sink(|text| {
+            capture.push(text);
+            Ok(())
+        });
         writer.write_all(b"\"a\\n").expect("JSON prefix");
         writer.write_all(&[0xf0]).expect("split UTF-8 prefix");
         writer
@@ -551,10 +495,38 @@ mod tests {
         writer.write_all(b"\"").expect("JSON close");
         writer.finish().expect("writer finish");
         let captured = capture.finish(true);
-        let locator = captured.output_locator.expect("oversized writer spill");
-        let bytes = std::fs::read(locator).expect("writer spill");
-        assert_eq!(bytes, b"\"a\\n\xf0\x9f\x98\x80\"");
-        assert!(serde_json::from_slice::<serde_json::Value>(&bytes).is_ok());
-        assert!(std::str::from_utf8(captured.preview.as_bytes()).is_ok());
+        assert!(captured.output_locator.is_none());
+        assert!(!captured.truncated);
+        assert_eq!(
+            captured.preview, "\"a\\n\u{1f600}\"",
+            "split scalars assemble exactly"
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(&captured.preview).is_ok());
+    }
+
+    #[test]
+    fn a_multi_mib_single_write_never_parks_unbounded_pending_bytes() {
+        let mut capture = ToolOutputCapture::preview_only();
+        let mut writer = ToolOutputWriter::over_sink(|text| {
+            capture.push(text);
+            Ok(())
+        });
+        writer
+            .write_all(&vec![b'x'; 4 * 1024 * 1024])
+            .expect("multi-MiB write");
+        assert!(
+            writer.pending.len() <= 3,
+            "only an incomplete scalar may remain: {}",
+            writer.pending.len()
+        );
+        assert!(
+            writer.pending.capacity() < 64 * 1024,
+            "pending must stay slice-bounded: {}",
+            writer.pending.capacity()
+        );
+        writer.finish().expect("writer finish");
+        let captured = capture.finish(true);
+        assert!(captured.truncated);
+        assert_eq!(captured.total_bytes, 4 * 1024 * 1024);
     }
 }

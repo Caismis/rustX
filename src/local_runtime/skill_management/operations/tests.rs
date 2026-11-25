@@ -646,6 +646,7 @@ fn settings_error_name(error: &SettingsError) -> &'static str {
     match error {
         SettingsError::Conflict { .. } => "conflict",
         SettingsError::Invalid => "invalid",
+        SettingsError::ExecutionUnavailable => "execution unavailable",
         SettingsError::Io => "io",
         SettingsError::Committed => "committed",
         SettingsError::TransferRejected(_) => "rejected",

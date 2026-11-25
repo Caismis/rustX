@@ -13,8 +13,9 @@ pub(super) struct GrepInput {
     /// The pattern to search for. A regular expression unless `literal` is
     /// true.
     pub pattern: String,
-    /// An optional relative or absolute directory/file search root. Omit it
-    /// to search the execution cwd.
+    /// An optional relative or absolute directory/file search root, inside
+    /// the Session's admitted Client workspace. Omit it to search the
+    /// execution cwd.
     pub path: Option<String>,
     /// A glob restricting which files are searched, matched against paths
     /// relative to the search root.
@@ -58,8 +59,8 @@ impl GrepInput {
         self.literal.unwrap_or(false)
     }
 
-    pub(super) fn context(&self) -> usize {
-        self.context.unwrap_or(0) as usize
+    pub(super) fn context(&self) -> u32 {
+        self.context.unwrap_or(0)
     }
 
     pub(super) fn limit(&self) -> u64 {

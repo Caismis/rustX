@@ -16,6 +16,8 @@ use sha2::Digest;
 use std::{io, path::PathBuf, time::Duration};
 use tokio_util::sync::CancellationToken;
 
+pub(crate) mod workspace_picker;
+
 pub(crate) const PATH: &str = "/product-host/file-read";
 pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v5";
 pub(crate) const OBSERVE_PATH: &str = "/product-host/file-observe";
@@ -117,7 +119,9 @@ impl Authority {
         }
     }
     pub(crate) fn authenticate(&self, offered: &[&str]) -> Option<CancellationToken> {
-        ((offered.contains(&SUBPROTOCOL) || offered.contains(&OBSERVE_SUBPROTOCOL))
+        ((offered.contains(&SUBPROTOCOL)
+            || offered.contains(&OBSERVE_SUBPROTOCOL)
+            || offered.contains(&workspace_picker::SUBPROTOCOL))
             && self.credential.offered(offered, "rustx-product-host.")
             && !self.revoked.is_cancelled())
         .then(|| self.revoked.child_token())

@@ -116,7 +116,7 @@ impl RuntimeInner {
             workspace_changes: if record_changes && self.role.is_root() {
                 Some(crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
-                    self.tool_runtime.workspace().root().to_owned(),
+                    self.tool_runtime.workspace(),
                     Arc::clone(&self.tool_runtime.workspace_changes),
                     cancellation.signal().child(),
                 ))

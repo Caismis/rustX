@@ -288,7 +288,7 @@ async fn semantic_success_with_unresolved_nested_containment_is_failed() {
         nested: super::super::super::anchors::NestedUnitSettlement {
             contained: Vec::new(),
             unproven: vec![(
-                crate::runtime::identity::ProcessUnitId::new("unit-unresolved"),
+                rustx_process_supervisor::identity::ProcessUnitId::new("unit-unresolved"),
                 "test containment proof is unavailable".to_owned(),
             )],
         },

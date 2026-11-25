@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 import { RpcFailure } from '../../src/client/errors';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
-import { connectRemote, openEmptySession } from './shell-actions';
+import { connectRemote, createBoundSession, openExistingSession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
 
@@ -102,17 +102,26 @@ for (const width of [1440, 390]) {
       writeFileSync(source, 'approval_mode = "full_access"\n[agent]\nworkflows = ["history_flow"]\n[agent.tools]\nbuiltin = ["read"]\n');
       await page.setViewportSize({ width, height: 1000 });
       await routeWorkspaceHost(page, fixture);
+      const session = await createBoundSession(fixture);
       await page.goto('/');
       await connectRemote(page, fixture.endpoint, fixture.token);
-      const session = await openEmptySession(page, fixture, 'Workspace A');
-      const effective = async () => {
-        const target = await wire.attachedTarget(session);
-        const { projection } = await wire.read('session/effectiveConfiguration', target);
-        return materializeEffective(projection, (reference, offset) => wire.effectiveValueRead(target, reference, offset), () => true);
+      await openExistingSession(page, session);
+      const expectCapabilities = async (tools: string[], workflows: string[]) => {
+        await expect.poll(async () => {
+          try {
+            const target = await wire.attachedTarget(session);
+            const { projection } = await wire.read('session/effectiveConfiguration', target);
+            const current = await materializeEffective(projection, (reference, offset) => wire.effectiveValueRead(target, reference, offset), () => true);
+            return { tools: current.root_agent.tools?.builtin, workflows: current.root_agent.workflows };
+          } catch (error) {
+            // Native configuration can retire a cut between its header and fields.
+            // Request a fresh cut and propagate every other refusal.
+            if (error instanceof RpcFailure && error.error.data?.kind === 'read_cut_expired') return 'read_cut_expired';
+            throw error;
+          }
+        }).toEqual({ tools, workflows });
       };
-      const original = await effective();
-      expect(original.root_agent.tools?.builtin).toEqual(['read']);
-      expect(original.root_agent.workflows).toEqual(['history_flow']);
+      await expectCapabilities(['read'], ['history_flow']);
       await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Execute capabilities before removal');
       await page.getByRole('button', { name: 'Send', exact: true }).click();
       // This crosses three provider requests plus native Tool/renderer
@@ -133,17 +142,7 @@ for (const width of [1440, 390]) {
       await page.getByRole('tab', { name: 'Chat', exact: true }).click();
       // Native commits the prepared configuration itself at the idle
       // Session's safe boundary; nothing in the browser adopts it.
-      await expect.poll(async () => {
-        try {
-          const current = await effective();
-          return { tools: current.root_agent.tools?.builtin, workflows: current.root_agent.workflows };
-        } catch (error) {
-          // Automatic commit can retire a projection between its header and
-          // field reads. Poll a new complete cut; other refusals still fail.
-          if (error instanceof RpcFailure && error.error.data?.kind === 'read_cut_expired') return 'read_cut_expired';
-          throw error;
-        }
-      }).toEqual({ tools: [], workflows: [] });
+      await expectCapabilities([], []);
       await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Continue after capability removal');
       await page.getByRole('button', { name: 'Send', exact: true }).click();
       await expect(page.getByText('Removed capabilities are absent from this request.', { exact: true })).toBeVisible();

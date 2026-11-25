@@ -1,0 +1,20 @@
+name: Local Execution Client domain runtime
+description: Install Bubblewrap and verify that the runner can launch a local Client as its namespace init.
+runs:
+  using: composite
+  steps:
+    - name: Install the namespace runtime with its distribution profile
+      shell: bash
+      env:
+        APT_INSTALLER: ${{ github.action_path }}/../../scripts/install_ubuntu_packages.py
+      run: |
+        set -euo pipefail
+        sudo python3 "$APT_INSTALLER" bubblewrap apparmor
+        sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+        test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+    - name: Verify local Client namespace admission
+      shell: bash
+      run: >-
+        /usr/bin/bwrap --unshare-user --unshare-pid --as-pid-1
+        --die-with-parent --dev-bind / / --proc /proc
+        -- /bin/sh -ec 'test "$$" = 1'

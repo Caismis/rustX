@@ -118,7 +118,10 @@ pub(crate) struct ApplicationState {
     version: u64,
     scopes: BTreeMap<String, ConfigurationApplication>,
     pending: BTreeMap<String, ApplicationIdentity>,
+    bound_captures: BTreeMap<crate::runtime::identity::SessionId, BoundCaptureState>,
     inputs: BTreeMap<String, Result<CapturedApplication, String>>,
+    bound_observations: BTreeMap<String, BoundSourceObservation>,
+    next_bound_source_generation: u64,
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
@@ -136,6 +139,11 @@ pub(crate) struct ApplicationState {
     // unrecorded commits. Views read it directly, so an application never
     // reports success over a commit that allocation could not record.
     health: BTreeMap<String, crate::runtime::conversation_runtime::ConfigurationHealth>,
+}
+
+struct BoundCaptureState {
+    generation: u64,
+    active: bool,
 }
 
 #[cfg(test)]
@@ -159,6 +167,55 @@ pub(crate) struct CapturedApplication {
     /// keep naming the authored file at fault.
     pub(crate) read: Vec<std::path::PathBuf>,
 }
+
+/// Physical reads from one bound capture, including reads that preceded a
+/// rejected configuration.
+#[derive(Default, PartialEq, Eq)]
+pub(crate) struct BoundSourceReads {
+    pub(crate) documents: BTreeMap<std::path::PathBuf, String>,
+    pub(crate) skills: Option<crate::skills::SkillWatchObservation>,
+    /// Fingerprint of the observed package content, permissions and watch
+    /// dependencies. Kept even if document verification rejects the capture.
+    pub(crate) python_manifest: Option<String>,
+}
+
+struct BoundSourceObservation {
+    lane: rustx_execution_server::ControlHandle,
+    reads: BoundSourceReads,
+    generation: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BoundObservationMode {
+    Explicit,
+    NativeHint,
+    Recheck,
+}
+
+impl BoundObservationMode {
+    fn same_capture(
+        self,
+        previous: &Result<CapturedApplication, String>,
+        current: &Result<CapturedApplication, String>,
+    ) -> bool {
+        match (self, previous, current) {
+            (Self::Explicit, _, _) => false,
+            (Self::Recheck, Err(previous), Err(current)) => previous == current,
+            (_, Ok(previous), Ok(current)) if previous.revision == current.revision => {
+                match (&previous.context, &current.context) {
+                    (Ok(_), Ok(_)) => true,
+                    (Err(previous), Err(current)) if matches!(self, Self::Recheck) => {
+                        previous == current
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+pub(crate) type BoundSourceCut = (Option<u64>, Option<u64>, Option<u64>);
 
 impl std::fmt::Debug for ApplicationState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -270,6 +327,10 @@ impl ConfigurationApplications {
         state.scope_targets.remove(scope);
         state.pending.remove(scope);
         state.inputs.remove(scope);
+        state.bound_observations.remove(scope);
+        state
+            .bound_captures
+            .retain(|session, _| session.as_ref() != scope);
         state.deferred.remove(scope);
         state.reasons.remove(scope);
         state.staged_in.remove(scope);
@@ -294,6 +355,193 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    pub(crate) fn source_cut(&self, workspace: &std::path::Path) -> [u64; 2] {
+        use super::settings::SourceTarget;
+        [
+            SourceTarget::User,
+            SourceTarget::Workspace {
+                directory: workspace.to_path_buf(),
+            },
+        ]
+        .map(|target| {
+            self.scopes
+                .get(&target.application_scope())
+                .map_or(0, |view| view.desired.attempt)
+        })
+    }
+
+    fn next_bound_source_generation(&mut self) -> u64 {
+        self.next_bound_source_generation = self
+            .next_bound_source_generation
+            .checked_add(1)
+            .expect("bound source generation exhausted");
+        self.next_bound_source_generation
+    }
+
+    pub(crate) fn begin_bound_capture(
+        &mut self,
+        session: crate::runtime::identity::SessionId,
+    ) -> u64 {
+        let generation = self.next_bound_source_generation();
+        self.bound_captures.insert(
+            session,
+            BoundCaptureState {
+                generation,
+                active: true,
+            },
+        );
+        generation
+    }
+
+    pub(crate) fn try_begin_bound_capture(
+        &mut self,
+        session: &crate::runtime::identity::SessionId,
+    ) -> Option<u64> {
+        if self
+            .bound_captures
+            .get(session)
+            .is_some_and(|capture| capture.active)
+        {
+            return None;
+        }
+        Some(self.begin_bound_capture(session.clone()))
+    }
+
+    pub(crate) fn latest_bound_source(
+        &self,
+        scope: &str,
+    ) -> Option<(&super::ProspectiveSessionConfig, u64)> {
+        let capture = self
+            .inputs
+            .get(scope)?
+            .as_ref()
+            .ok()?
+            .context
+            .as_ref()
+            .ok()?;
+        matches!(
+            capture.workspace_resources,
+            super::WorkspaceResourceAuthority::Bound
+        )
+        .then_some((capture, self.scopes.get(scope)?.desired.attempt))
+    }
+
+    /// Records the source facts used by a settings write and which capture
+    /// had most recently started when validation began.
+    pub(crate) fn bound_source_cut(
+        &self,
+        session: &crate::runtime::identity::SessionId,
+    ) -> BoundSourceCut {
+        let scope = session.as_str();
+        (
+            self.scopes.get(scope).map(|view| view.desired.attempt),
+            self.bound_observations
+                .get(scope)
+                .map(|observation| observation.generation),
+            self.bound_captures
+                .get(session)
+                .map(|capture| capture.generation),
+        )
+    }
+
+    pub(crate) fn bound_source_changed_since(
+        &self,
+        session: &crate::runtime::identity::SessionId,
+        (desired, observation, started): BoundSourceCut,
+    ) -> bool {
+        let (current_desired, current_observation, _) = self.bound_source_cut(session);
+        // A newer in-flight capture can own a consumed native hint. Once
+        // it finishes without changing the source facts, it no longer fences.
+        current_desired != desired
+            || current_observation != observation
+            || self
+                .bound_captures
+                .get(session)
+                .is_some_and(|capture| capture.active && Some(capture.generation) > started)
+    }
+
+    pub(crate) fn bound_source_reads(
+        &self,
+        scope: &str,
+        lane: &rustx_execution_server::ControlHandle,
+    ) -> Option<&BoundSourceReads> {
+        let observation = self.bound_observations.get(scope)?;
+        observation
+            .lane
+            .same_pair(lane)
+            .then_some(&observation.reads)
+    }
+
+    pub(crate) fn bound_source_failed(&self, scope: &str) -> bool {
+        self.inputs.get(scope).is_some_and(|capture| {
+            capture
+                .as_ref()
+                .map_or(true, |capture| capture.context.is_err())
+        })
+    }
+
+    /// Retain observed facts independently of the application's diagnostic.
+    /// A repeated failure can reuse its semantic application, but cannot
+    /// certify an unchanged source to a settings write already in flight.
+    pub(crate) fn publish_bound_observation(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+        reads: BoundSourceReads,
+        lane: rustx_execution_server::ControlHandle,
+        mode: BoundObservationMode,
+    ) -> bool {
+        let previous = self
+            .bound_observations
+            .get(&scope)
+            .filter(|previous| previous.lane.same_pair(&lane));
+        let same_capture = previous.is_some()
+            && self
+                .inputs
+                .get(&scope)
+                .is_some_and(|previous| mode.same_capture(previous, &input));
+        let successful = input.as_ref().is_ok_and(|capture| capture.context.is_ok());
+        if same_capture && successful && previous.is_some_and(|previous| previous.reads == reads) {
+            return false;
+        }
+        let publish = !same_capture || successful;
+        if publish {
+            self.capture_bound_source(scope.clone(), source, input);
+        }
+        let generation = self.next_bound_source_generation();
+        self.bound_observations.insert(
+            scope,
+            BoundSourceObservation {
+                lane,
+                reads,
+                generation,
+            },
+        );
+        publish
+    }
+
+    pub(crate) fn cancel_bound_capture(&mut self, session: &crate::runtime::identity::SessionId) {
+        if let Some(capture) = self.bound_captures.get_mut(session) {
+            capture.active = false;
+        }
+    }
+
+    pub(crate) fn finish_bound_capture(
+        &mut self,
+        session: &crate::runtime::identity::SessionId,
+        ticket: u64,
+    ) -> bool {
+        let Some(capture) = self.bound_captures.get_mut(session) else {
+            return false;
+        };
+        if !capture.active || capture.generation != ticket {
+            return false;
+        }
+        capture.active = false;
+        true
+    }
+
     /// Runtime catalog publication changes the native baseline, not authored
     /// intent. Reprepare the latest captured input, including its model choice.
     pub(crate) fn rebase_runtime_catalog(&mut self, scope: &str) -> bool {
@@ -347,13 +595,50 @@ impl ApplicationState {
         persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let key = super::capture::canonical_directory(&input.cwd)?;
-        let mut capture = match self.creation_capture(configuration, &key, credentials)? {
+        if !input.authoring.is_empty() {
+            let mut canonical_input = input.clone();
+            canonical_input.cwd = key;
+            let capture = configuration
+                .capture_session_application(&canonical_input, credentials, None)?
+                .context?;
+            Self::validate_default(&capture, credentials)?;
+            return Self::admit_initial(capture, &canonical_input, credentials, persisted);
+        }
+        let capture = match self.creation_capture(configuration, &key, credentials)? {
             std::borrow::Cow::Borrowed(capture) => capture.clone(),
             std::borrow::Cow::Owned(capture) => {
                 self.available.insert(key.clone(), capture.clone());
                 capture
             }
         };
+        Self::admit_initial(capture, input, credentials, persisted)
+    }
+
+    /// A Client-bound document has Session authority; two Clients can serve
+    /// different authored bytes at the same logical path. This capture never
+    /// borrows or populates the directory's Session-creation cache.
+    pub(crate) fn initial_bound_session(
+        configuration: &super::UserConfigManager,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        endpoint: &std::sync::Arc<
+            crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        >,
+        persisted: bool,
+    ) -> Result<super::AdmittedSessionConfig, String> {
+        let capture = configuration
+            .capture_session_application(input, credentials, Some(endpoint))?
+            .context?;
+        Self::validate_default(&capture, credentials)?;
+        Self::admit_initial(capture, input, credentials, persisted)
+    }
+
+    fn admit_initial(
+        mut capture: super::ProspectiveSessionConfig,
+        input: &super::SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
+        persisted: bool,
+    ) -> Result<super::AdmittedSessionConfig, String> {
         capture.input.model = Some(
             input
                 .model
@@ -447,8 +732,11 @@ impl ApplicationState {
         adopted: &super::AdmittedSessionConfig,
     ) {
         let source = adopted.input.cwd.clone();
-        self.scope_sources.insert(scope.clone(), source.clone());
         self.own_scope(&scope, &source);
+        if !adopted.input.authoring.is_empty() {
+            return;
+        }
+        self.scope_sources.insert(scope.clone(), source.clone());
         if let Some(mut input) = self.desired_sources.get(&source).cloned() {
             if let Ok(captured) = &mut input
                 && let Ok(context) = &mut captured.context
@@ -485,7 +773,7 @@ impl ApplicationState {
         }
     }
 
-    fn validate_selection(
+    pub(in crate::local_runtime) fn validate_selection(
         capture: &super::ProspectiveSessionConfig,
         credentials: &crate::credentials::CredentialSnapshot,
         persisted: bool,
@@ -542,6 +830,7 @@ impl ApplicationState {
         Self::validate_default(capture, credentials)?;
         capture.validate_resource_authority()?;
         if self.current(scope, identity)
+            && self.scope_sources.contains_key(scope)
             && self
                 .desired_sources
                 .get(&capture.input.cwd)
@@ -630,10 +919,33 @@ impl ApplicationState {
         input: Result<CapturedApplication, String>,
     ) -> ApplicationIdentity {
         self.record_source(source, &input);
-        self.reasons
-            .insert(scope.clone(), ConfigurationChangeReason::Source);
+        self.bound_observations.remove(&scope);
         self.scope_sources
             .insert(scope.clone(), source.to_path_buf());
+        self.capture_session_source(scope, source, input)
+    }
+
+    /// A bound Session never publishes its Client's view into the
+    /// path-keyed authoring cache or reloads from that cache.
+    pub(crate) fn capture_bound_source(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        self.scope_sources.remove(&scope);
+        self.bound_observations.remove(&scope);
+        self.capture_session_source(scope, source, input)
+    }
+
+    fn capture_session_source(
+        &mut self,
+        scope: String,
+        source: &std::path::Path,
+        input: Result<CapturedApplication, String>,
+    ) -> ApplicationIdentity {
+        self.reasons
+            .insert(scope.clone(), ConfigurationChangeReason::Source);
         self.own_scope(&scope, source);
         if let Ok(capture) = &input
             && let Some(current) = self.scopes.get(&scope)
@@ -725,6 +1037,40 @@ impl ApplicationState {
             self.desired_process = Some(policy.clone());
         }
         self.source_inputs.insert(scope, process);
+    }
+
+    /// Summarize what was observed through the bound consumers of this
+    /// Workspace. Their individual Sessions retain application diagnostics.
+    /// This does not authorize source writes or seed the creation cache.
+    pub(crate) fn record_bound_reconciliation(
+        &mut self,
+        target: &super::settings::SourceTarget,
+        directory: &std::path::Path,
+        consumers: &[super::super::session::SessionId],
+    ) {
+        let revisions: BTreeMap<_, _> = consumers
+            .iter()
+            .filter_map(|session| {
+                let revision = self
+                    .scopes
+                    .get(session.as_ref())?
+                    .desired
+                    .input_revision
+                    .clone()?;
+                Some((std::path::PathBuf::from(session.as_ref()), revision))
+            })
+            .collect();
+        let revision =
+            (!revisions.is_empty()).then(|| super::capture::source_manifest_revision(&revisions));
+        let scope = target.application_scope();
+        self.own_scope(&scope, directory);
+        self.desire(scope.clone(), revision);
+        self.pending.remove(&scope);
+        self.scopes
+            .get_mut(&scope)
+            .expect("bound observation scope")
+            .units
+            .clear();
     }
 
     pub(crate) fn record_source(

@@ -15,6 +15,8 @@
 
 use super::{common, support};
 
+use std::io::Read as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -92,7 +94,7 @@ impl AgentExecutionObserver for StartedSignal {
     }
 }
 
-/// A foreground Bash `sleep 30` admitted under a 5-second hard deadline is
+/// A foreground Bash held at a pipe under a 5-second hard deadline is
 /// killed and reaped by the supervisor after the deadline's cancellation
 /// intent, and the one canonical result is `TimedOut` — proven physical
 /// settlement, not `OutcomeUnknown`.
@@ -106,11 +108,31 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     // This fixture's subject is bash deadline settlement, so it composes no
     // native Agent Extension: no task list, and no `todo` in either Tool
     // plane (Issue #259).
-    let fixture = common::native_fixture_with_extensions(
+    let fixture = common::native_fixture_inner(
         Vec::new(),
         policies,
         &rustx::extensions::NativeAgentExtensions::none(),
+        true,
     );
+    let workspace = fixture.runtime.workspace().root();
+    let began = workspace.join("deadline-started");
+    let release = workspace.join("deadline-release");
+    for path in [&began, &release] {
+        nix::unistd::mkfifo(
+            path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+    }
+    let opened = tokio::io::unix::AsyncFd::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&began)
+            .unwrap(),
+    )
+    .unwrap();
     let registry = fixture.registry;
     let bash_id = registry
         .definitions()
@@ -124,7 +146,10 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
         id: "call-bash-deadline",
         tool_id: Box::leak(bash_id.into_boxed_str()),
         name: "bash",
-        arguments: serde_json::json!({"command": "sleep 30", "execution_mode": "foreground"}),
+        arguments: serde_json::json!({
+            "command": "printf '%012d' \"$$\" > deadline-started; read -r _ < deadline-release",
+            "execution_mode": "foreground"
+        }),
     };
     let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
     for event in tool_call_events(0, &scripted) {
@@ -241,12 +266,31 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             Some(5_000),
             "the frontier is measured from the executor start, at clock zero"
         );
+        // The Server's start fact and the armed clock do not imply that
+        // the Client has granted START. Wait for the actual Bash PID.
+        let mut encoded_pid = [0; 12];
+        loop {
+            let mut ready = opened.readable().await.unwrap();
+            if let Ok(result) = ready.try_io(|pipe| pipe.get_ref().read_exact(&mut encoded_pid)) {
+                result.unwrap();
+                break;
+            }
+        }
+        let pid =
+            nix::unistd::Pid::from_raw(std::str::from_utf8(&encoded_pid).unwrap().parse().unwrap());
+        assert_eq!(nix::sys::signal::kill(pid, None), Ok(()));
         controller_clock.advance(5_000);
+        pid
     });
     let result = tokio::time::timeout(Duration::from_mins(2), execution.run())
         .await
         .expect("anti-hang guard: the manual-clock deadline settles Bash promptly");
-    controller.await.expect("boundary deadline controller");
+    let pid = controller.await.expect("boundary deadline controller");
+    assert_eq!(
+        nix::sys::signal::kill(pid, None),
+        Err(nix::errno::Errno::ESRCH)
+    );
+    assert_eq!(model.requests().len(), 2);
     let audit = common::durable_agent_result(result, fixture.store.as_ref());
 
     let canonical_messages = audit.result.messages();

@@ -445,13 +445,13 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
                     flight.initialization.prepared_runtime().unwrap()
                 };
                 assert_eq!(native.is_activated(), cut == 1);
-                // The host returns only after generic native retirement owns
-                // the lifecycle, including the post-CAS recovery handoff.
+                // Host admission closes synchronously. The async drain
+                // then transfers the prepared runtime to native retirement.
                 f.host.begin_drain();
-                assert!(!native.lifecycle().is_running());
-                initialization_cancelled(&f, &session.active_conversation_id).await;
                 let host = f.host.clone();
                 let draining = tokio::spawn(async move { host.drain().await });
+                initialization_cancelled(&f, &session.active_conversation_id).await;
+                assert!(!native.lifecycle().is_running());
                 drop(release);
                 assert!(matches!(
                     loading.await.unwrap(),
