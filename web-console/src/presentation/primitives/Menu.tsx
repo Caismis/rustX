@@ -496,11 +496,31 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
       const active = document.activeElement
       triggerRef.current = active instanceof HTMLElement && rootRef.current?.contains(active) === true ? active : null
       selectionFocus.current = null
-      if (autoFocus) queueMicrotask(() => {
-        const rows = [...(popupRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])]
-          .filter(row => !row.hasAttribute('data-disabled') && row.getAttribute('aria-disabled') !== 'true' && !(row as HTMLButtonElement).disabled)
-        ;(rows.find(row => row.getAttribute('aria-current') === 'true') ?? rows[0])?.focus()
-      })
+      if (autoFocus) {
+        // The documented contract is the first row holding the keyboard on
+        // open. Base UI's own focus manager races this — it focuses the popup
+        // itself once on the same frames because the rows are not tabbable —
+        // so the adapter keeps reasserting the row across the whole opening
+        // window instead of stopping at the first successful focus.
+        let attempts = 0
+        const enter = () => {
+          attempts += 1
+          if (attempts > 15) return
+          const popup = popupRef.current
+          if (popup === null || popup.getAttribute('aria-hidden') === 'true') return
+          const first = [...popup.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+            .find(row => !row.hasAttribute('data-disabled') && row.getAttribute('aria-disabled') !== 'true' && !(row as HTMLButtonElement).disabled)
+          if (first === undefined) { requestAnimationFrame(enter); return }
+          const active = document.activeElement
+          // A row already holding the keyboard — ours or one the user walked
+          // to — settles the opening window; anything else (the popup itself,
+          // the trigger, the document) still needs the first row.
+          if (active instanceof HTMLElement && active !== first && active.getAttribute('role')?.startsWith('menuitem') === true && popup.contains(active)) return
+          if (active !== first) first.focus({ preventScroll: true })
+          requestAnimationFrame(enter)
+        }
+        requestAnimationFrame(enter)
+      }
     }
     if (!open && wasOpen.current) {
       if (anchorLost.current) {
