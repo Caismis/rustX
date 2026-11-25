@@ -34,7 +34,7 @@ export function Tooltip({ label, shortcutKeys, side = 'right', delayMs = 0, disa
   return (
     <CossTooltip disabled={disabled}>
       <TooltipTrigger render={children} delay={delayMs} closeOnClick />
-      <TooltipPopup side={side} sideOffset={side === 'right' ? 10 : 8} style={maxWidth === undefined ? undefined : { maxWidth }}>
+      <TooltipPopup role="tooltip" side={side} sideOffset={side === 'right' ? 10 : 8} style={maxWidth === undefined ? undefined : { maxWidth }}>
         {resolvedLabel && <span>{resolvedLabel}</span>}
         {!!shortcutKeys?.length && <ShortcutKeys keys={shortcutKeys} variant="tooltip" />}
       </TooltipPopup>

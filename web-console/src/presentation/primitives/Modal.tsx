@@ -1,10 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useRef } from 'react'
-import type { ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { useRef, type ReactNode } from 'react'
 import clsx from 'clsx'
+import { DialogSurface } from './DialogSurface'
 import { IconCloseOutline16 } from './icons/index.tsx'
-import { useModalFocus } from './useModalFocus';
 import css from './Modal.module.css'
 
 interface ModalBaseProps {
@@ -27,60 +25,45 @@ type ModalProps = ModalBaseProps & (
 )
 
 /**
- * Render a centered, body-portaled modal over a blurred page mask.
- * @param props.open - whether the dialog is showing.
- * @param props.onClose - Escape or mask click; while a menu is open inside the
- * dialog, Escape belongs to that menu first.
- * @param props.title - dialog heading (aria-label in every mode).
- * @param props.closeLabel - localized accessible close-button label.
- * @param props.description - optional supporting sentence under the title.
- * @param props.children - body (inputs, etc.).
- * @param props.footer - action row (Cancel / Create).
- * @param props.contentClassName - optional class for a scrollable content region.
- * @param props.headless - render children directly in the card (no default
- * header/close/body chrome); mask, card, Escape, and aria-label remain.
+ * Render a centered, body-portaled modal over a blurred page mask. coss ui's
+ * Base UI dialog primitive owns modality, focus containment, dismissal and
+ * focus restoration; rustX keeps the card geometry and content contract.
  * @returns null when closed; otherwise the overlay tree.
  */
 export function Modal({
   open, onClose, title, closeLabel, description, children, footer, className, contentClassName, rootClassName, headless = false,
 }: ModalProps) {
-  const dialog = useRef<HTMLDivElement>(null);
-  useModalFocus(open, dialog, onClose);
-
-
+  const popup = useRef<HTMLElement>(null)
   if (!open) return null
-
-  return createPortal((
-    <div className={clsx(css.root, rootClassName)} role="presentation">
-      <div className={css.mask} aria-hidden="true" onClick={onClose} />
-      <div
-        className={clsx(css.dialog, className)}
-        ref={dialog}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        {headless
-          ? children
-          : (
-            <>
-              <div className={clsx(css.content, contentClassName)}>
-                <div className={css.header}>
-                  <h2 className={css.title}>{title}</h2>
-                  <button type="button" className={css.close} aria-label={closeLabel} onClick={onClose}>
-                    <IconCloseOutline16 size={14} />
-                  </button>
-                </div>
-                {description !== undefined && description !== '' && (
-                  <p className={css.description}>{description}</p>
-                )}
-                {children !== undefined && <div className={css.body}>{children}</div>}
+  return (
+    <DialogSurface
+      open
+      onClose={onClose}
+      title={title}
+      overlayClassName={clsx(css.root, css.scrim, rootClassName)}
+      className={clsx(css.dialog, className)}
+      contentRef={popup}
+      initialFocus={() => popup.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? false}
+    >
+      {headless
+        ? children
+        : (
+          <>
+            <div className={clsx(css.content, contentClassName)}>
+              <div className={css.header}>
+                <h2 className={css.title}>{title}</h2>
+                <button type="button" className={css.close} aria-label={closeLabel} onClick={onClose}>
+                  <IconCloseOutline16 size={14} />
+                </button>
               </div>
-              {footer !== undefined && <div className={css.footer}>{footer}</div>}
-            </>
-          )}
-      </div>
-    </div>
-  ), document.body)
+              {description !== undefined && description !== '' && (
+                <p className={css.description}>{description}</p>
+              )}
+              {children !== undefined && <div className={css.body}>{children}</div>}
+            </div>
+            {footer !== undefined && <div className={css.footer}>{footer}</div>}
+          </>
+        )}
+    </DialogSurface>
+  )
 }

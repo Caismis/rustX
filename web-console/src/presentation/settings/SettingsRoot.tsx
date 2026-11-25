@@ -1,7 +1,7 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
+import { Tabs, TabsContent, TabsList, TabsTab } from '@/components/ui/tabs';
 import clsx from 'clsx';
 import { Menu } from '../primitives/Menu';
 import { IconChevronDownOutline14 } from '../primitives/icons';
@@ -36,9 +36,6 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
   return (
     <section ref={attachPanel} className={css.panel} aria-label={tx('settings:settings.settings')} tabIndex={-1} data-settings-page>
       <div className={css.page}>
-          {/* The header is deliberately outside <Tabs>: React Aria renders a
-              Tabs subtree a second time into a detached collection document
-              to discover its tabs, and the section menu measures real DOM. */}
           <header data-settings-header="" className={css.header}>
             <div className={css.sections}>
               <Menu open={sections} onClose={() => setSections(false)} autoFocus focusOwner={panelRef}
@@ -52,20 +49,20 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
                 </button>} />
             </div>
           </header>
-          <Tabs className={css.tabsRoot} orientation="vertical" selectedKey={activeId} onSelectionChange={key => { onSelect(String(key)); }}>
+          <Tabs className={css.tabsRoot} orientation="vertical" value={activeId} onValueChange={key => { onSelect(String(key)); }}>
             <nav className={css.nav} aria-label={tx('settings:navigation.rail')} data-settings-navigation="">
               <div className={css.navTitle}>{tx('settings:settings.settings')}</div>
-              <TabList className={clsx(css.navList, workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
+              <TabsList className={clsx(css.navList, workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
                 {pages.map(page => (
-                  <Tab key={page.id} id={page.id} className={clsx(css.navCell, workflow.pageTab)}>
+                  <TabsTab key={page.id} value={page.id} className={clsx(css.navCell, workflow.pageTab)}>
                     <span className={css.navIcon} aria-hidden="true">{page.icon}</span>
                     <span className={clsx(css.navLabel, workflow.pageTabLabel)}>{page.label}</span>
-                  </Tab>
+                  </TabsTab>
                 ))}
-              </TabList>
+              </TabsList>
             </nav>
             <div className={css.options}>
-              <TabPanel key={activeId} id={activeId} className={workflow.pageTabPanel}>{children}</TabPanel>
+              <TabsContent key={activeId} value={activeId} className={workflow.pageTabPanel}>{children}</TabsContent>
             </div>
           </Tabs>
       </div>

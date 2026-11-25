@@ -1,10 +1,17 @@
-import { createContext, useCallback, useContext, useState, type ReactNode, type Ref } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog } from '@base-ui/react/dialog';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
 
 const DialogPortalContext = createContext<HTMLElement | null>(null);
 const OverlayActiveContext = createContext(true);
+const surfaceLayers: symbol[] = [];
+let rootWasInert = false;
+function isolateRoot() {
+  const root = document.getElementById('root');
+  if (!root) return;
+  root.inert = surfaceLayers.length > 0 || rootWasInert;
+}
 /** Controls share the modal portal, while retaining their own focus scope. */
 export const useDialogPortal = () => useContext(DialogPortalContext) ?? document.body;
 export const useOverlayActive = () => useContext(OverlayActiveContext);
@@ -13,6 +20,18 @@ export const useOverlayActive = () => useContext(OverlayActiveContext);
  * pages keep editing state without activating a modal or restoring its focus. */
 export function OverlayScope({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
   const [portal, setPortal] = useState<HTMLDivElement | null>(null);
+  const [layer] = useState(() => Symbol('dialog-surface'));
+  useEffect(() => {
+    if (!open || !active) return;
+    if (!surfaceLayers.length) rootWasInert = document.getElementById('root')?.inert ?? false;
+    surfaceLayers.push(layer);
+    isolateRoot();
+    return () => {
+      const index = surfaceLayers.indexOf(layer);
+      if (index >= 0) surfaceLayers.splice(index, 1);
+      isolateRoot();
+    };
+  }, [open, active, layer]);
   return <OverlayActiveContext value={active}><DialogPortalContext value={portal}>
     <div className={className} hidden={!active} inert={!active}>{portal && children}</div>
     {createPortal(<div ref={setPortal} hidden={!active} inert={!active}/>, document.body)}
@@ -32,13 +51,25 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
   const active = useOverlayActive();
   const container = useDialogPortal();
   const [portal, setPortal] = useState<HTMLDivElement | null>(null);
+  const [layer] = useState(() => Symbol('dialog-surface'));
+  useEffect(() => {
+    if (!open || !active) return;
+    if (!surfaceLayers.length) rootWasInert = document.getElementById('root')?.inert ?? false;
+    surfaceLayers.push(layer);
+    isolateRoot();
+    return () => {
+      const index = surfaceLayers.indexOf(layer);
+      if (index >= 0) surfaceLayers.splice(index, 1);
+      isolateRoot();
+    };
+  }, [open, active, layer]);
   const attach = useCallback((node: HTMLElement | null) => {
     if (typeof contentRef === 'function') contentRef(node);
     else if (contentRef) contentRef.current = node;
   }, [contentRef]);
   const Root = role === 'alertdialog' ? AlertDialog.Root : Dialog.Root;
   return <Root open={open && active} onOpenChange={(next, details) => {
-    if (details.reason === 'escape-key' && (details.event.target as Element)?.closest?.('[role="menu"], [role="listbox"]')) {
+    if (details.reason === 'escape-key' && ((details.event.target as Element)?.closest?.('[role="menu"], [role="listbox"]') || surfaceLayers.at(-1) !== layer)) {
       details.cancel();
       return;
     }
