@@ -10,6 +10,7 @@ import { workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { editorHolds, workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
+import { chooseCossOption } from './coss-select';
 
 /** The real editor: its fields, its Ctrl/Cmd+S handler and its machine,
  * over a port whose writes the test observes. */
@@ -107,7 +108,7 @@ it('adds an optional input field through the dialog, validating it before one na
   fireEvent.click(dialog.getByRole('radio', { name: /^Optional/ }));
   save();
   expect(dialog.getByRole('alert').textContent).toBe('Choose one of the options as the default.');
-  fireEvent.change(dialog.getByLabelText('Default value'), { target: { value: 'casual' } });
+  await chooseCossOption(dialog.getByLabelText('Default value'), 'casual');
   save();
   expect(screen.queryByRole('dialog')).toBeNull();
   // The new field is listed last with its requirement and type.

@@ -77,7 +77,7 @@ async function open(condition: Predicate, schema: Record<string, unknown>, prope
 it('opens and edits array-object containment without presenting its object as null or changing the predicate', async () => {
   const condition: Predicate = { type: 'contains', left: reference, right: { type: 'object', fields: { id: { type: 'literal', value: 'x' } } } };
   const view = await open(condition, objects);
-  expect((view.panel.getByRole('combobox', { name: 'Predicate' }) as HTMLSelectElement).value).toBe('contains');
+  expect(view.panel.getByRole('combobox', { name: 'Predicate' }).textContent).toContain('Contains');
   const right = within(view.panel.getByRole('group', { name: 'Right' }));
   expect(right.getByRole('radio', { name: 'Object', checked: true })).toBeTruthy();
   const id = within(right.getByRole('group', { name: 'id' })).getByRole('textbox', { name: 'Literal JSON' }) as HTMLTextAreaElement;
@@ -95,7 +95,7 @@ it.each([
 ])('uses the native value editor for $name', async ({ schema, right, group, text, edited, expected }) => {
   const condition: Predicate = { type: 'contains', left: reference, right };
   const view = await open(condition, schema);
-  expect((view.panel.getByRole('combobox', { name: 'Predicate' }) as HTMLSelectElement).value).toBe('contains');
+  expect(view.panel.getByRole('combobox', { name: 'Predicate' }).textContent).toContain('Contains');
   const rhs = within(view.panel.getByRole('group', { name: 'Right' }));
   const field = (group ? within(rhs.getByRole('group', { name: group })) : rhs).getByRole('textbox', { name: 'Literal JSON' }) as HTMLTextAreaElement;
   expect(field.value).toBe(text);
@@ -145,7 +145,7 @@ it.each([
 it('preserves a native unary boolean predicate instead of presenting an editable equality', async () => {
   const condition: Predicate = { type: 'boolean', value: reference };
   const view = await open(condition, { type: 'boolean' });
-  expect((view.panel.getByRole('combobox', { name: 'Predicate' }) as HTMLSelectElement).value).toBe('boolean');
+  expect(view.panel.getByRole('combobox', { name: 'Predicate' }).textContent).toContain('Boolean value');
   expect(view.panel.queryByRole('button', { name: 'Operator' })).toBeNull();
   expect(view.condition()).toEqual(condition);
 });

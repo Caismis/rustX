@@ -21,6 +21,7 @@ import { useToolCatalog } from '../toolCatalog';
 import { IconPencil } from '../../icons';
 import css from '../Editor.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
 type ToolNode = ReturnType<typeof useNode<'tool'>>;
 type ArgumentKind = 'string' | 'enum' | 'integer' | 'number' | 'boolean' | 'json';
@@ -169,10 +170,9 @@ function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelP
         </div>
         {variable ? <ReferencePicker address={address} path={value.path} edit={edit} placeholder={tx('workflows:branch.select-variable')} onChoose={choice => set(name, { type: 'reference', path: choice.path })} />
           : kind === 'boolean' ? <span className={css.toolBoolean}><Switch checked={constant === true} label={name} onChange={on => set(name, { type: 'literal', value: on })} /></span>
-            : kind === 'enum' ? <select className={css.input} aria-label={name} value={selected < 0 ? '' : String(selected)} aria-invalid={required && !value || undefined} onChange={event => set(name, event.target.value === '' ? undefined : { type: 'literal', value: options[Number(event.target.value)] })}>
-              <option value="">{tx('workflows:tool.unset')}</option>
-              {options.map((item, index) => <option key={item} value={index}>{item || '""'}</option>)}
-            </select>
+            : kind === 'enum' ? <EnumSelect className={css.input} label={name} value={selected < 0 ? null : String(selected)} aria-invalid={required && !value || undefined}
+              onChange={next => set(name, next === '' ? undefined : { type: 'literal', value: options[Number(next)] })}
+              options={[{ value: '', label: tx('workflows:tool.unset') }, ...options.map((item, index) => ({ value: String(index), label: item || '""' }))]} />
               : <ConstantInput kind={kind} name={name} value={constant} invalid={required && !value}
                 wrapped={tool.node.arguments.type !== 'literal'} address={tool.node.arguments.type === 'literal' ? tool.at('arguments', 'value', { key: name }) : address} />}
       </div>}

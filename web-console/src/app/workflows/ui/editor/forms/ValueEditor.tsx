@@ -20,6 +20,7 @@ function updateKind<K extends Value['type'] | Predicate['type'], T extends { typ
 }
 import css from '../Editor.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
 type ValueKind = Value['type'];
 const VALUE_KINDS: readonly ValueKind[] = ['reference', 'template', 'literal', 'object', 'array'];
@@ -156,10 +157,9 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
   }, array);
   return <fieldset className={css.value}>
     <legend className={css.fieldLabel}>{label}</legend>
-    <select className={css.input} aria-label={tx('workflows:predicate.kind')} value={predicate.type}
-      onChange={event => { const kind = event.target.value as PredicateKind; if (kind !== predicate.type) edit(document => updateField<Predicate>(document, address, current => current.type === kind ? current : predicateTemplate(kind, current))); }}>
-      {PREDICATE_KINDS.map(kind => <option key={kind} value={kind}>{tx(`workflows:predicate.${kind}`)}</option>)}
-    </select>
+    <EnumSelect className={css.input} label={tx('workflows:predicate.kind')} value={predicate.type}
+      onChange={kind => { if (kind !== predicate.type) edit(document => updateField<Predicate>(document, address, current => current.type === kind ? current : predicateTemplate(kind, current))); }}
+      options={PREDICATE_KINDS.map(kind => ({ value: kind, label: tx(`workflows:predicate.${kind}`) }))} />
     {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
     {('left' in predicate) && <>
       <ValueEditor label={tx('workflows:predicate.left')} address={within(address, ['left'])} value={predicate.left} edit={edit} />

@@ -17,6 +17,8 @@ import editorCss from '../Editor.module.css';
 import css from './InputFields.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Radio, RadioGroup } from '@/components/ui/radio-group';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
+import { Textarea } from '@/components/ui/textarea';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -99,7 +101,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
       {field('name', tx('workflows:fields.name'), controlId => <TextInput id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} autoFocus spellCheck={false}
         placeholder={tx('workflows:fields.name-placeholder')} {...invalid('name')} onChange={event => change({ name: event.target.value })} />)}
 
-      {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}
+      {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <Textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}
         placeholder={tx('workflows:fields.description-placeholder')} onChange={event => change({ description: event.target.value })} />)}
 
       {type === 'string' && <>
@@ -118,9 +120,8 @@ export function FieldDialog({ document, address, keys, original, schema, require
         </fieldset>
       </>}
 
-      {type === 'array' && field('items', tx('workflows:fields.items'), controlId => <select id={controlId} className={editorCss.input} value={form.itemType} onChange={event => change({ itemType: event.target.value })}>
-        {ITEM_TYPES.map(item => <option key={item} value={item}>{item ? `${tx(`workflows:fields.type.${item as FieldType}`)} · ${item}` : tx('workflows:fields.items-any')}</option>)}
-      </select>)}
+      {type === 'array' && field('items', tx('workflows:fields.items'), controlId => <EnumSelect id={controlId} className={editorCss.input} label={tx('workflows:fields.items')} value={form.itemType} onChange={itemType => change({ itemType })}
+        options={ITEM_TYPES.map(item => ({ value: item, label: item ? `${tx(`workflows:fields.type.${item as FieldType}`)} · ${item}` : tx('workflows:fields.items-any') }))} />)}
 
       {(type === 'object' || type === 'raw') && <div className={css.code}>
         <JsonCodeEditor label={tx(type === 'raw' ? 'workflows:fields.json' : 'workflows:fields.object-schema')} value={form.schemaJson} allowEmpty={false} minHeight={160}
@@ -158,14 +159,12 @@ function DefaultValue({ id, form, change, problem }: { id: string; form: FieldFo
   return <div className={editorCss.field}>
     <label htmlFor={control} className={editorCss.fieldLabel}>{label}</label>
     {form.type === 'boolean'
-      ? <select id={control} className={editorCss.input} value={String(form.defaultBool)} onChange={event => change({ defaultBool: event.target.value === 'true' })}>
-        <option value="true">true</option><option value="false">false</option>
-      </select>
+      ? <EnumSelect id={control} className={editorCss.input} label={label} value={String(form.defaultBool)} onChange={next => change({ defaultBool: next === 'true' })}
+        options={[{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }]} />
       : form.type === 'string' && options.length
-        ? <select id={control} className={editorCss.input} value={options.includes(form.defaultText) ? form.defaultText : ''} {...described} onChange={event => change({ defaultText: event.target.value })}>
-          {!options.includes('') && <option value="" disabled>{tx('workflows:fields.default-choose')}</option>}
-          {[...new Set(options)].map(option => <option key={option} value={option}>{option}</option>)}
-        </select>
+        ? <EnumSelect id={control} className={editorCss.input} label={label} value={options.includes(form.defaultText) ? form.defaultText : null} {...described} onChange={defaultText => change({ defaultText })}
+          placeholder={tx('workflows:fields.default-choose')}
+          options={[...new Set(options)].map(option => ({ value: option, label: option }))} />
         : <TextInput id={control} className={clsx(editorCss.input, form.type !== 'string' && editorCss.mono)} value={form.defaultText} {...described}
           type={form.type === 'string' ? 'text' : 'number'} step={form.type === 'integer' ? 1 : 'any'} inputMode={form.type === 'string' ? undefined : form.type === 'integer' ? 'numeric' : 'decimal'}
           maxLength={form.type === 'string' && Number(form.maxLength) > 0 ? Number(form.maxLength) : undefined}

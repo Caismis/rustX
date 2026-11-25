@@ -11,6 +11,7 @@ import { schemaObject, schemaTarget, schemaTemplate, schemaTypes, type Schema } 
 import { putProperty, removeProperty, schemaAt, type SchemaEdit } from './schema';
 import css from './StructuredOutput.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 
 interface Editing { parent: FieldAddress; name?: string }
 export const fieldType = (schema: Schema) => schema.type === 'array' ? `array[${schemaObject(schema.items)?.type ?? 'string'}]` : String(schema.type ?? 'string');
@@ -98,7 +99,7 @@ function FieldCard({ document, parent, name, onCancel, onConfirm }: {
     </div>
     <TextInput className={css.description} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
     {type === 'string' && <div className={css.validations}><div className={css.validationTitle}>{tx('workflows:structured.string-validations')}<span /></div>
-      <label>{tx('workflows:structured.enum')}<textarea aria-label={tx('workflows:structured.enum')} placeholder={tx('workflows:structured.enum-placeholder')} rows={2} value={enums} onChange={event => setEnums(event.target.value)} /></label>
+      <label>{tx('workflows:structured.enum')}<Textarea aria-label={tx('workflows:structured.enum')} placeholder={tx('workflows:structured.enum-placeholder')} rows={2} value={enums} onChange={event => setEnums(event.target.value)} /></label>
     </div>}
     {error && <p role="alert" className={css.error}>{error}</p>}
   </form>;

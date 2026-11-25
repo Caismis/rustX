@@ -12,6 +12,7 @@ import { DEFAULT_WORKFLOW_ICON, IconPicker } from '../WorkflowIcon';
 import css from '../Workflows.module.css';
 import catalog from '../../../../presentation/catalog/Catalog.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 
 /** The native identity rule, checked early for presentation; native decides. */
 const ID = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -167,7 +168,7 @@ function InfoForm({ confirmation, scopeLabel, library, busy, title: heading, sou
           </div>
           <label className={css.field}>
             <span>{tx('workflows:dialog.summary')}</span>
-            <textarea rows={3} value={summary} maxLength={1024} onChange={event => setSummary(event.target.value)} disabled={blocked} placeholder={tx('workflows:dialog.summary-placeholder')} />
+            <Textarea rows={3} value={summary} maxLength={1024} onChange={event => setSummary(event.target.value)} disabled={blocked} placeholder={tx('workflows:dialog.summary-placeholder')} />
           </label>
         </section>
         <section className={css.column}>
@@ -180,7 +181,7 @@ function InfoForm({ confirmation, scopeLabel, library, busy, title: heading, sou
           </label>
           <label className={css.field}>
             <span>{tx('workflows:dialog.description')}</span>
-            <textarea rows={3} value={description} placeholder={tx('workflows:dialog.description-placeholder')} onChange={event => { setDescription(event.target.value); setTouched(true); }} disabled={blocked} />
+            <Textarea rows={3} value={description} placeholder={tx('workflows:dialog.description-placeholder')} onChange={event => { setDescription(event.target.value); setTouched(true); }} disabled={blocked} />
             <small>{touched && !description.trim() ? tx('workflows:dialog.description-required') : tx('workflows:dialog.description-hint')}</small>
           </label>
         </section>
