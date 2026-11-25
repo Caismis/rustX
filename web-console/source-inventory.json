@@ -2278,7 +2278,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "b5f64d304bb75cc26073a8b1c18caf74da86abf06613db5a9f0f1178bfbb331f",
+      "local_sha256": "6bcd5bf9c8fbff25ff3eb3f609402211b65245e5c6dea0a3b228904e58c7288b",
       "classification": "A",
       "additional_sources": [
         {
@@ -2397,7 +2397,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "d9a77344266d37496ee5888975d0de7c13888e04882566225e6e288985062772",
+      "local_sha256": "bd8f2d40525fb1cb974de8c1cd4d52c5f981c14875e66d68e005bae889181771",
       "classification": "B",
       "additional_sources": [
         {

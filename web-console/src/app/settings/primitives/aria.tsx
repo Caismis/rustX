@@ -126,7 +126,12 @@ export function Advanced({ title, children, expanded }: { title: string; childre
 export function Toggle({ label, checked, onChange, disabled = false }: {
   label: string; checked: boolean; onChange: (value: boolean) => void; disabled?: boolean;
 }) {
-  return <div className={css.switchRow}>
+  // Row clicks actuate the toggle, as the pre-coss React Aria label root did:
+  // a wrapping label would fold its text into the switch's accessible name.
+  return <div className={css.switchRow} onClick={event => {
+    if ((event.target as HTMLElement).closest('[role="switch"]') !== null) return
+    if (!disabled) onChange(!checked)
+  }}>
     <span>{label}</span>
     <Switch checked={checked} disabled={disabled} onChange={onChange} label={label} className={css.switch} />
   </div>;

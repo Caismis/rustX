@@ -211,8 +211,11 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
     const positioner = subPopupElement?.closest<HTMLElement>('[data-slot="menu-positioner"]')
     if (!positioner) return undefined
     let closing = false
+    // Base UI's hide middleware reports every all-zero anchor rect as hidden,
+    // so the signal is only truthful where layout measurement exists at all.
+    const measurable = document.documentElement.getBoundingClientRect().width > 0
     const settle = () => {
-      if (closing || !positioner.hasAttribute('data-anchor-hidden')) return
+      if (closing || !measurable || !positioner.hasAttribute('data-anchor-hidden')) return
       closing = true
       ownership.release(entry.id)
       // The keyboard lands on the parent list before the closing surface
@@ -552,8 +555,11 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
     const positioner = popupElement?.closest<HTMLElement>('[data-slot="menu-positioner"]')
     if (!positioner) return undefined
     let closing = false
+    // Base UI's hide middleware reports every all-zero anchor rect as hidden,
+    // so the signal is only truthful where layout measurement exists at all.
+    const measurable = document.documentElement.getBoundingClientRect().width > 0
     const settle = () => {
-      if (closing || !positioner.hasAttribute('data-anchor-hidden')) return
+      if (closing || !measurable || !positioner.hasAttribute('data-anchor-hidden')) return
       closing = true
       anchorLost.current = true
       focusAfterClose.current = false

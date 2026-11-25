@@ -33,7 +33,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   useEffect(() => { if (wasOpen.current && !open) onClose?.(returnFocus.current); wasOpen.current = open; }, [open]);
   useEffect(() => {
     if (!open) return;
-    searchInput.current?.focus();
+    if (!token) searchInput.current?.focus();
     if (token) return;
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) { returnFocus.current = false; setOpen(false); } };
     window.document.addEventListener('pointerdown', outside, true);
@@ -113,7 +113,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
     </button>
     {open && (token
       ? <PopoverPopup ref={popup} id={id} className={`${css.referencePopup} ${css.branchVariablePopup}`} role="dialog" aria-label={tx('workflows:value.pick')}
-        anchor={virtualAnchor ?? trigger} positionMethod="fixed" side="bottom" align="start" sideOffset={6} collisionPadding={12} initialFocus={false} finalFocus={() => false}
+        anchor={virtualAnchor ?? trigger} positionMethod="fixed" side="bottom" align="start" sideOffset={6} collisionPadding={12} initialFocus={searchInput} finalFocus={() => false}
         onWheel={event => event.stopPropagation()} onKeyDown={panelKeyDown}>{panelBody}</PopoverPopup>
       : <div ref={popup} id={id} className={css.referencePopup} role="dialog" aria-label={tx('workflows:value.pick')} onWheel={event => event.stopPropagation()} onKeyDown={panelKeyDown}>{panelBody}</div>)}
   </div></Popover>;

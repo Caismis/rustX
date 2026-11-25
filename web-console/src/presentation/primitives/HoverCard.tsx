@@ -206,6 +206,7 @@ export function HoverCard({
     const target = previewAnchor?.current ?? rootRef.current?.querySelector<HTMLElement>('button, [role="button"]') ?? rootRef.current
     if (!target) return
     const hidden = () => target.closest('[hidden], [inert]') !== null
+      || rootRef.current?.closest('[hidden], [inert]') !== null
       || (previewAnchor ? previewRect().width <= 0 : false)
     if (hidden()) {
       close()
@@ -216,10 +217,17 @@ export function HoverCard({
     }, { threshold: 0 })
     observer?.observe(target)
     const check = () => { if (hidden()) close() }
+    // Attribute hiding fires no scroll, resize or intersection event of its
+    // own: watch the anchor chain the way the pre-coss floating-ui wiring did.
+    const visibility = new MutationObserver(check)
+    for (let element: HTMLElement | null = target; element; element = element.parentElement) {
+      visibility.observe(element, { attributes: true, attributeFilter: ['hidden', 'inert'] })
+    }
     window.addEventListener('scroll', check, true)
     window.addEventListener('resize', check)
     return () => {
       observer?.disconnect()
+      visibility.disconnect()
       window.removeEventListener('scroll', check, true)
       window.removeEventListener('resize', check)
     }
@@ -290,7 +298,9 @@ export function HoverCard({
           data-hover-card={previewAnchor ? 'preview' : 'default'}
           style={{
             width: previewAnchor ? previewWidth : undefined,
-            maxHeight: previewAnchor ? PREVIEW_MAX_HEIGHT : undefined,
+            // The positioner publishes the collision-aware space on its own side;
+            // capping here is what lets flip/shift actually fit the card.
+            maxHeight: previewAnchor ? `min(${PREVIEW_MAX_HEIGHT}px, var(--available-height, ${PREVIEW_MAX_HEIGHT}px))` : undefined,
             minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined,
           }}
           role={copyable ? 'button' : undefined}
