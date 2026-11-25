@@ -3,7 +3,7 @@
 // the vocabulary here prevents the external component API from leaking through
 // the application while the visual implementation is coss-owned.
 
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { Button as CossButton } from '@/components/ui/button'
 
 /** Visual variant, backed by the corresponding coss ui variant. */
@@ -26,15 +26,16 @@ const VARIANT_MAP = {
  * @param props.icon - optional leading icon node.
  * @returns the button element; native button attributes pass through.
  */
-export function Button({ variant = 'ghost', size = 'md', icon, className, children, ...rest }: {
+export const Button = forwardRef<HTMLButtonElement, {
   variant?: ButtonVariant
   size?: 'md' | 'sm'
   icon?: ReactNode
   className?: string | undefined
   children?: ReactNode
-} & ButtonHTMLAttributes<HTMLButtonElement>) {
+} & ButtonHTMLAttributes<HTMLButtonElement>>(function Button({ variant = 'ghost', size = 'md', icon, className, children, ...rest }, ref) {
   return (
     <CossButton
+      ref={ref}
       variant={VARIANT_MAP[variant]}
       size={size === 'sm' ? 'sm' : 'default'}
       className={className}
@@ -44,4 +45,4 @@ export function Button({ variant = 'ghost', size = 'md', icon, className, childr
       {children}
     </CossButton>
   )
-}
+})
