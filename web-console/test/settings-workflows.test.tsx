@@ -61,7 +61,7 @@ it('S2-02 an edit reached through Provider → Model drill-down replaces the com
   await user(s, 'Models');
   await openResourceRow('transport');
   expect(screen.getByRole('heading', { name: 'transport' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' }));
   expect(screen.getByRole('dialog', { name: 'Model main' })).toBeTruthy();
   fireEvent.change(screen.getByLabelText('Context window'), { target: { value: '256000' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
@@ -91,7 +91,7 @@ it('S2-02 deleting a Model removes exactly that authored unit after confirmation
   s.source.user.authored!.models = { main: fullModel() };
   await user(s, 'Models');
   await openResourceRow('transport');
-  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' }));
   const editor = within(screen.getByRole('dialog', { name: 'Model main' }));
   expect(editor.queryByRole('button', { name: 'Remove Model main' })).toBeNull();
   fireEvent.click(editor.getByRole('button', { name: 'Close' }));
@@ -952,7 +952,7 @@ it('S2-09 a Provider autosave waits for the committed Model reread and uses its 
   s.source.user.revision = 'user-1';
   await user(s, 'Models');
   await openResourceRow('transport');
-  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' }));
   const wire = () => screen.getByLabelText('Model ID') as HTMLInputElement;
   const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
   const save = (name: string) => screen.getByRole('button', { name: `Save ${name}` }) as HTMLButtonElement;
@@ -988,7 +988,7 @@ it('S2-09 a Provider autosave waits for the committed Model reread and uses its 
   await act(async () => reread!.resolve());
   await waitForSettingsSave();
   expect(screen.queryByRole('button', { name: 'Apply my changes' })).toBeNull();
-  fireEvent.click(screen.getByRole('listitem', { name: 'main' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Model main' }));
   await waitFor(() => expect(wire().value).toBe('wire-new'));
   expect(contextWindow().closest('fieldset')!.disabled).toBe(false);
   // The next edit is a fresh draft of the observed Model, fenced on its

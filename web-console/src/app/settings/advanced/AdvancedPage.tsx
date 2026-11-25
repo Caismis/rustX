@@ -157,7 +157,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
                     type="number"
                     min="1"
                     value={value.summary_output_cap.tokens}
-                    onChange={event => change({ ...value, summary_output_cap: { mode: 'limit', tokens: Number(event.target.value) } })}
+                    onChange={event => change({ ...value, summary_output_cap: { mode: 'limit', tokens: event.target.value ? Number(event.target.value) : (value.summary_output_cap as { tokens: number }).tokens } })}
                   />
                 </label>
               )}

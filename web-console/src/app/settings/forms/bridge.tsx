@@ -1,5 +1,5 @@
 import { useTranslation } from '../../../locale/react';
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
 import type { SourceMutation } from '../../../../../protocol/app-server/v80';
@@ -125,8 +125,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const guard = useNavigationGuard();
   // Latest UnitEditing handle per registered identity — never a stale
   // snapshot, because `useUnitEditing` refreshes `handle.current` each render.
-  const handles = useRef(new Map<string, PageUnitHandle>());
-  const registered = useRef(new Set<string>());
+  const handles = useRef(new Map<string, Set<PageUnitHandle>>());
   // A unit unregistered while its draft was still live: the editor is gone
   // but the transaction actor still owns intent this page's Save, Cancel and
   // navigation guard must reach. The detached handle keeps submitting and
@@ -162,11 +161,28 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   const localSaveRef = useRef<(() => void | Promise<void>) | undefined>(undefined);
   const localCancelRef = useRef<(() => void) | undefined>(undefined);
   const [localSaving, setLocalSaving] = useState(false);
+  const localSavingRef = useRef(false);
+  localSavingRef.current = localSaving;
+  const saveActiveRef = useRef(false);
+  const saveFailedRef = useRef(false);
+  const pendingConflictsRef = useRef<NonNullable<PageTransaction['conflict']>[]>([]);
   const localBeforeSaveRef = useRef<(() => boolean | void) | undefined>(undefined);
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const onAllSavedRef = useRef(onAllSaved);
   onAllSavedRef.current = onAllSaved;
+  const liveHandle = useCallback((identity: string) =>
+    handles.current.get(identity)?.values().next().value ?? detached.current.get(identity), []);
+  const dismissConflict = useCallback(() => {
+    setConflict(pendingConflictsRef.current.shift());
+  }, []);
+  const offerConflict = useCallback((entry: NonNullable<PageTransaction['conflict']>) => {
+    setConflict(current => {
+      if (!current) return entry;
+      pendingConflictsRef.current.push(entry);
+      return current;
+    });
+  }, []);
 
   // Each unit reports its own unsaved-intent flag: registered refs alone
   // leave the guard blind to a draft that was restored while its editor was
@@ -188,7 +204,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     if (!admitsSourceMutation(ctx)) return;
     dispatchedRef.current.add(item.id);
     if (item.kind === 'unit') {
-      (handles.current.get(item.id) ?? detached.current.get(item.id))?.current.submit(false);
+      liveHandle(item.id)?.current.submit(false);
       return;
     }
     // A module reset is removal intent on the semantic unit itself, keyed by
@@ -199,20 +215,25 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     const obs = ctx.observation ?? ctx.staleObservation;
     const rev = obs ? selectedRevision(obs, item.selector) : '';
     actor.send({ type: 'UNIT.SUBMIT', identity: item.id, selector: item.selector, revision: rev, mutation: item.mutation });
-  }, [actor]);
+  }, [actor, liveHandle]);
 
   const finishSave = useCallback(() => {
+    const failed = saveFailedRef.current;
+    saveFailedRef.current = false;
+    saveActiveRef.current = false;
     const refused = resetFailuresRef.current;
     resetFailuresRef.current = [];
     if (refused.length) stageModuleReset(refused);
     else moduleResetCancelRef.current = undefined;
     dispatchedRef.current.clear();
-    const pending = localSaveRef.current?.();
-    if (pending && typeof (pending as Promise<void>).then === 'function') {
-      setLocalSaving(true);
-      void Promise.resolve(pending).finally(() => setLocalSaving(false));
+    if (!failed) {
+      const pending = localSaveRef.current?.();
+      if (pending && typeof (pending as Promise<void>).then === 'function') {
+        setLocalSaving(true);
+        void Promise.resolve(pending).catch(() => undefined).finally(() => setLocalSaving(false));
+      }
+      onAllSavedRef.current?.();
     }
-    onAllSavedRef.current?.();
   }, [stageModuleReset]);
 
   // The save queue advances one unit at a time: submit, wait for the unit's
@@ -261,6 +282,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       // A refused module reset has no unit draft to keep: it is re-staged
       // when the queue drains (see finishSave) so the gesture is not lost, and
       // the refusal is surfaced to the control that staged it.
+      saveFailedRef.current = true;
       if (item.kind === 'mutation' && headStatus !== 'conflict') {
         resetFailuresRef.current.push(item.mutation);
         const outcome = unitOutcome(actor.getSnapshot(), item.id);
@@ -270,17 +292,17 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       // submit, and the failed one keeps its draft for the footer gesture.
       if (headStatus === 'conflict') {
         if (item.kind === 'unit') {
-          const handle = handles.current.get(item.id) ?? detached.current.get(item.id);
-          setConflict(handle ? {
+          const handle = liveHandle(item.id);
+          offerConflict(handle ? {
             identity: item.id,
             // Adopt the authoritative revision: abandon this browser's intent
             // entirely. `retry` keeps the intent but rebases it on the
             // reviewed revision first, so its resubmission carries a real CAS.
-            adopt: () => { handle.current.discard(); setConflict(undefined); },
-            retry: () => { handle.current.review(); handle.current.submit(false); setConflict(undefined); },
-          } : undefined);
+            adopt: () => { handle.current.discard(); dismissConflict(); },
+            retry: () => { handle.current.review(); handle.current.submit(false); dismissConflict(); },
+          } : { identity: item.id, adopt: dismissConflict, retry: dismissConflict });
         } else {
-          setConflict({
+          offerConflict({
             identity: item.id,
             adopt: () => {
               actor.send({ type: 'UNIT.DISCARD', identity: item.id });
@@ -292,7 +314,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
             // submitItem discards the leftover transaction and resubmits on
             // the current observed revision — the kept intent rebases.
             retry: () => {
-              setConflict(undefined);
+              dismissConflict();
               setQueue(current => [item, ...current]);
               submitItem(item);
             },
@@ -302,14 +324,17 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       setQueue(rest);
       if (rest.length) submitItem(rest[0]); else finishSave();
     }
-  }, [actor, headStatus, barrierFree, submitItem, finishSave]);
+  }, [actor, headStatus, barrierFree, submitItem, finishSave, liveHandle, offerConflict, dismissConflict]);
 
   const savePage = useCallback(() => {
+    if (saveActiveRef.current || localSavingRef.current) return;
     // A local `beforeSave` may veto (invalid buffers stay on the page) or
     // seed a unit draft synchronously — read the actors, not the React
     // snapshots captured before it ran.
     if (localBeforeSaveRef.current?.() === false) return;
     resetFailuresRef.current = [];
+    saveFailedRef.current = false;
+    saveActiveRef.current = true;
     setModuleResetError(undefined);
     const units = actor.getSnapshot().context.units;
     const items: (typeof queue)[number][] = [];
@@ -318,7 +343,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     // its flag still arms the navigation guard and it re-registers on remount
     // — but it is not this editing task's to commit: submitting it here
     // would write a hidden draft the user can no longer see.
-    for (const identity of registered.current) {
+    for (const identity of handles.current.keys()) {
       const ref = units[identity];
       if (ref && ref.getSnapshot().context.draft !== undefined) items.push({ kind: 'unit', id: identity });
     }
@@ -334,6 +359,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
       stageModuleReset(undefined);
     }
     dispatchedRef.current.clear();
+    pendingConflictsRef.current = [];
     setConflict(undefined);
 
     if (!items.length) { finishSave(); return; }
@@ -342,7 +368,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
   }, [actor, submitItem, finishSave, stageModuleReset]);
 
   const discardDrafts = useCallback(() => {
-    for (const handle of [...handles.current.values(), ...detached.current.values()]) handle.current.discard();
+    for (const handle of [...[...handles.current.values()].flatMap(set => [...set]), ...detached.current.values()]) handle.current.discard();
     localCancelRef.current?.();
     setGeneration(generation => generation + 1);
   }, []);
@@ -357,6 +383,8 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     }
     resetFailuresRef.current = [];
     setQueue([]);
+    saveActiveRef.current = false;
+    pendingConflictsRef.current = [];
     setConflict(undefined);
     setModuleResetError(undefined);
     const onCancel = moduleResetCancelRef.current;
@@ -396,22 +424,31 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  useEffect(() => () => {
+    for (const sub of detachedSubs.current.values()) sub.unsubscribe();
+    detachedSubs.current.clear();
+  }, []);
+
   const register = useCallback((identity: string, handle: PageUnitHandle) => {
     // A remounting editor takes back a detached registration for its unit.
     detachedSubs.current.get(identity)?.unsubscribe();
     detachedSubs.current.delete(identity);
     detached.current.delete(identity);
-    handles.current.set(identity, handle);
-    registered.current.add(identity);
+    let registrations = handles.current.get(identity);
+    if (!registrations) {
+      registrations = new Set();
+      handles.current.set(identity, registrations);
+    }
+    registrations.add(handle);
     return () => {
-      // Unmounting an editor cannot end intent the actor still owns: while a
-      // draft is live the unit detaches instead of unregistering, so the page
-      // still saves, cancels and guards on it. The subscription releases the
-      // registration when that draft resolves, whichever gesture resolves it.
+      const currentRegistrations = handles.current.get(identity);
+      currentRegistrations?.delete(handle);
+      if (currentRegistrations?.size === 0) handles.current.delete(identity);
+      const stillRegistered = handles.current.has(identity);
+      // Unmounting the last editor cannot end intent the actor still owns:
+      // while a draft is live the unit detaches instead of unregistering.
       const ref = actor.getSnapshot().context.units[identity];
-      if (ref && ref.getSnapshot().context.draft !== undefined) {
-        handles.current.delete(identity);
-        registered.current.delete(identity);
+      if (!stillRegistered && ref && ref.getSnapshot().context.draft !== undefined) {
         detached.current.set(identity, handle);
         const sub = ref.subscribe(snapshot => {
           if (snapshot.context.draft !== undefined) return;
@@ -426,9 +463,7 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
         detachedSubs.current.set(identity, sub);
         return;
       }
-      handles.current.delete(identity);
-      registered.current.delete(identity);
-      setDraftFlags(current => {
+      if (!stillRegistered) setDraftFlags(current => {
         if (!current.has(identity)) return current;
         const next = new Map(current); next.delete(identity); return next;
       });
@@ -479,12 +514,13 @@ export function PageTransactionProvider({ children, onAllSaved }: { children: Re
     onCancel?.();
   }, [actor, stageModuleReset]);
 
-  const transaction: PageTransaction = {
+  const transaction: PageTransaction = useMemo(() => ({
     dirty, saving, generation, setModuleReset, moduleReset, discardDrafts,
     savePage, cancelPage, conflict, moduleResetError, retryModuleReset, abandonModuleReset,
     register, reportDraft, setLocal: setLocalEntry,
     footerLeading, setFooterLeading,
-  };
+  }), [dirty, saving, generation, setModuleReset, moduleReset, discardDrafts, savePage, cancelPage,
+    conflict, moduleResetError, retryModuleReset, abandonModuleReset, register, reportDraft, setLocalEntry, footerLeading]);
   return <PageTransactionContext.Provider value={transaction}>{children}</PageTransactionContext.Provider>;
 }
 
@@ -955,6 +991,8 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
  * pause and gives a superseding gesture a chance to supersede the draft
  * before it is submitted. */
 function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
+  const latest = useRef(unit);
+  latest.current = unit;
   useEffect(() => {
     if (!enabled || !unit.draft || unit.busy || unit.awaitingObservation) return;
     // A draft pending review (external divergence or a failed commit) waits
@@ -967,9 +1005,9 @@ function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
     // The attempt record lives in the transaction actor, not this component,
     // so a remounted editor sees the same fact.
     if (unit.attempted) return;
-    const timer = setTimeout(() => unit.commit(unit.displayed), 400);
+    const timer = setTimeout(() => latest.current.commit(latest.current.displayed), 400);
     return () => clearTimeout(timer);
-  }, [enabled, unit.draft, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.attempted, unit.displayed, unit]);
+  }, [enabled, unit.draft, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.attempted, unit.displayed]);
 }
 
 /** One native semantic unit's editing surface, with a plain value contract.

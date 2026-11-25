@@ -683,7 +683,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e3d1db1dfdd98b11bf79af8593021aa5d8318f9e9412e8be316569ae44459664"
+      "local_sha256": "9304f6d742d79d653715315d4c352fa6a9ef65e0f99860d67b9466daa3dfef8e"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -795,7 +795,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ca0c07cbb1b1bf7ec6075e340060ec39a849f6956917a068838f12f19f31092b"
+      "local_sha256": "1a39ac953bf9a92d55428b2760662a8c29a44c11753a5a0857e0754d5c209d5b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2394,7 +2394,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3117590edfa240129da3c408b343785c2992a27964a5d31b8e6ac54c345ed083",
+      "local_sha256": "f863bd9009fd2033631a100900fdbbc221eaf3a70443607da968eeb872291b99",
       "classification": "B",
       "additional_sources": [
         {
@@ -2545,7 +2545,7 @@
         "@/components/ui/tooltip",
         "react"
       ],
-      "local_sha256": "49a080e3005dca294ab14c12b7351606705613cccbdab3f1337819ddaebc1c85",
+      "local_sha256": "05f537e1393776c304a72cbca1898f4091a009f0beada90fab7e4d46545837ca",
       "classification": "A",
       "additional_sources": [
         {
@@ -4055,7 +4055,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "4712052828fd7ff6c16fefd7ef9b3f2aa3ac25a3ad50b4fd0b28e12448649dcf"
+      "local_sha256": "01664eefcb92b9a8b061c480e6aa075e12f2d02a5893c8a9776d0613d4ae65ab"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

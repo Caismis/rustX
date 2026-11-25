@@ -124,8 +124,8 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     path={deleting.path} close={() => setDeleting(undefined)} remove={async () => {
       try {
         await deleting.remove();
-      } finally {
         setFocus(undefined);
+      } finally {
         onRefresh();
       }
     }} />;

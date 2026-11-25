@@ -71,7 +71,7 @@ request_params = '{}'
     const backToList = settings.getByRole('button', {name:'Model Settings', exact:true});
     await leaveRetainedDetail(backToList, settings.getByRole('button', {name:'OpenAI →',exact:true}));
     await settings.getByRole('button', {name:'OpenAI →',exact:true}).click();
-    await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).click();
+    await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = page.getByRole('dialog', {name:'Model OpenAI/gpt-6-luna',exact:true});
     await modal.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     const params = modal.getByRole('textbox', {name:'API parameters (JSON)',exact:true});
@@ -91,7 +91,7 @@ request_params = '{}'
     expect(readFileSync(fixture.settings, 'utf8')).toContain('"reasoning":{"effort":"low"}');
     await captureEvidence(modal, `responses-profile-${width}`);
     await modal.getByRole('button', {name:'Cancel',exact:true}).click();
-    await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).click();
+    await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     await modal.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     await expect(limit).toHaveValue('2048');
     await expect(params).toHaveText(JSON.stringify(low,null,2), {useInnerText:true});

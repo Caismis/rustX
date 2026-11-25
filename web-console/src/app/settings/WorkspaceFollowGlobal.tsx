@@ -82,6 +82,7 @@ export function WorkspaceFollowGlobal({
   // so a remount with one pending starts back on the pending-following view.
   const stagedReset = scope === 'workspace' && (page?.moduleReset?.length ?? 0) > 0;
   const [customized, setCustomized] = useState((hasOverrides || hasUnitDraft) && !stagedReset);
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const prevContext = useRef({ actor, hasOverrides });
 
   useEffect(() => {
@@ -137,16 +138,11 @@ export function WorkspaceFollowGlobal({
               checked={following}
               onChange={nextFollow => {
                 if (nextFollow) {
+                  if ((hasOverrides && authoredRemovals.length > 0) || hasUnitDraft) { setConfirmingReset(true); return; }
                   page?.discardDrafts();
                   setCustomized(false);
-                  if (hasOverrides && authoredRemovals.length > 0) {
-                    // Following global again clears this scope's authored
-                    // overrides; like every scalar gesture it commits at once —
-                    // the staged mutations land through savePage in this tick.
-                    setModuleReset?.(authoredRemovals, () => setCustomized(true));
-                    page?.savePage();
-                  }
                 } else {
+                  setConfirmingReset(false);
                   setModuleReset?.(undefined);
                   setCustomized(true);
                 }
@@ -154,6 +150,25 @@ export function WorkspaceFollowGlobal({
             />
           }
         />
+        {confirmingReset && (
+          <SettingsRow
+            label={tx('settings:workspace.follow-global.confirm-reset')}
+            control={
+              <>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmingReset(false)}>{tx('settings:aria.cancel')}</Button>
+                <Button variant="danger" size="sm" onClick={() => {
+                  setConfirmingReset(false);
+                  page?.discardDrafts();
+                  setCustomized(false);
+                  if (hasOverrides && authoredRemovals.length > 0) {
+                    setModuleReset?.(authoredRemovals, () => setCustomized(true));
+                    page?.savePage();
+                  }
+                }}>{tx('settings:workspace.follow-global.confirm-clear')}</Button>
+              </>
+            }
+          />
+        )}
         {conflict && (
           <SettingsRow
             label={tx('settings:unsaved.save-conflict')}

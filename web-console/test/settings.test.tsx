@@ -327,6 +327,7 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
     fireEvent.click(screen.getByRole('switch', { name: 'read' }));
   } else {
     followGlobalSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear workspace overrides' }));
   }
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
@@ -679,7 +680,7 @@ it('WorkspaceFollowGlobal hides clean module controls, reveals without writes on
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
 });
 
-it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially on the toggle itself', async () => {
+it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially after explicit Save', async () => {
   let rev = 1;
   const subject = cfg3Client(async (op, source) => {
     if (op.method !== 'configuration/sourceWrite' || op.params.mutation.kind !== 'config') return;
@@ -700,8 +701,9 @@ it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially on th
   expect(screen.getByRole('form', { name: 'Approval mode' })).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
 
-  // Flipping ON commits both removals sequentially via exact CAS and settles ON.
+  // Flipping ON stages both removals; explicit Save commits them sequentially via exact CAS and settles ON.
   followGlobalSettings();
+  fireEvent.click(screen.getByRole('button', { name: 'Clear workspace overrides' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   const writes = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').map(([op]) => op);
   expect(writes[0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'approval', authored: null } } } });

@@ -30,8 +30,8 @@ export function Tooltip({ label, shortcutKeys, side = 'right', delayMs = 0, disa
   maxWidth?: number
   children: ReactElement
 }) {
-  const resolvedLabel = typeof label === 'function' ? label() : label
   const [open, setOpen] = useState(false)
+  const resolvedLabel = open ? (typeof label === 'function' ? label() : label) : typeof label === 'string' ? label : undefined
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancelOpenTimer = () => {
     if (openTimer.current !== null) clearTimeout(openTimer.current)

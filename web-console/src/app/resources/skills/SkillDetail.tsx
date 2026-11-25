@@ -134,7 +134,11 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
     setReading(true); setFailure('');
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const upload = { media_type: mediaType, data_base64: btoa(String.fromCharCode(...bytes)) };
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+      }
+      const upload = { media_type: mediaType, data_base64: btoa(binary) };
       const image = new Image();
       image.src = skillAssetUrl(upload);
       await image.decode();
@@ -153,7 +157,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
   // batch done before this write answered.
   useEffect(() => {
     const editable = !!write && !!display?.revision && !!draftBase.current;
-    page?.setLocal(editable && changed,
+    return page?.setLocal(editable && changed,
       editable ? () => {
         if (saving) return Promise.resolve();
         setSaving(true);

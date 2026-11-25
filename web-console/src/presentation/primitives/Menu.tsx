@@ -64,14 +64,10 @@ function takesFocus(element: HTMLElement | null | undefined, preventScroll = fal
 
 
 function NativeMenuButton({ ref, ...props }: ComponentProps<'button'> & { ref?: Ref<HTMLButtonElement> }) {
-  const localRef = useRef<HTMLButtonElement | null>(null)
-  useEffect(() => {
-    if (localRef.current !== null) localRef.current.disabled = props['aria-disabled'] === true || props['aria-disabled'] === 'true'
-  })
   return <button
     {...props}
+    disabled={props.disabled || props['aria-disabled'] === true || props['aria-disabled'] === 'true'}
     ref={node => {
-      localRef.current = node
       if (typeof ref === 'function') ref(node)
       else if (ref !== null && ref !== undefined) ref.current = node
     }}

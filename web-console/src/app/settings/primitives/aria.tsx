@@ -1,5 +1,5 @@
 import { useTranslation } from '../../../locale/react';
-import { useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
 import {
   Collapsible,
@@ -39,8 +39,9 @@ export function Choice<T extends string>({ label, value, onChange, options, disa
   hideLabel?: boolean;
 }) {
   const disabledSet = new Set(disabledKeys ?? []);
+  const labelId = useId();
   return <div className={css.select}>
-    {!hideLabel && <span id={`choice-${label}`}>{label}</span>}
+    {!hideLabel && <span id={labelId}>{label}</span>}
     <CossSelect
       items={options.map(([optionValue, optionLabel]) => ({ value: optionValue, label: optionLabel }))}
       value={value}
@@ -167,7 +168,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
       {description}
       <div className={css.confirmActions}>
         <Button type="button" ref={cancel} variant="outline" onClick={() => setOpen(false)}>{tx('settings:aria.cancel')}</Button>
-        <Button type="button" variant="primary"
+        <Button type="button" variant={destructive ? 'danger' : 'primary'}
           onClick={() => { closing.current = 'confirmed'; setOpen(false); onConfirm(); }}>{confirm}</Button>
       </div>
     </DialogSurface>

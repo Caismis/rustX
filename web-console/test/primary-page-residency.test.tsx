@@ -282,7 +282,7 @@ it('authority replacement cannot activate a model dialog owned by the hidden Set
   await navigate('Settings');
   await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
   await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'transport →' })));
-  await act(async () => fireEvent.click(await screen.findByRole('listitem', { name: 'main' })));
+  await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Edit Model main' })));
   const dialog = await screen.findByRole('dialog', { name: 'Model main' });
   await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
   await act(async () => { server.authorityId = 'replacement'; await server.connect(); });
@@ -312,7 +312,7 @@ it('hiding a model dialog retains its form while its admitted exact-CAS write se
   await navigate('Settings');
   await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
   await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'transport →' })));
-  await act(async () => fireEvent.click(await screen.findByRole('listitem', { name: 'main' })));
+  await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Edit Model main' })));
   const field = screen.getByLabelText('Context window') as HTMLInputElement;
   fireEvent.change(field, { target: { value: '256000' } });
   server.held.add('configuration/sourceWrite');

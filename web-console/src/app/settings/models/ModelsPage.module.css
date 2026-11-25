@@ -44,12 +44,13 @@
 .modelsHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 4px; padding-top: 12px; border-top: .5px solid var(--dsw-alias-border-l2); }
 .section .modelsHeading h4 { margin: 0; }
 .modelList { min-width: 0; outline: none; }
-.modelRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px; min-height: 40px; cursor: pointer; outline: none; }
+.modelRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px; min-height: 40px; outline: none; }
 .modelRow[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
 .modelRow[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
 .modelRow + .modelRow { border-top: .5px solid var(--dsw-alias-border-l2); }
 .modelRow [role=alert] { flex-basis: 100%; }
-.modelIdentity { display: flex; flex: 1 1 152px; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.modelIdentity { display: flex; flex: 1 1 152px; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; border: 0; border-radius: var(--dsw-radius-sm); padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.modelIdentity:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .section .modelName { min-width: 0; max-width: 100%; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .modelRow[data-hidden=true] .modelName { color: var(--dsw-alias-label-secondary); }
 .modelBadges { display: flex; align-items: center; gap: 4px; }

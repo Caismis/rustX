@@ -298,7 +298,7 @@ function MalformedPage({ title, config, bodyDisabled = false }: {
   config: { state: 'malformed'; path: string; diagnostic?: string; revision: string } | { state: 'structured' } | { state: 'unavailable' };
 }) {
   if (config.state !== 'malformed') return null;
-  return <SettingsPageShell title={title} bodyDisabled={bodyDisabled} footer={null}>
+  return <SettingsPageShell title={title} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} bodyDisabled={bodyDisabled} footer={null}>
     <div className={css.page}>
       <MalformedNotice config={config} />
       <RepairSourceForm revision={config.revision} />

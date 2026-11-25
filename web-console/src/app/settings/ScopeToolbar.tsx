@@ -68,7 +68,7 @@ export function ScopeToolbar({ target, host, onSelect, userLabel, disabled = fal
   };
   return <div className={css.scopeBar}>
     <div className={css.scopeSegment} role="group" aria-label={tx('settings:catalog.scope')}>
-      <button type="button" aria-pressed={workspaceActive} disabled={disabled}
+      <button type="button" aria-pressed={workspaceActive} disabled={disabled || !workspaceActive && workspaces.length === 0}
         onClick={() => { const next = activeWorkspace ?? workspaces[0]; if (!workspaceActive && next) onSelect(workspaceSettingsTarget(next.id, next.displayName)); }}>
         {tx('settings:catalog.workspaces')}
       </button>

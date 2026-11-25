@@ -96,9 +96,6 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
             Some(serde_json::json!({"answer":"native durable return"}))
         );
         assert!(!view.capacity_blocked && !view.deletion_blocked);
-        // The settled run's committed return may already have advanced the node to a new
-        // conversation head; the schedule id bound to the superseded conversation then
-        // resolves to NotFound. Both outcomes prove readmission cannot execute the run twice.
         let retry = f
             .manager
             .schedule_operation(
@@ -111,13 +108,12 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
             )
             .await
             .unwrap();
-        match retry {
-            ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current }) => {
-                assert_eq!(current, snapshot);
-            }
-            ScheduleOperationResult::Admission(ScheduleAdmission::NotFound) => {}
-            other => panic!("expected readmission to be impossible, got {other:?}"),
-        }
+        let ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current }) =
+            retry
+        else {
+            panic!("expected the existing admission on retry, got {retry:?}");
+        };
+        assert_eq!(current, snapshot);
         let store = runtime.tool_runtime().durable_store();
         let events = store.read_events(None, 256).unwrap().events;
         assert_eq!(

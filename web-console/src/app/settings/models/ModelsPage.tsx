@@ -148,7 +148,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
       <SettingsGroup title={tx('settings:models.list')}
         action={<Button size="sm" variant="outline" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
           disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>}>
-        {selectedModels.length ? <div className={cards.modelList}>
+        {selectedModels.length ? <div role="list" className={cards.modelList}>
           {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
             scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
             onOpen={() => focusWithGuard({ kind: 'model', id: entry.id, provider: selected! })}/>)}
@@ -242,14 +242,14 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
   const title = tx('settings:models-page.model-value', { p0: entry.id });
   const removeLabel = tx(restoresGlobal ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: title });
   const removeDisabled = !unit.admitted || unit.busy || unit.awaitingObservation;
-  return <div role="listitem" aria-label={entry.id} onClick={onOpen} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(); } }} tabIndex={0} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
-    <div className={cards.modelIdentity}>
+  return <div role="listitem" aria-label={entry.id} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
+    <button type="button" className={cards.modelIdentity} aria-label={tx('settings:models.edit-model-value', { p0: entry.id })} onClick={onOpen}>
       <span className={cards.modelName} title={model.id}>{model.id}</span>
-      <div className={cards.modelBadges}>
+      <span className={cards.modelBadges}>
         <span title={tx('settings:models.context-tokens', { p0: model.context_window })}><Badge>{compactContext.format(context)}</Badge></span>
         {model.capabilities.input_modalities.includes('image') && <Badge>{tx('settings:models.vision')}</Badge>}
-      </div>
-    </div>
+      </span>
+    </button>
     <div className={cards.modelActions}
       onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}>
