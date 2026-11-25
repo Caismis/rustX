@@ -60,7 +60,7 @@ function isLabel(entry: MenuEntry): entry is MenuLabel {
 }
 
 function takesFocus(element: HTMLElement | null | undefined, preventScroll = false): boolean {
-  if (!element?.isConnected || element.matches(':disabled, [aria-disabled="true"]')) return false
+  if (!element?.isConnected || element.matches(':disabled')) return false
   element.focus({ preventScroll })
   return document.activeElement === element
 }
@@ -329,6 +329,7 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
           className={clsx(css.item, item.danger && css.danger, selected(item.id) && (selection === 'fill' ? css.selectedFill : css.selected))}
           variant={item.danger ? 'destructive' : 'default'}
           closeOnClick={false}
+          data-menu-item-id={item.id}
           aria-current={selected(item.id) ? 'true' : undefined}
           {...control}
         >
@@ -357,6 +358,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
       className={clsx(css.item, entry.danger && css.danger, selected(entry.id) && (selection === 'fill' ? css.selectedFill : css.selected))}
       variant={entry.danger ? 'destructive' : 'default'}
       closeOnClick={false}
+      data-menu-item-id={entry.id}
       data-selected={selection === 'fill' && selected(entry.id) || undefined}
       aria-current={selected(entry.id) ? 'true' : undefined}
       onPointerEnter={() => ownership.enterRow(entry.id)}
@@ -466,7 +468,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
     return { getBoundingClientRect: () => getAnchorRect() ?? rootRef.current?.getBoundingClientRect() ?? new DOMRect() }
   }, [getAnchorRect])
 
-  const focusable = (element: HTMLElement | null | undefined) => element?.isConnected === true && !element.matches(':disabled, [aria-disabled="true"]')
+  const focusable = (element: HTMLElement | null | undefined) => element?.isConnected === true && !element.matches(':disabled')
   const focusTarget = () => {
     const root = rootRef.current
     if (!root) return null

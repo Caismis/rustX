@@ -1540,7 +1540,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "bba12580bbb9ebace3cb5f5773669e50e7a5cbd5302d000aa9e5978959255a8d",
+      "local_sha256": "b44c4cf787f620bbf134d2f58b16afdf6623a30515418ac48712908a7a5d3fd2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -2397,7 +2397,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e286d27c2f3a4e6cde258d89f231157d7148670ef7c0462def701e244239bba6",
+      "local_sha256": "d01cc0f0c1a81f9a42b6d5b52ab5ae5e18f69578fa402507dd3b9083dd752179",
       "classification": "B",
       "additional_sources": [
         {
@@ -5133,7 +5133,7 @@
         "@/components/ui/popover",
         "react"
       ],
-      "local_sha256": "9376140496ed28c44f8b4ce055d4a73a66c0d4941a12d6e5c845217132f14dea"
+      "local_sha256": "299cd41b7e26791474d95be39c71e89f8a8bb1d54fc4f2ab8c9ca25560e1b2d6"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
@@ -5193,7 +5193,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "c02aac1695e8f1233228d0822a8ed33333cae88a5293891540f341971ce4a38e"
+      "local_sha256": "e874eadaad5e6c19bd692dd854382b4ec74b5e6a78c91c1b7cc5bd735a13534d"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/measure.ts",
