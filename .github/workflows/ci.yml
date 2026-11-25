@@ -70,7 +70,9 @@ jobs:
     name: Installed release conformance (macOS)
     if: github.event_name == 'workflow_dispatch' && inputs.installed_macos
     runs-on: macos-15
-    timeout-minutes: 90
+    # The native checks alone took over an hour on a fresh runner. Keep the
+    # independent optimized builds and installed cases within the same job.
+    timeout-minutes: 180
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"

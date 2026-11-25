@@ -18,6 +18,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = ("rustx", "workflow-renderer")
 CLIENT = ("rustx-execution-client", "bash-supervisor", "interactive-supervisor")
+PYTHON_GUARD = ("python", "python3")
 PRODUCTS = ("rustx-server", "rustx-client", "rustx")
 UI_PROJECTS = ("dev", "tui", "protocol/app-server", "web-console")
 
@@ -180,6 +181,9 @@ def package(product: str, target: Path, server: Path, client: Path, revision: st
             for binary in CLIENT:
                 installed = "rustx-client" if binary == "rustx-execution-client" and product == "rustx-client" else binary
                 copy(client / "release" / binary, directory / "bin" / installed)
+            for script in PYTHON_GUARD:
+                copy(ROOT / "crates/execution-client/assets/python-guard" / script,
+                     directory / "bin/python-guard" / script)
             copy(client / "dependency-audit/rustx-execution-client.txt", directory / "share/rustx-client-dependencies.txt")
         if product == "rustx":
             install_ui(Path(scratch) / "ui-source", directory / "share/rustx", revision)

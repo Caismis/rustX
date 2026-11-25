@@ -39,8 +39,8 @@ def main() -> None:
     if platform.system() != "Darwin":
         parser.error("this verification requires a native macOS runner")
     directory = args.out.resolve()
-    run("cargo", "test", "--lib", "--all-features", "--locked", "--no-run")
     run("cargo", "clippy", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings")
+    run("cargo", "test", "--lib", "--all-features", "--locked", "--no-run")
     harness = native_harness("rustx", "process")
     client_harness = native_harness("rustx-execution-client", "bootstrap")
     run("python3", "release/package.py", "all", "--out", directory)

@@ -29,6 +29,7 @@ BINARIES = {
     "rustx-client": {"rustx-client", "bash-supervisor", "interactive-supervisor"},
     "rustx": {"rustx", "rustx-execution-client", "workflow-renderer", "bash-supervisor", "interactive-supervisor"},
 }
+PYTHON_GUARD = {"python", "python3"}
 PROCESS_CASES = (
     "standalone_server_reads_cold_sessions_without_workspace_or_helpers",
     "app_server_concurrent_sessions_finish_across_external_disconnect",
@@ -116,8 +117,14 @@ def extract(archive: Path, products: Path) -> dict:
     actual = {path.relative_to(directory).as_posix() for path in directory.rglob("*")
               if path.is_symlink() or path.is_file()}
     require(actual == expected, "Manifest does not enumerate the complete installation")
-    require({path.name for path in (directory / "bin").iterdir()} == BINARIES[product],
-            f"Unexpected executables for {product}")
+    helpers = {"python-guard"} if product != "rustx-server" else set()
+    require({path.name for path in (directory / "bin").iterdir()} == BINARIES[product] | helpers,
+            f"Unexpected bin entries for {product}")
+    if helpers:
+        guard = directory / "bin/python-guard"
+        require(guard.is_dir() and not guard.is_symlink()
+                and {script.name for script in guard.iterdir()} == PYTHON_GUARD,
+                f"Incomplete Python guard for {product}")
     directory.rename(products / product)
     return manifest
 
@@ -127,6 +134,16 @@ def cli(binary: Path, args: list[str], cwd: Path, environment: dict) -> str:
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
     require(result.returncode == 0, f"{binary.name} {args[0]} failed:\n{result.stdout}")
     return result.stdout
+
+
+def python_guard(product_binary: Path, cwd: Path, environment: dict) -> None:
+    diagnostic = "Installed Workspace Python is unavailable"
+    for name in sorted(PYTHON_GUARD):
+        script = product_binary.parent / "python-guard" / name
+        result = subprocess.run([script], cwd=cwd, timeout=5, capture_output=True, text=True,
+                                env={**environment, "RUSTX_PYTHON_GUARD_MESSAGE": diagnostic})
+        require(result.returncode == 127 and not result.stdout and result.stderr.strip() == diagnostic,
+                f"Installed Python guard failed: {script}")
 
 
 def tui(binary: Path, cwd: Path, environment: dict, bootstrap: dict, workspace: Path) -> None:
@@ -338,6 +355,8 @@ def main() -> None:
                 "Client release or protocol revision disagrees with manifest")
         require(cli(server, ["--version"], cwd, environment).strip() == f"rustX {manifests[0]['version']}",
                 "Server release version disagrees with manifest")
+        python_guard(client, cwd, environment)
+        python_guard(bundle, cwd, environment)
         require(shutil.which("node") is not None, "Node.js 24 is required for installed Web and TUI proofs")
         environment["PATH"] = os.environ["PATH"]
         environment["TEST_KEY"] = "fake-provider-unused"

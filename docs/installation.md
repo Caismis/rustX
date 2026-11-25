@@ -24,7 +24,7 @@ intact when adding its `bin` to `PATH` or creating a symlink into it.
 | Archive | Entry point | Other executables |
 | --- | --- | --- |
 | `rustx-server` | `bin/rustx-server` | `bin/workflow-renderer` |
-| `rustx-client` | `bin/rustx-client` | `bin/bash-supervisor`, `bin/interactive-supervisor` |
+| `rustx-client` | `bin/rustx-client` | `bin/bash-supervisor`, `bin/interactive-supervisor`, `bin/python-guard/` |
 | `rustx` | `bin/rustx` | All of the above companions, with the local Client named `bin/rustx-execution-client` |
 
 The Server-only layout can serve committed history, Server-side tools and
@@ -149,7 +149,7 @@ For the native macOS release check, run the same packager and verifier through
 `python3 release/verify_macos.py --out /absolute/path/to/packages`. The
 local run needs the Fake Provider fixture initialized with
 `uv sync --frozen` in `test-support/fake-provider`. The verifier
-compiles the native lib test target, runs strict Clippy, builds the
+checks strict Clippy, compiles the native lib test target, builds the
 three archives, and runs the installed process and Client reattachment
 cases. On GitHub, dispatch
 `CI` with `installed_macos=true` for the desired release branch. This job
