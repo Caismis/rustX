@@ -924,7 +924,7 @@ impl AttemptCompletion {
             expected.runtime_incarnation,
             self.target.runtime_incarnation
         );
-        let receipt = self.runtime.child_attempt_settlement(self.after).await;
+        let receipt = self.runtime.attempt_settlement(self.after).await;
         diagnostic.receipt_ordinal = Some(receipt.ordinal);
         diagnostic.stage = "display publication";
         assert_eq!(receipt.ordinal, self.after + 1, "exact next native handoff");

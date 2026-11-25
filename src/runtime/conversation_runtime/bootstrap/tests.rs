@@ -3,6 +3,7 @@ use crate::durable::InboxStore;
 use crate::durable::JournalStore;
 use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
+use crate::runtime::conversation_runtime::ConversationRole;
 use crate::runtime::conversation_runtime::test_support::*;
 
 fn has_permission_reminder(snapshot: &crate::model::RequestSnapshot) -> bool {
@@ -39,7 +40,14 @@ async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority
             .permission_task_message
             .is_none()
     );
-    assert!(runtime.inner.lock_state().permission_task_message.is_none());
+    assert!(
+        runtime
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .is_none()
+    );
     runtime.shutdown().await.unwrap();
     drop(runtime);
     let (reopened, _) =
@@ -48,6 +56,7 @@ async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority
         reopened
             .inner
             .lock_state()
+            .config
             .permission_task_message
             .is_none()
     );
@@ -169,6 +178,7 @@ async fn permission_task_commits_only_when_the_primary_request_starts() {
                         runtime
                             .inner
                             .lock_state()
+                            .foreground
                             .recovered_permission_task_message
                             .as_ref(),
                         Some(&candidate)
@@ -199,7 +209,12 @@ async fn permission_task_commits_only_when_the_primary_request_starts() {
                 pre_start.release();
                 await_settled_ledger(&runtime, settled_count).await;
                 assert_eq!(
-                    runtime.inner.lock_state().permission_task_message.as_ref(),
+                    runtime
+                        .inner
+                        .lock_state()
+                        .config
+                        .permission_task_message
+                        .as_ref(),
                     Some(&established.message_id),
                     "pre-start cancellation cannot commit the prepared task"
                 );
@@ -219,7 +234,12 @@ async fn permission_task_commits_only_when_the_primary_request_starts() {
                     (runtime, settled_count + 1)
                 };
                 assert_eq!(
-                    runtime.inner.lock_state().permission_task_message.as_ref(),
+                    runtime
+                        .inner
+                        .lock_state()
+                        .config
+                        .permission_task_message
+                        .as_ref(),
                     Some(&established.message_id)
                 );
                 let capture = Arc::new(PermissionTaskCapture::default());
@@ -327,17 +347,25 @@ async fn permission_task_recovery_uses_the_exact_unanswered_adoption() {
             },
         )
         .await;
-        assert!(runtime.inner.lock_state().permission_task_message.is_none());
+        assert!(
+            runtime
+                .inner
+                .lock_state()
+                .config
+                .permission_task_message
+                .is_none()
+        );
         assert_eq!(
             runtime
                 .inner
                 .lock_state()
+                .foreground
                 .recovered_permission_task_message
                 .as_ref(),
             Some(&task_id)
         );
         runtime.activate();
-        runtime.child_attempt_settlement(0).await;
+        runtime.attempt_settlement(0).await;
         let snapshots = request_snapshots(&runtime.request_history());
         assert_eq!(snapshots.len(), 1);
         assert_eq!(
@@ -409,7 +437,12 @@ async fn permission_task_recovery_keeps_the_task_across_an_adopted_runtime_notic
     )
     .await;
     assert_eq!(
-        reopened.inner.lock_state().permission_task_message.as_ref(),
+        reopened
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .as_ref(),
         Some(&human.message_id)
     );
     reopened.activate();
@@ -534,7 +567,12 @@ async fn permission_task_recovery_preserves_an_established_task_across_agent_ado
         )
         .await;
         assert_eq!(
-            reopened.inner.lock_state().permission_task_message.as_ref(),
+            reopened
+                .inner
+                .lock_state()
+                .config
+                .permission_task_message
+                .as_ref(),
             Some(&established.message_id)
         );
         reopened.activate();
@@ -576,7 +614,12 @@ async fn permission_task_pointer_survives_reopen_and_is_replaced_by_new_human_in
         .unwrap();
     assert_eq!(delegated_id, delegated.message_id);
     assert_eq!(
-        runtime.inner.lock_state().permission_task_message.as_ref(),
+        runtime
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .as_ref(),
         Some(&delegated_id)
     );
     runtime.shutdown().await.unwrap();
@@ -593,7 +636,12 @@ async fn permission_task_pointer_survives_reopen_and_is_replaced_by_new_human_in
     )
     .await;
     assert_eq!(
-        reopened.inner.lock_state().permission_task_message.as_ref(),
+        reopened
+            .inner
+            .lock_state()
+            .config
+            .permission_task_message
+            .as_ref(),
         Some(&delegated_id)
     );
     reopened.activate();
@@ -670,7 +718,7 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
             config.approval_mode = ApprovalMode::FullAccess;
             let configuration = crate::runtime::resources::RuntimeConfiguration {
                 config: Arc::new(config),
-                models: state.model.registry().unwrap().clone(),
+                models: state.config.model.registry().unwrap().clone(),
                 resource_definitions: Vec::new(),
                 resource_diagnostics: Vec::new(),
                 authored: crate::local_runtime::configuration::generation::AuthoredConfiguration {
@@ -681,8 +729,9 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
                     provenance: std::collections::BTreeMap::new(),
                 },
             };
-            state.resources = Arc::new(
+            state.config.resources = Arc::new(
                 state
+                    .config
                     .resources
                     .as_ref()
                     .clone()
@@ -744,14 +793,22 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
                 );
                 assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
                 assert_eq!(
-                    runtime.inner.lock_state().last_permission_reminder_mode,
+                    runtime
+                        .inner
+                        .lock_state()
+                        .config
+                        .last_permission_reminder_mode,
                     Some(ApprovalMode::FullAccess),
                     "a cancelled mode B request cannot erase mode A consumption"
                 );
             }
         }
         assert_eq!(
-            runtime.inner.lock_state().last_permission_reminder_mode,
+            runtime
+                .inner
+                .lock_state()
+                .config
+                .last_permission_reminder_mode,
             Some(ApprovalMode::FullAccess)
         );
         let (runtime, _model, after) = if reopen {
@@ -851,7 +908,11 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
         );
         assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
         assert_eq!(
-            runtime.inner.lock_state().last_permission_reminder_mode,
+            runtime
+                .inner
+                .lock_state()
+                .config
+                .last_permission_reminder_mode,
             None
         );
         let (runtime, _model, after) = if reopen {
@@ -874,7 +935,11 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
             )
             .await;
             assert_eq!(
-                runtime.inner.lock_state().last_permission_reminder_mode,
+                runtime
+                    .inner
+                    .lock_state()
+                    .config
+                    .last_permission_reminder_mode,
                 None
             );
             runtime.activate();
@@ -947,7 +1012,11 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
             )
             .await;
             assert_eq!(
-                reopened.inner.lock_state().last_permission_reminder_mode,
+                reopened
+                    .inner
+                    .lock_state()
+                    .config
+                    .last_permission_reminder_mode,
                 if compact {
                     None
                 } else {
@@ -1041,6 +1110,72 @@ async fn construction_rejects_a_registry_for_another_parent_agent() {
         ),
         "a registry for another parent agent is rejected: {error}"
     );
+}
+
+/// A child-scoped runtime never owns a subagent registry — the registry
+/// is a parent-plane authority. The `role + subagents` combination is
+/// rejected at construction before any claim (docs/invariants.md,
+/// Issue #606).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn construction_rejects_a_child_role_holding_a_subagent_registry() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let store = Arc::new(
+        crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
+        ))
+        .expect("in-memory store"),
+    );
+    for role in [
+        ConversationRole::WorkflowAgentRun { output: None },
+        ConversationRole::WorkflowAgentRun {
+            output: Some(Arc::new(
+                crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                    "type": "object"
+                }))
+                .expect("test schema compiles"),
+            )),
+        },
+    ] {
+        let (_subagents, mut config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
+            store.clone(),
+            &ConversationId::new("conv_efeaf863-95c1-73d9-8623-5a766b1967be"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        config.role = role;
+        let error = ConversationRuntime::new(config)
+            .expect_err("workflow child role + registry is rejected");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::SubagentOwnershipMismatch { .. }
+            ),
+            "a WorkflowAgentRun role holding a registry is rejected: {error}"
+        );
+    }
+    // A `SubagentChild` keeps its registry: a middle runtime is both the
+    // child of its parent and the parent of deeper children (nested
+    // delegation), so construction must accept the combination.
+    let (_subagents, mut config) = subagent_runtime_config_with_registry(
+        &dir,
+        "conv_efeaf863-95c1-73d9-8623-5a766b1967be",
+        store.clone(),
+        &ConversationId::new("conv_efeaf863-95c1-73d9-8623-5a766b1967be"),
+        &AgentId::new("agent-a"),
+        &AgentId::new("agent-a"),
+    )
+    .await;
+    config.role = ConversationRole::SubagentChild;
+    let runtime =
+        ConversationRuntime::new(config).expect("a SubagentChild holding a registry is accepted");
+    runtime.activate();
+    runtime
+        .shutdown()
+        .await
+        .expect("the accepted nested-delegation runtime shuts down");
 }
 
 /// A registry that already owns a committed child record can be
@@ -1659,7 +1794,12 @@ async fn preactivation_mcp_settlement_failure_is_replayed_and_fences_activation(
     assert!(model.requests().is_empty(), "no attempt crossed activation");
 
     assert!(
-        runtime.settle_child_physical_lifetime(false).await.is_err(),
+        runtime
+            .shutdown_outcome()
+            .await
+            .expect("drain outcome")
+            .physical
+            .is_err(),
         "MCP containment failure must remain physically unproven"
     );
     let shutdown = runtime.shutdown().await;
@@ -2054,7 +2194,7 @@ fn construction_validates_ownership() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect_err("mismatched ownership is rejected");
     assert!(matches!(
@@ -2139,7 +2279,7 @@ fn construction_outside_execution_runtime_fails_typed() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect_err("construction outside Tokio is rejected");
     assert!(matches!(
@@ -2194,7 +2334,7 @@ async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() 
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
-                workflow_output: None,
+                role: ConversationRole::Root,
             }
         }
     }
@@ -2311,7 +2451,7 @@ async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() 
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
-                workflow_output: None,
+                role: ConversationRole::Root,
             }
         }
     }
@@ -2524,7 +2664,7 @@ async fn complete_tool_group_is_recoverable_and_admits_normally() {
     let admission = runtime
         .submit_inbound(text_content("hello"))
         .expect("accepted after recovery");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert!(
         ledger
@@ -2638,7 +2778,7 @@ async fn recovered_pending_inbound_is_auto_admitted_with_zero_clients() {
 
     // Activation is the only trigger. Nothing submits, nothing attaches.
     runtime.activate();
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
 
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert_eq!(
@@ -2728,7 +2868,7 @@ async fn class_b_restart_continues_the_adopted_turn_without_duplicating_it() {
     );
 
     runtime.activate();
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
 
     let ledger = runtime.coordinator_ledger().expect("settled");
     assert_eq!(
@@ -3000,7 +3140,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
     runtime
         .submit_inbound(text_content("a new turn"))
         .expect("accepted after recovery");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     assert_eq!(
         model.requests().len(),
         1,
@@ -3141,7 +3281,7 @@ async fn class_e_restart_issues_no_replacement_request() {
     runtime
         .submit_inbound(text_content("a new turn"))
         .expect("accepted after recovery");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     assert_eq!(
         model.requests().len(),
         1,
@@ -3204,7 +3344,7 @@ async fn a_restart_allocates_an_attempt_id_past_durable_history() {
     runtime
         .submit_inbound(text_content("after restart"))
         .expect("accepted");
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
 
     // The durable Event Journal is the proof: the new attempt's start
     // fact carries an identity that never appeared before.

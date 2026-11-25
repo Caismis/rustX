@@ -1,8 +1,9 @@
+import { sameSessionFile } from '../shared/session-file-identity.ts';
 /** Node-only native seam. Never imported by browser code or its protocol log. */
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
 import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v81.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, PreviewCancelled, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && !/[\uD800-\uDFFF]/u.test(value);
@@ -129,4 +130,112 @@ export function readNativeSource(endpoint: string, credential: string, target: A
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) abort();
   });
+}
+
+/** One authenticated native connection binds canonical identity across pages. */
+export async function openNativeDeliveryPreview(endpoint: string, credential: string, read: DeliveryRead, roots: string[], signal: AbortSignal): Promise<import('../shared/file-preview.ts').FilePreviewOperation> {
+  validateDeliveryRead(read); signal.throwIfAborted();
+  const url = new URL(endpoint);
+  if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('Invalid Product Host native endpoint');
+  url.pathname = '/product-host/file-read';
+  const socket = new WebSocket(url, ['rustx.product-host.file-read.v5', `rustx-product-host.${credential}`]);
+  socket.binaryType = 'arraybuffer';
+  let sequence = 0, identity = '', dispatched = false, ended = false, closing: Promise<void> | undefined;
+  let metadata: { id: number; value: FileBytes & { length: number } } | undefined;
+  type Pending = { resolve(value: FileBytes): void; reject(error: unknown): void; range: { offset: number; length: number } };
+  const pending = new Map<number, Pending>();
+  let opened!: (value: { version: string; bytes: number; file: DeliveryBytes['file'] }) => void, failedOpen!: (error: unknown) => void;
+  const ready = new Promise<{ version: string; bytes: number; file: DeliveryBytes['file'] }>((yes, no) => { opened = yes; failedOpen = no; });
+  let retired!: () => void, failedRetirement!: (error: unknown) => void;
+  const retirement = new Promise<void>((yes, no) => { retired = yes; failedRetirement = no; });
+  void retirement.catch(() => {});
+  let terminal: unknown, validated = false, validationDispatched = false, openedWitness = false, validationWitness = false;
+  const abort = () => { terminal ??= new PreviewCancelled(); socket.close(1000); };
+  const invalid = () => { terminal ??= new Error('Invalid native preview response'); socket.close(1000); };
+  socket.addEventListener('open', () => {
+    if (signal.aborted) { abort(); return; }
+    const request = { target: read.target, source: { kind: 'session_file', locator: read.locator, delivery_index: read.delivery_index, agent_id: read.agent_id }, roots,
+      read: { kind: 'bytes', max_bytes: FILE_PREVIEW_LIMITS.fileBytes, range: { offset: 0, length: 1 } } };
+    const payload = JSON.stringify({ operation: 'open', request });
+    if (Buffer.byteLength(payload) > 1_048_576) { terminal = new Error('Product Host read coordinates exceed limit'); socket.close(1000); return; }
+    dispatched = true; socket.send(payload);
+  });
+  socket.addEventListener('message', event => {
+    try {
+      if (event.data instanceof ArrayBuffer) {
+        if (!metadata || event.data.byteLength !== metadata.value.length) return invalid();
+        const { id, value: { length: _length, ...value } } = metadata; metadata = undefined;
+        const request = pending.get(id); if (!request) return invalid(); pending.delete(id);
+        if (terminal || signal.aborted) request.reject(terminal ?? signal.reason);
+        else request.resolve({ ...value, data: new Uint8Array(event.data) });
+        return;
+      }
+      if (typeof event.data !== 'string' || Buffer.byteLength(event.data) > 1_048_576 || metadata) return invalid();
+      const response = JSON.parse(event.data);
+      if (response?.jsonrpc !== '2.0' || !Number.isSafeInteger(response.id)) return invalid();
+      if (response.error) {
+        if (response.result !== undefined || typeof response.error.code !== 'number' || typeof response.error.message !== 'string') return invalid();
+        terminal = new NativeFileReadError(response.error);
+        // A valid terminal failure acknowledges its exact physical request even
+        // if later socket retirement is lost. Other in-flight ids still wait.
+        if (response.id === 0 && !identity) { openedWitness = true; failedOpen(terminal); }
+        else if (response.id === 0 && validationDispatched) { validationWitness = true; failedRetirement(terminal); }
+        else if (response.id !== 0) {
+          const request = pending.get(response.id); if (!request) return invalid();
+          validationDispatched = false; // A failed page terminates the operation before its final probe.
+          pending.delete(response.id); request.reject(terminal);
+        }
+        socket.close(1000); return;
+      }
+      const value = response.result;
+      if (response.id === 0) {
+        if (!identity) {
+          if (typeof value?.identity !== 'string' || !/^[a-f0-9-]{36}$/.test(value.identity) || typeof value.version !== 'string' || !value.version || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || !value.file) return invalid();
+          identity = value.identity; openedWitness = true; opened(value);
+        } else if (closing && value?.closed === true && pending.size === 0) { validated = true; validationWitness = true; socket.close(1000); }
+        else invalid();
+        return;
+      }
+      const request = pending.get(response.id);
+      if (!request || value?.type !== 'session_file_bytes' || !Number.isSafeInteger(value.length) || value.length < 0 || value.length > request.range.length
+        || value.offset !== request.range.offset || typeof value.eof !== 'boolean' || value.lines !== undefined) return invalid();
+      metadata = { id: response.id, value };
+    } catch { invalid(); }
+  });
+  socket.addEventListener('error', () => { /* The close event supplies settlement evidence. */ });
+  socket.addEventListener('close', event => {
+    ended = true; signal.removeEventListener('abort', abort);
+    const physical = !openedWitness && dispatched || pending.size > 0 || validationDispatched && !validationWitness;
+    const error = !event.wasClean && physical ? new WorkspaceHostError('Native file settlement could not be confirmed', 'file_settlement_unknown')
+      : terminal ?? (!validated ? new Error('Native preview operation ended') : undefined);
+    failedOpen(error ?? new Error('Native preview operation ended'));
+    for (const request of pending.values()) request.reject(error ?? new Error('Native preview operation ended'));
+    pending.clear(); if (error) failedRetirement(error); else retired();
+  });
+  signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
+  const bound = await ready;
+  return {
+    ...bound,
+    read(range, active = signal) {
+      validateFileRead({ kind: 'bytes', range });
+      if (ended || closing || terminal || signal.aborted || active.aborted || pending.size >= 2) return Promise.reject(terminal ?? new Error('Obsolete or full preview operation'));
+      const id = ++sequence;
+      const canceled = () => abort(); active.addEventListener('abort', canceled, { once: true });
+      return new Promise<FileBytes>((resolve, reject) => {
+        pending.set(id, { range, resolve, reject });
+        socket.send(JSON.stringify({ operation: 'read', identity, id, range }));
+      }).then(value => {
+        if (value.version !== bound.version || value.bytes !== bound.bytes || !sameSessionFile((value as DeliveryBytes).file, bound.file)) throw new WorkspaceHostError('source_changed', 'source_changed');
+        return value;
+      }).finally(() => active.removeEventListener('abort', canceled));
+    },
+    close() {
+      return closing ??= (async () => {
+        if (!ended && !terminal && !signal.aborted) {
+          validationDispatched = true; socket.send(JSON.stringify({ operation: 'close', identity }));
+        }
+        await retirement;
+      })();
+    },
+  };
 }

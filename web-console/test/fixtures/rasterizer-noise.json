@@ -59759,6 +59759,24 @@
     ]
   },
   {
+    "reference": "trajectory-inspector-390-dark-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 FULL CI run 44655704367, job 136025214225, artifact 14595895111. The stable capture differs at one antialiased pixel on the rounded blue selection edge at (28,233). All other RGBA pixels and both dimensions match the reference.",
+    "referenceSha256": "7b48b9688315936d2851403c5b10c711e8f84b5123701b02a031ab3281f6a169",
+    "captureSha256": "2bd8d9dd193521c5f7147a9b7bd63f29b4018718ed7b6be8ea2da4ef0279d812",
+    "regions": [
+      {
+        "label": "Selected row rounded edge coverage",
+        "x": 28,
+        "y": 233,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 4
+      }
+    ],
+    "pixels": [[28, 233, [45, 56, 78, 255], [46, 58, 82, 255]]]
+  },
+  {
     "reference": "trajectory-inspector-390-light-linux.png",
     "evidence": "Pinned Playwright 1.63.0 Linux FULL CI run 45187152968, job 137741822345, artifact 14826982621. The stable comparison differs by one level at (28,233). Both of its inspector screenshot checkpoints (23179, 23181) and both checkpoints (147, 149) in a strict passing local replay have byte-identical reconstructed DOM, including the embedded styles, after removing only the tracing target marker. All twelve desktop and mobile light/dark replays passed the strict reference. The region contains only the measured coordinate and channel difference.",
     "referenceSha256": "4e09ad73875b4f8abdfc3cc7e48c986e1fbb07220410c6f2d487178a885e8888",

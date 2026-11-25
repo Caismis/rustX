@@ -251,7 +251,7 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         f.gates[0].wait_entered().await;
         f.gates[0].release();
         stage.set("settlement");
-        let receipt = runtime.child_attempt_settlement(after).await;
+        let receipt = runtime.attempt_settlement(after).await;
         assert_eq!(receipt.ordinal, after + 1);
         stage.set("close");
         *work_host.lock().unwrap() = None;

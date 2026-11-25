@@ -146,7 +146,7 @@ async fn cancelled_attempt_does_not_start_a_final_workspace_observation() {
         "after\n"
     );
     let attempt = runtime.cancel_active_attempt().unwrap();
-    let settlement = bounded(runtime.child_attempt_settlement(0)).await;
+    let settlement = bounded(runtime.attempt_settlement(0)).await;
     assert_eq!(settlement.attempt_id, attempt);
     assert!(matches!(
         settlement.outcome,
@@ -172,10 +172,7 @@ async fn cancelled_attempt_does_not_start_a_final_workspace_observation() {
             .is_none()
     );
     runtime.submit_inbound(text_content("next task")).unwrap();
-    assert_eq!(
-        bounded(runtime.child_attempt_settlement(1)).await.ordinal,
-        2
-    );
+    assert_eq!(bounded(runtime.attempt_settlement(1)).await.ordinal, 2);
     runtime.shutdown().await.unwrap();
 }
 
@@ -211,7 +208,7 @@ async fn cancelling_final_observation_releases_terminal_and_handoff_before_obser
         .unwrap();
     let release = configuration.wait_until_started().await;
     let attempt = runtime.cancel_active_attempt().unwrap();
-    let settlement = bounded(runtime.child_attempt_settlement(0)).await;
+    let settlement = bounded(runtime.attempt_settlement(0)).await;
     assert_eq!(settlement.attempt_id, attempt);
     // The successful model selected completion before observation began.
     // Cancellation releases the optional observation, never relabels it.
@@ -230,10 +227,7 @@ async fn cancelling_final_observation_releases_terminal_and_handoff_before_obser
     );
     // A new task completes while the old observation is still held.
     runtime.submit_inbound(text_content("next task")).unwrap();
-    assert_eq!(
-        bounded(runtime.child_attempt_settlement(1)).await.ordinal,
-        2
-    );
+    assert_eq!(bounded(runtime.attempt_settlement(1)).await.ordinal, 2);
     let _ = release.send(());
     runtime.shutdown().await.unwrap();
     assert!(

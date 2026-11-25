@@ -672,7 +672,7 @@ async fn an_escaped_newline_stays_inside_one_record() {
     // Acceptance is durable and asynchronous from admission: wait for the
     // admitted attempt to settle so the committed inbound is deterministically
     // folded into the snapshot before it is read.
-    fixture.runtime.child_attempt_settlement(0).await;
+    fixture.runtime.attempt_settlement(0).await;
     let (snapshot, _) = fixture
         .host
         .checkpoint()
@@ -1740,7 +1740,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         .expect("the emitted channel stays open");
     // Provider emission is not runtime settlement. Freeze the actual terminal
     // frontier before admitting the second turn or repairing a replay cursor.
-    tokio::time::timeout(LIVENESS_GUARD, fixture.runtime.child_attempt_settlement(0))
+    tokio::time::timeout(LIVENESS_GUARD, fixture.runtime.attempt_settlement(0))
         .await
         .expect("the first attempt settles while its consumer is blocked");
     fixture
@@ -1761,7 +1761,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     .await
     .expect("the runtime must keep executing while the transport is stalled")
     .expect("the emitted channel stays open");
-    tokio::time::timeout(LIVENESS_GUARD, fixture.runtime.child_attempt_settlement(1))
+    tokio::time::timeout(LIVENESS_GUARD, fixture.runtime.attempt_settlement(1))
         .await
         .expect("the second attempt settles before taking a repair cursor");
     let (progressed, _) = fixture

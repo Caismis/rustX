@@ -1,5 +1,6 @@
 #include "importer-brep.hpp"
 #include "importer-utils.hpp"
+#include "native-profile.hpp"
 
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -146,7 +147,11 @@ Importer::Result ImporterBrep::LoadFile (const std::vector<std::uint8_t>& fileCo
     std::istream inputStream (&inputBuffer);
 
     BRep_Builder builder;
-    BRepTools::Read (shape, inputStream, builder);
+    {
+        // BREP Read constructs topology while parsing; these cannot be split.
+        NativeSpan span (NativePhase::FileParse);
+        BRepTools::Read (shape, inputStream, builder);
+    }
     if (shape.IsNull ()) {
         return Importer::Result::ImportFailed;
     }

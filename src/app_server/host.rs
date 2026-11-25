@@ -69,6 +69,7 @@ struct HostInner {
     file_reads: Arc<tokio::sync::Semaphore>,
     file_observers: Arc<tokio::sync::Semaphore>,
     unconfirmed_file_observer: AtomicBool,
+    file_previews: Arc<tokio::sync::Semaphore>,
     file_routes: Mutex<
         std::collections::HashMap<
             super::protocol::AttachmentTarget,
@@ -261,6 +262,10 @@ impl AppServerHost {
             .upgrade()?;
         (route.target == *target && route.attachment.read_authority().is_ok()).then_some(route)
     }
+    pub(crate) fn file_previews(&self) -> Arc<tokio::sync::Semaphore> {
+        self.0.file_previews.clone()
+    }
+
     pub(crate) fn file_reads(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_reads.clone()
     }
@@ -314,6 +319,7 @@ impl AppServerHost {
             file_reads: Arc::new(tokio::sync::Semaphore::new(
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),
+            file_previews: Arc::new(tokio::sync::Semaphore::new(2)),
             file_routes: Mutex::default(),
             file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
             workspace_picker_enabled: AtomicBool::new(false),

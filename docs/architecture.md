@@ -73,7 +73,15 @@ uses one transient lease. Native file authority and document security remain wit
 their existing owners. The private native file-read carrier acknowledges clean
 close only after joining its exact canceled read; browser/Host admission cannot
 reuse that permit on an unproven transport outcome. No public protocol schema or
-server-side layout registry is introduced. See [preview workspaces](preview-workspace.md)
+server-side layout registry is introduced. Geometry source reads use a bounded
+private preview operation that binds source identity, version and size. The
+Session-file operation reuses one authenticated native connection; Workbench
+reuses one securely opened read-only descriptor with positional reads. Idle
+operations hold no physical read permit. Open, page reads and final validation
+share the existing two-read admission domain with Download. Final secure source
+validation precedes publication of the complete copy or a streamed STL model.
+STL decoding consumes acknowledged bounded chunks in a disposable Worker;
+provisional decoded data never becomes a displayed model. See [preview workspaces](preview-workspace.md)
 for identity, lifetime, finite budgets, focus and responsive restoration.
 
 ## Native conversation reading (#430)
@@ -5732,6 +5740,24 @@ transcript or execution-history authority.
   attempt task and holds no lock when it observes. Every client lock
   acquisition drains the pending queue first, so queued observations fold
   in the coordinator's commit order.
+- **Foreground execution ownership (Issue #606).** Every fact about which
+  operation owns the conversation's single mutable `ConversationState` lives
+  in `CoordinatorState.foreground`: the typed `ForegroundSlot`
+  (`Idle`/`Attempt`/`ManualCompaction`/`Scheduled`/`Poisoned`) plus the
+  `ManualTailState` physical-reclamation state. The slot is the only source
+  of truth for the lent conversation state; `Poisoned` is the absorbing
+  terminal a poison guard installs when a lending task dies without
+  returning it. Regrouping narrowed the ownership surface — it did not add a
+  second linearization domain, so all of it stays under the one coordinator
+  lock and the lock graph above is unchanged. Business logic that does not
+  own foreground execution moved out of `ConversationRuntime`/`RuntimeInner`:
+  classification/BTW/title auxiliary execution lives in `ExternalAuxiliary`
+  (one atomic `admit_auxiliary_work` bundle), scheduled workflow execution
+  in `ScheduledExecutor` (one atomic `claim_scheduled_start` bundle), and
+  session-title publication in `SessionTitle` at the local-runtime layer.
+  `ConversationRole` makes Root vs SubagentChild explicit at construction,
+  and child physical settlement is reachable only through
+  `runtime.child_control()` on child-role runtimes.
 - **Checkpoint/cursor invariant.** `checkpoint_get` returns a bounded checkpoint
   at cursor C with one native read cut, finite display heads, collection
   frontiers and deferred content evidence. A subscription after C observes

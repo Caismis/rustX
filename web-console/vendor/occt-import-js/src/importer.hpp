@@ -7,6 +7,7 @@
 
 class Node;
 class Importer;
+class ShapeSizeCache;
 using NodePtr = std::shared_ptr<const Node>;
 using ImporterPtr = std::shared_ptr<Importer>;
 
@@ -27,6 +28,9 @@ public:
     Face ();
     virtual ~Face ();
 
+    virtual size_t VertexCount () const = 0;
+    virtual size_t NormalCount () const = 0;
+    virtual size_t TriangleCount () const = 0;
     virtual bool HasNormals () const = 0;
     virtual bool GetColor (Color& color) const = 0;
 
@@ -86,6 +90,7 @@ public:
 
     // Internal: discard earlier preview tessellations before the next pass.
     bool resetTriangulation = false;
+    std::shared_ptr<ShapeSizeCache> shapeSizes;
 };
 
 class Importer

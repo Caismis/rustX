@@ -6146,11 +6146,11 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
     }
     bounded(Box::pin(async {
         use rustx::app_server::protocol::*;
+        use rustx::runtime::auxiliary::external::AuxiliarySubmissionLookup;
         use rustx::runtime::auxiliary::{
             delivery::ConsumerResult,
             submission::{ClassificationInput, ClassificationSubmission, CorrelationId},
         };
-        use rustx::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup;
         for socket in [false, true] {
             eprintln!("auxiliary transport socket={socket}: setup");
             let Some(provider) =

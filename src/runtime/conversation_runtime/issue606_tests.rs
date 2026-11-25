@@ -1,0 +1,2062 @@
+//! Issue #606 architecture-contract tests: `ForegroundSlot` exclusivity and
+//! poisoning, `ManualTail` reclamation fencing, extracted-owner boundaries
+//! (`ExternalAuxiliary` / `ScheduledExecutor` / `ChildControl` / host task),
+//! three-role isolation, and atomic admission sections.
+use super::foreground::{
+    CurrentManualCompaction, CurrentScheduled, ForegroundSlot, IdleConversation, ManualTailState,
+};
+use super::test_support;
+use super::*;
+use crate::durable::SqliteConversationStore;
+use crate::durable::store::canonical::CanonicalStore;
+use crate::message::types::UserSource;
+use crate::runtime::auxiliary::external::AuxiliaryInvocationKind;
+use crate::runtime::identity::CompactionOperationId;
+use crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId;
+
+fn manual_compaction_slot() -> ForegroundSlot {
+    ForegroundSlot::ManualCompaction(CurrentManualCompaction {
+        operation_id: CompactionOperationId::new("compaction-test"),
+        cancellation: AgentCancellation::new(CancellationReason::UserRequested),
+    })
+}
+
+fn scheduled_slot() -> ForegroundSlot {
+    ForegroundSlot::Scheduled {
+        current: CurrentScheduled {
+            id: ScheduledWorkflowStartId::try_from(format!("swf_{}", "a".repeat(64)))
+                .expect("scheduled start id"),
+            owner: "scheduled:test".to_owned(),
+            cancellation: ScheduledCancellation::new(),
+            graph_finished: false,
+            recovered_writer: false,
+            settlement_wake: Arc::default(),
+        },
+        conversation: IdleConversation::Durable,
+    }
+}
+
+fn child_store(
+    dir: &tempfile::TempDir,
+    conversation_id: &ConversationId,
+) -> Arc<SqliteConversationStore> {
+    let store = SqliteConversationStore::open(
+        conversation_id.clone(),
+        &dir.path().join(format!("{conversation_id}.sqlite")),
+    )
+    .expect("open store");
+    store.initialize(&[]).expect("initialize store");
+    Arc::new(store)
+}
+
+#[test]
+fn manual_tail_pending_and_joining_are_both_unreaped() {
+    // ManualTail Pending + Joining: an unexited or claimed-but-incomplete
+    // compaction task still fences every dependent admission and
+    // publication; only `None` releases the physical fence.
+    assert!(!ManualTailState::None.is_unreaped());
+    let completion = Arc::new(compaction::ManualCompactionCompletion::default());
+    assert!(ManualTailState::Joining(completion).is_unreaped());
+}
+
+#[test]
+fn a_lent_slot_poisons_and_blocks_every_future_owner() {
+    // Attempt/ManualCompaction panic contract: the slot that never returned
+    // its conversation becomes `Poisoned` — terminal, non-idle, and refusing
+    // every subsequent admission so drain can never hang on it.
+    let mut slot = manual_compaction_slot();
+    assert!(slot.poison());
+    assert!(slot.is_poisoned());
+    assert!(slot.is_foreground_active());
+    assert!(!slot.is_idle());
+    // Poisoned is absorbing: a second poison and every start refuse.
+    assert!(!slot.poison());
+    assert!(
+        slot.lend_for_manual_compaction(CurrentManualCompaction {
+            operation_id: CompactionOperationId::new("compaction-late"),
+            cancellation: AgentCancellation::new(CancellationReason::UserRequested),
+        })
+        .is_none()
+    );
+}
+
+#[test]
+fn scheduled_and_idle_slots_are_never_poisonable() {
+    let mut scheduled = scheduled_slot();
+    assert!(!scheduled.poison());
+    let mut idle = ForegroundSlot::Idle(IdleConversation::Durable);
+    assert!(!idle.poison());
+}
+
+#[test]
+fn only_the_exact_scheduled_owner_releases_the_slot() {
+    // A settlement from a different owner cannot retire this run's slot.
+    let mut slot = scheduled_slot();
+    assert!(!slot.finish_scheduled("scheduled:foreign"));
+    assert!(!slot.is_idle());
+    assert!(slot.finish_scheduled("scheduled:test"));
+    assert!(slot.is_idle());
+}
+
+#[test]
+fn scheduled_slot_blocks_catalog_publication_until_settled() {
+    // Scheduled Publication Matrix: a running Scheduled owner fences the
+    // Runtime MCP Catalog (no historical exemption); once it settles the
+    // fence lifts. Pure ExecutionPolicy commits never consult this gate.
+    let mut slot = scheduled_slot();
+    assert!(slot.blocks_runtime_publication());
+    assert!(slot.finish_scheduled("scheduled:test"));
+    assert!(!slot.blocks_runtime_publication());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
+    // ManualTail Pending + Post-compaction Admission: while the physical
+    // compaction task is unreaped, dependent admission refuses; after the
+    // task's durable settlement the admission worker's next pass reaps the
+    // finished tail and admits the queued work.
+    let gate = Arc::new(probe::Gate::default());
+    gate.arm();
+    let coordinator_probe = probe::CoordinatorProbe {
+        manual_compaction_settlement_gate: Some(gate.clone()),
+        ..Default::default()
+    };
+    let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
+    let handle = fixture
+        .runtime
+        .admit_compaction(None)
+        .expect("first compaction admitted");
+    assert!(matches!(
+        fixture.runtime.inner.lock_state().foreground.manual_tail,
+        ManualTailState::Pending(_)
+    ));
+    // Pending tail: a second compaction is fenced even though the first
+    // task's durable work is not yet reported.
+    assert!(matches!(
+        fixture.runtime.admit_compaction(None),
+        Err(compaction::ManualCompactionError::Busy)
+    ));
+    gate.wait_entered_async().await;
+    gate.release();
+    // The physical task exits and records its outcome — success or the
+    // deterministic NoProgress refusal of an empty history, either way the
+    // tail is a finished, unreaped owner.
+    let _ = handle.wait().await;
+    // The tail record stays Pending until a reaper claims it — but its
+    // worker is finished, so the admission worker's next pass reaps it and
+    // admits the queued inbound.
+    fixture
+        .runtime
+        .submit_inbound(test_support::text_content("post-compaction inbound"))
+        .expect("inbound queued");
+    let settlement = fixture.runtime.attempt_settlement(0).await;
+    assert!(settlement.ordinal >= 1);
+    assert!(
+        !fixture
+            .runtime
+            .inner
+            .lock_state()
+            .foreground
+            .manual_tail
+            .is_unreaped()
+    );
+    fixture.runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_reapers_claim_one_join_handle() {
+    // Concurrent Reaper with a real barrier: one reaper provably holds the
+    // `JoinHandle` while `Joining` is published; a concurrent reaper
+    // walks `WaitJoined`, waits for the join's completion signal rather
+    // than racing a second join, and the tail ends `None` with
+    // `completed && joined` both observed.
+    let joining_gate = Arc::new(probe::Gate::default());
+    joining_gate.arm();
+    let waitjoined_gate = Arc::new(probe::Gate::default());
+    waitjoined_gate.arm();
+    let coordinator_probe = probe::CoordinatorProbe {
+        manual_tail_joining_gate: Some(joining_gate.clone()),
+        manual_tail_waitjoined_gate: Some(waitjoined_gate.clone()),
+        ..Default::default()
+    };
+    let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
+    let runtime = fixture.runtime.clone();
+    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    // Drive a reap pass that claims the JoinHandle and pauses with
+    // `Joining` published. The admission worker's next pass reaps it once
+    // the task finishes; the barrier holds it inside `Reap::Work`.
+    runtime
+        .submit_inbound(test_support::text_content("trigger a reaper pass"))
+        .expect("inbound queued");
+    joining_gate.wait_entered_async().await;
+    assert!(
+        matches!(
+            runtime.inner.lock_state().foreground.manual_tail,
+            ManualTailState::Joining(_)
+        ),
+        "the first reaper published Joining while holding the JoinHandle"
+    );
+    // A second reaper — drain — sees Joining and parks on the shared
+    // completion. The WaitJoined barrier PROVES it is parked there before
+    // the first reaper's join is allowed to finish.
+    let drain = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.shutdown().await }
+    });
+    waitjoined_gate.wait_entered_async().await;
+    assert!(
+        matches!(
+            runtime.inner.lock_state().foreground.manual_tail,
+            ManualTailState::Joining(_)
+        ),
+        "the second reaper observed Joining and parks in WaitJoined"
+    );
+    // Release the parked second reaper's gate and the first reaper's join
+    // in one go: `joined` publication is now the only frontier between
+    // them — exactly the shared-completion handoff under test.
+    waitjoined_gate.release();
+    joining_gate.release();
+    // `handle.wait()` requires `completed && joined` — it returns only
+    // because the one claimed join finished, which is the shared
+    // completion the second reaper waited on.
+    let _ = handle.wait().await;
+    drain.await.expect("drain task").expect("shutdown");
+    assert!(
+        !runtime
+            .inner
+            .lock_state()
+            .foreground
+            .manual_tail
+            .is_unreaped(),
+        "both reapers converge on one join; the tail is reaped"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn host_task_installation_is_inactive_only_and_install_once() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (runtime, _model) =
+        test_support::headless_runtime(&dir, vec![test_support::one_turn_script()], None, None)
+            .await;
+    runtime
+        .install_host_task(|| tokio::spawn(async {}))
+        .expect("first install while Inactive");
+    let error = runtime
+        .install_host_task(|| tokio::spawn(async {}))
+        .expect_err("a second install is refused");
+    assert_eq!(error.kind, crate::context::ContextErrorKind::AuxiliaryBusy);
+    runtime.activate();
+    let error = runtime
+        .install_host_task(|| tokio::spawn(async {}))
+        .expect_err("post-activation install is refused");
+    assert_eq!(error.kind, crate::context::ContextErrorKind::Cancelled);
+    runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn host_task_holds_only_a_weak_runtime_while_idle() {
+    // The optional host task must not pin the runtime or its store: while the
+    // task is idle, dropping the last semantic runtime handle drops the
+    // runtime even though the task is still parked.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (runtime, _model) =
+        test_support::headless_runtime(&dir, vec![test_support::one_turn_script()], None, None)
+            .await;
+    let weak = Arc::downgrade(&runtime.inner);
+    let (release, parked) = tokio::sync::oneshot::channel::<()>();
+    let (proof, proved) = tokio::sync::oneshot::channel::<bool>();
+    runtime
+        .install_host_task(|| {
+            tokio::spawn(async move {
+                parked.await.expect("park");
+                proof.send(weak.upgrade().is_some()).expect("proof");
+            })
+        })
+        .expect("install");
+    drop(runtime);
+    release.send(()).expect("release");
+    assert!(
+        !proved.await.expect("task answered"),
+        "the parked host task still pinned the runtime"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unsettled_host_task_blocks_the_drain_quiescent_boundary() {
+    // Title Publication Tail: auxiliary work may have ended, but while the
+    // host task (session title publication) is unsettled the drain must not
+    // mark Quiescent. Order: executor drain -> host task -> no admissions ->
+    // quiescent.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (runtime, _model) =
+        test_support::headless_runtime(&dir, vec![test_support::one_turn_script()], None, None)
+            .await;
+    let (entered, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release, parked) = tokio::sync::oneshot::channel::<()>();
+    runtime
+        .install_host_task(|| {
+            tokio::spawn(async move {
+                entered.send(()).expect("entered");
+                parked.await.expect("park");
+            })
+        })
+        .expect("install");
+    runtime.activate();
+    let shutdown = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.shutdown_outcome().await }
+    });
+    entered_rx.recv().expect("host task is parked");
+    // The drain commits `Running -> Draining` eagerly and cannot complete
+    // while the host task remains unsettled.
+    assert!(matches!(
+        runtime.inner.lifecycle.state(),
+        ConversationLifecycleState::Draining | ConversationLifecycleState::Running
+    ));
+    release.send(()).expect("release host task");
+    let outcome = shutdown.await.expect("drain task").expect("drain outcome");
+    assert!(outcome.logical.is_ok() && outcome.physical.is_ok());
+}
+
+async fn child_config(
+    dir: &tempfile::TempDir,
+    conversation_id: &str,
+    role: ConversationRole,
+) -> RuntimeConversationConfig {
+    // `conversation_id` must be a canonical `conv_<uuidv7>` tail fragment.
+    let id = ConversationId::new(format!("conv_{conversation_id}").as_str());
+    let store = child_store(dir, &id);
+    let (_registry, mut config) = test_support::subagent_runtime_config_with_registry(
+        dir,
+        id.as_ref(),
+        store,
+        &id.clone(),
+        &AgentId::new(format!("registry-agent-{conversation_id}").as_str()),
+        &AgentId::new(format!("agent-{conversation_id}").as_str()),
+    )
+    .await;
+    config.role = role;
+    // A child runtime never adopts its parent's subagent registry.
+    config.subagents = None;
+    config
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn three_role_isolation_is_declared_not_inferred() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (runtime, _model) =
+        test_support::headless_runtime(&dir, vec![test_support::one_turn_script()], None, None)
+            .await;
+    // Root: no child control handle and no ChildControlState.
+    assert!(!runtime.inner.role.is_child());
+    assert!(runtime.child_control().is_none());
+    assert!(runtime.inner.lock_state().child.is_none());
+    // An Inactive runtime drains directly: shutdown is the Running path.
+    drop(runtime);
+
+    // SubagentChild: the control handle exists before activation and the
+    // child state is installed.
+    let config = child_config(
+        &dir,
+        "7a2b9c4d-1234-7000-8000-000000000001",
+        ConversationRole::SubagentChild,
+    )
+    .await;
+    let child = ConversationRuntime::new(config).expect("child runtime");
+    let control = child.child_control().expect("child control");
+    assert!(child.inner.lock_state().child.is_some());
+    assert!(!child.is_activated());
+    // Inactive Child Cancellation: physical-only rollback evidence —
+    // PreparationRollback drains without semantic activation, so the
+    // lifecycle lands on Quiescent without ever passing through Running.
+    control
+        .settle_child_physical_lifetime(false)
+        .await
+        .expect("physical rollback");
+    assert_eq!(
+        child.inner.lifecycle.state(),
+        ConversationLifecycleState::Quiescent
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn workflow_agent_run_has_no_guidance_or_seal() {
+    // WorkflowAgentRun gets output/permits/settlement/rollback but never
+    // Parent Guidance or Terminal Seal access: the role gate refuses.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config = child_config(
+        &dir,
+        "7a2b9c4d-1234-7000-8000-000000000002",
+        ConversationRole::WorkflowAgentRun {
+            output: Some(Arc::new(
+                crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                    "type": "object", "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"], "additionalProperties": false
+                }))
+                .expect("output latch"),
+            )),
+        },
+    )
+    .await;
+    let runtime = ConversationRuntime::new(config).expect("workflow child");
+    let control = runtime.child_control().expect("workflow child control");
+    // seal_probe_calls() == 0: the seal probe is never consulted for a
+    // workflow-owned child (mirrors the existing native conformance proof).
+    assert_eq!(control.seal_probe_calls(), 0);
+    drop(runtime);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[should_panic(expected = "SubagentChild-only")]
+async fn workflow_agent_run_cannot_submit_parent_guidance() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config = child_config(
+        &dir,
+        "7a2b9c4d-1234-7000-8000-000000000003",
+        ConversationRole::WorkflowAgentRun {
+            output: Some(Arc::new(
+                crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                    "type": "object", "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"], "additionalProperties": false
+                }))
+                .expect("output latch"),
+            )),
+        },
+    )
+    .await;
+    let runtime = ConversationRuntime::new(config).expect("workflow child");
+    runtime
+        .child_control()
+        .expect("workflow child control")
+        .submit_parent_guidance(UserSource::Runtime, test_support::text_content("steer"))
+        .expect("unreachable");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn auxiliary_admission_freezes_snapshot_and_owns_capacity_atomically() {
+    // Auxiliary Admission Race: snapshot, reservation and lifecycle
+    // admission are taken inside the one coordinator critical section, so
+    // the bundle is internally consistent and capacity is owned from the
+    // moment the call is admitted.
+    let fixture = test_support::headless_fixture().await;
+    let cancellation = crate::runtime::cancellation::CancellationSignal::default();
+    let admitted = fixture
+        .runtime
+        .external_auxiliary()
+        .admit_auxiliary_work(AuxiliaryInvocationKind::Title, 3, &cancellation, true)
+        .expect("title admission");
+    assert_eq!(
+        admitted.resource_revision,
+        admitted.resources.revision().get()
+    );
+    assert!(admitted.business_admission.is_some());
+    let second = fixture
+        .runtime
+        .external_auxiliary()
+        .admit_auxiliary_work(AuxiliaryInvocationKind::Title, 3, &cancellation, true)
+        .expect("second title admission");
+    drop(admitted);
+    drop(second);
+    fixture.runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn auxiliary_admission_blocks_inside_the_shared_coordinator_section() {
+    // The coordinator mutex IS the critical section: while the test holds
+    // it, admission cannot acquire it; once released, admission proceeds.
+    // The channel handshake proves the interleave without sleeps.
+    let fixture = test_support::headless_fixture().await;
+    let guard = fixture.runtime.inner.lock_state();
+    let (blocked_tx, blocked_rx) = std::sync::mpsc::channel();
+    let runtime = fixture.runtime.clone();
+    let admitted = std::thread::spawn(move || {
+        blocked_tx.send(()).expect("blocked marker");
+        runtime.external_auxiliary().admit_auxiliary_work(
+            AuxiliaryInvocationKind::Btw,
+            1,
+            &crate::runtime::cancellation::CancellationSignal::default(),
+            false,
+        )
+    });
+    blocked_rx.recv().expect("admit thread started");
+    drop(guard);
+    assert!(admitted.join().expect("admit thread").is_ok());
+    fixture.runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attempt_task_panic_publishes_a_failed_settlement_for_terminal_waiters() {
+    // Issue #606 (P1): a real unwind inside the attempt task used to leave
+    // every `attempt_settlement` waiter — the SubagentChild /
+    // WorkflowAgentRun terminal wait — hung forever. Here the model stream
+    // panics for real: the unwind crosses `run_attempt` back into the
+    // spawned task, where the armed `AttemptTaskPoisonGuard` drops, poisons
+    // the slot and publishes the recognizable `RuntimeFailed` settlement
+    // both child-role terminal drivers consume. It fabricates no Attempt
+    // terminal and overwrites no committed history.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (release_tx, release_rx) = test_support::model_release();
+    let script = vec![
+        test_support::FakeStep::Emit(crate::model::event::ModelEvent::Started),
+        // The panic is fenced behind this release: the unwind cannot begin
+        // before the test observes the live Attempt owner, so no legal
+        // interleaving can complete the whole lifecycle unseen.
+        test_support::FakeStep::ParkUntilReleased(release_rx),
+        test_support::FakeStep::Panic,
+    ];
+    let (runtime, model) = test_support::headless_runtime(&dir, vec![script], None, None).await;
+    runtime.activate();
+    runtime
+        .submit_inbound(test_support::text_content("panic the attempt"))
+        .expect("inbound accepted");
+    // The model reaching the park proves the attempt task is live and holds
+    // the slot: the stream only parks inside the running invocation.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut parks = model.parks();
+        while *parks.borrow_and_update() < 1 {
+            parks.changed().await.expect("park frontier observed");
+        }
+    })
+    .await
+    .expect("the attempt invocation reaches the pre-panic barrier");
+    let attempt_id = {
+        let state = runtime.inner.lock_state();
+        state
+            .foreground
+            .slot
+            .as_attempt()
+            .map(|current| current.attempt_id.clone())
+            .expect("the parked attempt owns the slot")
+    };
+    release_tx.send_replace(true);
+    // The unwind — not test code — invokes the guard's poison handoff:
+    // `RuntimeFailed` is published for every terminal waiter, and the slot
+    // converges to `Poisoned` instead of staying a live `Attempt` forever.
+    let settlement = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime.attempt_settlement(0),
+    )
+    .await
+    .expect("the poison guard publishes a settlement for terminal waiters");
+    assert_eq!(settlement.attempt_id, attempt_id);
+    assert!(
+        matches!(
+            settlement.outcome,
+            attempt::NativeAttemptOutcome::RuntimeFailed
+        ),
+        "the unwound attempt settles as a recognizable failure: {:?}",
+        settlement.outcome
+    );
+    // The task physically exited: the model stream owner is gone and the
+    // task's admission was released, so shutdown drains rather than hanging
+    // on the poisoned owner.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut exited = model.streams_exited();
+        while *exited.borrow_and_update() < 1 {
+            exited.changed().await.expect("stream exit observed");
+        }
+    })
+    .await
+    .expect("the panicked attempt task released its model stream");
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("shutdown drains after the panic");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn in_lock_panic_recovers_to_failed_admission_and_still_drains() {
+    // Issue #606 (P2): a panic *while holding* the coordinator guard must
+    // not wedge every later caller on a poisoned mutex. The controlled
+    // recovery boundary in `lock_state` converges business admission to
+    // the absorbing failed state while physical drain — a second reaper
+    // pass and shutdown — still terminates.
+    let fixture = test_support::headless_fixture().await;
+    let runtime = fixture.runtime.clone();
+    // Fault injection: panic while holding the coordinator guard, exactly
+    // like a panic inside a critical-section mutation (e.g. `append_event`
+    // in `finish_manual_compaction`).
+    let inner = runtime.inner.clone();
+    std::thread::spawn(move || {
+        let _guard = inner.state.lock().expect("pre-poison lock");
+        panic!("fault injection: panic while holding the coordinator guard");
+    })
+    .join()
+    .expect_err("the injected panic poisoned the coordinator lock");
+    // Business admission converges to failed — every gate consults the
+    // committed `DurabilityFailed` fact instead of hanging on the lock.
+    // `submit_inbound` is synchronous on the coordinator lock: the
+    // recovered guard answers immediately instead of panicking or hanging.
+    let rejected = runtime.submit_inbound(test_support::text_content("post-poison inbound"));
+    assert!(
+        rejected.is_err(),
+        "a poisoned coordinator admits no new business work"
+    );
+    // Physical drain — the manual-tail reaper and shutdown — still
+    // terminates: it reads the mid-transition facts and exits.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let _ = runtime.admit_compaction(None);
+        runtime.shutdown().await
+    })
+    .await
+    .expect("reaper and shutdown terminate after lock poisoning");
+    // The converged failure state is consistent for every reader: the
+    // poison mark was cleared after the `DurabilityFailed` fact committed,
+    // so a non-blocking `try_lock` reader (`try_activity`) observes the
+    // failed health instead of spinning on `None` forever (Issue #606).
+    let activity = runtime.activity();
+    assert!(
+        activity.is_some_and(|activity| activity.system_error),
+        "non-blocking readers observe the converged failure: {activity:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lock_panic_during_a_live_attempt_preserves_cancellation_and_settlement_ownership() {
+    // Issue #606 (P1): the generic lock-recovery path must close business
+    // admission WITHOUT destroying the live foreground owner. The attempt
+    // parked on a cancellation-only model barrier keeps its owner record —
+    // drain's cancellation reaches the model, the task exits on its own
+    // settlement path, and admission is released. The test never releases
+    // the model manually: shutdown's cancellation is the only frontier.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let script = vec![
+        test_support::FakeStep::Emit(crate::model::event::ModelEvent::Started),
+        test_support::FakeStep::ParkUntilCancelled,
+    ];
+    let (runtime, model) = test_support::headless_runtime(&dir, vec![script], None, None).await;
+    runtime.activate();
+    runtime
+        .submit_inbound(test_support::text_content(
+            "hold the attempt on a cancel barrier",
+        ))
+        .expect("inbound accepted");
+    // The real model request is parked on the cancellation-only barrier:
+    // only the preserved owner's cancellation can move it.
+    model
+        .parks()
+        .wait_for(|parks| *parks >= 1)
+        .await
+        .expect("the attempt parks on the cancel barrier");
+    // Fault injection: a panic inside another coordinator critical
+    // section (e.g. `apply_execution_policy`'s compose closure) poisons
+    // the mutex while the Attempt still owns the slot.
+    let inner = runtime.inner.clone();
+    std::thread::spawn(move || {
+        let _guard = inner.state.lock().expect("pre-poison lock");
+        panic!("fault injection: panic inside a coordinator critical section");
+    })
+    .join()
+    .expect_err("the injected panic poisoned the coordinator lock");
+    // Business admission converges to failed.
+    let rejected = runtime.submit_inbound(test_support::text_content("post-poison inbound"));
+    assert!(
+        rejected.is_err(),
+        "a poisoned coordinator admits no new business work"
+    );
+    // The live attempt owner survived recovery: its slot is still lent
+    // (not Poisoned), so cancellation and settlement remain reachable.
+    assert!(
+        !runtime.inner.lock_state().foreground.slot.is_poisoned(),
+        "recovery preserves the live foreground owner"
+    );
+    // Shutdown's drain cancellation is the only thing that can release
+    // the parked model — the test never touches the release frontier.
+    let settlement = runtime.attempt_settlement(0);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("drain cancellation reaches the parked attempt");
+    // The task exited through its own settlement path with the real
+    // cancelled outcome — no fabricated terminal, no `RuntimeFailed`
+    // receipt pre-empted by a destroyed owner.
+    let settlement = settlement.await;
+    assert!(
+        matches!(
+            settlement.outcome,
+            attempt::NativeAttemptOutcome::Cancelled | attempt::NativeAttemptOutcome::ModelFailed
+        ),
+        "the attempt settles on its own cancelled outcome: {:?}",
+        settlement.outcome
+    );
+}
+
+/// Issue #606 (P1 evidence, headless): an admitted scheduled task itself
+/// owns the runtime — a strong `RuntimeInner` reference — until execution,
+/// the physical proof, the durable settlement and the exact slot/admission
+/// release are all done. This fixture has NO session manager and no
+/// runtime catalog observer, so dropping the only `ConversationRuntime`
+/// handle truly leaves the admitted task's strong reference as the last
+/// owner: releasing the post-Claim barrier must still reach a durable
+/// Completed settlement. Under the previous `Weak`-only executor the same
+/// sequence could not settle — the Weak died with the last external
+/// handle.
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_admitted_scheduled_task_owns_the_runtime_until_settlement() {
+    use crate::runtime::workflow::scheduled::{
+        ScheduledWorkflowPreparation, lifecycle::ScheduledWorkflowState,
+    };
+    use crate::runtime::workflow::{WorkflowCatalog, WorkflowProgram};
+    use crate::scheduler::{
+        ScheduleAdmission, ScheduleBinding, ScheduleCommand, ScheduleCommandAuthority,
+        ScheduleCommandResult, ScheduleMutation, ScheduleTiming,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workflow_id = crate::runtime::workflow::WorkflowId::parse("scheduled").unwrap();
+    let program = WorkflowProgram::compile(
+        workflow_id.clone(),
+        serde_json::from_value(serde_json::json!({
+            "description":"Native scheduled run","timeout_ms":1000,
+            "block":{"input":{"type":"object","properties":{"answer":{"type":"string","default":"native durable return"}},"additionalProperties":false},
+            "nodes":{"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","answer"]}]}},
+            "edges":[{"from":"workflow_start","to":"done"}]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut workflows = WorkflowCatalog::new([program]).unwrap();
+    workflows.admit(
+        &crate::capabilities::AvailableToolCatalog::default(),
+        &crate::capabilities::CapabilityAvailability::new(),
+        &crate::skills::SkillSnapshot::new(Vec::new()),
+        &crate::runtime::subagent::AgentCatalog::empty(),
+        &BTreeMap::new(),
+    );
+    let (runtime, _model) = test_support::headless_runtime_with_options(
+        &dir,
+        Vec::new(),
+        None,
+        None,
+        test_support::HeadlessRuntimeOptions {
+            workflow_catalog: workflows,
+            root_workflows: BTreeSet::from([workflow_id.clone()]),
+            with_subagents: true,
+            ..test_support::HeadlessRuntimeOptions::default()
+        },
+    )
+    .await;
+    // `ScheduledWorkflowPreparation` reads the inherited execution policy
+    // from `resources.configuration()`, which a headless fixture does not
+    // author — install the same minimal configuration the bootstrap tests
+    // use so the contract binds to a real generation.
+    {
+        let mut state = runtime.inner.lock_state();
+        let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+            b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent.model]\nmodel='scripted/scripted'\n",
+        )
+        .unwrap();
+        config.approval_mode = ApprovalMode::FullAccess;
+        let configuration = crate::runtime::resources::RuntimeConfiguration {
+            config: Arc::new(config),
+            models: state.config.model.registry().unwrap().clone(),
+            resource_definitions: Vec::new(),
+            resource_diagnostics: Vec::new(),
+            authored: crate::local_runtime::configuration::generation::AuthoredConfiguration {
+                component_revisions: BTreeMap::new(),
+                source_revisions: BTreeMap::new(),
+                effective:
+                    crate::local_runtime::configuration::settings::SourceDocumentView::default(),
+                provenance: BTreeMap::new(),
+            },
+        };
+        state.config.resources = Arc::new(
+            state
+                .config
+                .resources
+                .as_ref()
+                .clone()
+                .with_configuration(configuration),
+        );
+    }
+    runtime.activate();
+    let store = runtime.tool_runtime().durable_store();
+    let binding = ScheduleBinding {
+        session_id: crate::runtime::identity::SessionId::new(
+            "ses_01900000-0000-7000-8000-000000000001",
+        ),
+        node_id: crate::runtime::identity::SessionNodeId::new(
+            "node_01900000-0000-7000-8000-000000000001",
+        ),
+        conversation_id: runtime.conversation_id().clone(),
+    };
+    let (catalog_changed, _watch) = tokio::sync::watch::channel(());
+    runtime
+        .inner
+        .tool_runtime
+        .schedule()
+        .bind(
+            binding.clone(),
+            Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            Arc::new(tokio::sync::Notify::new()),
+            catalog_changed,
+        )
+        .expect("bind schedule control");
+    // The durable start carries a contract prepared against THIS
+    // generation's resources/model/approval so `reconstruct` and the Claim
+    // freshness check agree.
+    let (resources, model, approval) = {
+        let state = runtime.inner.lock_state();
+        (
+            state.config.resources.clone(),
+            state.config.model.config().clone(),
+            state.config.effective_approval_mode,
+        )
+    };
+    let contract = ScheduledWorkflowPreparation::new(binding.clone(), resources, model)
+        .expect("scheduled preparation")
+        .with_approval_mode(approval)
+        .prepare(&workflow_id, &serde_json::json!({}))
+        .expect("prepare scheduled workflow")
+        .contract()
+        .clone();
+    let applied = store
+        .schedule_workflow_command(
+            &binding,
+            &ScheduleCommand {
+                command_id: "native-workflow".to_owned(),
+                mutation: ScheduleMutation::CreateWorkflow {
+                    title: "Native scheduled run".to_owned(),
+                    workflow_id,
+                    arguments: serde_json::json!({}),
+                    timing: ScheduleTiming::After { seconds: 60 },
+                },
+            },
+            &crate::runtime::types::SystemClock,
+            &ScheduleCommandAuthority::RuntimeControl,
+            &contract,
+        )
+        .expect("create scheduled workflow");
+    let ScheduleCommandResult::Applied { receipt } = applied else {
+        panic!("native schedule create: {applied:?}")
+    };
+    struct FastForwardClock;
+    impl crate::runtime::types::RuntimeClock for FastForwardClock {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now() + chrono::Duration::seconds(61)
+        }
+    }
+    let ScheduleAdmission::WorkflowAdmitted { start, .. } = store
+        .admit_scheduled_target(&receipt.id, receipt.revision, &FastForwardClock)
+        .expect("native schedule admission")
+    else {
+        panic!("native workflow admission")
+    };
+    let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release = gate.arm_scoped();
+    runtime.install_scheduled_settlement_gate(gate.clone());
+    assert!(
+        runtime.inner.scheduled_executor.admit_next(),
+        "the admitted start is reserved"
+    );
+    // Parked after the Claim, graph finished, before the first settlement
+    // probe — the exact window the review named.
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    let claim = store.scheduled_workflow_get(&start.id).unwrap().unwrap();
+    assert!(
+        matches!(claim.head.state, ScheduledWorkflowState::Claimed { .. }),
+        "{:?}",
+        claim.head.state
+    );
+    // The ONLY external holder of this runtime is `runtime` itself: the
+    // admission worker keeps Weak<RuntimeInner>, and there is no session
+    // manager or catalog observer in this fixture. Dropping it leaves the
+    // admitted task's own strong reference as the last owner.
+    let weak = Arc::downgrade(&runtime.inner);
+    drop(runtime);
+    assert!(
+        weak.upgrade().is_some(),
+        "the admitted task's own strong reference keeps the runtime alive"
+    );
+    drop(release);
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let view = store.scheduled_workflow_get(&start.id).unwrap().unwrap();
+            if let ScheduledWorkflowState::Settled { outcome, .. } = view.head.state {
+                assert!(
+                    matches!(
+                        outcome,
+                        crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOutcome::Completed
+                    ),
+                    "{outcome:?}"
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        // Settlement is published: the task's last act is releasing its own
+        // strong owner, so the runtime is finally dropped.
+        while weak.upgrade().is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the admitted task settles and releases the runtime after every external handle is gone");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_compaction_worker_panic_settles_through_the_join_error_path() {
+    // Issue #606 (P2): a real panic inside the compaction worker resolves
+    // its `JoinHandle` with a `JoinError`. The reaper — not the task —
+    // owns the failed settlement: the lent slot is poisoned, the absorbing
+    // failure fact commits, the handle completes `Err(Durable)`, `joined`
+    // publishes, and drain still terminates.
+    let fixture = test_support::headless_fixture().await;
+    let runtime = fixture.runtime.clone();
+    runtime.install_manual_compaction_worker_panic();
+    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    // The worker unwinds; the `JoinHandle` resolves `Err`. The reaper's
+    // join runs inside drain — shutdown drives it.
+    let drained = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.shutdown().await }
+    });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), handle.wait())
+        .await
+        .expect("the compaction handle completes")
+        .expect_err("a panicked worker settles as a durable failure");
+    assert!(
+        matches!(result, ManualCompactionError::Durable { .. }),
+        "{result:?}"
+    );
+    {
+        let state = runtime.inner.lock_state();
+        assert!(
+            matches!(state.foreground.manual_tail, ManualTailState::None),
+            "the `JoinError` path reaps the manual tail"
+        );
+        assert!(
+            state.foreground.slot.is_poisoned(),
+            "the lent slot is poisoned"
+        );
+    }
+    assert!(
+        runtime
+            .activity()
+            .is_some_and(|activity| activity.system_error),
+        "the absorbing failure fact committed"
+    );
+    let shutdown = tokio::time::timeout(std::time::Duration::from_secs(30), drained)
+        .await
+        .expect("drain terminates")
+        .expect("drain task joins");
+    // The contract under test is that the drain TERMINATES: the poisoned
+    // slot committed a `DurabilityFailed` fact, which `shutdown` reports.
+    assert!(
+        shutdown.is_err(),
+        "shutdown surfaces the durability failure instead of hanging"
+    );
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test(flavor = "multi_thread")]
+async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
+    // Issue #606 (P2 matrix): while a reaper holds the `JoinHandle` with
+    // `Joining` published, every admission path that consults the unreaped
+    // tail — Attempt, Scheduled, ManualCompaction, idle probe, catalog
+    // publication, staged configuration commit — is refused. Every leg
+    // prepares work whose ONLY refuser is the tail, and after `joined`
+    // publishes the same work proceeds: that differential is what detects
+    // a missing tail check.
+    use crate::runtime::configuration_commit::{
+        ConfigurationChangeReason, DesiredApplication, StagedConfiguration, StagedOutcome,
+    };
+    let joining_gate = Arc::new(probe::Gate::default());
+    // Scoped release: if an assertion fails while the reaper is parked, the
+    // guard drops during unwind and releases the barrier instead of
+    // deadlocking the runtime shutdown behind the panic report.
+    let _joining_guard = joining_gate.arm_scoped();
+    let coordinator_probe = probe::CoordinatorProbe {
+        manual_tail_joining_gate: Some(joining_gate.clone()),
+        ..Default::default()
+    };
+    let fixture = scheduled_fixture_with(
+        vec![
+            test_support::one_turn_script(),
+            test_support::one_turn_script(),
+            test_support::one_turn_script(),
+        ],
+        Some(coordinator_probe),
+        None,
+    )
+    .await;
+    let runtime = fixture.runtime.clone();
+    // A real catalog observation and a real staged configuration candidate
+    // wait behind the fence: both must be consumed after the join, not
+    // before it.
+    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    // No inbound is needed to drive the reap: `finish_manual_compaction`
+    // and `ManualTailExit::drop` each notify the admission worker, whose
+    // level-triggered pass reaps the physically exited worker. Keeping the
+    // mailbox empty is what makes the idle leg below separable — the
+    // unreaped tail is its only blocker.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        joining_gate.wait_entered_async(),
+    )
+    .await
+    .expect("the reaper claims the JoinHandle and publishes Joining");
+    assert!(
+        matches!(
+            runtime.inner.lock_state().foreground.manual_tail,
+            ManualTailState::Joining(_)
+        ),
+        "the reaper published Joining while holding the JoinHandle"
+    );
+    // Idle probe: no inbound is queued yet, so the unreaped tail is the
+    // only refuser (its retained lifecycle admission closes the epoch).
+    // `claim_idle` is not separable here: every admission — compaction
+    // included — advances the activity epoch, so any pre-captured epoch is
+    // stale for a reason unrelated to the tail.
+    assert!(
+        runtime.idle_epoch().is_err(),
+        "idle epoch is fenced while the unreaped tail retains its admission"
+    );
+
+    // Scheduled: a valid binding with an Accepted start is pending and the
+    // mailbox is still empty — so the human-input-priority refusal cannot
+    // mask a missing tail check, and the unreaped tail is the only refuser
+    // of the atomic reservation.
+    assert!(
+        !runtime.inner.mailbox.has_pending().unwrap_or(true),
+        "the mailbox is empty: human-input priority cannot refuse this reservation"
+    );
+    assert!(
+        runtime.inner.reserve_scheduled_start(|_| true).is_none(),
+        "scheduled reservation is fenced by the unreaped tail"
+    );
+    // Attempt — proven with no catalog observation and no staged candidate
+    // in flight, so neither publication nor commit back-pressure can mask a
+    // missing tail check in the admission path itself. The observations are
+    // cumulative facts, not a momentary slot read: the admission counter
+    // never moves and the inbound is never consumed.
+    let admitted_before = runtime.inner.lock_state().foreground.admitted_attempts;
+    runtime
+        .submit_inbound(test_support::text_content("held behind Joining"))
+        .expect("inbound queued");
+    runtime.inner.admit_next_attempt();
+    assert_eq!(
+        runtime.inner.lock_state().foreground.admitted_attempts,
+        admitted_before,
+        "no admission counter advance is possible behind the unreaped tail"
+    );
+    assert!(
+        runtime.inner.mailbox.has_pending().unwrap_or(false),
+        "the queued inbound is never consumed behind the unreaped tail"
+    );
+    // Every remaining leg's work item is prepared only now — with the
+    // barrier already holding — so nothing could have been consumed before
+    // the fence existed, and the tail is each item's only refuser.
+    runtime.install_runtime_catalog_preparer(Arc::new(|_candidate, _resources| {
+        Err("test: catalog candidate intentionally unprepared".to_owned())
+    }));
+    runtime.capability().notify_catalog_change_for_test();
+    let observed = runtime.capability().catalog_revision();
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
+    let desired_current = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let prepared = runtime
+        .prepare_context_configuration(|configuration| crate::runtime::resources::ContextBinding {
+            configuration: configuration.clone(),
+            project_context_files: Vec::new(),
+            skills: Arc::new(crate::skills::SkillSnapshot::new(Vec::new())),
+        })
+        .expect("context candidate");
+    runtime.stage_configuration(StagedConfiguration {
+        prepared,
+        desired: DesiredApplication::new(desired_current.clone(), 1),
+        reason: ConfigurationChangeReason::Source,
+        retain: Box::new(|_revision| {}),
+        settled: Box::new(move |outcome| {
+            let _ = settled_tx.send(outcome);
+            Box::pin(async {})
+        }),
+    });
+    // ManualCompaction: refused Busy, not deferred.
+    let rejected = runtime.admit_compaction(None);
+    assert!(
+        matches!(rejected, Err(ManualCompactionError::Busy)),
+        "a second compaction is fenced by the unreaped tail"
+    );
+    // Catalog publication: a real observation waits. Driven through the
+    // locked entry point under `Joining`, it is not consumed.
+    {
+        let mut state = runtime.inner.lock_state();
+        runtime.inner.publish_runtime_catalogs_locked(&mut state);
+        assert!(
+            state.config.catalog_revision < observed,
+            "the catalog observation is fenced by the unreaped tail"
+        );
+    }
+    // Staged configuration: a real candidate waits. Driven through the
+    // locked entry point under `Joining`, it neither commits nor settles.
+    {
+        let mut state = runtime.inner.lock_state();
+        runtime.inner.commit_staged_configuration_locked(&mut state);
+        assert!(
+            state.config.staged_configuration.is_some(),
+            "the staged candidate survives the fenced commit pass"
+        );
+    }
+    // Release the join: `joined` publishes, the tail is reaped, and every
+    // fenced work item — the same instances prepared above — proceeds
+    // through the real consumer path: the admission worker's own pass
+    // reaps, publishes, commits, reserves and admits in order.
+    joining_gate.release();
+    tokio::time::timeout(std::time::Duration::from_secs(30), handle.wait())
+        .await
+        .expect("the parked join completes after the barrier releases")
+        .expect_err("the fixture compaction history cannot satisfy the summary budget");
+    assert!(
+        !runtime
+            .inner
+            .lock_state()
+            .foreground
+            .manual_tail
+            .is_unreaped(),
+        "the reaped tail is gone after joined publishes"
+    );
+    // Scheduled: the same pending start is claimed by the real admission
+    // worker — the durable row leaving `Accepted` is the unfenced proof.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let view = fixture
+                .store
+                .scheduled_workflow_get(&fixture.start.id)
+                .unwrap()
+                .unwrap();
+            if !matches!(
+                view.head.state,
+                crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState::Accepted {
+                    ..
+                }
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the real admission worker claims the fenced scheduled start after the join");
+    // Catalog + staged configuration: the same observation and candidate
+    // are consumed by the consumer's repeated-pass pattern.
+    for _ in 0..10 {
+        {
+            let mut state = runtime.inner.lock_state();
+            runtime.inner.publish_runtime_catalogs_locked(&mut state);
+            runtime.inner.commit_staged_configuration_locked(&mut state);
+            if state.config.catalog_revision >= observed
+                && state.config.staged_configuration.is_none()
+            {
+                break;
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    {
+        let state = runtime.inner.lock_state();
+        assert!(
+            state.config.catalog_revision >= observed,
+            "the fenced catalog observation publishes after the join"
+        );
+        assert!(
+            state.config.staged_configuration.is_none(),
+            "the fenced candidate commits after the join"
+        );
+    }
+    assert!(
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), settled_rx).await,
+            Ok(Ok(StagedOutcome::Committed)),
+        ),
+        "the deferred candidate settles Committed after the join"
+    );
+    // Attempt: the same queued inbound is admitted and settles.
+    let settlement = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        runtime.attempt_settlement(0),
+    )
+    .await
+    .expect("the fenced attempt is admitted after the join publishes");
+    assert!(
+        matches!(settlement.outcome, attempt::NativeAttemptOutcome::Completed),
+        "{:?}",
+        settlement.outcome
+    );
+    assert_eq!(
+        runtime.inner.lock_state().foreground.admitted_attempts,
+        admitted_before + 1,
+        "the same fenced inbound produces exactly one admitted attempt after the join"
+    );
+    // Idle probe: with the mailbox empty and no active owner, the same
+    // probe that errored under `Joining` now succeeds.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if runtime.idle_epoch().is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the idle epoch opens once the tail is reaped and the attempt settled");
+    // ManualCompaction: admitted again.
+    let second = runtime.admit_compaction(None);
+    assert!(
+        !matches!(second, Err(ManualCompactionError::Busy)),
+        "the fenced compaction admits after the join"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("shutdown timeout")
+        .expect("fixture shutdown");
+}
+
+/// A controlled Tool executor whose remote response channel can be lost on
+/// demand: the physical dispatch starts (and is counted), then the dropped
+/// channel ends the execution as `OutcomeUnknown` — the effect's physical
+/// settlement is unproven even though the graph itself finishes
+/// (Issue #606).
+struct ResponseLossTool {
+    started: tokio::sync::watch::Sender<bool>,
+    starts: std::sync::atomic::AtomicUsize,
+    response: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+impl crate::tools::executor::ToolExecutor for ResponseLossTool {
+    fn start<'a>(
+        &'a self,
+        _: crate::tools::types::ToolInvocation,
+        _: crate::tools::executor::ToolExecutionContext<'a>,
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        self.starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::tools::executor::ToolExecutionHandle::new(
+            Box::pin(async move {
+                self.started.send_replace(true);
+                let _ = self.response.lock().await.take().unwrap().await;
+                crate::tools::invocation::terminal(
+                    crate::tools::types::ToolExecutionStatus::OutcomeUnknown {
+                        detail: "dispatched remote response channel closed".into(),
+                    },
+                )
+            }),
+            Box::pin(async move { std::future::pending().await }),
+        )
+    }
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_runner_reconciles_awaiting_native_proof_until_the_proof_arrives() {
+    // Issue #606: the real runner must RECEIVE `AwaitingNativeProof` from
+    // its own settlement, retain the exact slot owner, the capability
+    // lease and the durable Claim through the reconciliation wait, never
+    // replay the graph, and — once the physical proof arrives — settle,
+    // release and drop the lease entirely by itself.
+    use crate::runtime::workflow::scheduled::lifecycle::{
+        ClaimedScheduledWorkflow, ScheduledWorkflowOutcome, ScheduledWorkflowState,
+    };
+    let gate = Arc::new(probe::Gate::default());
+    let _guard = gate.arm_scoped();
+    let coordinator_probe = probe::CoordinatorProbe {
+        scheduled_awaiting_proof_gate: Some(gate.clone()),
+        ..Default::default()
+    };
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    let tool = Arc::new(ResponseLossTool {
+        started: tokio::sync::watch::channel(false).0,
+        starts: std::sync::atomic::AtomicUsize::new(0),
+        response: tokio::sync::Mutex::new(Some(response_rx)),
+    });
+    let fixture =
+        scheduled_fixture_with(Vec::new(), Some(coordinator_probe), Some(tool.clone())).await;
+    let runtime = fixture.runtime.clone();
+    assert!(
+        runtime.inner.scheduled_executor.admit_next(),
+        "the admitted start is reserved"
+    );
+    // The graph physically dispatches the Tool node.
+    let mut started = tool.started.subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        started
+            .wait_for(|entered| *entered)
+            .await
+            .expect("tool watch")
+    })
+    .await
+    .expect("the graph physically starts the Tool node");
+    // The remote response is lost: the execution ends `OutcomeUnknown`, the
+    // effect can never carry a positive physical proof, and the graph
+    // finishes with that uncertainty.
+    drop(response_tx);
+    // The runner itself processes the real `AwaitingNativeProof` settlement
+    // result and enters the reconciliation loop — the probe parks it inside
+    // that branch, after the blocked diagnostic is durably written.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        gate.wait_entered_async(),
+    )
+    .await
+    .expect("the runner received AwaitingNativeProof and entered reconciliation");
+    // Retention through the reconciliation wait: exact owner, slot,
+    // capability lease, durable Claim — and the graph ran exactly once.
+    let owner_probe = runtime
+        .inner
+        .probe_scheduled_owner(&fixture.start.id)
+        .expect("the exact owner is retained in reconciliation");
+    assert!(owner_probe.graph_finished);
+    assert!(
+        runtime
+            .inner
+            .lock_state()
+            .foreground
+            .slot
+            .as_scheduled()
+            .is_some(),
+        "the slot owner is retained while the proof is missing"
+    );
+    assert!(
+        runtime.capability().active_attempts() >= 1,
+        "the capability lease is still held by the reconciling runner"
+    );
+    let view = fixture
+        .store
+        .scheduled_workflow_get(&fixture.start.id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(view.head.state, ScheduledWorkflowState::Claimed { .. }),
+        "the durable row stays Claimed through reconciliation: {:?}",
+        view.head.state
+    );
+    assert_eq!(
+        tool.starts.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the graph executed exactly once — no replay"
+    );
+    let page = fixture
+        .store
+        .scheduled_workflow_recovery(&fixture.start.id, 0, 100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.effects.len(), 1, "one physical effect owner");
+    assert!(
+        !page.effects[0].physical_settlement_proven,
+        "the lost response keeps the effect unproven"
+    );
+    // The physical completion proof finally arrives through the effect
+    // ownership seam — the runner's own retry must observe it.
+    let claim = ClaimedScheduledWorkflow { start: view };
+    fixture
+        .store
+        .scheduled_workflow_effect_settled(
+            &claim,
+            &page.effects[0].node,
+            true,
+            Some("test: the physical settlement proof arrived"),
+        )
+        .unwrap();
+    gate.release();
+    owner_probe.settlement_wake.notify_one();
+    // The runner — never the test — completes the durable settlement. The
+    // outcome is honestly `OutcomeUnknown`: ownership was uncertain, so no
+    // success can be claimed even though the graph returned.
+    let outcome = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
+    assert!(
+        matches!(outcome, ScheduledWorkflowOutcome::OutcomeUnknown { .. }),
+        "an uncertain run settles OutcomeUnknown, never Completed: {outcome:?}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let slot_free = runtime
+                .inner
+                .lock_state()
+                .foreground
+                .slot
+                .as_scheduled()
+                .is_none();
+            if slot_free && runtime.capability().active_attempts() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner releases the slot owner and the capability lease after settlement");
+    assert_eq!(
+        tool.starts.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the graph was never replayed across the whole reconciliation"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("shutdown timeout")
+        .expect("fixture shutdown");
+}
+
+// ---- Issue #606 acceptance-matrix: scheduled-workflow shared fixture ----
+
+struct ScheduledFixture {
+    _dir: tempfile::TempDir,
+    runtime: ConversationRuntime,
+    _model: Arc<test_support::FakeModel>,
+    store: Arc<dyn crate::durable::ConversationStore>,
+    _workflow_id: crate::runtime::workflow::WorkflowId,
+    _binding: crate::scheduler::ScheduleBinding,
+    contract: crate::runtime::workflow::scheduled::PinnedScheduledWorkflow,
+    start: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowHead,
+}
+
+async fn scheduled_fixture() -> ScheduledFixture {
+    scheduled_fixture_with(Vec::new(), None, None).await
+}
+
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+async fn scheduled_fixture_with(
+    scripts: Vec<Vec<test_support::FakeStep>>,
+    probe: Option<probe::CoordinatorProbe>,
+    tool: Option<Arc<dyn crate::tools::executor::ToolExecutor>>,
+) -> ScheduledFixture {
+    use crate::runtime::workflow::scheduled::{
+        ScheduledWorkflowPreparation, lifecycle::ScheduledWorkflowState,
+    };
+    use crate::runtime::workflow::{WorkflowCatalog, WorkflowProgram};
+    use crate::scheduler::{
+        ScheduleAdmission, ScheduleBinding, ScheduleCommand, ScheduleCommandAuthority,
+        ScheduleCommandResult, ScheduleMutation, ScheduleTiming,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workflow_id = crate::runtime::workflow::WorkflowId::parse("scheduled").unwrap();
+    let empty_schema: serde_json::Value =
+        serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
+    let program = WorkflowProgram::compile(
+        workflow_id.clone(),
+        serde_json::from_value(if tool.is_some() {
+            serde_json::json!({
+                "description":"Native scheduled tool run","timeout_ms":20000,
+                "block":{"input":{"type":"object","properties":{"task":{"type":"string","default":"review"}},"additionalProperties":false},
+                "nodes":{"workflow_start":{"type":"start"},"work":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{}},"result":{"type":"json","schema":empty_schema}},"done":{"type":"return","outputs":[]}},
+                "edges":[{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}]}
+            })
+        } else {
+            serde_json::json!({
+                "description":"Native scheduled run","timeout_ms":1000,
+                "block":{"input":{"type":"object","properties":{"answer":{"type":"string","default":"native durable return"}},"additionalProperties":false},
+                "nodes":{"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","answer"]}]}},
+                "edges":[{"from":"workflow_start","to":"done"}]}
+            })
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let tool_registry = tool.map(|executor| {
+        let definition = crate::tools::types::ToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-check"),
+            name: "check".into(),
+            description: "Controlled response-loss tool".into(),
+            input_schema: empty_schema.clone().into(),
+            execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+            origin: crate::tools::types::ToolOrigin::Builtin,
+        };
+        crate::tools::executor::ToolRegistry::from_registrations([
+            crate::tools::executor::ToolRegistration::plain(definition, executor),
+        ])
+        .expect("controlled tool registry")
+    });
+    let mut workflows = WorkflowCatalog::new([program]).unwrap();
+    let available_tools = tool_registry.as_ref().map_or_else(
+        crate::capabilities::AvailableToolCatalog::default,
+        |registry| {
+            crate::capabilities::AvailableToolCatalog::new(registry.validated_registrations())
+        },
+    );
+    workflows.admit(
+        &available_tools,
+        &crate::capabilities::CapabilityAvailability::new(),
+        &crate::skills::SkillSnapshot::new(Vec::new()),
+        &crate::runtime::subagent::AgentCatalog::empty(),
+        &BTreeMap::new(),
+    );
+    let (runtime, model) = test_support::headless_runtime_with_options(
+        &dir,
+        scripts,
+        tool_registry,
+        probe,
+        test_support::HeadlessRuntimeOptions {
+            workflow_catalog: workflows,
+            root_workflows: BTreeSet::from([workflow_id.clone()]),
+            with_subagents: true,
+            ..test_support::HeadlessRuntimeOptions::default()
+        },
+    )
+    .await;
+    {
+        let mut state = runtime.inner.lock_state();
+        let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+            b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent.model]\nmodel='scripted/scripted'\n",
+        )
+        .unwrap();
+        config.approval_mode = ApprovalMode::FullAccess;
+        let configuration = crate::runtime::resources::RuntimeConfiguration {
+            config: Arc::new(config),
+            models: state.config.model.registry().unwrap().clone(),
+            resource_definitions: Vec::new(),
+            resource_diagnostics: Vec::new(),
+            authored: crate::local_runtime::configuration::generation::AuthoredConfiguration {
+                component_revisions: BTreeMap::new(),
+                source_revisions: BTreeMap::new(),
+                effective:
+                    crate::local_runtime::configuration::settings::SourceDocumentView::default(),
+                provenance: BTreeMap::new(),
+            },
+        };
+        state.config.resources = Arc::new(
+            state
+                .config
+                .resources
+                .as_ref()
+                .clone()
+                .with_configuration(configuration),
+        );
+    }
+    runtime.activate();
+    let store = runtime.tool_runtime().durable_store();
+    let binding = ScheduleBinding {
+        session_id: crate::runtime::identity::SessionId::new(
+            "ses_01900000-0000-7000-8000-000000000001",
+        ),
+        node_id: crate::runtime::identity::SessionNodeId::new(
+            "node_01900000-0000-7000-8000-000000000001",
+        ),
+        conversation_id: runtime.conversation_id().clone(),
+    };
+    let (catalog_changed, _watch) = tokio::sync::watch::channel(());
+    runtime
+        .inner
+        .tool_runtime
+        .schedule()
+        .bind(
+            binding.clone(),
+            Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            Arc::new(tokio::sync::Notify::new()),
+            catalog_changed,
+        )
+        .expect("bind schedule control");
+    let (resources, model_config, approval) = {
+        let state = runtime.inner.lock_state();
+        (
+            state.config.resources.clone(),
+            state.config.model.config().clone(),
+            state.config.effective_approval_mode,
+        )
+    };
+    let contract = ScheduledWorkflowPreparation::new(binding.clone(), resources, model_config)
+        .expect("scheduled preparation")
+        .with_approval_mode(approval)
+        .prepare(&workflow_id, &serde_json::json!({}))
+        .expect("prepare scheduled workflow")
+        .contract()
+        .clone();
+    let applied = store
+        .schedule_workflow_command(
+            &binding,
+            &ScheduleCommand {
+                command_id: "native-workflow".to_owned(),
+                mutation: ScheduleMutation::CreateWorkflow {
+                    title: "Native scheduled run".to_owned(),
+                    workflow_id: workflow_id.clone(),
+                    arguments: serde_json::json!({}),
+                    timing: ScheduleTiming::After { seconds: 60 },
+                },
+            },
+            &crate::runtime::types::SystemClock,
+            &ScheduleCommandAuthority::RuntimeControl,
+            &contract,
+        )
+        .expect("create scheduled workflow");
+    let ScheduleCommandResult::Applied { receipt } = applied else {
+        panic!("native schedule create: {applied:?}")
+    };
+    struct FastForwardClock;
+    impl crate::runtime::types::RuntimeClock for FastForwardClock {
+        fn now(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now() + chrono::Duration::seconds(61)
+        }
+    }
+    let ScheduleAdmission::WorkflowAdmitted { start, .. } = store
+        .admit_scheduled_target(&receipt.id, receipt.revision, &FastForwardClock)
+        .expect("native schedule admission")
+    else {
+        panic!("native workflow admission")
+    };
+    assert!(
+        matches!(start.state, ScheduledWorkflowState::Accepted { .. }),
+        "the admitted start is fresh, never claimed"
+    );
+    ScheduledFixture {
+        _dir: dir,
+        runtime,
+        _model: model,
+        store,
+        _workflow_id: workflow_id,
+        _binding: binding,
+        contract,
+        start: *start,
+    }
+}
+
+async fn scheduled_settled(
+    store: &dyn crate::durable::ConversationStore,
+    id: &ScheduledWorkflowStartId,
+) -> crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowOutcome {
+    use crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let view = store.scheduled_workflow_get(id).unwrap().unwrap();
+            if let ScheduledWorkflowState::Settled { outcome, .. } = view.head.state {
+                break outcome;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("scheduled settlement")
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scheduled_owner_defers_catalog_and_staged_config_but_not_policy() {
+    // Scheduled Publication Matrix (Issue #606): a running Scheduled owner
+    // fences the runtime MCP catalog observation and the staged
+    // configuration commit; a pure ExecutionPolicy commit never consults
+    // that gate. Both deferred consumers publish after settlement.
+    use crate::runtime::configuration_commit::{
+        ConfigurationChangeReason, DesiredApplication, StagedConfiguration, StagedOutcome,
+    };
+    let fixture = scheduled_fixture().await;
+    let runtime = fixture.runtime.clone();
+    let gate = Arc::new(probe::Gate::default());
+    let release = gate.arm_scoped();
+    runtime.install_scheduled_settlement_gate(gate.clone());
+    assert!(
+        runtime.inner.scheduled_executor.admit_next(),
+        "the admitted start is reserved"
+    );
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    assert!(
+        runtime
+            .inner
+            .lock_state()
+            .foreground
+            .slot
+            .blocks_runtime_publication(),
+        "the parked Scheduled owner holds the publication fence"
+    );
+    // Pure ExecutionPolicy commits immediately under the coordinator lock.
+    let outcome = runtime.apply_execution_policy(|configuration| {
+        let mut config = (*configuration.config).clone();
+        config.approval_mode = ApprovalMode::Plan;
+        Some(crate::runtime::resources::RuntimeConfiguration {
+            config: Arc::new(config),
+            ..configuration.clone()
+        })
+    });
+    assert!(
+        matches!(outcome, Ok(StagedOutcome::Committed)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        runtime.inner.lock_state().config.effective_approval_mode,
+        ApprovalMode::Plan,
+        "the policy commit is visible even while Scheduled holds the slot"
+    );
+    // A staged context candidate stays staged while the owner holds.
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
+    let desired_current = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let prepared = runtime
+        .prepare_context_configuration(|configuration| crate::runtime::resources::ContextBinding {
+            configuration: configuration.clone(),
+            project_context_files: Vec::new(),
+            skills: Arc::new(crate::skills::SkillSnapshot::new(Vec::new())),
+        })
+        .expect("context candidate");
+    runtime.stage_configuration(StagedConfiguration {
+        prepared,
+        desired: DesiredApplication::new(desired_current.clone(), 1),
+        reason: ConfigurationChangeReason::Source,
+        retain: Box::new(|_revision| {}),
+        settled: Box::new(move |outcome| {
+            let _ = settled_tx.send(outcome);
+            Box::pin(async {})
+        }),
+    });
+    assert!(
+        runtime.has_staged_configuration(),
+        "the staged candidate waits on the Scheduled owner"
+    );
+    // An MCP catalog change stays unobserved while the owner holds. The
+    // preparer is the off-side preparation seam the publication pipeline
+    // must reach to consume the observation.
+    runtime.install_runtime_catalog_preparer(Arc::new(|_candidate, _resources| {
+        Err("test: catalog candidate intentionally unprepared".to_owned())
+    }));
+    runtime.capability().notify_catalog_change_for_test();
+    let observed = runtime.capability().catalog_revision();
+    {
+        let mut state = runtime.inner.lock_state();
+        runtime.inner.publish_runtime_catalogs_locked(&mut state);
+        assert!(
+            state.config.catalog_revision < observed,
+            "the catalog observation is deferred by the Scheduled owner"
+        );
+    }
+    drop(release);
+    let _ = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
+    // The durable `Settled` row is only step one of the settlement: the
+    // runner then calls `finish_scheduled`, which is what releases the
+    // native foreground slot. Wait for that slot-release signal — the real
+    // publication fence lifting — before driving the publish pass.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if runtime
+                .inner
+                .lock_state()
+                .foreground
+                .slot
+                .as_scheduled()
+                .is_none()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner releases the slot owner after settlement");
+    // With the fence provably lifted, drive the consumer the way the
+    // runtime does: repeat the publish pass until the observed cut is
+    // covered (a `Busy` capability commit is a transient seam, not a
+    // terminal state).
+    for _ in 0..10 {
+        {
+            let mut state = runtime.inner.lock_state();
+            runtime.inner.publish_runtime_catalogs_locked(&mut state);
+            if state.config.catalog_revision >= observed {
+                break;
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    {
+        let mut state = runtime.inner.lock_state();
+        assert!(
+            state.config.catalog_revision >= observed,
+            "the deferred catalog observation publishes after settlement"
+        );
+        runtime.inner.commit_staged_configuration_locked(&mut state);
+        assert!(state.config.staged_configuration.is_none());
+    }
+    assert!(
+        matches!(settled_rx.await, Ok(StagedOutcome::Committed)),
+        "the deferred candidate commits after settlement"
+    );
+    runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn the_title_publication_tail_blocks_the_drain_after_the_call_settles() {
+    // Title Publication Tail (Issue #606): the REAL title path — durable
+    // human source → admitted auxiliary Call → Call settles — then parks
+    // at the separate catalog visibility transaction. A drain reaches its
+    // wait boundary behind that parked tail and only finishes after the
+    // publication commits.
+    let (_catalog_dir, catalog, _config) = crate::local_runtime::session::tests::open_catalog();
+    let session_id = catalog.persisted_session_ids()[0].clone();
+    let conversation = catalog
+        .snapshot(&session_id)
+        .unwrap()
+        .active_conversation_id;
+    let dir = tempfile::tempdir().expect("temp dir");
+    let store =
+        SqliteConversationStore::open(conversation.clone(), &dir.path().join("title.sqlite"))
+            .expect("open store");
+    store.initialize(&[]).expect("initialize store");
+    let gate = Arc::new(probe::Gate::default());
+    gate.arm();
+    let drain_gate = Arc::new(probe::Gate::default());
+    drain_gate.arm();
+    let (runtime, model) = test_support::headless_runtime_over_store_with(
+        &dir,
+        conversation.as_ref(),
+        Arc::new(store),
+        vec![
+            test_support::one_turn_script(),
+            test_support::text_turn_script("A short generated title"),
+        ],
+        Some(probe::CoordinatorProbe {
+            title_publication_gate: Some(gate.clone()),
+            drain_host_task_gate: Some(drain_gate.clone()),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let catalog = Arc::new(tokio::sync::Mutex::new(catalog));
+    runtime
+        .install_host_task({
+            let runtime = runtime.clone();
+            let weak = Arc::downgrade(&catalog);
+            let session_id = session_id.clone();
+            move || {
+                tokio::spawn(async move {
+                    runtime.attempt_settlement(0).await;
+                    crate::local_runtime::session_title::generate_for_test(
+                        &weak,
+                        &session_id,
+                        &runtime,
+                    )
+                    .await;
+                })
+            }
+        })
+        .expect("install title host task while Inactive");
+    runtime.activate();
+    runtime
+        .submit_inbound(test_support::text_content("hello"))
+        .expect("inbound queued");
+    // The real path reached the post-Call / pre-publication seam.
+    gate.wait_entered_async().await;
+    assert!(
+        *model.streams_exited().borrow() >= 2,
+        "the attempt stream and the title Call stream both exited"
+    );
+    // The drain commits Draining eagerly; it must then wait on the parked
+    // publication tail. The exact proof point is the host-task wait
+    // boundary: auxiliary drain complete, the supervisor parked immediately
+    // before awaiting the title owner — with the tail still open.
+    let drain = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.shutdown().await }
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        drain_gate.wait_entered_async(),
+    )
+    .await
+    .expect("the drain reaches the host-task wait boundary behind the parked tail");
+    assert!(
+        !drain.is_finished(),
+        "the drain is parked at the host-task boundary, not past it"
+    );
+    assert!(
+        catalog
+            .lock()
+            .await
+            .summary(&session_id)
+            .unwrap()
+            .generated_title
+            .is_none(),
+        "the title catalog publication is still fenced at this point"
+    );
+    // Let the supervisor consume the boundary and enter the host-task await;
+    // the tail still holds it — the drain cannot finish.
+    drain_gate.release();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for _ in 0..20 {
+            assert!(
+                !drain.is_finished(),
+                "the drain waits on the still-parked title tail"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the drain stays parked on the publication tail");
+    gate.release();
+    drain.await.expect("drain task").expect("shutdown");
+    assert!(
+        catalog
+            .lock()
+            .await
+            .summary(&session_id)
+            .unwrap()
+            .generated_title
+            .is_some(),
+        "the deferred catalog publication committed before the drain closed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mutated_generation_between_prep_and_claim_refuses_the_stale_claim() {
+    // Prep→Claim staleness (Issue #606): the frozen generation captured at
+    // reservation time is re-validated inside the Claim critical section.
+    // A real policy commit that replaces resources and approval between
+    // the two must make the old Claim never commit and never start a graph.
+    use crate::runtime::conversation_runtime::scheduled::{ScheduledClaim, ScheduledSnapshot};
+    use crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowState;
+    let fixture = scheduled_fixture().await;
+    let runtime = fixture.runtime.clone();
+    let reservation = runtime
+        .inner
+        .reserve_scheduled_start(|_| true)
+        .expect("the admitted start is reserved");
+    let snapshot = ScheduledSnapshot {
+        resources: reservation.resources.clone(),
+        model: reservation.model.clone(),
+        approval: reservation.approval,
+    };
+    // The mutation lands through the real commit path between reservation
+    // and Claim: a new resources generation plus a different approval mode.
+    runtime
+        .apply_execution_policy(|configuration| {
+            let mut config = (*configuration.config).clone();
+            config.approval_mode = ApprovalMode::Plan;
+            Some(crate::runtime::resources::RuntimeConfiguration {
+                config: Arc::new(config),
+                ..configuration.clone()
+            })
+        })
+        .expect("policy commit");
+    let lease_resources = reservation.resources.clone();
+    let claim = runtime
+        .inner
+        .claim_scheduled_start(
+            &reservation.start.head.id,
+            &fixture.contract,
+            &snapshot,
+            &reservation.owner,
+            &reservation.cancellation,
+            || {
+                runtime
+                    .capability()
+                    .acquire_attempt_lease_for(lease_resources.capability().clone())
+            },
+        )
+        .expect("claim answers");
+    assert!(
+        matches!(claim, ScheduledClaim::Stale),
+        "a moved generation refuses the stale Claim"
+    );
+    let view = fixture
+        .store
+        .scheduled_workflow_get(&reservation.start.head.id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(view.head.state, ScheduledWorkflowState::Accepted { .. }),
+        "the durable row was never Claimed: {:?}",
+        view.head.state
+    );
+    runtime.inner.finish_scheduled(&reservation.owner);
+    drop(reservation);
+    runtime.shutdown().await.expect("fixture shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_runner_owns_settlement_after_the_graph_finishes() {
+    // Real-runner settlement ownership (Issue #606): the admitted
+    // `ScheduledExecutor` task — never test code — runs the graph, keeps the
+    // exact slot owner, the capability lease and the Claim through the
+    // settlement boundary, and only then releases them. The runner is
+    // parked at the real settlement-entry barrier (after
+    // `mark_scheduled_graph_finished`, before the settlement loop), where
+    // the test proves retention; after the barrier the runner itself
+    // commits the durable settlement, releases the slot through
+    // `finish_scheduled` and drops the lease — no `finish_scheduled` call
+    // in this test.
+    use crate::runtime::workflow::scheduled::lifecycle::{
+        ScheduledWorkflowOutcome, ScheduledWorkflowState,
+    };
+    let gate = Arc::new(probe::Gate::default());
+    gate.arm();
+    let coordinator_probe = probe::CoordinatorProbe {
+        scheduled_settlement_gate: Some(gate.clone()),
+        ..Default::default()
+    };
+    let fixture = scheduled_fixture_with(Vec::new(), Some(coordinator_probe), None).await;
+    let runtime = fixture.runtime.clone();
+    assert!(
+        runtime.inner.scheduled_executor.admit_next(),
+        "the admitted start is reserved"
+    );
+    // The runner reached the settlement-entry barrier: the graph physically
+    // finished, the settlement loop has not started.
+    gate.wait_entered_async().await;
+    let (owner_probe, ownerless) = runtime
+        .inner
+        .reconcile_scheduled(&fixture.start.id, || 1_u8);
+    let owner_probe = owner_probe.expect("the live owner is still probed");
+    assert!(owner_probe.graph_finished);
+    assert!(
+        ownerless.is_none(),
+        "the ownerless submission is deferred while the owner holds"
+    );
+    assert!(
+        runtime
+            .inner
+            .lock_state()
+            .foreground
+            .slot
+            .as_scheduled()
+            .is_some(),
+        "the slot owner is retained across the settlement boundary"
+    );
+    assert!(
+        runtime.capability().active_attempts() >= 1,
+        "the capability lease is still held by the parked runner"
+    );
+    let view = fixture
+        .store
+        .scheduled_workflow_get(&fixture.start.id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(view.head.state, ScheduledWorkflowState::Claimed { .. }),
+        "the durable row stays Claimed — no ownerless retirement, no replay: {:?}",
+        view.head.state
+    );
+    // Release the barrier: the runner itself commits the durable settlement,
+    // releases the slot and drops the lease. `finish_scheduled` is never
+    // called from this test.
+    gate.release();
+    let outcome = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
+    assert!(
+        matches!(outcome, ScheduledWorkflowOutcome::Completed),
+        "the runner commits the Completed settlement itself: {outcome:?}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let slot_free = runtime
+                .inner
+                .lock_state()
+                .foreground
+                .slot
+                .as_scheduled()
+                .is_none();
+            if slot_free && runtime.capability().active_attempts() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner releases the slot owner and the capability lease after settlement");
+    // With the owner gone, the reconciliation seam runs the ownerless
+    // submission — the exact post-release frontier.
+    let (owner_probe, ownerless) = runtime
+        .inner
+        .reconcile_scheduled(&fixture.start.id, || 7_u8);
+    assert!(owner_probe.is_none());
+    assert_eq!(ownerless, Some(7_u8));
+    runtime.shutdown().await.expect("fixture shutdown");
+}

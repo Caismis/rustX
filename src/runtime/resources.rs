@@ -331,6 +331,41 @@ impl RuntimeResourceSnapshot {
         self
     }
 
+    /// Test-only resolved Root profile carrying an explicit Workflow
+    /// authority list — the headless fixture has no `rustx.toml` authoring
+    /// layer, so scheduled-workflow preparation needs the list injected.
+    #[cfg(test)]
+    pub(crate) fn with_test_root_workflows(
+        mut self,
+        workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
+    ) -> Self {
+        use crate::runtime::agent_profile::{
+            AgentProfileAuthority, AgentScope, resolve_agent_profile,
+        };
+        let mut profile = crate::local_runtime::config::builtin_root_profile()
+            .lower()
+            .unwrap();
+        profile.workflows = workflows;
+        let resolved = resolve_agent_profile(
+            &profile,
+            &AgentProfileAuthority {
+                tools: self.capability.available_tools(),
+                availability: &self.capability_availability,
+                skills: self.capability.skills(),
+                workflows: &self.workflows.enabled_ids(),
+                scope: AgentScope::Root,
+            },
+        );
+        self.capability = Arc::new(
+            self.capability
+                .as_ref()
+                .clone()
+                .with_resolved_profile(Some(Arc::new(resolved))),
+        );
+        self.refresh_inspection();
+        self
+    }
+
     /// Preserve configuration identity while resolving newly admitted demand.
     pub(crate) fn with_admitted_capability(
         mut self,

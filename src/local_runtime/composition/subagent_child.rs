@@ -862,7 +862,18 @@ impl LocalConversationCore {
                 // A child runtime has no subagent registry: recursive
                 // delegation is absent by construction.
                 subagents: None,
-                workflow_output,
+                // The role follows the declared terminal mode, not the
+                // optional output latch: a schema-free run
+                // (`WorkflowChildTerminal::Text`) is still a
+                // `WorkflowAgentRun` — never a steerable `SubagentChild`.
+                role: match &workflow_terminal {
+                    Some(_) => {
+                        crate::runtime::conversation_runtime::ConversationRole::WorkflowAgentRun {
+                            output: workflow_output,
+                        }
+                    }
+                    None => crate::runtime::conversation_runtime::ConversationRole::SubagentChild,
+                },
             })?;
 
             Ok(Self {
@@ -894,7 +905,11 @@ impl LocalConversationCore {
         )?;
         let runtime = LocalConversationRuntime { core: self, host };
         runtime.runtime().install_interaction_route(route);
-        runtime.runtime().gate_child_turns();
+        runtime
+            .runtime()
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
         Ok(runtime)
     }
