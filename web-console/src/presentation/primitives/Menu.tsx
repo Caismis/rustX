@@ -171,6 +171,9 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
   const [subPopupElement, setSubPopupElement] = useState<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLDivElement | null>(null)
   const suppressFocusOpen = useRef(false)
+  // Hover-opened submenus are presentation, not a press target: the first
+  // mouse activation on their trigger must not toggle them back closed.
+  const hoverOpened = useRef(false)
   const keyboardOwned = ownership.owner === entry.id
   const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -236,9 +239,12 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
   </>
   return <MenuSub highlightItemOnHover={false} open={submenuOpen} onOpenChange={(next, details) => {
     if (next && ownership.owner !== null && ownership.owner !== entry.id) return
+    if (!next && details.reason === 'item-press' && hoverOpened.current) return
     if (!next && keyboardOwned && details.reason !== 'escape-key' && details.reason !== 'list-navigation' && details.reason !== 'item-press' && details.reason !== 'imperative-action') return
+    if (next && details.reason === 'item-press') hoverOpened.current = false
     setSubmenuOpen(next)
     if (!next) {
+      hoverOpened.current = false
       if (details.reason === 'escape-key' || details.reason === 'list-navigation') suppressFocusOpen.current = true
       if (keyboardOwned && details.reason !== 'sibling-open') ownership.release(entry.id)
     }
@@ -254,6 +260,7 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
         ownership.enterRow(entry.id)
         if (entry.disabled || ownership.owner !== null) return
         cancelHoverClose()
+        hoverOpened.current = true
         setSubmenuOpen(true)
       }}
       onPointerLeave={armHoverClose}
@@ -282,7 +289,7 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
         setSubmenuOpen(false)
       }}
       onKeyDownCapture={(event) => {
-        if (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ' || event.key === 'Tab') {
+        if (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ' || (event.key === 'Tab' && !event.shiftKey)) {
           if (entry.disabled) return
           event.preventDefault()
           event.stopPropagation()

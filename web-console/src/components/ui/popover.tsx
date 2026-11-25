@@ -58,7 +58,9 @@ export function PopoverPopup({
   // focus move gives, so deferred-commit fields apply instead of stranding.
   useEffect(() => {
     const blurOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      // Escape that cancels an IME candidate list is composition input, not a
+      // popup dismissal: the field keeps its editing session.
+      if (event.key !== 'Escape' || event.isComposing) return;
       const focused = document.activeElement;
       if (focused instanceof HTMLElement && popupRef.current?.contains(focused) === true) focused.blur();
     };

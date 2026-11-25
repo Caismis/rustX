@@ -2397,7 +2397,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "bd8f2d40525fb1cb974de8c1cd4d52c5f981c14875e66d68e005bae889181771",
+      "local_sha256": "de85d00d9941b420e5e103bb8b737a3df0bcca8105d607541e373ab9b3df7ca0",
       "classification": "B",
       "additional_sources": [
         {
