@@ -7814,17 +7814,16 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./PickerPopover.module.css",
-        "@floating-ui/react-dom",
+        "@/components/ui/popover",
         "clsx",
-        "react",
-        "react-dom"
+        "react"
       ],
       "excluded_dependencies": [
         "Harness Host and Peer services",
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "9140cec2350b94948c9569ee327784b613318019e59de60925cff85f537dbce7"
+      "local_sha256": "c2970cf734866ae7fe5b913272a24804798a43211d98623634061c84a585dce5"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
