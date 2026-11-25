@@ -1306,8 +1306,6 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['browser-prepare']
     runs-on: ubuntu-26.04
     timeout-minutes: 30
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
