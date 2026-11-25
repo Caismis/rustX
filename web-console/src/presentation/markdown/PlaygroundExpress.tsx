@@ -4,7 +4,7 @@ import { GenerativeUIRuntimeContext, SurfaceView, type GenerativeUIRuntime } fro
 import { ExpressCard, ExpressEventContext } from './ExpressCard';
 import type { ExpressSurface } from './a2ui-express';
 import { MAX_SOURCE_LENGTH } from './express-values';
-import { MarkdownText } from './MarkdownText';
+import { ExpressInvalid } from './ExpressInvalid';
 import { playgroundParser } from './playground-parser';
 import catalog from './vendor/playground/catalog.json';
 import { playgroundUI } from './vendor/playground/ui';
@@ -30,13 +30,16 @@ function guard(value: unknown, depth = 0): unknown {
     .map(([key, item]) => [key, guard(item, depth + 1)]));
 }
 
-export function createSurface(source: string) {
-  if (source.length > MAX_SOURCE_LENGTH) return undefined;
+export type PlaygroundView = { manager: GenerativeUISurfaceManager; surface: NonNullable<ReturnType<GenerativeUISurfaceManager['getSurface']>> };
+
+/** Compile one Express block, or say why it cannot be shown. */
+export function createSurface(source: string): PlaygroundView | { error: string } {
+  if (source.length > MAX_SOURCE_LENGTH) return { error: `Express source exceeds ${MAX_SOURCE_LENGTH} characters` };
   try {
     const body = source.trim().replace(/^<a2ui>\s*/, '').replace(/\s*<\/a2ui>$/, '');
     const operations = playgroundParser.compile(body).filter(operation => !('callRendererFunction' in operation));
     const createdOps = operations.filter(operation => 'createSurface' in operation);
-    if (createdOps.length !== 1 || !createdOps[0]?.createSurface) return undefined;
+    if (createdOps.length !== 1 || !createdOps[0]?.createSurface) return { error: `Expected one surface, found ${createdOps.length}` };
     const { surfaceId } = createdOps[0].createSurface;
     const content = GenerativeUISurfaceContentSchema.parse({
       surfaceId, catalogId: catalog.catalogId, target: inlineTarget, operations: guard(operations), status: 'ready', rejected: [],
@@ -44,21 +47,23 @@ export function createSurface(source: string) {
     const manager = new GenerativeUISurfaceManager(playgroundUI);
     manager.ingest('inline', undefined, content);
     const surface = manager.getSurface('inline', surfaceId);
-    if (!surface || surface.failed || surface.clientRejected.length > 0 || !surface.model.componentsModel.get('root')) {
-      return undefined;
-    }
+    if (!surface) return { error: 'The surface was not created' };
+    const rejected = surface.clientRejected.map(item => item.reason);
+    if (surface.failed || rejected.length > 0) return { error: rejected.join('\n') || 'The surface was rejected' };
+    if (!surface.model.componentsModel.get('root')) return { error: 'The surface has no root component' };
     return { manager, surface };
-  } catch {
-    return undefined;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export default function PlaygroundExpress({ source, fallback, tree, streaming }: {
-  source: string; fallback: string; tree?: ExpressSurface; streaming: boolean;
+export default function PlaygroundExpress({ source, tree, streaming }: {
+  source: string; tree?: ExpressSurface; streaming: boolean;
 }) {
   const send = useContext(ExpressEventContext);
   const activation = useRef<Event | undefined>(undefined);
-  const view = useMemo(() => createSurface(source), [source]);
+  const result = useMemo(() => createSurface(source), [source]);
+  const view = 'error' in result ? undefined : result;
   const runtime = useMemo<GenerativeUIRuntime | undefined>(() => view && ({
     manager: view.manager,
     dispatcher: createGenerativeUIDispatcher({ getDeclared: () => new Map() }),
@@ -85,7 +90,7 @@ export default function PlaygroundExpress({ source, fallback, tree, streaming }:
     reportError: () => {},
   }), [send, streaming, view]);
 
-  if (!view || !runtime) return tree ? <ExpressCard surface={tree} streaming={streaming}/> : <MarkdownText text={fallback}/>;
+  if (!view || !runtime) return tree ? <ExpressCard surface={tree} streaming={streaming}/> : <ExpressInvalid source={source} error={'error' in result ? result.error : ''}/>;
   function activate(nativeEvent: Event) {
     if (!nativeEvent.isTrusted) return;
     activation.current = nativeEvent;

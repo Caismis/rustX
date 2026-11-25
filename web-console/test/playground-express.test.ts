@@ -15,6 +15,6 @@ it('covers every component in the published Playground catalog', () => {
 describe('published Playground gallery', () => {
   it.each(Object.entries(cases))('compiles and applies the %s Express sample', (_name, source) => {
     const view = createSurface(source);
-    expect(view?.surface.clientRejected).toEqual([]);
+    expect('error' in view ? view.error : view.surface.clientRejected).toEqual([]);
   });
 });

@@ -78,7 +78,7 @@ export function AssistantMarkdown({ text, streaming = false, fileMentions }: { t
     {part.draft !== undefined || part.source || part.tree
       ? <ExpressGeneration live={streaming} draft={part.draft} contentKey={part.source ?? (part.tree ? part.text : undefined)}>
         {part.source
-          ? <PlaygroundExpress key={part.source} source={part.source} fallback={part.text} tree={part.tree} streaming={streaming}/>
+          ? <PlaygroundExpress key={part.source} source={part.source} tree={part.tree} streaming={streaming}/>
           : part.tree && <ExpressCard key={part.text} surface={part.tree} streaming={streaming}/>}
       </ExpressGeneration>
       : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1} fileMentions={fileMentions}/>}

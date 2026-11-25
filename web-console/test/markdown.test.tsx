@@ -62,3 +62,14 @@ it('renders case-insensitive Express fences as inline views', () => {
   expect(view.getByText('Inline view')).toBeTruthy();
   expect(view.container.querySelector('pre')).toBeNull();
 });
+
+it('explains an Express block that fails to compile instead of leaking it into prose', async () => {
+  const source = '<a2ui>\nsurface("inline")\nroot = BarChart("Top stories", [{label: "A", value: 1}])\n</a2ui>';
+  const view = render(<AssistantMarkdown text={`Before.\n\n${source}\n\nAfter.`}/>);
+  const note = await view.findByRole('note', undefined, { timeout: 15000 });
+  expect(note.textContent).toContain('This inline view couldn’t be displayed.');
+  expect(note.querySelector('details')?.open).toBe(false);
+  expect(note.textContent).toContain("missing required property 'data'");
+  expect(note.querySelector('code')?.textContent).toBe(source);
+  expect(view.container.textContent).toMatch(/Before\..*After\./s);
+}, 20000);
