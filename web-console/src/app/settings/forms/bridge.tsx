@@ -875,7 +875,10 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   const register = page?.register;
   const reportDraft = page?.reportDraft;
   const unsaved = !!snapshot && unsavedIntent(snapshot);
-  useLayoutEffect(() => register?.(identity, handle.current), [register, identity]);
+  // Embedded editors share the primary editor's unit transaction but must
+  // not race it for the page-save handle: the primary editor owns submission
+  // chrome and completion behavior (for example closing its detail surface).
+  useLayoutEffect(() => embedded ? undefined : register?.(identity, handle.current), [register, identity, embedded]);
   useEffect(() => { reportDraft?.(identity, unsaved); }, [reportDraft, identity, unsaved]);
   return unit;
 }
