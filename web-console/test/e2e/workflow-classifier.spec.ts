@@ -106,6 +106,9 @@ for (const width of [1440,390]) test.describe(`classifier panel ${width}`,()=>{
       await panel.getByText('class_name',{exact:true}).scrollIntoViewIfNeeded();
       for(const name of ['class_name','class_label','usage'])await expect(panel.getByText(name,{exact:true})).toBeVisible();
       const save=page.getByRole('button',{name:'保存文件',exact:true});await save.click();await expect(save).toBeDisabled();
+      // A pointer resting under the anchored announcement pauses its lifetime
+      // timer: park it so the notice expires on schedule.
+      await page.mouse.move(0,0);
       const saved=parse(readFileSync(file,'utf8')),classifier=saved.block.nodes.classify;
       expect(classifier.input).toEqual({type:'reference',path:['args','priority']});
       expect(classifier.classes.map((item:any)=>item.id)).toEqual(['class_2','class_1']);
