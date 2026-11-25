@@ -452,7 +452,7 @@ class Workflow(unittest.TestCase):
         for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
         for job in ("rust-contracts", "rust-boundaries"):
-            self.assertIn('CARGO_BUILD_JOBS: "1"', jobs[job])
+            self.assertIn('CARGO_BUILD_JOBS: "4"', jobs[job])
         # macOS lanes overlap two codegen workers; one rustX compilation peaks
         # near 3.5 GB RSS, so -j2 stays under the 7 GB runner (see ci.yml).
         for job in ("rust-platform-core", "rust-platform-boundaries"):
