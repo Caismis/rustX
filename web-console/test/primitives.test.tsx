@@ -23,6 +23,19 @@ it('a tooltip shows shortcut keycaps and withdraws when its action changes the l
   fireEvent.mouseEnter(button);
   expect(screen.getByRole('tooltip').textContent).toContain('Exit fullscreen');
 });
+it('a nested tooltip suppresses its ancestor bubble', () => {
+  render(<Tooltip label="Outer tip" side="bottom">
+    <span tabIndex={0}>Outer<Tooltip label="Inner tip" side="bottom"><button>Inner</button></Tooltip></span>
+  </Tooltip>);
+  const outer = screen.getByText('Outer');
+  const inner = screen.getByRole('button', { name: 'Inner' });
+  fireEvent.focus(outer);
+  expect(screen.getByRole('tooltip').textContent).toContain('Outer tip');
+  fireEvent.focus(inner);
+  expect(screen.queryByRole('tooltip', { name: /Outer tip/ })).toBeNull();
+  expect(screen.getByRole('tooltip').textContent).toContain('Inner tip');
+});
+
 it('Harness Menu never dispatches a disabled entry', () => {
   const select = vi.fn();
   const view = render(<Menu open anchor={<button>Actions</button>} items={[{ id: 'a', label: 'A', disabled: true }]} onClose={() => {}} onSelect={select} />);

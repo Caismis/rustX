@@ -2545,7 +2545,7 @@
         "@/components/ui/tooltip",
         "react"
       ],
-      "local_sha256": "05f537e1393776c304a72cbca1898f4091a009f0beada90fab7e4d46545837ca",
+      "local_sha256": "26457a2ee591fd701218520445b35c7fc1799c01a78cc8c2af45bede93f65c54",
       "classification": "A",
       "additional_sources": [
         {
@@ -8325,7 +8325,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4feec6478044ded56db5d3eb0ac53bc1fa06cf5360dd1a2904df72ccd1aa3ecb"
+      "local_sha256": "f0e2f06f1b8ec792faa11bab0db7a9f0b2286a6b585f170f9acd9b3839ea924b"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
