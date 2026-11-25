@@ -432,6 +432,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -457,7 +459,7 @@ jobs:
       # --skip, or a Linux test no lane executes fails here. The checker's own
       # deterministic tests ran above as part of `--examples`.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard --job rust-contracts-post
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
