@@ -239,9 +239,9 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
   </>
   return <MenuSub highlightItemOnHover={false} open={submenuOpen} onOpenChange={(next, details) => {
     if (next && ownership.owner !== null && ownership.owner !== entry.id) return
-    if (!next && details.reason === 'item-press' && hoverOpened.current) return
+    if (!next && details.reason === 'trigger-press' && hoverOpened.current) return
     if (!next && keyboardOwned && details.reason !== 'escape-key' && details.reason !== 'list-navigation' && details.reason !== 'item-press' && details.reason !== 'imperative-action') return
-    if (next && details.reason === 'item-press') hoverOpened.current = false
+    if (next && details.reason === 'trigger-press') hoverOpened.current = false
     setSubmenuOpen(next)
     if (!next) {
       hoverOpened.current = false
