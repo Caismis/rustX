@@ -538,23 +538,31 @@ it('provides Chinese labels and keyboard tab navigation', async () => {
   expect(screen.getByRole('tab', { name: '任务运行记录' }).getAttribute('aria-selected')).toBe('true'); expect(screen.getByText('暂无任务运行记录')).toBeTruthy();
 });
 
-it('keeps filtered time zone keyboard selection aligned with the visible row', async () => {
+function renderTimingZoneEditor() {
   const initial: TimingDraft = { kind: 'daily', date: '2028-11-01', time: '09:00:00', zone: 'UTC', quantity: '1', unit: 'hour', weekdays: [1], expression: '0 9 * * *' };
   const t = (key: TaskManagerKey) => key === 'timing.zone' ? 'Time zone' : key === 'timing.zone-search' ? 'Search time zones' : key;
-  let current = initial;
+  const state = { current: initial };
   function Harness() {
     const [value, setValue] = useState(initial);
-    current = value;
+    state.current = value;
     return <TimingEditor value={value} change={setValue} disabled={false} t={t} locale="en"/>;
   }
   render(<Harness/>);
+  return state;
+}
+it.each([
+  { query: 'America/New_York', zone: 'America/New_York' },
+  { query: 'America/New_York ', zone: 'America/New_York' },
+  { query: 'Reunion Time', zone: 'Indian/Reunion' },
+])('keeps filtered time zone keyboard selection aligned with the visible row', async ({ query, zone }) => {
+  const state = renderTimingZoneEditor();
   const input = await screen.findByRole('combobox', { name: 'Time zone' });
   fireEvent.click(document.querySelector('[data-slot="autocomplete-trigger"]')!);
-  fireEvent.change(input, { target: { value: 'America/New_York' } });
-  await screen.findByText(/America\/New_York/);
+  fireEvent.change(input, { target: { value: query } });
+  await screen.findByText(new RegExp(zone.replace('/', '\\/')));
   fireEvent.keyDown(input, { key: 'ArrowDown' });
   fireEvent.keyDown(input, { key: 'Enter' });
-  await waitFor(() => expect(current.zone).toBe('America/New_York'));
+  await waitFor(() => expect(state.current.zone).toBe(zone));
 });
 
 it('converts local time, rejects DST gaps and cron seconds, and preserves large creation identities', () => {
