@@ -1015,6 +1015,18 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         "idle epoch is fenced while the unreaped tail retains its admission"
     );
 
+    // Scheduled: a valid binding with an Accepted start is pending and the
+    // mailbox is still empty — so the human-input-priority refusal cannot
+    // mask a missing tail check, and the unreaped tail is the only refuser
+    // of the atomic reservation.
+    assert!(
+        !runtime.inner.mailbox.has_pending().unwrap_or(true),
+        "the mailbox is empty: human-input priority cannot refuse this reservation"
+    );
+    assert!(
+        runtime.inner.reserve_scheduled_start(|_| true).is_none(),
+        "scheduled reservation is fenced by the unreaped tail"
+    );
     // Attempt — proven with no catalog observation and no staged candidate
     // in flight, so neither publication nor commit back-pressure can mask a
     // missing tail check in the admission path itself. The observations are
@@ -1066,12 +1078,6 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
     assert!(
         matches!(rejected, Err(ManualCompactionError::Busy)),
         "a second compaction is fenced by the unreaped tail"
-    );
-    // Scheduled: a valid binding with an Accepted start is pending — the
-    // tail is the only refuser of the atomic reservation.
-    assert!(
-        runtime.inner.reserve_scheduled_start(|_| true).is_none(),
-        "scheduled reservation is fenced by the unreaped tail"
     );
     // Catalog publication: a real observation waits. Driven through the
     // locked entry point under `Joining`, it is not consumed.
