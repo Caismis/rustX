@@ -197,9 +197,11 @@ it('switching credential modes removes the previous mode and its secret from the
   const subject = cfg3Client();
   await openModels(subject);
   if (!screen.queryByLabelText('API Key')) await providerAction('Use an API Key');
-  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
+  fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
   await providerAction('Use an environment variable');
-  fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
+  // The mode selection settles through the menu's close-and-submit gesture:
+  // the replacement field is awaited rather than assumed synchronous.
+  fireEvent.change(await screen.findByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { authored: { credential: { kind: 'environment', variable: 'PROVIDER_KEY' } } } } } });
