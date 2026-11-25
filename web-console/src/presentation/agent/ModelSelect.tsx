@@ -114,8 +114,13 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
  useLayoutEffect(() => {
   if (open && pane === 'model') document.getElementById(`${id}-model-${activeIndex}`)?.scrollIntoView?.({ block: 'nearest' });
  }, [open, pane, id, activeIndex]);
+ const seenKeys = useRef(new WeakSet<globalThis.KeyboardEvent>());
  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
   if (!open || event.nativeEvent.isComposing) return;
+  // The portaled popup bubbles one native keydown through both the DOM and the
+  // React portal path: without this guard a single press would walk two rows.
+  if (seenKeys.current.has(event.nativeEvent)) return;
+  seenKeys.current.add(event.nativeEvent);
   if (event.key === 'Escape' || event.key === 'Tab' && event.shiftKey || event.key === 'ArrowLeft' && pane !== 'root') {
    event.preventDefault(); event.stopPropagation();
    if (pane !== 'root' && selected) back(); else close(true);
