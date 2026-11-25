@@ -2405,13 +2405,9 @@
       "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
         "./DialogSurface",
-        "./Menu.module.css",
         "./icons/index.tsx",
-        "./pointer-grace.ts",
-        "@floating-ui/react-dom",
-        "clsx",
-        "react",
-        "react-dom"
+        "@/components/ui/menu",
+        "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2421,7 +2417,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "fb864a774d80c2adb217a008803b7d11bdcce0536a0b7ef2a229508f8de580e9",
+      "local_sha256": "288fd83cf8dd1743abeb6843636decebb84d31875669d9eec586a2da08189fb6",
       "classification": "B",
       "additional_sources": [
         {
