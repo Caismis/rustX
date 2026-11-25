@@ -209,7 +209,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         onRetry={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(true); else void intake.upload(id, port); }}
         onReconcile={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(false); else void intake.reconcile(id, port); }}/>
       <div className={css.editor}>
-        <Textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
+        <Textarea unstyled ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
           value={draft} disabled={disabled && !cancellationEditor} readOnly={busy || cancellationEditor} rows={1} onChange={event => { if (cancellationEditor) return; setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
           onPaste={event => {

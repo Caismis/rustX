@@ -262,7 +262,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "5107fdc506e835b09e5ae22d43489e69f5416a47c9ec3d62dded5d1366d6c697",
+      "local_sha256": "48020d41a7d6f5a86bc645ba8f4878a5f98aa581142343cbf63f55041775187c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -371,7 +371,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9ef90d064ba7b5932f4bdc19929710b8d1889f1bc9e562db0ebd971afaa5224e"
+      "local_sha256": "317a058df134eebfd1c2d99694fb203c376e4e93509663b7b8dceeed6379f425"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -492,7 +492,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "8e62bf2dc493cd4a2940b2d4588df4934ea2a0b29665a1d013259edb45d7e703"
+      "local_sha256": "9ebad22b07a2fa84e8a5b13c8ed110872f5e73d06d461ed902dc4920faf8b4e8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -539,7 +539,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "97e537a4aba0438a887691104892dfcea6be0316b8a646200965388f757ff31e"
+      "local_sha256": "e85d7495aff78873bbf28801fd13c2c977a08ab7f0c242616435ee0b677ec813"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -931,7 +931,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "b5d4010408b1a1eed3d97fd691461fd448a86a347c8800cee06c479839f59001"
+      "local_sha256": "a062a959ce6d64b46acece5ad52e9219f9757456fb4ad5cceeb45f63bb666cdc"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -1540,7 +1540,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "bd6fbb064726933bae8c3f654404d9a10c37dbc8bbb67e5f5186987d48eacf7c",
+      "local_sha256": "bba12580bbb9ebace3cb5f5773669e50e7a5cbd5302d000aa9e5978959255a8d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -2278,7 +2278,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "d45fbac000f7385666b5515db8583457df76b10ddbcad3b45030e1e99119b673",
+      "local_sha256": "b5f64d304bb75cc26073a8b1c18caf74da86abf06613db5a9f0f1178bfbb331f",
       "classification": "A",
       "additional_sources": [
         {
@@ -2307,7 +2307,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ee41928c25f6e2885f9848574a1b2d96c6d611509f3cff513e4ef1e263aa0ab4",
+      "local_sha256": "4002bf54cec8996065ffa5597b713748f10f332b269c4227a7651e878bf4ff97",
       "classification": "A"
     },
     {
@@ -2372,7 +2372,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "02d5978fd12570c22116fc63e9938730f02cdc376e9b772675910655847badd2",
+      "local_sha256": "f94e0623c6254535d8e4a23cbc88b38aad0e0b159d0e93bb92a89c5376b2bb89",
       "classification": "B"
     },
     {
@@ -2382,8 +2382,10 @@
       "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
         "./DialogSurface",
+        "./Menu.module.css",
         "./icons/index.tsx",
         "@/components/ui/menu",
+        "clsx",
         "react",
         "react-dom"
       ],
@@ -2395,7 +2397,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ce44658d8e26aa4f33d75f5397f9cba3d6caf17586a747c4de6654a645bf10da",
+      "local_sha256": "d9a77344266d37496ee5888975d0de7c13888e04882566225e6e288985062772",
       "classification": "B",
       "additional_sources": [
         {
@@ -2721,7 +2723,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "7accc907db09473ef20d51b7ac241af1f3323eb28cda5cc55f8c5cfdd1936692",
+      "local_sha256": "0409cac74b968266d1dfd2c463ccf197bb69e1ceedfb89db072becd7d5e40c65",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2892,7 +2894,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "845c5ade172b1399ada2ba68ee383b8c80510c495da7853c8e62f6bbf5e0821b",
+      "local_sha256": "bd724268533ab8af0d6c62cd153ab5da5cad0cdda0fcc270b0a278bc4d99cc2a",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -3109,7 +3111,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "331a634ce9d13b1d9059af5fafebf2e980c01c355300b42d5f21c5e6ca44b29f",
+      "local_sha256": "5778612034e3285cc53efea92d3a490585f5031f7df2c3289c8b6bc272ee4301",
       "classification": "B",
       "additional_sources": [
         {
@@ -7174,7 +7176,7 @@
         "Cordis slots and injected Session mutation service",
         "Harness Host metadata persistence"
       ],
-      "local_sha256": "19e05185c7f5d2b150a9e396642202973c41e0b3958ac69b74f6298fddee7e26"
+      "local_sha256": "d4f9136d780dfdbe8e2b8c430b4f38dc542a9d707eaff713405e6dcadce191f1"
     },
     {
       "upstream": "packages/api/session-controller/src/client/sessions/service.ts",
@@ -7201,7 +7203,7 @@
       "destination": "web-console/src/presentation/theme/reset.css",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "f7398e7730415592ab1e81cec36f8c5e23065becd06c050f0129a6fa44d247e8",
-      "local_sha256": "2d59990c632539b0592d59e8058ff6acbaff8ba9aa2d7aacf44f731eca0bdce8",
+      "local_sha256": "92159ea9b1e7009fd5d66234fa5cb51a8572eb78db5f2a321dce3ec0a3ae0b29",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "B",
       "treatment": "DSH focus paint sets color and width without forcing outline style, preserving each component's outline:none. rustX text editors default to no external outline; field/card borders remain component-owned. Existing layout/font reset is rustX-owned.",

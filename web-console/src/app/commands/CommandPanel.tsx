@@ -88,7 +88,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     {!busy && stale && <p role="status">{tx('commands:command-panel.attachment-changed-close-and-reopen-to-read-current-native-state')}</p>}
     {busy && <p role="status">{tx('commands:command-panel.waiting-for-native-acknowledgement')}</p>}
     {!busy && !error && !rows.length && (historical || request.id === 'tree') && <p role="status">{tx('commands:command-panel.no-native-choices-available')}</p>}
-    {!!rows.length && <><TextInput autoFocus className={css.search} aria-label={tx('commands:command-panel.filter-options')} value={query} disabled={busy}
+    {!!rows.length && <><TextInput unstyled autoFocus className={css.search} aria-label={tx('commands:command-panel.filter-options')} value={query} disabled={busy}
       onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
       onKeyDown={event => {
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && filtered.length) { event.preventDefault(); setActive(index => (index + (event.key === 'ArrowDown' ? 1 : filtered.length - 1)) % filtered.length); }

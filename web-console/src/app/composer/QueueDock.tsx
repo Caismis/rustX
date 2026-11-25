@@ -290,7 +290,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const discardDisabled = pendingOperation;
   const editor = draft ? <div className={css.editPanel}>
     <div className={css.editorField}>
-      <Textarea ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
+      <Textarea unstyled ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
         onChange={event => {
           const text = event.currentTarget.value;
           clearCopyState();

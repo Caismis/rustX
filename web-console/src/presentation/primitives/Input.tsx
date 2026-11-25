@@ -14,9 +14,10 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 export const Input = forwardRef<HTMLInputElement, {
   icon?: ReactNode
   className?: string
-} & InputHTMLAttributes<HTMLInputElement>>(function Input({ icon, className, ...rest }, ref) {
+  unstyled?: boolean
+} & InputHTMLAttributes<HTMLInputElement>>(function Input({ icon, className, unstyled, ...rest }, ref) {
   if (icon == null) {
-    return <CossInput ref={ref} data-primitive-input="" className={className} {...rest} />
+    return <CossInput ref={ref} data-primitive-input="" className={className} unstyled={unstyled} {...rest} />
   }
   return (
     <InputGroup className={className}>

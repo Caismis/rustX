@@ -119,7 +119,7 @@ export function UserMessageEditor({
         if (canRetry && !event.repeat) event.currentTarget.requestSubmit();
       }
     }}>
-      <Textarea className={css.input} aria-label={labels.input} value={editing.text}
+      <Textarea unstyled className={css.input} aria-label={labels.input} value={editing.text}
         rows={Math.max(3, editing.text.split('\n', 10).length)}
         disabled={unavailable} autoFocus onChange={event => editing.onText(event.target.value)} />
       <div className={css.editorActions}>

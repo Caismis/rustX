@@ -218,7 +218,7 @@ function LinkBar({ link, unlink }: { link: { key: string; url: string }; unlink:
   return <Popover open onOpenChange={(next, details) => { if (!next) dismiss(details.reason === 'escape-key'); }}><PopoverPopup ref={bar} anchor={anchorElement} positionMethod="fixed" side="top" align="center" sideOffset={4} collisionPadding={8}
     initialFocus={false} finalFocus={() => false} className={clsx(css.linkBar, !editing && css.linkOperator)}>
     {editing ? <>
-      <TextInput className={css.linkInput} value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
+      <TextInput unstyled className={css.linkInput} value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
         onChange={event => { setUrl(event.target.value); setInvalid(false); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (url) save(); } }} />
       <button type="button" className={css.primary} disabled={!url} onClick={save}>{tx('workflows:note.ok')}</button>
     </> : <>
