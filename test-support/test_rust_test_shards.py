@@ -78,6 +78,8 @@ class ShardToolCase(unittest.TestCase):
             "runner_os": __import__("platform").system(),
             "runner_arch": __import__("platform").machine(),
             "cargo_lock_sha256": self._lock_sha(),
+            "features": "all-features",
+            "profile": "test",
         }))
         self.inventory_dir = self.tmp / "inventory"
 
@@ -86,7 +88,9 @@ class ShardToolCase(unittest.TestCase):
         return hashlib.sha256(b"lock").hexdigest()
 
     def tool(self, *argv: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
-        env = dict(os.environ, RUSTX_SOURCE_HEAD="current")
+        # PATH without ~/.cargo/bin keeps rustc off the tool's PATH so the
+        # manifest's optional toolchain checks are skipped deterministically.
+        env = dict(os.environ, RUSTX_SOURCE_HEAD="current", PATH="/usr/bin:/bin")
         return subprocess.run(
             [sys.executable, str(TOOL), *argv],
             cwd=cwd or self.tmp,
@@ -112,7 +116,8 @@ class ShardToolCase(unittest.TestCase):
             "--manifest", str(self.manifest),
             "--prepared", str(self.prepared),
             "--inventory", str(self.inventory_dir / "inventory.json"),
-            "--spec", str(self.spec), "--root", str(self.root),
+            "--spec", str(self.spec), "--features", "all-features",
+            "--profile", "test", "--root", str(self.root),
             "--shard", str(shard),
             "--report", str(runs / f"shard-{shard}" / "report.json"),
         )
@@ -192,13 +197,15 @@ class ShardToolCase(unittest.TestCase):
     def test_shard_failure_is_reported_and_recorded(self) -> None:
         self.make_inventory(shards=1)
         runs = self.tmp / "runs"
-        env = dict(os.environ, FAIL_SLOW="1", RUSTX_SOURCE_HEAD="current")
+        env = dict(os.environ, FAIL_SLOW="1", RUSTX_SOURCE_HEAD="current",
+                   PATH="/usr/bin:/bin")
         result = subprocess.run(
             [sys.executable, str(TOOL), "run",
              "--manifest", str(self.manifest),
              "--prepared", str(self.prepared),
              "--inventory", str(self.inventory_dir / "inventory.json"),
-             "--spec", str(self.spec), "--root", str(self.root),
+             "--spec", str(self.spec), "--features", "all-features",
+            "--profile", "test", "--root", str(self.root),
              "--shard", "0",
              "--report", str(runs / "shard-0" / "report.json")],
             capture_output=True, text=True, env=env,
@@ -230,7 +237,8 @@ class ShardToolCase(unittest.TestCase):
             "--manifest", str(self.manifest),
             "--prepared", str(self.prepared),
             "--inventory", str(self.inventory_dir / "inventory.json"),
-            "--spec", str(self.spec), "--root", str(self.root),
+            "--spec", str(self.spec), "--features", "all-features",
+            "--profile", "test", "--root", str(self.root),
             "--shard", "0",
             "--report", str(report_path),
         )

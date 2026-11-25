@@ -27,6 +27,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,7 +77,10 @@ def build_manifest(root: Path, features: str, profile: str) -> dict:
     }
 
 
-def check_manifest(manifest: dict, root: Path) -> list[str]:
+def check_manifest(
+    manifest: dict, root: Path,
+    expected_features: str, expected_profile: str,
+) -> list[str]:
     problems = []
     if manifest.get("git_head") != git_head(root):
         problems.append("artifact was built for a different commit")
@@ -86,6 +90,27 @@ def check_manifest(manifest: dict, root: Path) -> list[str]:
         problems.append("artifact was built for a different architecture")
     if manifest.get("cargo_lock_sha256") != sha256_file(root / "Cargo.lock"):
         problems.append("Cargo.lock changed since the artifact was built")
+    # rustc-bound fields are verified wherever a toolchain exists; shard
+    # runners deliberately carry none, so there the OS/arch/lock/head
+    # checks are what bind the artifact.
+    if shutil.which("rustc"):
+        rustc = subprocess.run(
+            ["rustc", "--version", "--verbose"], cwd=root, check=True,
+            capture_output=True, text=True,
+        ).stdout
+        triple = next(
+            (line.split(":", 1)[1].strip() for line in rustc.splitlines()
+             if line.startswith("host:")),
+            f"{platform.system()}-{platform.machine()}",
+        )
+        if manifest.get("target_triple") != triple:
+            problems.append("artifact was built for a different target triple")
+        if manifest.get("rustc_version") != rustc.splitlines()[0].strip():
+            problems.append("artifact was built with a different toolchain")
+    if manifest.get("features") != expected_features:
+        problems.append("artifact was built with different features")
+    if manifest.get("profile") != expected_profile:
+        problems.append("artifact was built with a different profile")
     return problems
 
 
@@ -340,6 +365,10 @@ def main() -> int:
     p.add_argument("--spec", type=Path, required=True,
                    help="the lane spec this run declares; the lane check "
                         "reads it to know which targets this step executes")
+    p.add_argument("--features", required=True,
+                   help="the features string the manifest must record")
+    p.add_argument("--profile", required=True,
+                   help="the build profile the manifest must record")
     p.add_argument("--root", type=Path, default=Path("."))
     p.add_argument("--shard", type=int, required=True)
     p.add_argument("--report", type=Path, required=True)
@@ -435,7 +464,8 @@ def main() -> int:
 
     if args.command == "run":
         manifest = json.loads(args.manifest.read_text())
-        problems = check_manifest(manifest, args.root)
+        problems = check_manifest(
+            manifest, args.root, args.features, args.profile)
         for problem in problems:
             print(f"artifact identity mismatch: {problem}", file=sys.stderr)
         if problems:

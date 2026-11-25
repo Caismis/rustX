@@ -479,7 +479,7 @@ jobs:
       - name: Execute shard ${{ matrix.shard }}
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --spec test-support/rust-lanes/contracts.json --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --spec test-support/rust-lanes/contracts.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
       - name: Shard report
         if: always()
         uses: actions/upload-artifact@v7
@@ -663,7 +663,7 @@ jobs:
       - name: Execute shard ${{ matrix.shard }}
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/boundaries-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/boundaries-inventory/inventory.json" --spec test-support/rust-lanes/boundaries.json --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/boundaries-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/boundaries-inventory/inventory.json" --spec test-support/rust-lanes/boundaries.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
       - name: Shard report
         if: always()
         uses: actions/upload-artifact@v7
