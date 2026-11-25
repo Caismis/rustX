@@ -1,6 +1,4 @@
-import { Menu } from '@base-ui/react/menu';
-import { Popover } from '@base-ui/react/popover';
-import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
+
 import { $isLinkNode, LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link';
 import { $isListItemNode, INSERT_UNORDERED_LIST_COMMAND, ListItemNode, ListNode } from '@lexical/list';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
@@ -15,7 +13,6 @@ import { $getSelectionStyleValueForProperty, $isAtNodeEnd, $patchStyleText, $set
 import { $createParagraphNode, $createTextNode, $getNodeByKey, $getRoot, $getSelection, $isParagraphNode, $isRangeSelection, FORMAT_TEXT_COMMAND, type EditorThemeClasses, type LexicalEditor, type RangeSelection } from 'lexical';
 import clsx from 'clsx';
 import { createContext, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import type { WorkflowNote, WorkflowNoteTheme } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
 import { ShortcutKeys } from '../../../../../presentation/primitives/ShortcutKeys';
@@ -24,6 +21,8 @@ import { IconBold, IconBulletList, IconExternal, IconFontSize, IconItalic, IconL
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from '../shortcuts';
 import css from './Note.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu';
+import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
 
 /** What a note does to the document; the canvas owns selection and history. */
 export const NoteActions = createContext<{
@@ -163,22 +162,22 @@ function Tools({ id, theme }: { id: string; theme: WorkflowNoteTheme }) {
   const sizeLabel = tx(`workflows:note.${FONT_SIZES.find(([value]) => value === format.fontSize)?.[1] ?? 'small'}`);
   return <>
     <div className={clsx(css.toolbar, 'nodrag nopan nowheel')} role="toolbar" aria-label={tx('workflows:note.title')} onMouseDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
-      <Popover.Root open={colors} onOpenChange={setColors}>
-        <Popover.Trigger className={css.command} aria-label={tx('workflows:note.color')} title={tx('workflows:note.color')}><span className={clsx(css.swatch, css[theme])} /></Popover.Trigger>
-        <Popover.Portal><Popover.Positioner side="top" sideOffset={4} className={css.positioner}><Popover.Popup className={css.colors}>
+      <Popover open={colors} onOpenChange={setColors}>
+        <PopoverTrigger className={css.command} aria-label={tx('workflows:note.color')} title={tx('workflows:note.color')}><span className={clsx(css.swatch, css[theme])} /></PopoverTrigger>
+        <PopoverPopup side="top" sideOffset={4} className={css.colors}>
           {THEMES.map(value => <button key={value} type="button" className={clsx(css.color, css[value], value === theme && css.current)} aria-label={tx(`workflows:note.${value}`)} title={tx(`workflows:note.${value}`)}
             onClick={() => { actions.change(id, { theme: value }); setColors(false); }}><span className={css.swatch} /></button>)}
-        </Popover.Popup></Popover.Positioner></Popover.Portal>
-      </Popover.Root>
+        </PopoverPopup>
+      </Popover>
       <span className={css.divider} />
-      <Popover.Root open={sizes} onOpenChange={setSizes}>
-        <Popover.Trigger className={css.fontSize} aria-label={tx('workflows:note.font-size')}><IconFontSize size={16} />{sizeLabel}</Popover.Trigger>
-        <Popover.Portal><Popover.Positioner side="bottom" align="start" sideOffset={2} className={css.positioner}><Popover.Popup className={css.sizes} initialFocus={false} finalFocus={false}>
+      <Popover open={sizes} onOpenChange={setSizes}>
+        <PopoverTrigger className={css.fontSize} aria-label={tx('workflows:note.font-size')}><IconFontSize size={16} />{sizeLabel}</PopoverTrigger>
+        <PopoverPopup side="bottom" align="start" sideOffset={2} className={css.sizes} initialFocus={false} finalFocus={false}>
           {FONT_SIZES.map(([value, name]) => <button key={value} type="button" className={css.size} onMouseDown={event => event.preventDefault()} onClick={() => { size(value); setSizes(false); }}>
             <span style={{ fontSize: value }}>{tx(`workflows:note.${name}`)}</span>{format.fontSize === value && <IconCheckOutline16 />}
           </button>)}
-        </Popover.Popup></Popover.Positioner></Popover.Portal>
-      </Popover.Root>
+        </PopoverPopup>
+      </Popover>
       <span className={css.divider} />
       {command(tx('workflows:note.bold'), format.bold, <IconBold size={16} />, () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold'))}
       {command(tx('workflows:note.italic'), format.italic, <IconItalic size={16} />, () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic'))}
@@ -186,15 +185,15 @@ function Tools({ id, theme }: { id: string; theme: WorkflowNoteTheme }) {
       {command(tx('workflows:note.link'), !!format.link, <IconLink size={16} />, link)}
       {command(tx('workflows:note.bullet-list'), format.bullet, <IconBulletList size={16} />, bullet)}
       <span className={css.divider} />
-      <Menu.Root modal={false}>
-        <Menu.Trigger className={css.command} aria-label={tx('workflows:note.more')} title={tx('workflows:note.more')}><IconEllipsisOutline16 /></Menu.Trigger>
-        <Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.positioner}><Menu.Popup className={css.menu}>
-          <Menu.Item className={css.menuItem} onClick={() => actions.copy(id)}>{tx('workflows:canvas.copy')}<ShortcutKeys keys={COPY_KEYS} /></Menu.Item>
-          <Menu.Item className={css.menuItem} onClick={() => actions.duplicate(id)}>{tx('workflows:canvas.duplicate')}<ShortcutKeys keys={DUPLICATE_KEYS} /></Menu.Item>
-          <Menu.Separator className={css.separator} />
-          <Menu.Item className={clsx(css.menuItem, css.destructive)} onClick={() => actions.remove(id)}>{tx('workflows:note.delete')}<ShortcutKeys keys={DELETE_KEYS} /></Menu.Item>
-        </Menu.Popup></Menu.Positioner></Menu.Portal>
-      </Menu.Root>
+      <Menu modal={false}>
+        <MenuTrigger className={css.command} aria-label={tx('workflows:note.more')} title={tx('workflows:note.more')}><IconEllipsisOutline16 /></MenuTrigger>
+        <MenuPopup side="bottom" align="end" sideOffset={4} className={css.menu}>
+          <MenuItem className={css.menuItem} onClick={() => actions.copy(id)}>{tx('workflows:canvas.copy')}<ShortcutKeys keys={COPY_KEYS} /></MenuItem>
+          <MenuItem className={css.menuItem} onClick={() => actions.duplicate(id)}>{tx('workflows:canvas.duplicate')}<ShortcutKeys keys={DUPLICATE_KEYS} /></MenuItem>
+          <MenuSeparator className={css.separator} />
+          <MenuItem className={clsx(css.menuItem, css.destructive)} onClick={() => actions.remove(id)}>{tx('workflows:note.delete')}<ShortcutKeys keys={DELETE_KEYS} /></MenuItem>
+        </MenuPopup>
+      </Menu>
     </div>
     {format.link && <LinkBar key={format.link.key} link={format.link} unlink={unlink} />}
   </>;
@@ -206,25 +205,18 @@ function LinkBar({ link, unlink }: { link: { key: string; url: string }; unlink:
   const tx = useTranslation(), [editor] = useLexicalComposerContext();
   const [editing, setEditing] = useState(!link.url), [url, setUrl] = useState(link.url), [dismissed, setDismissed] = useState(false), [invalid, setInvalid] = useState(false);
   const bar = useRef<HTMLDivElement>(null);
-  const { refs, floatingStyles } = useFloating({ placement: 'top', strategy: 'fixed', whileElementsMounted: autoUpdate, middleware: [offset(4), shift({ padding: 8 }), flip()] });
-  useEffect(() => { refs.setReference(editor.getElementByKey(link.key)); }, [editor, link.key, refs]);
-  const dismiss = () => { setDismissed(true); if (!link.url) unlink(link.key); };
-  useEffect(() => {
-    const outside = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!bar.current?.contains(target) && !editor.getElementByKey(link.key)?.contains(target)) dismiss();
-    };
-    window.document.addEventListener('pointerdown', outside, true);
-    return () => window.document.removeEventListener('pointerdown', outside, true);
-  });
+  const [anchorElement, setAnchorElement] = useState<HTMLElement | null>(null);
+  useEffect(() => { setAnchorElement(editor.getElementByKey(link.key) as HTMLElement | null); }, [editor, link.key]);
+  const dismiss = (restoreEditor = false) => { setDismissed(true); if (!link.url) unlink(link.key); if (restoreEditor) editor.focus(); };
   const save = () => {
     if (!URL_PATTERN.test(url)) { setInvalid(true); return; }
     editor.update(() => { const node = $getNodeByKey(link.key); if ($isLinkNode(node)) node.setURL(url); });
     setEditing(false);
   };
   if (dismissed) return null;
-  return createPortal(<div ref={element => { bar.current = element; refs.setFloating(element); }} style={floatingStyles} className={clsx(css.linkBar, !editing && css.linkOperator)}
-    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); dismiss(); editor.focus(); } }}>
+  if (!anchorElement) return null;
+  return <Popover open onOpenChange={(next, details) => { if (!next) dismiss(details.reason === 'escape-key'); }}><PopoverPopup ref={bar} anchor={anchorElement} positionMethod="fixed" side="top" align="center" sideOffset={4} collisionPadding={8}
+    initialFocus={false} finalFocus={() => false} className={clsx(css.linkBar, !editing && css.linkOperator)}>
     {editing ? <>
       <TextInput className={css.linkInput} value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
         onChange={event => { setUrl(event.target.value); setInvalid(false); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (url) save(); } }} />
@@ -235,5 +227,5 @@ function LinkBar({ link, unlink }: { link: { key: string; url: string }; unlink:
       <button type="button" className={css.ghost} onClick={() => setEditing(true)}><IconPencil size={12} />{tx('workflows:note.edit-link')}</button>
       <button type="button" className={css.ghost} onClick={() => { unlink(link.key); setDismissed(true); }}><IconUnlink size={12} />{tx('workflows:note.unlink')}</button>
     </>}
-  </div>, window.document.body);
+  </PopoverPopup></Popover>;
 }

@@ -109,6 +109,8 @@
 .destructive[data-highlighted] { color: var(--dsw-alias-state-error-primary); }
 .separator { height: 1px; margin: 4px -4px; background: var(--dsw-alias-border-l2); }
 .linkBar { z-index: 60; display: inline-flex; align-items: center; width: max-content; padding: 4px; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); }
+.colors > [data-slot=popover-viewport], .sizes > [data-slot=popover-viewport], .menu > div, .linkBar > [data-slot=popover-viewport] { padding: 0; }
+
 .linkOperator { padding: 2px; font-size: 12px; font-weight: 500; color: var(--dsw-alias-label-tertiary); }
 .linkInput { width: 196px; height: 24px; margin-right: 2px; padding: 4px; border: 0; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; outline: none; }
 .linkInput[aria-invalid] { color: var(--dsw-alias-state-error-primary); }

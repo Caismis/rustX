@@ -649,6 +649,8 @@ name. */
 .branchNextFlow .nextPort { padding: 6px 6px 6px 10px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover-solid); }
 .branchNextFlow .nextPortLabel { margin: 0 0 4px; font-size: 10px; }
 .branchVariablePopup { z-index: 100; width: 328px; max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); box-sizing: border-box; background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); }
+.branchVariablePopup > [data-slot=popover-viewport] { padding: 0; }
+
 .branchVariablePopup .variableGroup legend code { display: none; }
 .branchVariablePopup .variableChoice > span { display: flex; align-items: center; gap: 8px; }
 .branchVariablePopup .variableChoice > span::before { content: '{x}'; color: var(--dsw-alias-state-business-primary); font-family: var(--ds-font-family-code); }
