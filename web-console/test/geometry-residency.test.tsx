@@ -17,19 +17,17 @@ const models = vi.hoisted(() => ({ imports: 0, live: 0, peak: 0, bytes: 4, copie
 vi.mock('../src/app/components/documents/GeometryDocument', () => ({ preloadGeometry: vi.fn(), GeometryDocument: (props: GeometryDocumentProps) => {
   const model = useRef({ camera: 'kept', selection: 'part', outlines: true });
   useLayoutEffect(() => {
-    if (!props.bytes) return;
+    if (!props.bytes && !props.source) return;
+    if (props.source) void props.source.consume({start:()=>{},chunk:()=>{}},props.signal).catch(()=>{});
     const record = { name: props.name, model: model.current, props, disposed: false }; models.copies.push(record);
     models.imports++; models.live++; models.peak = Math.max(models.peak, models.live);
     props.takeSource?.(); props.releaseSource?.();
     const dispose = () => { if (!record.disposed) { record.disposed = true; models.live--; } };
     props.signal.addEventListener('abort', dispose, { once: true });
     return () => { props.signal.removeEventListener('abort', dispose); dispose(); };
-  }, [props.bytes, props.copyId, props.signal]);
-  return props.bytes ? <canvas data-model={props.name} data-shown={props.visible !== false}/> : null;
+  }, [props.bytes, props.source, props.copyId, props.signal]);
+  return props.bytes || props.source ? <canvas data-model={props.name} data-shown={props.visible !== false}/> : null;
 } }));
-// Range transport is covered by geometry-source tests. Here the complete copy
-// exercises the real content owner's transfer/deactivation behavior.
-vi.mock('../src/client/geometry-source', () => ({ readGeometrySource: async (read: (options: unknown, signal: AbortSignal) => Promise<{ data: Uint8Array<ArrayBuffer>; version: string }>, signal: AbortSignal) => read({ kind: 'bytes' }, signal) }));
 vi.mock('../src/client/session-files', async original => {
   const actual = await original<typeof import('../src/client/session-files')>();
   return { ...actual, FilePreviewCoordinator: class {
@@ -148,7 +146,9 @@ it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('parks the delivered geome
 it.each([4, 64 * 1024 * 1024 + 1])('Workbench keeps its mounted geometry through file tabs with bounded admission (%i bytes)', async size => {
   models.bytes = size;
   const cache = new PreviewContentCache(), previews = new WorkbenchPreviewRetention(server.client, authority, cache); stops.push(previews.start());
-  const reads = vi.fn(), host = { ...server.workspaceHost, workbench: vi.fn(async (_scope, { request }) => {
+  const reads = vi.fn(), host = { ...server.workspaceHost, openWorkspacePreview: vi.fn(async (_scope, { request }) => {
+    reads(request.path); const bytes = models.bytes; return { bytes, version:'one', read:async ({offset,length}:{offset:number;length:number})=>{const data=new Uint8Array(Math.min(length,Math.max(0,bytes-offset)));return {data,bytes,version:'one',offset,eof:offset+data.length===bytes};}, close:async()=>{} };
+  }), workbench: vi.fn(async (_scope, { request }) => {
     if (request.kind === 'resolve') return { path: request.path };
     if (request.kind === 'preview' && request.path.endsWith('.html')) { const data = new TextEncoder().encode('<html><body>retained frame</body></html>'); return { preview: { data, version: 'one', offset: 0, bytes: data.byteLength, eof: true } }; }
     if (request.kind === 'preview' && request.read?.kind === 'text') return { preview: { data: new TextEncoder().encode('plain text'), version: 'one', offset: request.read.offset, lines: 1, bytes: 10, eof: true } };
@@ -202,7 +202,9 @@ it.each([4, 64 * 1024 * 1024 + 1])('Workbench keeps its mounted geometry through
 
 it('Workbench defers inactive geometry admission and parks the same Navigator viewport across Home', async () => {
   const previews = new WorkbenchPreviewRetention(server.client, authority, new PreviewContentCache()); stops.push(previews.start());
-  const reads = vi.fn(), host = { ...server.workspaceHost, workbench: vi.fn(async (_scope, { request }) => {
+  const reads = vi.fn(), host = { ...server.workspaceHost, openWorkspacePreview: vi.fn(async (_scope, { request }) => {
+    reads(request.path); const bytes = models.bytes; return { bytes, version:'one', read:async ({offset,length}:{offset:number;length:number})=>{const data=new Uint8Array(Math.min(length,Math.max(0,bytes-offset)));return {data,bytes,version:'one',offset,eof:offset+data.length===bytes};}, close:async()=>{} };
+  }), workbench: vi.fn(async (_scope, { request }) => {
     if (request.kind === 'resolve') return { path: request.path };
     if (request.kind === 'preview') { reads(request.path); return { preview: { data: new Uint8Array(4), version: 'one', offset: 0, bytes: 4, eof: true } }; }
     return {};

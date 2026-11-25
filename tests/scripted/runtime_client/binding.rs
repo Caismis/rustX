@@ -132,7 +132,7 @@ fn try_config(
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: crate::runtime::conversation_runtime::ConversationRole::Root,
     })?;
     Ok((
         conversation_runtime.clone(),

@@ -91,6 +91,9 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
       await expect(page.getByText('Unfinished source output.', { exact: true })).toHaveCount(0);
       if (width === 390) await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
+      // Cold history can show the inherited answer before the live composer
+      // takes its seat. Wait for the attached Fork's native response controls.
+      await expect(retry).toBeEnabled();
       await send('Fork follow-up'); await expect(page.getByText('Fork kept the completed answer.', { exact: true })).toBeVisible({ timeout: 15_000 });
       await expect(retry).toBeEnabled();
       await actions(child); await page.getByRole('menuitem', { name: zh ? '删除会话' : 'Delete Session', exact: true }).click();

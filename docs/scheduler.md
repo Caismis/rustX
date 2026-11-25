@@ -360,3 +360,28 @@ S4a preparation seam. The integration and resource results are recorded in
 [performance acceptance](issue-85-scheduler-performance.md). The current formats
 are SQLite 84, App Server 69, Runtime Client 81 and child IPC 37, with Session
 catalog 18 and Scheduled Workflow compiler contract 3. Older formats are refused without compatibility readers or migrations.
+
+## ScheduledExecutor ownership (Issue #606)
+
+Scheduled workflow execution — driving a due start through durable Claim,
+foreground occupation, run finish and retry bookkeeping — is owned by
+`ScheduledExecutor`, not by `RuntimeInner`. The runtime keeps only the
+coordinator bookkeeping the claim itself needs (`ForegroundSlot::Scheduled`
+and the `scheduled_retries` backoff map, both under the one coordinator
+lock); all sequencing lives in `runtime/workflow/scheduled/executor.rs`.
+
+`claim_scheduled_start` is one atomic critical section: it rejects a start
+whose frozen resources/model/approval no longer match the live
+configuration (recording retry backoff and a durable wait receipt so the
+occurrence is rescheduled, never silently claimed with stale facts), and it
+freezes the permission-reviewer invocation in the same section as the
+durable Claim, so no configuration commit can slide between preparation and
+claim. On success it returns the `ClaimedScheduledWorkflow`, the
+`AttemptCapabilityLease` and the frozen invocation together — there is no
+point between Preparation and Claim where a half-current bundle exists.
+
+`finish_scheduled` releases the foreground right only when the slot holds
+`ForegroundSlot::Scheduled` with the matching start identity, and retires
+the durable run through the same executor. Early capability-lease release
+or settlement without the matching owner record is impossible by
+construction, not by convention.

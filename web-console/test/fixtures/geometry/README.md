@@ -97,3 +97,34 @@ geometry must be preserved.
 ```sh
 uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python web-console/test/fixtures/geometry/generate-lod.py
 ```
+
+## Natural high-output STEP presentation
+
+`curved-100.step` is original MIT test data from `generate-mesh-step.py`, using
+cadquery-ocp-novtk 7.9.3.1.1 / OCCT 7.9.3. It contains 100 independent, named and
+colored analytic radius-10 mm spheres. Centers are `((i % 20) * 25,
+floor(i / 20) * 25, 0)` mm; names are `Curved part 000` through `Curved part 099`.
+Every source sphere is referenced; the file has no padding or unused geometry.
+
+The checked-in source is 201,056 bytes with SHA-256
+`dfd0e23a4e55789c7a77bede9c7706ca97632de3f11d7f963d70e2d104645cfa`. The generator normalizes its STEP header
+timestamp. With the reviewed production importer and unchanged final settings,
+the complete coarse tier has 23,400 triangles and the final model has 500,800.
+This small-source, high-output workload tests natural unheld coarse presentation
+before the final model. It complements the 96-part bracket case, where a final
+result may supersede an unpainted coarse tier. Both cases require complete native
+tier/final names and occurrence hierarchy, the entire coarse triangle count for
+every provisional frame, and the original full triangle count for the first
+full frame and every complete-quality frame. At least one complete-quality
+original frame is required. Interactive full-model frames may use the existing
+admitted one-pixel-error complete surfaces; they are recorded separately and do
+not prove the original final tessellation. This test does not verify those
+interactive representations per mesh; dedicated display-quality tests cover
+that policy. Both cases require one graphics context and complete retirement.
+No artificial delay, held Worker message, synthetic tier or extra LOD is used.
+
+```sh
+uv run --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python \
+  web-console/test/fixtures/geometry/generate-mesh-step.py \
+  --parts 100 --output web-console/test/fixtures/geometry/curved-100.step
+```

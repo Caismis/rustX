@@ -157,7 +157,7 @@ async fn admitted_btw_survives_detach_and_successor_cancels_without_observation(
         successor
             .auxiliary_lookup(&receipt.correlation, Some(&receipt.scope))
             .unwrap(),
-        crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { .. }
+        crate::runtime::auxiliary::external::AuxiliarySubmissionLookup::Known { .. }
     ));
     assert!(successor.auxiliary_cancel(&receipt.call_id).unwrap());
     release.send_replace(true);
@@ -178,7 +178,7 @@ async fn admitted_btw_survives_detach_and_successor_cancels_without_observation(
         successor
             .auxiliary_lookup(&receipt.correlation, None)
             .unwrap(),
-        crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { .. }
+        crate::runtime::auxiliary::external::AuxiliarySubmissionLookup::Known { .. }
     ));
     host.shutdown().await.unwrap();
 }
@@ -305,7 +305,7 @@ async fn previous_call_retirement_can_refuse_a_prepared_submission_before_provid
             submission.correlation.clone(),
         )
         .unwrap();
-        runtime.btw(submission, &permit)
+        runtime.external_auxiliary().btw(submission, &permit)
     });
     tokio::time::timeout(std::time::Duration::from_secs(10), observing)
         .await
@@ -388,7 +388,7 @@ async fn failed_preparation_publishes_no_receipt_or_provider_request_and_release
             attachment
                 .auxiliary_lookup(&submission.correlation, None)
                 .unwrap(),
-            crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { .. }
+            crate::runtime::auxiliary::external::AuxiliarySubmissionLookup::Known { .. }
         ));
     }
     assert_eq!(
@@ -486,8 +486,11 @@ async fn failed_preparation_confirmation_waits_for_native_resource_release() {
     );
     assert_eq!(error.message, "classification history is unavailable");
     assert!(matches!(
-        fixture.runtime.auxiliary_lookup(&submission.correlation, Some(&permit.id())),
-        crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::ConfirmedNotAdmitted { .. }
+        fixture
+            .runtime
+            .external_auxiliary()
+            .auxiliary_lookup(&submission.correlation, Some(&permit.id())),
+        crate::runtime::auxiliary::external::AuxiliarySubmissionLookup::ConfirmedNotAdmitted { .. }
     ));
     assert_eq!(
         fixture.model.requests(),
@@ -707,7 +710,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
     release.send_replace(true);
     let terminal = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        fixture.runtime.child_attempt_settlement(0),
+        fixture.runtime.attempt_settlement(0),
     )
     .await
     .unwrap();
@@ -814,7 +817,7 @@ async fn host_detach_revokes_auxiliary_handles_but_preserves_calls_for_the_succe
             .executing
     );
     assert!(
-        matches!(successor.auxiliary_lookup(&active.correlation, Some(&active.scope)).unwrap(), crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { receipt } if receipt == active)
+        matches!(successor.auxiliary_lookup(&active.correlation, Some(&active.scope)).unwrap(), crate::runtime::auxiliary::external::AuxiliarySubmissionLookup::Known { receipt } if receipt == active)
     );
     assert_eq!(
         result(&successor, &retained.call_id).await.value,
@@ -905,7 +908,7 @@ async fn host_detach_before_final_transfer_prevents_call_started_and_provider_di
             successor
                 .auxiliary_lookup(&correlation(name), None)
                 .unwrap(),
-            crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { .. }
+            crate::runtime::auxiliary::external::AuxiliarySubmissionLookup::Known { .. }
         ));
         fixture.host.shutdown().await.unwrap();
     }

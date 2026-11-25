@@ -7,28 +7,40 @@ import { BufferGeometry, Frustum, Material, Matrix4, Mesh, MeshStandardMaterial,
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { admitGlb, importGlb } from '../src/app/components/documents/geometry/glb';
 import { importStl } from '../src/app/components/documents/geometry/stl';
-import { importCad, convertCadResult } from '../src/app/components/documents/geometry/cad';
+import createOcct from 'occt-import-js';
+import { importCad, convertCadResult, CAD_TRIANGULATION } from '../src/app/components/documents/geometry/cad';
 import { modelScene, validateScene, disposeScene } from '../src/app/components/documents/geometry/scene-resources';
 import { viewersForPath, loadsBytes } from '../src/app/components/workbench-documents/definitions';
 
-const cadModule = await WebAssembly.compile(readFileSync(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
+// Fixture builder emits the current native typed contract, independently of
+// the adapter's validation and narrowing of those doubles.
+function nativeResult(value: any): any {
+  for (const mesh of value.meshes ?? []) {
+    for (const attribute of Object.values(mesh.attributes ?? {}) as any[]) attribute.array = Float64Array.from(attribute.array);
+    if (mesh.index) mesh.index.array = Float64Array.from(mesh.index.array);
+  }
+  return value;
+}
+const convertFixture = (value: unknown) => convertCadResult(nativeResult(value));
+const cadModule = await WebAssembly.compile(readFileSync(process.env.RUSTX_TEST_CAD_WASM ?? new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
 const fixture = (name: string) => new Uint8Array(readFileSync(fileURLToPath(new URL(`./fixtures/geometry/${name}`, import.meta.url))));
-it.each([['lod-assembly.step','step'],['lod-assembly.brep','brep']] as const)('publishes complete coarse and medium %s tessellations before the unchanged full result', async (file,format) => {
+it.each([['lod-assembly.step','step'],['cube.iges','iges'],['lod-assembly.brep','brep']] as const)('uses the production coarse/final policy for complete %s tessellations before the unchanged full result', async (file,format) => {
   const tiers: { level: number; model: ReturnType<typeof convertCadResult> }[] = [];
   let complete = false;
   const result = await importCad(fixture(file), format, cadModule, undefined, false, (level, model) => {
     expect(complete).toBe(false); tiers.push({ level, model });
   });
   complete = true;
-  expect(tiers.map(tier => tier.level)).toEqual([0,1]);
+  expect(tiers.map(tier => tier.level)).toEqual([0]);
   for (const tier of tiers) {
     expect(tier.model.root).toEqual(result.root);
     expect(tier.model.meshes.map(mesh => mesh.name)).toEqual(result.meshes.map(mesh => mesh.name));
-    expect(tier.model.meshes.length).toBeGreaterThan(1);
+    if (format === 'iges') expect(tier.model.meshes).toHaveLength(1);
+    else expect(tier.model.meshes.length).toBeGreaterThan(1);
   }
   const triangles = (model: ReturnType<typeof convertCadResult>) => model.meshes.reduce((sum, mesh) => sum + mesh.indices!.length / 3, 0);
-  expect(triangles(tiers[0].model)).toBeLessThan(triangles(tiers[1].model));
-  expect(triangles(tiers[1].model)).toBeLessThan(triangles(result));
+  expect(triangles(tiers[0].model)).toBeLessThanOrEqual(triangles(result));
+  if (format !== 'iges') expect(triangles(tiers[0].model)).toBeLessThan(triangles(result));
   expect(result).toEqual(await importCad(fixture(file), format, cadModule));
 });
 it('preserves embedded BREP triangulation by skipping LOD while retaining the unchanged final model', async () => {
@@ -51,14 +63,14 @@ it.each([['cube.step','step'],['cube.iges','iges'],['cube.brep','brep']] as cons
 });
 it.each(['uncolored','same-color','base-color'])('admits many CAD faces without charging each %s face as a draw call', mode => {
   const count=1024,color=mode==='uncolored'?null:[.2,.4,.6];
-  const model=convertCadResult({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{name:'Dense CAD',...(mode==='base-color'?{color}:{}),attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:Array.from({length:count*3},(_,i)=>i%3)},brep_faces:Array.from({length:count},(_,i)=>({first:i,last:i,color}))}]});
+  const model=convertFixture({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{name:'Dense CAD',...(mode==='base-color'?{color}:{}),attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:Array.from({length:count*3},(_,i)=>i%3)},brep_faces:Array.from({length:count},(_,i)=>({first:i,last:i,color}))}]});
   expect(model.meshes[0].indices!.length).toBe(count*3);
   expect(model.meshes[0].groups).toEqual(mode==='same-color'?[{start:0,count:count*3,color}]:[]);
 });
 it('preserves CAD color gaps and continues to bound actual alternating material ranges', () => {
   const model = (colors: (number[]|null)[]) => ({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{name:'',attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:Array.from({length:colors.length*3},(_,i)=>i%3)},brep_faces:colors.map((color,i)=>({first:i,last:i,color}))}]});
-  expect(convertCadResult(model([[0,0,1],null,[0,0,1]])).meshes[0].groups).toEqual([{start:0,count:3,color:[0,0,1]},{start:6,count:3,color:[0,0,1]}]);
-  expect(()=>convertCadResult(model(Array.from({length:513},(_,i)=>i%2?[1,0,0]:[0,0,1])))).toThrow('limit');
+  expect(convertFixture(model([[0,0,1],null,[0,0,1]])).meshes[0].groups).toEqual([{start:0,count:3,color:[0,0,1]},{start:6,count:3,color:[0,0,1]}]);
+  expect(()=>convertFixture(model(Array.from({length:513},(_,i)=>i%2?[1,0,0]:[0,0,1])))).toThrow('limit');
 });
 it('rejects instance initialization failure without falling through to the pinned asset loader', async () => {
   const Native = WebAssembly, read = vi.spyOn(fs, 'readFile');
@@ -194,7 +206,7 @@ it('preserves ASCII solid names and separate selectable geometry', () => {
   expect(model.meshes.map(mesh => mesh.name)).toEqual(['First', 'Second']); expect(model.root.meshes).toEqual([0, 1]);
 });
 it('preserves CAD hierarchy, base colors and face-color ranges', () => {
-  const model = convertCadResult({ success: true, root: { name: 'Assembly', meshes: [], children: [{ name: 'Part', meshes: [0], children: [] }] }, meshes: [{ name: 'Body', color: [1, 0, 0], attributes: { position: { array: [0,0,0, 1,0,0, 0,1,0] } }, index: { array: [0,1,2] }, brep_faces: [{ first: 0, last: 0, color: [0,0,1] }] }] });
+  const model = convertFixture({ success: true, root: { name: 'Assembly', meshes: [], children: [{ name: 'Part', meshes: [0], children: [] }] }, meshes: [{ name: 'Body', color: [1, 0, 0], attributes: { position: { array: [0,0,0, 1,0,0, 0,1,0] } }, index: { array: [0,1,2] }, brep_faces: [{ first: 0, last: 0, color: [0,0,1] }] }] });
   const object = modelScene(model).scene;
   try { expect(object.getObjectByName('Assembly')).toBeDefined(); expect(object.getObjectByName('Part')).toBeDefined(); expect(model.meshes[0].color).toEqual([1,0,0]); expect(model.meshes[0].groups).toEqual([{ start: 0, count: 3, color: [0,0,1] }]); }
   finally { disposeScene([object]); }
@@ -221,5 +233,51 @@ it('rejects nonfinite decoded coordinates and invalid STL/CAD indices', async ()
   view.setFloat32(20 + jsonLength + 8, Infinity, true);
   await expect(importGlb(bytes, new AbortController().signal)).rejects.toThrow();
   expect(() => importStl(fixture('cube.stl').subarray(0, 100))).toThrow();
-  expect(() => convertCadResult({ success: true, meshes: [{ attributes: { position: { array: [0,0,0,1,0,0,0,1,0] } }, index: { array: [-1, 1, 2] } }], root: { name: '', meshes: [0], children: [] } })).toThrow();
+  expect(() => convertFixture({ success: true, meshes: [{ attributes: { position: { array: [0,0,0,1,0,0,0,1,0] } }, index: { array: [-1, 1, 2] } }], root: { name: '', meshes: [0], children: [] } })).toThrow();
+});
+
+it.each([NaN, Infinity, 1e12 + 1])('rejects raw CAD coordinate %s before Float32 narrowing', coordinate => {
+  const raw = nativeResult({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{attributes:{position:{array:[coordinate,0,0,1,0,0,0,1,0]}},index:{array:[0,1,2]}}]});
+  expect(() => convertCadResult(raw)).toThrow();
+});
+it.each([-1, .5, 4294967296, NaN, Infinity])('rejects raw CAD index %s before Uint32 narrowing', index => {
+  const raw = nativeResult({success:true,root:{name:'',meshes:[0],children:[]},meshes:[{attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:[index,1,2]}}]});
+  expect(() => convertCadResult(raw)).toThrow();
+});
+it('requires JS-owned raw double streams rather than narrowed or boxed native output', () => {
+  const raw = {success:true,root:{name:'',meshes:[0],children:[]},meshes:[{attributes:{position:{array:[0,0,0,1,0,0,0,1,0]}},index:{array:[0,1,2]}}]};
+  expect(() => convertCadResult(raw)).toThrow();
+  const typed = nativeResult(raw); typed.meshes[0].index.array = new Uint32Array([0,1,2]);
+  expect(() => convertCadResult(typed)).toThrow();
+});
+
+it('exports owned raw doubles, bounded native spans and one invariant bbox pass across tiers', async () => {
+  let memory: WebAssembly.Memory | undefined;
+  const occt = await createOcct({ instantiateWasm(imports, receive) {
+    const instance = new WebAssembly.Instance(cadModule, imports);
+    memory = Object.values(instance.exports).find(value => value instanceof WebAssembly.Memory) as WebAssembly.Memory;
+    receive(instance, cadModule); return instance.exports;
+  } });
+  const spans: any[][] = [], tiers: number[] = [], source = fixture('lod-assembly.step');
+  const raw = occt.ReadStepFile(source, { ...CAD_TRIANGULATION, onLod(level) { tiers.push(level); }, lodTiers: 2, onNativeProfile(value) { spans.push(value); } }) as any;
+  expect(tiers).toEqual([0,1]); expect(spans).toHaveLength(1); expect(spans[0].length).toBeLessThanOrEqual(27);
+  for (const mesh of raw.meshes) for (const stream of [mesh.attributes.position.array, mesh.attributes.normal.array, mesh.index.array]) {
+    expect(stream).toBeInstanceOf(Float64Array); expect(stream.buffer).not.toBe(memory!.buffer);
+  }
+  const expected = convertCadResult(raw), saved = raw.meshes[0].attributes.position.array.slice();
+  const finalOnly = occt.ReadStepFile(source, { ...CAD_TRIANGULATION, lodTiers: 0, onLod() { throw new Error('Unexpected tier'); }, onNativeProfile(value) { spans.push(value); } });
+  expect(convertCadResult(finalOnly)).toEqual(expected); expect(raw.meshes[0].attributes.position.array).toEqual(saved);
+  const bbox = (list: any[]) => list.filter(span => span.phase === 'bounding-box');
+  expect(bbox(spans[0]).map(span => span.tier)).toEqual([0]);
+  expect(bbox(spans[0]).reduce((sum, span) => sum + span.calls, 0)).toBe(bbox(spans[1]).reduce((sum, span) => sum + span.calls, 0));
+  for (const span of spans.flat()) {
+    expect(span.durationMs).toBeGreaterThanOrEqual(0); expect(span.calls).toBeGreaterThan(0);
+    expect(span.wasmCommittedBytes).toBeLessThanOrEqual(2 * 1024 ** 3);
+    if (span.allocatorLiveSamples) expect(span.allocatorLiveSampledMaximumBytes).toBeLessThanOrEqual(span.wasmCommittedBytes);
+    else expect(span.allocatorLiveSampledMaximumBytes).toBeNull();
+  }
+  expect(spans[0].find(span => span.phase === 'complete-final').inclusive).toBe(true);
+  const levels: number[] = [];
+  const coarseFinal = occt.ReadStepFile(source, { ...CAD_TRIANGULATION, lodTiers: 1, onLod(level) { levels.push(level); } });
+  expect(levels).toEqual([0]); expect(convertCadResult(coarseFinal)).toEqual(expected);
 });

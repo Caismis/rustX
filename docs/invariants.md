@@ -140,7 +140,9 @@ Preview tabs are browser presentation metadata, never native file authority.
 An occurrence and its active lease must both be current before bytes or derived
 content can publish. Closing, hiding or replacing their scope retires the lease;
 reopening the same exact source cannot adopt the old occurrence's completion.
-At most two selected visible preview bodies own resources, and hidden tabs own
+At most two mounted geometry bodies, including parked bodies, own geometry
+resources. Parking retains the same admitted model and canvas; actual body
+retirement releases its Worker and renderer resources. Other inactive tabs own
 no workers or URLs. Versioned payloads may remain in the shared eight-entry /
 64 MiB inactive cache; reactivation reauthorizes and checks freshness before
 exposure. Close, scope/permission retirement, version change and eviction purge
@@ -153,7 +155,15 @@ Office derivation remains one active Host operation shared by both preview entry
 Cancellation removes waiting demand immediately but releases an admitted permit
 only on proven physical settlement. In particular, the private native file-read
 socket joins its canceled read before acknowledging clean close; unknown transport
-settlement keeps admission unavailable. The public authority/protocol contract is
+settlement keeps admission unavailable. A private geometry preview operation
+binds source identity, version and size, with at most two live source owners.
+An idle connection or descriptor holds no physical-read permit. Every actual
+open, page read and final validation shares the existing two-read bound. A
+reused descriptor does not freeze external writes: descriptor metadata checks
+and a final secure pathname check must succeed before complete source/model
+publication. Streamed STL chunks have bounded backpressure, and EOF is sent to
+the decoder only after final source validation. Cancellation retires all started
+physical reads before acknowledging the operation's close. The public authority/protocol contract is
 unchanged. See [preview workspace invariants](preview-workspace.md).
 
 A `present` delivery exists only in the typed `deliveries` of a successfully
@@ -8539,3 +8549,77 @@ read repair never loads a cold runtime or repeats semantic work. See the
   replacement retire callbacks and fence held successes, held errors and lazy reads.
   Status/paging updates preserve camera and focus;
   explicit current-owner closure alone may restore the opener.
+
+## ConversationRuntime boundary ownership (Issue #606)
+
+- **One foreground source of truth.** The coordinator owns a single typed
+  `ForegroundSlot` (`Idle`, `Attempt`, `ManualCompaction`, `Scheduled`,
+  `Poisoned`) inside `CoordinatorState.foreground`. Every ownership question —
+  who holds the lent `ConversationState`, whether an idle claim may proceed,
+  whether the slot is fenced — reads that one variant; there is no second
+  foreground fact, no implicit inference from task liveness, and no
+  `ConversationState` ownership outside the slot. `ManualTailState`
+  (`None`/`Pending`/`Joining`) lives in the same `foreground` group under the
+  same coordinator lock, so a claimed-but-unjoined manual compaction can never
+  be misread as reaped, and reclamation is installed before the lock releases.
+- **Panic is an absorbing failure, never a silent re-admission.** A lending
+  task that dies without returning `ConversationState` leaves the slot
+  `Poisoned` via `AttemptTaskPoisonGuard`; every subsequent foreground
+  admission, idle claim and staged commit fails against the recorded evidence
+  while drain still completes. No path recreates a slot out of thin air.
+- **Coordinator-lock recovery preserves the live owner.** When a panic
+  inside a critical section poisons the coordinator state lock, `lock_state`
+  recovers the guard, commits an explicit `DurabilityFailed` fact and clears
+  the poison mark so readers converge on the same recorded failure — but it
+  never poisons the foreground slot: a poisoned mutex proves only that the
+  critical section panicked, not that the task holding the slot exited. The
+  task's own cancellation and settlement ownership stays intact until it can
+  be proven the task exited or was joined; generic lock recovery commits the
+  irreversible health-failure fact and nothing more.
+- **The admitted scheduled task owns the runtime until settlement.** The
+  long-lived `ScheduledExecutor` keeps only a `Weak` link for admission
+  decisions, but every admitted scheduled task moves a strong
+  `RuntimeInner` reference into its spawn and holds it until execution, the
+  physical proof, the durable settlement, the exact slot release and the
+  admission release are all complete — so a settlement owner cannot lose its
+  runtime while a Claim it started is still open.
+- **Auxiliary admission is one atomic bundle.** `RuntimeInner::admit_auxiliary_work`
+  — not the extracted `ExternalAuxiliary` — is the authority that runs the
+  bundle inside a single coordinator critical section: it freezes the model
+  invocation, resource snapshot, timeout policy and revision, reserves
+  executor capacity (which itself acquires the Call's
+  `LifecycleAdmission`), and optionally takes the business admission that
+  outlives Call settlement. `ExternalAuxiliary` — the extracted owner of
+  classification, BTW and title auxiliary work — only invokes that
+  interface. The returned `AdmittedAuxiliaryWork` is the only way auxiliary
+  execution obtains these facts; no snapshot can be newer or older than the
+  capacity it was acquired with, and failure paths release everything
+  together.
+- **Scheduled claim is one atomic bundle.** `ScheduledExecutor` owns scheduled
+  workflow execution outside `RuntimeInner`. `claim_scheduled_start` validates
+  configuration freshness (resources Arc identity, model config, approval
+  mode) and freezes the permission-reviewer invocation inside the same
+  coordinator critical section as the durable Claim, so a concurrent
+  configuration commit cannot slide between preparation and claim. A stale
+  start is deferred through `scheduled_retries` backoff and a durable wait
+  receipt, never silently claimed. `finish_scheduled` requires
+  `ForegroundSlot::Scheduled` with the matching start identity — nothing else
+  may release the foreground right or retire the durable run.
+- **Roles are explicit.** `ConversationRole` (`Root` vs `SubagentChild`) is
+  chosen at construction, never inferred from configuration contents. Child
+  physical settlement moves behind `ChildControl`, reachable only through
+  `runtime.child_control()` on a child-role runtime; a `subagents` registry
+  configured on a `WorkflowAgentRun` role fails validation instead of
+  silently re-interpreting intent, while a `SubagentChild` keeps its
+  registry as the parent plane of deeper children (nested delegation).
+  Root runtimes observe the same physical drain
+  through `shutdown_outcome`/`rollback_preparation_outcome`.
+- **Session title publication owns its lifecycle boundary.** Title refresh
+  is a local-runtime owner (`SessionTitle`) driving auxiliary invocation
+  through the same `admit_auxiliary_work` path with its business admission
+  held across Call settlement; no title state machine lives inside
+  `ConversationRuntime`.
+- **No second linearization domain.** The regrouped `foreground` state and
+  the extracted owners still synchronize on the one coordinator lock: the
+  refactor narrows ownership surfaces without adding locks, parallel commit
+  paths, compatibility shims or retained duplicates of the moved logic.

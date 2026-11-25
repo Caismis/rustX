@@ -227,13 +227,8 @@ impl RuntimeInner {
     ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
-        if (state.current_attempt.is_some() || state.scheduled.is_some())
-            || state.manual_compaction.is_some()
-            || self
-                .manual_tail
-                .lock()
-                .expect("manual tail owner")
-                .is_some()
+        if state.foreground.slot.is_foreground_active()
+            || state.foreground.manual_tail.is_unreaped()
         {
             return Err(Busy::Foreground);
         }
@@ -241,13 +236,17 @@ impl RuntimeInner {
         // catalog does not admit the configured selection: admission is closed
         // until a valid selection is committed, and committing one is exactly
         // the idle mutation this rule must leave open.
-        let admissible = state.model.unavailable().is_none();
-        if admissible && state.recovered_continuation.is_some() {
+        let admissible = state.config.model.unavailable().is_none();
+        if admissible && state.foreground.recovered_continuation.is_some() {
             return Err(Busy::Recovery);
         }
         if self.durability_gate.is_failed()
-            || state.mcp_settlement_failure.is_some()
-            || state.admission_durability_cycle.pending_retry.is_some()
+            || state.health.mcp_settlement_failure.is_some()
+            || state
+                .foreground
+                .admission_durability_cycle
+                .pending_retry
+                .is_some()
         {
             return Err(Busy::Durability);
         }
@@ -316,6 +315,7 @@ impl RuntimeInner {
     ) -> Option<&'a crate::goal::GoalDomain> {
         self.tool_runtime.goal().filter(|_| {
             state
+                .config
                 .resources
                 .root_profile()
                 .is_some_and(|profile| profile.extensions.goal().is_some())
@@ -447,18 +447,18 @@ impl RuntimeInner {
                         let mut state = inner.lock_state();
                         inner.publish_runtime_catalogs_locked(&mut state);
                         inner.commit_staged_configuration_locked(&mut state);
-                        if !state.configuration_commit_waiting
-                            && std::mem::take(&mut state.configuration_admission_deferred)
+                        if !state.config.configuration_commit_waiting
+                            && std::mem::take(&mut state.config.configuration_admission_deferred)
                         {
                             admit = true;
                         }
                     }
-                    if admit && !inner.admit_next_scheduled() {
+                    if admit && !inner.scheduled_executor.admit_next() {
                         inner.admit_next_attempt();
                     }
                     let state = inner.lock_state();
-                    commit_blocked =
-                        state.catalog_commit_blocked || state.configuration_commit_waiting;
+                    commit_blocked = state.config.catalog_commit_blocked
+                        || state.config.configuration_commit_waiting;
                 }
                 admit = tokio::select! {
                     biased;
@@ -544,11 +544,12 @@ impl RuntimeInner {
         }
         let mut state = self.lock_state();
         if !self.lifecycle.is_running()
-            || (state.current_attempt.is_some() || state.scheduled.is_some())
-            || state.manual_compaction.is_some()
+            || state.foreground.slot.is_foreground_active()
+            || state.foreground.manual_tail.is_unreaped()
             || state
-                .parent_turn_permits
-                .is_some_and(|permits| state.admitted_attempts >= permits)
+                .child()
+                .and_then(|child| child.parent_turn_permits)
+                .is_some_and(|permits| state.foreground.admitted_attempts >= permits)
         {
             return;
         }
@@ -557,19 +558,19 @@ impl RuntimeInner {
         // admitted; a candidate a real owner still blocks stays staged and the
         // Attempt runs with the last committed configuration.
         self.commit_staged_configuration_locked(&mut state);
-        if state.configuration_commit_waiting {
+        if state.config.configuration_commit_waiting {
             // A ready candidate is only waiting for the capability commit
             // boundary: this Attempt must capture it, so the pass is resumed
             // by the worker once that boundary is released.
-            state.configuration_admission_deferred = true;
+            state.config.configuration_admission_deferred = true;
             return;
         }
         if self.runtime_catalog_preparer.get().is_some()
-            && (state.catalog_commit_blocked
-                || state.pending_runtime_catalog.is_some()
-                || state.catalog_revision != self.capability.catalog_revision())
+            && (state.config.catalog_commit_blocked
+                || state.config.pending_runtime_catalog.is_some()
+                || state.config.catalog_revision != self.capability.catalog_revision())
         {
-            state.catalog_admission_deferred = true;
+            state.config.catalog_admission_deferred = true;
             // Transfer this existing kick to the worker's native frontier wait.
             self.wake.eligibility.notify_one();
             return;
@@ -586,7 +587,7 @@ impl RuntimeInner {
         // continuation or Goal round — until a valid selection is committed;
         // committing one wakes this pass. The invocation it last resolved is
         // never a substitute.
-        if state.model.unavailable().is_some() {
+        if state.config.model.unavailable().is_some() {
             return;
         }
         // Live admission guard: the coordinator may only adopt inbound when
@@ -647,7 +648,7 @@ impl RuntimeInner {
                 // A Class C conversation never reaches this branch: an
                 // indeterminate external outcome leaves the permission unset,
                 // so recovery starts nothing at all.
-                if state.recovered_continuation.is_some() {
+                if state.foreground.recovered_continuation.is_some() {
                     self.admit_continuation(state);
                     return;
                 }
@@ -705,7 +706,7 @@ impl RuntimeInner {
         // validate stable identities; committed receipts supply the content. On a validation failure
         // nothing is durably adopted and the items remain pending.
         {
-            let conversation = match state.conversation.hydrate(self.store.as_ref()) {
+            let conversation = match state.foreground.slot.hydrate(self.store.as_ref()) {
                 Ok(conversation) => {
                     &*conversation.expect("the coordinator owns the conversation state while idle")
                 }
@@ -758,10 +759,10 @@ impl RuntimeInner {
             self.mailbox.wake().notify_one();
             return;
         }
-        state.recovered_continuation = None;
+        state.foreground.recovered_continuation = None;
         // Mutation preserves identity. Every committed row is a subset of the
         // prevalidated identities; only the committed receipt supplies content.
-        let conversation = state.conversation.owned().expect("idle conversation");
+        let conversation = state.foreground.slot.owned().expect("idle conversation");
         let prepared_commits: Vec<_> = adopted
             .iter()
             .map(|item| {
@@ -808,7 +809,8 @@ impl RuntimeInner {
         // `None` and the attempt is the single mutable conversation
         // authority.
         let mut conversation = state
-            .conversation
+            .foreground
+            .slot
             .lend()
             .expect("the coordinator owns the conversation state while idle");
         for ((prepared, _item), receipt) in prepared_commits
@@ -853,9 +855,10 @@ impl RuntimeInner {
         self: &Arc<Self>,
         mut state: MutexGuard<'_, CoordinatorState>,
     ) {
-        let conversation = match state.conversation.hydrate(self.store.as_ref()) {
+        let conversation = match state.foreground.slot.hydrate(self.store.as_ref()) {
             Ok(_) => state
-                .conversation
+                .foreground
+                .slot
                 .lend()
                 .expect("the coordinator owns the conversation state while idle"),
             Err(error) => {
@@ -868,6 +871,7 @@ impl RuntimeInner {
             }
         };
         let provenance = state
+            .foreground
             .recovered_continuation
             .take()
             .expect("recovered answer obligation");
@@ -889,8 +893,9 @@ impl RuntimeInner {
         fresh: Option<FreshInboundTurn>,
         provenance: AttemptProvenance,
     ) {
-        let attempt_id = AttemptId::for_conversation(&self.conversation_id, state.next_attempt_seq);
-        state.next_attempt_seq = state.next_attempt_seq.saturating_add(1);
+        let attempt_id =
+            AttemptId::for_conversation(&self.conversation_id, state.foreground.next_attempt_seq);
+        state.foreground.next_attempt_seq = state.foreground.next_attempt_seq.saturating_add(1);
         // The coordinator-owned cancellation handle is the exact trigger
         // `cancel_current_attempt` requests on: the attempt task runs
         // against the same signal, so protocol cancellation always reaches
@@ -902,36 +907,44 @@ impl RuntimeInner {
         // arbitration resolves `CancelledBeforeStart` and no provider
         // request ever starts. The intent is consumed exactly once; the
         // child is one-shot, so at most one admission can ever consume it.
-        if let Some(reason) = state.one_shot_cancel.take() {
+        if let Some(reason) = state.foreground.one_shot_cancel.take() {
             // First winner by construction: the fresh attempt signal has no
             // prior cause.
             let _ = cancellation.request_cancel(reason);
         }
-        state.current_attempt = Some(CurrentAttempt {
-            configuration: AdmittedConfiguration {
-                approval_mode: state.effective_approval_mode,
-                model_timeout: state
-                    .resources
-                    .configuration()
-                    .map(|generation| generation.config.model_timeout_policy),
-                tool_deadline: state
-                    .resources
-                    .configuration()
-                    .map(|generation| generation.config.tool_deadline_policy),
-                attempt: attempt_id.clone(),
-                generation: state.resources.revision(),
-                model: state.model.view(),
-                resources: state.resources.inspection().clone(),
-            },
-            attempt_id: attempt_id.clone(),
-            cancellation: cancellation.clone(),
-            provenance,
-        });
+        let configuration = AdmittedConfiguration {
+            approval_mode: state.config.effective_approval_mode,
+            model_timeout: state
+                .config
+                .resources
+                .configuration()
+                .map(|generation| generation.config.model_timeout_policy),
+            tool_deadline: state
+                .config
+                .resources
+                .configuration()
+                .map(|generation| generation.config.tool_deadline_policy),
+            attempt: attempt_id.clone(),
+            generation: state.config.resources.revision(),
+            model: state.config.model.view(),
+            resources: state.config.resources.inspection().clone(),
+        };
+        state
+            .foreground
+            .slot
+            .start_attempt(CurrentAttempt {
+                configuration,
+                attempt_id: attempt_id.clone(),
+                cancellation: cancellation.clone(),
+                provenance,
+            })
+            .map_err(|_| ())
+            .expect("foreground idleness proven under this lock");
         // The one admission publication point is also where the admitted
         // attempt becomes countable (Issue #193): the subagent child driver
         // compares this against the terminals it has observed to prove it
         // has seen every attempt an accepted steer could have opened.
-        state.admitted_attempts = state.admitted_attempts.saturating_add(1);
+        state.foreground.admitted_attempts = state.foreground.admitted_attempts.saturating_add(1);
         {
             let mut steering = self.mailbox.steering.lock().expect("steering admission");
             steering.active = Some(attempt_id.clone());
@@ -957,6 +970,7 @@ impl RuntimeInner {
         // reconstructed only from its own frozen durable facts and is never
         // rewritten to resemble the new configuration.
         let model = state
+            .config
             .model
             .snapshot()
             .expect("admission checked the selection under this lock");
@@ -964,36 +978,34 @@ impl RuntimeInner {
         // same linearization point as its resolved snapshot. A named
         // subagent with no explicit model inherits exactly this — never live
         // mutable session state, and never a composition-time capture.
-        let model_config = state.model.config().clone();
-        let model_registry = state.model.registry().cloned();
+        let model_config = state.config.model.config().clone();
+        let model_registry = state.config.model.registry().cloned();
         // Freeze runtime execution policy at the same admission boundary as
         // the attempt's model snapshot. A later configuration change can
         // therefore affect only a future admitted attempt.
-        let model_timeout_policy =
-            state
-                .resources
-                .configuration()
-                .map_or(self.model_timeout_policy, |generation| {
-                    generation
-                        .config
-                        .timeout_policy()
-                        .expect("validated generation")
-                });
+        let model_timeout_policy = state.config.resources.configuration().map_or(
+            self.model_timeout_policy,
+            |generation| {
+                generation
+                    .config
+                    .timeout_policy()
+                    .expect("validated generation")
+            },
+        );
         // The tool execution-liveness policy freezes at the same boundary
         // (Issue #204): every foreground ToolCall of this attempt runs under
         // exactly this policy value.
-        let tool_deadline_policy =
-            state
-                .resources
-                .configuration()
-                .map_or(self.tool_deadline_policy, |generation| {
-                    generation
-                        .config
-                        .tool_deadline_policy()
-                        .expect("validated generation")
-                });
-        let approval_mode = state.effective_approval_mode;
-        let resources = state.resources.clone();
+        let tool_deadline_policy = state.config.resources.configuration().map_or(
+            self.tool_deadline_policy,
+            |generation| {
+                generation
+                    .config
+                    .tool_deadline_policy()
+                    .expect("validated generation")
+            },
+        );
+        let approval_mode = state.config.effective_approval_mode;
+        let resources = state.config.resources.clone();
         let capability = resources.capability().clone();
         let lease = self.capability.acquire_attempt_lease_for(capability);
         self.observe(ConversationObservation::AttemptAdmitted {
@@ -1029,6 +1041,11 @@ impl RuntimeInner {
         self.enter_attempt_execution_probe();
         let inner = Arc::clone(self);
         self.executor.spawn(async move {
+            // The poison guard arms for the entire lending window: an unwind
+            // before the state is returned transitions the slot to
+            // `Poisoned` instead of leaving a phantom `Attempt` that hangs
+            // drain forever (Issue #606).
+            let mut poison_guard = AttemptTaskPoisonGuard::arm(&inner, attempt_id.clone());
             let result = inner
                 .run_attempt(
                     attempt_id.clone(),
@@ -1046,6 +1063,7 @@ impl RuntimeInner {
                 )
                 .await;
             inner.finish_attempt(attempt_id, result);
+            poison_guard.disarm();
             drop(attempt_admission);
             drop(activity);
         });
@@ -1167,7 +1185,11 @@ impl ConversationRuntime {
         // is read here, inside the very critical section that performs the
         // durable acceptance below, so acceptance and the seal have one
         // total order. Only a native child activation seals its local inbox.
-        if class.is_parent_guidance() && state.parent_guidance_sealed {
+        if class.is_parent_guidance()
+            && state
+                .child()
+                .is_some_and(|child| child.parent_guidance_sealed)
+        {
             return Err(InboundAdmissionError::GuidanceSealed);
         }
         match self.inner.lifecycle.state() {
@@ -1189,7 +1211,7 @@ impl ConversationRuntime {
         // Explicit refusal, ordered with catalog publication and model
         // commits by this lock: nothing is accepted for a selection the
         // Session's published catalog does not admit.
-        if let Some(error) = state.model.unavailable() {
+        if let Some(error) = state.config.model.unavailable() {
             return Err(InboundAdmissionError::ModelUnavailable {
                 diagnostic: error.to_string(),
             });
@@ -1258,14 +1280,13 @@ impl ConversationRuntime {
         if steering.waiting.len() >= 128 {
             return Err(InboundAdmissionError::NotSteerable);
         }
-        let current = state.current_attempt.as_ref();
+        let current = state.foreground.slot.as_attempt();
         if let Some(expected) = expected
             && current.is_none_or(|current| current.attempt_id != *expected)
         {
             return Err(InboundAdmissionError::StaleAttempt);
         }
-        if state.scheduled.is_some()
-            || state.manual_compaction.is_some()
+        if state.foreground.slot.steering_blocked()
             || current.is_some_and(|current| {
                 current.cancellation.is_cancelled()
                     || !steering.open
@@ -1333,12 +1354,11 @@ impl ConversationRuntime {
             .steering
             .lock()
             .expect("steering admission");
-        let current = state.current_attempt.as_ref();
+        let current = state.foreground.slot.as_attempt();
         if current.is_none_or(|current| current.attempt_id != *expected) {
             return Err(InboundAdmissionError::StaleAttempt);
         }
-        if state.scheduled.is_some()
-            || state.manual_compaction.is_some()
+        if state.foreground.slot.steering_blocked()
             || current.is_some_and(|current| {
                 current.cancellation.is_cancelled()
                     || !steering.open
@@ -1383,7 +1403,9 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .current_attempt
+            .foreground
+            .slot
+            .as_attempt()
             .is_some()
     }
 
@@ -1404,13 +1426,16 @@ impl ConversationRuntime {
         let Ok(state) = self.inner.state.try_lock() else {
             return false;
         };
-        if (state.current_attempt.is_some() || state.scheduled.is_some())
-            || state.manual_compaction.is_some()
-            || state.conversation.is_lent()
-            || state.recovered_continuation.is_some()
+        if state.foreground.slot.is_foreground_active()
+            || state.foreground.manual_tail.is_unreaped()
+            || state.foreground.recovered_continuation.is_some()
             || !self.inner.durability_gate.healthy_for_idle_claim()
-            || state.mcp_settlement_failure.is_some()
-            || state.admission_durability_cycle.pending_retry.is_some()
+            || state.health.mcp_settlement_failure.is_some()
+            || state
+                .foreground
+                .admission_durability_cycle
+                .pending_retry
+                .is_some()
         {
             return false;
         }
@@ -1433,4 +1458,71 @@ fn input_correlation(id: &str) -> Result<String, InboundAdmissionError> {
         return Err(InboundAdmissionError::InvalidInputId);
     }
     Ok(format!("app-server:{id}"))
+}
+
+impl RuntimeInner {
+    /// `admit_auxiliary_work` (Issue #606): the coordinator-side auxiliary
+    /// admission critical section. Under the coordinator lock it freezes
+    /// the model invocation selected for `kind`, reserves generic capacity
+    /// on the runtime's own `AuxiliaryExecutor`, optionally holds a
+    /// business admission, and returns one frozen work package the
+    /// extracted external service executes — it never sees the
+    /// coordinator state itself.
+    pub(crate) fn admit_auxiliary_work(
+        &self,
+        kind: crate::runtime::auxiliary::external::AuxiliaryInvocationKind,
+        allowance: u8,
+        cancellation: &crate::runtime::cancellation::CancellationSignal,
+        hold_business_admission: bool,
+    ) -> Result<
+        crate::runtime::auxiliary::external::AdmittedAuxiliaryWork,
+        crate::context::ContextError,
+    > {
+        use crate::context::{ContextError, ContextErrorKind};
+        use crate::runtime::auxiliary::external::AuxiliaryInvocationKind;
+        let state = self.lock_state();
+        let invocation = match kind {
+            AuxiliaryInvocationKind::Classification => {
+                state.config.model.classification_invocation().cloned()
+            }
+            AuxiliaryInvocationKind::Btw => state.config.model.btw_invocation().cloned(),
+            AuxiliaryInvocationKind::Title => state.config.model.title_invocation(),
+        }
+        .map_err(|_| {
+            ContextError::new(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "auxiliary model selection is unavailable",
+            )
+        })?;
+        let scope = self
+            .auxiliary_executor
+            .general_scope(allowance, cancellation);
+        let reservation = self.auxiliary_executor.reserve_general(&scope)?;
+        let business_admission = hold_business_admission
+            .then(|| {
+                self.lifecycle
+                    .try_enter_running()
+                    .map_err(|_| ContextError::new(ContextErrorKind::Cancelled, "runtime closed"))
+            })
+            .transpose()?;
+        let resources = state.config.resources.clone();
+        let timeout = resources
+            .configuration()
+            .map_or(self.model_timeout_policy, |generation| {
+                generation
+                    .config
+                    .timeout_policy()
+                    .expect("validated timeout")
+            });
+        let resource_revision = resources.revision().get();
+        Ok(crate::runtime::auxiliary::external::AdmittedAuxiliaryWork {
+            invocation,
+            resources,
+            timeout,
+            resource_revision,
+            scope,
+            reservation,
+            business_admission,
+        })
+    }
 }

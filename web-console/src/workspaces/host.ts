@@ -129,6 +129,8 @@ export function settlementFailureKind(cause: unknown): SettlementFailureKind | u
 }
 
 export interface ProductHostWorkspaces {
+  openDeliveryPreview?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal: AbortSignal): Promise<import('../../shared/file-preview.ts').FilePreviewOperation>;
+  openWorkspacePreview?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal: AbortSignal): Promise<import('../../shared/file-preview.ts').FilePreviewOperation>;
   /** Targeted change hints. Initial version is native-authorized after the
    * watcher is ready; every hint still requires a fresh authorized probe. */
   observeDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation>;
