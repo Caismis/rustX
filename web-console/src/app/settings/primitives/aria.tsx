@@ -162,8 +162,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
       finalFocus={() => {
         const targets = closing.current === 'confirmed' ? [settle.current] : [trigger.current, settle.current];
         for (const target of targets) {
-          if (!target?.isConnected || target.matches(':disabled, [aria-disabled="true"]')
-            || !target.checkVisibility({ visibilityProperty: true })) continue;
+          if (!target?.isConnected || target.matches(':disabled, [aria-disabled="true"]')) continue;
           target.focus({ preventScroll: true });
           if (document.activeElement === target) break;
         }

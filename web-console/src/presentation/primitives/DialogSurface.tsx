@@ -65,7 +65,13 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
     previousFocus.current = activeElement instanceof HTMLElement ? activeElement : null;
     return () => {
       const target = finalFocusRef.current ? finalFocusRef.current() : previousFocus.current;
-      if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) target.focus({ preventScroll: true });
+      if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) {
+        target.focus({ preventScroll: true });
+        requestAnimationFrame(() => {
+          const active = document.activeElement;
+          if (target.isConnected && document.activeElement !== target && (!(active instanceof HTMLElement) || active === document.body || active.closest('[inert]'))) target.focus({ preventScroll: true });
+        });
+      }
     };
   }, [shown]);
   const Root = role === 'alertdialog' ? AlertDialog.Root : Dialog.Root;

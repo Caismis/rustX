@@ -900,7 +900,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           same fields, and none of them is writable until the explicit
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
-      {!unit.embedded && <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}
+      {!unit.embedded && <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' && unit.outcome.kind !== 'uncertain' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}
         fallback={<div className={css.review}><p role="status">{tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere')}</p></div>}/>}
       {!unit.embedded && <UnitOutcomeNotice title={title} outcome={unit.outcome} />}
       </div>

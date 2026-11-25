@@ -131,7 +131,10 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   // connection owner may then start restoration before the explicit Connect
   // gesture, whose replacement would retire that just-dispatched Attach.
   const mode = page.getByLabel('Connection mode');
-  if (await mode.inputValue() !== 'remote') await mode.selectOption('remote');
+  if (!(await mode.textContent())?.includes('Remote')) {
+    await mode.click();
+    await page.getByRole('option', { name: /Remote/ }).click();
+  }
   const address = page.getByLabel('WebSocket endpoint');
   const currentAddress = await address.inputValue();
   let sameAddress = currentAddress === endpoint;
