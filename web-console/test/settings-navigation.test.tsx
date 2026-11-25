@@ -314,7 +314,8 @@ it('a current owner lookup failure announces one dismissible floating notice', a
   await release(startLookup());
   const error = screen.getByRole('alert', { name: 'Settings navigation error' });
   expect(error.textContent).toContain('stale owner lookup failed');
-  expect(error.parentElement).toBe(document.body);
+  expect(error.closest('[data-base-ui-portal]')).not.toBeNull();
+  expect(document.body.contains(error)).toBe(true);
   expect(screen.queryByRole('button', { name: 'Dismiss notice' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Dismiss settings error' }));
   expect(screen.queryByRole('alert', { name: 'Settings navigation error' })).toBeNull();

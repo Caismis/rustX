@@ -17,6 +17,7 @@ interface ModalBaseProps {
   /* Optional class for the fixed full-viewport layer — e.g. a dialog that
    * must sit above another dialog raises its stacking level here. */
   rootClassName?: string
+  finalFocus?: () => HTMLElement | false
 }
 
 type ModalProps = ModalBaseProps & (
@@ -31,7 +32,7 @@ type ModalProps = ModalBaseProps & (
  * @returns null when closed; otherwise the overlay tree.
  */
 export function Modal({
-  open, onClose, title, closeLabel, description, children, footer, className, contentClassName, rootClassName, headless = false,
+  open, onClose, title, closeLabel, description, children, footer, className, contentClassName, rootClassName, headless = false, finalFocus,
 }: ModalProps) {
   const popup = useRef<HTMLElement>(null)
   if (!open) return null
@@ -43,6 +44,7 @@ export function Modal({
       overlayClassName={clsx(css.root, css.scrim, rootClassName)}
       className={clsx(css.dialog, className)}
       contentRef={popup}
+      finalFocus={finalFocus}
       initialFocus={() => popup.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? false}
     >
       {headless

@@ -70,7 +70,7 @@ it('changes API format once on the provider without exposing protocol identifier
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'anthropic_messages', credential: { kind: 'retain' } } } } } });
   await waitFor(() => {
     for (const id of ['one', 'two']) expect(within(screen.getByRole('listitem', { name: id })).queryByText('anthropic_messages')).toBeNull();
-    expect(screen.getByRole('button', { name: /API format$/ }).textContent).toContain('Anthropic Messages');
+    expect(screen.getByRole('combobox', { name: /API format$/ }).textContent).toContain('Anthropic Messages');
   });
   fireEvent.click(screen.getByRole('button', { name: '+ Add Model' }));
   expect(within(screen.getByRole('dialog', { name: 'Add Model' })).queryByLabelText('API format')).toBeNull();

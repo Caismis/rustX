@@ -23,8 +23,10 @@ it('validates stored preferences and applies settings even when browser storage 
 it('General edits the three preferences, bounds the font stepper and persists the selection', async () => {
   await renderEditor(<GeneralPage theme="dark"/>);
   fireEvent.click(screen.getByRole('button', {name:'Increase font size'}));
-  fireEvent.click(screen.getByRole('button', {name:/Work details$/}));
-  fireEvent.click(await screen.findByRole('option', {name:'Fully expanded'}));
+  fireEvent.click(screen.getByRole('combobox', {name:/Work details$/}));
+  const expanded = await screen.findByRole('option', {name:'Fully expanded'});
+  fireEvent.pointerDown(expanded);
+  fireEvent.click(expanded);
   fireEvent.click(screen.getByRole('switch', {name:'Show coding view'}));
   // General preferences apply the moment each control is used; no save exists.
   expect(new ConversationPreferenceStore().getSnapshot()).toEqual({fontSize:15, transcriptMode:'verbose', codingView:false});

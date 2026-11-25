@@ -88,7 +88,7 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   open('Tools & Permissions');
   if (scope === 'workspace') enableWorkspaceCustomization();
   const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
-  fireEvent.click(tools.getByLabelText('read'));
+  fireEvent.click(tools.getByRole('switch', { name: 'read' }));
   // Scalar units commit themselves after a short debounce.
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ expected_revision: 'saved-2', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read'] } } });
@@ -140,7 +140,7 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   expect(forms()).toEqual([]);
   open('Tools & Permissions');
   const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
-  fireEvent.click(tools.getByLabelText('read'));
+  fireEvent.click(tools.getByRole('switch', { name: 'read' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config' } });
 });
@@ -150,7 +150,7 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
 const model = (id: string): Model => ({ provider: 'transport', id, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } });
 /** The option labels of one React Aria Select, read by opening it. */
 function options(scope: HTMLElement, label: RegExp) {
-  fireEvent.click(within(scope).getByRole('button', { name: label }));
+  fireEvent.click(within(scope).getByRole('combobox', { name: label }));
   const listed = within(screen.getByRole('listbox')).getAllByRole('option').map(option => option.textContent!);
   fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
   return listed;

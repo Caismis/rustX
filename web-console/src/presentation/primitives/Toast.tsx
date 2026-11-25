@@ -49,6 +49,7 @@ function Emitter({ text, icon, anchor, label, tone, foreground, holdMs, actions,
         rootProps: {
           role: tone === 'success' ? 'status' : 'alert',
           'aria-label': label,
+          'aria-labelledby': undefined,
           'data-toast': '',
           'data-foreground': foreground || undefined,
         },

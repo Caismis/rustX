@@ -41,7 +41,7 @@ async function skills(workspace = false, options: {
   return subject;
 }
 const toggle = (name: string) => within(screen.getByRole('listitem', { name })).getByRole('switch');
-const policy = () => screen.getByRole('button', { name: /Skill access$/ });
+const policy = () => screen.getByRole('combobox', { name: /Skill access$/ });
 async function settled() { await waitFor(() => expect((policy() as HTMLButtonElement).disabled).toBe(false)); }
 
 function catalogPage(names: string[], next_offset: number | null = null): SkillsPage {
@@ -67,7 +67,9 @@ it.each(['loading', 'failed', 'page-failed'] as const)('cannot freeze all from a
   expect(writes(subject)).toHaveLength(0);
   expect(subject.source.user.authored!.agent!.skills).toBe('all');
   expect(screen.getByRole('option', { name: 'All skills, including newly discovered' }).getAttribute('aria-disabled')).not.toBe('true');
-  fireEvent.click(screen.getByRole('option', { name: 'None' }));
+  const none = screen.getByRole('option', { name: 'None' });
+  fireEvent.pointerDown(none);
+  fireEvent.click(none);
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0].mutation).toMatchObject({ mutation: { authored: [] } });
   if (state === 'loading') await act(async () => release(catalogPage(['a', 'b'])));

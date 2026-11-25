@@ -22,7 +22,7 @@ export function StateDot({ state, size = 10, className }: {
   className?: string | undefined
 }) {
   if (state === 'ongoing') {
-    return <Spinner className={className} width={size} height={size} role={undefined} aria-label={undefined} aria-hidden="true" />
+    return <Spinner className={className} width={size} height={size} role={undefined} aria-label={undefined} aria-hidden="true" data-state="ongoing" />
   }
   return (
     <span

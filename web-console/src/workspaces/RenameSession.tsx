@@ -8,7 +8,7 @@ import css from '../presentation/workspace/WorkspaceBrowser.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** DSH rename dialog over one native name mutation; no chooser or list-refresh barrier. */
-export function RenameSession({ client, id, title, close }: { client: AppServerClient; id: string; title: string; close: () => void }) {
+export function RenameSession({ client, id, title, close, finalFocus }: { client: AppServerClient; id: string; title: string; close: () => void; finalFocus?: () => HTMLElement | false }) {
   const tx = useTranslation(), [draft, setDraft] = useState(title), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const composing = useRef(false), pending = useRef(false), alive = useRef(true);
   const generation = client.getSnapshot().generation;
@@ -23,7 +23,7 @@ export function RenameSession({ client, id, title, close }: { client: AppServerC
     } catch (cause) { if (alive.current && client.getSnapshot().generation === generation) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { pending.current = false; if (alive.current) setBusy(false); }
   };
-  return <Modal open title={tx('workspace:rename.session')} closeLabel={tx('workspace:workspace-navigation.close-dialog')} onClose={dismiss}
+  return <Modal open finalFocus={finalFocus} title={tx('workspace:rename.session')} closeLabel={tx('workspace:workspace-navigation.close-dialog')} onClose={dismiss}
     footer={<><Button variant="outline" disabled={busy} onClick={dismiss}>{tx('workspace:cancel')}</Button><Button variant="primary" disabled={busy || !draft.trim()} onClick={() => void confirm()}>{tx('workspace:rename')}</Button></>}>
     <TextInput className={css.renameInput} data-modal-autofocus="" aria-label={tx('workspace:field.sessionName')} value={draft} disabled={busy}
       onFocus={event => event.target.select()} onChange={event => { setDraft(event.target.value); setError(''); }}

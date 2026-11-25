@@ -18,7 +18,7 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
   renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
   workspaceSettings?: (id: string, label: string) => void;
   groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
-  query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string) => void;
+  query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string, returnFocus?: HTMLElement | null) => void;
   closeView?: (id: string) => void;
   pin?: (id: string) => void; copyId?: (id: string) => void;
   closeAllViews?: () => void;

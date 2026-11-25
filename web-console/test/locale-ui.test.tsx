@@ -24,15 +24,17 @@ it('switches the complete active shell and General through Language, preserving 
   fireEvent.change(composer, { target: { value: 'User authored ENGLISH 中文 /path' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
   const before = [...server.requests];
-  fireEvent.click(screen.getByRole('button', { name: /Language$/ }));
+  fireEvent.click(screen.getByRole('combobox', { name: /Language$/ }));
   // General preferences apply the moment they are picked; no save exists.
-  await act(async () => fireEvent.click(screen.getByRole('option', { name: '中文' })));
+  const zh = screen.getByRole('option', { name: '中文' });
+  fireEvent.pointerDown(zh);
+  await act(async () => fireEvent.click(zh));
   expect(document.documentElement.lang).toBe('zh-CN');
   expect(localStorage.getItem('rustx-locale-v1')).toBe('zh');
   expect(server.requests).toEqual(before);
   expect(screen.getByRole('heading', { name: '通用设置' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: /中文.*语言/ })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: /语言$/ }));
+  expect(screen.getByRole('combobox', { name: /语言$/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole('combobox', { name: /语言$/ }));
   expect(screen.getByRole('option', { name: 'English' })).toBeTruthy();
   fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: text('sidebar:navigation.home') })));
@@ -161,7 +163,9 @@ it.each(['en', 'zh'] as const)('resource permission choices preserve exact nativ
   const change = vi.fn(), tx = translator(locale);
   render(<ResourcePermissionFields value={undefined} change={change}/>);
   // Issue #544: MCP/resource overrides author complete three-mode objects.
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(`${tx('settings:permission.plan')}$`) }));
-  fireEvent.click(screen.getByRole('option', { name: tx('settings:permission.deny') }));
+  fireEvent.click(screen.getByRole('combobox', { name: new RegExp(`${tx('settings:permission.plan')}$`) }));
+  const deny = screen.getByRole('option', { name: tx('settings:permission.deny') });
+  fireEvent.pointerDown(deny);
+  fireEvent.click(deny);
   expect(change).toHaveBeenLastCalledWith({ plan: 'deny', automatic: 'default', full_access: 'default' });
 });

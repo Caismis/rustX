@@ -59,7 +59,7 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
   const [busy, setBusy] = useState(false);
   const [pickingFolder, setPickingFolder] = useState(false);
   const folderPick = useRef<AbortController | undefined>(undefined);
-  const [renaming, setRenaming] = useState<{ id: string; title: string }>();
+  const [renaming, setRenaming] = useState<{ id: string; title: string; returnFocus?: HTMLElement | null }>();
   const [toast, setToast] = useState<{ sequence: number; copied: boolean }>();
   const pinned = useSyncExternalStore(pins.subscribe, pins.getSnapshot);
   useEffect(() => client.subscribeSessionDeletion(id => pins.remove(id)), [client, pins]);
@@ -80,9 +80,9 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
     setQuery(text); setOffset(page); setError('');
     void client.listSessions(page, text, current).catch(cause => { if (current()) setError(actionError(cause)); });
   };
-  const edit = (kind: 'workspace' | 'session' | 'remove' | 'add', id: string, title: string) => {
+  const edit = (kind: 'workspace' | 'session' | 'remove' | 'add', id: string, title: string, returnFocus?: HTMLElement | null) => {
     setError(''); setName(title);
-    if (kind === 'session') { setRenaming({ id, title }); return; }
+    if (kind === 'session') { setRenaming({ id, title, returnFocus }); return; }
     const mutation = catalog ? associations.captureMutation(catalog) : undefined;
     if (!mutation || !catalog) { setError(String(new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced'))); return; }
     setDialog({ kind, id, name: title, mutation, catalog });
@@ -137,7 +137,7 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
   return <>
     <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
-      unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.generated_title?.text ?? state.sessions.find(session => session.id === id)?.preview ?? '')} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
+      unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={(id, returnFocus) => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.generated_title?.text ?? state.sessions.find(session => session.id === id)?.preview ?? '', returnFocus)} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={bound && (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser' && host.browseWorkspace && host.registerWorkspaceFolder
         || catalog?.picker.kind === 'native' && host.pickWorkspace) ? () => void addWorkspace() : undefined}
@@ -146,7 +146,7 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}
       notices={<>{status === 'unavailable' && <p role="status">{tx('workspace:association.unavailable')}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />
     {!dialog && error && <Toast key={notice?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setError('')}/>}
-    {renaming && <RenameSession key={renaming.id} client={client} id={renaming.id} title={renaming.title} close={() => setRenaming(undefined)}/>}
+    {renaming && <RenameSession key={renaming.id} client={client} id={renaming.id} title={renaming.title} finalFocus={() => renaming.returnFocus ?? false} close={() => setRenaming(undefined)}/>}
     {toast && <Toast key={toast.sequence} anchor={null} tone={toast.copied ? 'success' : undefined} text={tx(toast.copied ? 'workspace:toast.sessionIdCopied' : 'workspace:toast.sessionIdCopyFailed')} icon={toast.copied ? <IconCheckOutline16/> : <IconWarningOutline16/>} onDone={() => setToast(undefined)}/>}
     {dialog?.kind === 'add' && dialog.catalog.picker.kind === 'browser' ? <WorkspaceFolderDialog host={host} scope={dialog.mutation.scope}
       locations={dialog.catalog.picker.locations} busy={busy} error={error} close={() => setDialog(undefined)}

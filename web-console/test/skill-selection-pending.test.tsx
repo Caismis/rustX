@@ -65,9 +65,9 @@ it('does not expand all from a pending catalog, then toggles and freezes the rel
   rerender(browser(gate.client, next, 'rev-2'));
   await waitFor(() => expect(gate.lists()).toBe(2));
   const pending = screen.getByRole('switch', { name: 'Allow a for the agent' });
-  expect((pending as HTMLButtonElement).disabled).toBe(true);
+  expect(pending.getAttribute('aria-disabled')).toBe('true');
   fireEvent.click(pending);
-  fireEvent.click(screen.getByRole('button', { name: (name: string) => name.endsWith('Skill access') }));
+  fireEvent.click(screen.getByRole('combobox', { name: (name: string) => name.endsWith('Skill access') }));
   const selected = await screen.findByRole('option', { name: 'Selected skills' });
   expect(selected.getAttribute('aria-disabled')).toBe('true');
   fireEvent.click(selected);
@@ -89,7 +89,7 @@ it('does not expand all from a pending catalog, then toggles and freezes the rel
   await waitFor(() => expect(freeze.lists()).toBe(2));
   expect(frozen.writes).not.toHaveBeenCalled();
   freeze.releaseSecond(skillPage(['a', 'b', 'c']));
-  await waitFor(() => expect((screen.getByRole('switch', { name: 'Allow c for the agent' }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.getByRole('switch', { name: 'Allow c for the agent' }).getAttribute('aria-disabled')).not.toBe('true'));
   await chooseOption('Skill access', 'Selected skills');
   await waitFor(() => expect(frozen.writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: ['a', 'b', 'c'] } }, 'rev-2'));
 });
@@ -103,7 +103,7 @@ it('still edits an exact selection and none while the catalog is pending', async
   rerender(browser(gate.client, next, 'rev-2'));
   await waitFor(() => expect(gate.lists()).toBe(2));
   const exact = screen.getByRole('switch', { name: 'Allow a for the agent' });
-  expect((exact as HTMLButtonElement).disabled).toBe(false);
+  expect(exact.getAttribute('aria-disabled')).not.toBe('true');
   fireEvent.click(exact);
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: ['b'] } }, 'rev-2'));
 

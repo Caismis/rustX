@@ -83,13 +83,13 @@ describe('enabling in Sessions', () => {
     expect(sessions().title).toBe('Enabled in the Sessions of every Workspace');
     fireEvent.click(sessions());
     expect(a.enables.map(({ id, expected, enabled }) => ({ id, expected, enabled }))).toEqual([{ id: 'flow', expected: 'cfg-1', enabled: true }]);
-    expect(sessions().disabled).toBe(true);
+    expect(sessions().getAttribute('aria-disabled')).toBe('true');
     a.enables[0].result.resolve(); await flush();
     const after = listing(a);
     after.files[0].enabled = true;
     a.lists[1].resolve({ ...after, configuration_revision: 'cfg-2' }); await flush();
     expect(sessions().getAttribute('aria-checked')).toBe('true');
-    expect(sessions().disabled).toBe(false);
+    expect(sessions().getAttribute('aria-disabled')).not.toBe('true');
   });
 
   it('forces a file that fails its check off and gray, even when its scope enables it', async () => {
@@ -98,14 +98,14 @@ describe('enabling in Sessions', () => {
     observed.files[0] = { ...observed.files[0], enabled: true, diagnostic: { path: 'block.edges.0.to', category: 'compile', reason: 'unknown node', correction: null, detail: null, line: null, column: null } };
     a.lists[0].resolve({ ...observed, configuration_revision: 'cfg-1' }); await flush();
     expect(sessions().getAttribute('aria-checked')).toBe('false');
-    expect(sessions().disabled).toBe(true);
+    expect(sessions().getAttribute('aria-disabled')).toBe('true');
     expect(sessions().title).toMatch(/fails its check/);
   });
 
   it('cannot switch while the scope configuration does not parse', async () => {
     const { a, show } = mount(); show();
     a.lists[0].resolve({ ...listing(a), configuration_revision: null }); await flush();
-    expect(sessions().disabled).toBe(true);
+    expect(sessions().getAttribute('aria-disabled')).toBe('true');
     expect(sessions().title).toMatch(/rustx\.toml cannot be read/);
   });
 });
@@ -123,7 +123,7 @@ function mount() {
 afterEach(cleanup);
 
 const dialog = () => within(screen.getByRole('dialog'));
-const newButton = () => screen.getByRole('button', { name: 'New Workflow' }) as HTMLButtonElement;
+const newButton = () => screen.getByRole('button', { name: 'New Workflow', hidden: true }) as HTMLButtonElement;
 function fill(id: string, description: string) {
   fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: `${id} name` } });
   fireEvent.change(dialog().getByLabelText(/^Workflow ID/), { target: { value: id } });

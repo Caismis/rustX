@@ -53,7 +53,7 @@ it('disabling a partially granted MCP source explicitly revokes that source', as
   const card = within(screen.getByRole('listitem', { name: 'search' }));
   expect(card.queryByRole('button', { name: 'Manage selection' })).toBeNull();
   const toggle = card.getByRole('switch') as HTMLButtonElement;
-  expect(toggle.disabled).toBe(false);
+  expect(toggle.getAttribute('aria-disabled')).not.toBe('true');
   fireEvent.click(toggle);
   await waitFor(()=>expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0]).toMatchObject({mutation:{kind:'config',mutation:{unit:'source_tools',id:'search',authored:[]}}});
@@ -78,7 +78,7 @@ it('a rejected MCP toggle exposes the failure and cannot blindly retry', async (
   await catalog(s);
   fireEvent.click(within(screen.getByRole('listitem', { name: 'search' })).getByRole('switch'));
   await screen.findByText(/catalog rejected/);
-  expect((within(screen.getByRole('listitem', {name:'search'})).getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
+  expect(within(screen.getByRole('listitem', {name:'search'})).getByRole('switch').getAttribute('aria-disabled')).toBe('true');
   expect(screen.queryByRole('button', {name:'Manage selection'})).toBeNull();
   expect(writes(s)).toHaveLength(1);
 });

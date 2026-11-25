@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from '../src/app/App';
 import { SessionPins } from '../src/workspaces/session-pins';
 import { RpcFailure } from '../src/client/errors';
@@ -49,7 +49,7 @@ it('rename selects the full title, blocks IME/empty/duplicate submits, retains a
   const trigger = screen.getByRole('button', { name: 'Session actions for Session B' });
   fireEvent.click(trigger); fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
   const input = screen.getByRole('textbox', { name: 'Session name' }) as HTMLInputElement;
-  expect(document.activeElement).toBe(input); expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
+  await waitFor(() => expect(document.activeElement).toBe(input)); expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
   fireEvent.compositionStart(input); fireEvent.keyDown(input, { key: 'Enter' }); fireEvent.compositionEnd(input);
   expect(server!.requests.some(row => row.request.method === 'session/name')).toBe(false);
   fireEvent.change(input, { target: { value: ' ' } }); expect(screen.getByRole('button', { name: 'Rename' })).toHaveProperty('disabled', true);

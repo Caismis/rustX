@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode, type Ref } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog } from '@base-ui/react/dialog';
 import { AlertDialog } from '@base-ui/react/alert-dialog';
@@ -67,9 +67,22 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
     if (typeof contentRef === 'function') contentRef(node);
     else if (contentRef) contentRef.current = node;
   }, [contentRef]);
+  const shown = open && active;
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const finalFocusRef = useRef(finalFocus);
+  finalFocusRef.current = finalFocus;
+  useLayoutEffect(() => {
+    if (!shown) return undefined;
+    const activeElement = document.activeElement;
+    previousFocus.current = activeElement instanceof HTMLElement ? activeElement : null;
+    return () => {
+      const target = finalFocusRef.current ? finalFocusRef.current() : previousFocus.current;
+      if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) target.focus({ preventScroll: true });
+    };
+  }, [shown]);
   const Root = role === 'alertdialog' ? AlertDialog.Root : Dialog.Root;
   return <Root open={open && active} onOpenChange={(next, details) => {
-    if (details.reason === 'escape-key' && ((details.event.target as Element)?.closest?.('[role="menu"], [role="listbox"]') || surfaceLayers.at(-1) !== layer)) {
+    if (details.reason === 'escape-key' && (details.event.defaultPrevented || (details.event.target as Element)?.closest?.('[role="menu"], [role="listbox"]') || surfaceLayers.at(-1) !== layer)) {
       details.cancel();
       return;
     }
@@ -79,7 +92,7 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
       <Dialog.Viewport className={overlayClassName}>
         <div className={panelClassName} style={panelClassName ? undefined : { display: 'contents' }}>
           <Dialog.Popup render={<section />} ref={attach} className={className} aria-label={title}
-            initialFocus={initialFocus} finalFocus={active ? finalFocus : false}>
+            initialFocus={initialFocus} finalFocus={false}>
             <DialogPortalContext value={portal}>{children}</DialogPortalContext>
           </Dialog.Popup>
         </div>

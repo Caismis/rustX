@@ -8,6 +8,7 @@ import type { ComponentProps, MouseEvent as ReactMouseEvent, PointerEvent as Rea
 import { useDialogPortal, useOverlayActive } from './DialogSurface'
 import {
   Menu as CossMenu,
+  MenuGroup,
   MenuGroupLabel,
   MenuItem as CossMenuItem,
   MenuPopup,
@@ -104,9 +105,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
       onClick: (event: ReactMouseEvent<HTMLElement>) => press.click(item, event),
     }
   }
-  return entries.map(entry => {
-    if (isSeparator(entry)) return <MenuSeparator key={entry.id} />
-    if (isLabel(entry)) return <MenuGroupLabel key={entry.id}>{entry.text}</MenuGroupLabel>
+  const renderItem = (entry: MenuItem) => {
     const content = <>
       {entry.icon !== undefined && <span className="inline-flex shrink-0">{entry.icon}</span>}
       <span className="min-w-0 flex-1 truncate">{entry.label}</span>
@@ -114,7 +113,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
     </>
     if (entry.submenu?.length) {
       return <MenuSub key={entry.id}>
-        <MenuSubTrigger disabled={entry.disabled} data-variant={entry.danger ? 'destructive' : undefined}>
+        <MenuSubTrigger disabled={entry.disabled} delay={0} data-variant={entry.danger ? 'destructive' : undefined} aria-current={selected(entry.id) ? 'true' : undefined}>
           {content}
         </MenuSubTrigger>
         <MenuSubPopup>
@@ -124,6 +123,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
               key={item.id}
               variant={item.danger ? 'destructive' : 'default'}
               closeOnClick={false}
+              aria-current={selected(item.id) ? 'true' : undefined}
               {...control}
             >
               {item.icon !== undefined && <span className="inline-flex shrink-0">{item.icon}</span>}
@@ -140,11 +140,37 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
       variant={entry.danger ? 'destructive' : 'default'}
       closeOnClick={false}
       data-selected={selection === 'fill' && selected(entry.id) || undefined}
+      aria-current={selected(entry.id) ? 'true' : undefined}
       {...control}
     >
       {content}
     </CossMenuItem>
-  })
+  }
+  const rows: ReactNode[] = []
+  let group: { id: string; label: string; items: ReactNode[] } | null = null
+  const flush = () => {
+    if (!group) return
+    rows.push(<MenuGroup key={group.id}>
+      <MenuGroupLabel>{group.label}</MenuGroupLabel>
+      {group.items}
+    </MenuGroup>)
+    group = null
+  }
+  for (const entry of entries) {
+    if (isLabel(entry)) {
+      flush()
+      group = { id: entry.id, label: entry.text, items: [] }
+    } else if (isSeparator(entry)) {
+      flush()
+      rows.push(<MenuSeparator key={entry.id} />)
+    } else {
+      const item = renderItem(entry)
+      if (group) group.items.push(item)
+      else rows.push(item)
+    }
+  }
+  flush()
+  return rows
 }
 
 /**
@@ -188,6 +214,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
   const wasOpen = useRef(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const focusAfterClose = useRef(false)
+  const selectionFocus = useRef<HTMLElement | null>(null)
   const heldPressRef = useRef<HeldPress | null>(null)
   const [heldPress, setHeldPress] = useState<HeldPress | null>(null)
 
@@ -197,27 +224,46 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
     return { getBoundingClientRect: () => getAnchorRect() ?? rootRef.current?.getBoundingClientRect() ?? new DOMRect() }
   }, [getAnchorRect])
 
-  const refocusAnchor = () => {
+  const focusable = (element: HTMLElement | null | undefined) => element?.isConnected === true && !element.matches(':disabled, [aria-disabled="true"]')
+  const focusTarget = () => {
     const root = rootRef.current
-    if (!root) return
-    const trigger = triggerRef.current
-    if (trigger !== null && root.contains(trigger) && takesFocus(trigger)) return
-    if (takesFocus(root.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]:not(:disabled)') ?? root.querySelector<HTMLButtonElement>('button:not(:disabled)'))
-      || takesFocus(triggerRef.current)) return
-    if (!takesFocus(focusOwner?.current, true)) {
-      const active = document.activeElement
-      if (active instanceof HTMLElement && root.contains(active)) active.blur()
+    if (!root) return null
+    const explicit = selectionFocus.current
+    if (focusable(explicit)) {
+      selectionFocus.current = null
+      return explicit
     }
+    const trigger = triggerRef.current
+    if (trigger !== null && root.contains(trigger) && focusable(trigger)) return trigger
+    const anchorButton = root.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]:not(:disabled)') ?? root.querySelector<HTMLButtonElement>('button:not(:disabled)')
+    if (focusable(anchorButton)) return anchorButton
+    if (focusable(focusOwner?.current)) return focusOwner?.current ?? null
+    return null
+  }
+  const refocusAnchor = () => {
+    const target = focusTarget()
+    if (target && takesFocus(target, target === focusOwner?.current)) return
+    const active = document.activeElement
+    if (active instanceof HTMLElement && rootRef.current?.contains(active)) active.blur()
   }
 
   useEffect(() => {
     if (open && !wasOpen.current) {
-      triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      const active = document.activeElement
+      triggerRef.current = active instanceof HTMLElement && rootRef.current?.contains(active) === true ? active : null
+      selectionFocus.current = null
     }
     if (!open && wasOpen.current) {
       if (focusAfterClose.current) {
         focusAfterClose.current = false
-        refocusAnchor()
+        queueMicrotask(() => {
+          const active = document.activeElement
+          const explicit = selectionFocus.current
+          selectionFocus.current = null
+          if (explicit?.isConnected && takesFocus(explicit)) return
+          const inMenu = active instanceof HTMLElement && (rootRef.current?.contains(active) === true || active.closest('[data-slot="menu-popup"]') !== null)
+          if (active === document.body || active === document.documentElement || active === triggerRef.current || inMenu) refocusAnchor()
+        })
       } else {
         queueMicrotask(() => {
           const active = document.activeElement
@@ -227,6 +273,23 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
     }
     wasOpen.current = open
   }, [open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !(event.target instanceof Element)) return
+      const inSubmenu = event.target.closest('[data-slot="menu-sub-content"]') !== null
+      const inMenu = event.target.closest('[data-slot="menu-popup"]') !== null
+      if (inSubmenu || (!inMenu && rootRef.current?.contains(event.target) !== true)) return
+      event.preventDefault()
+      event.stopPropagation()
+      focusAfterClose.current = true
+      onClose()
+      refocusAnchor()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [open, onClose])
 
   useEffect(() => () => {
     if (closeTimer.current !== null) clearTimeout(closeTimer.current)
@@ -268,6 +331,8 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
   const select = (id: string) => {
     focusAfterClose.current = true
     onSelect(id)
+    const active = document.activeElement
+    selectionFocus.current = active instanceof HTMLElement && active.closest('[data-slot="menu-popup"]') === null ? active : null
   }
   const pressControl: PressControl = {
     held: heldPress,
@@ -330,6 +395,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
       {anchor}
       <CossMenu open={open} modal={false} onOpenChange={(next, details) => {
         if (!next) {
+          if (details.reason === 'sibling-open') return;
           if (details.reason === 'escape-key') focusAfterClose.current = true
           onClose()
         }
@@ -342,6 +408,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
           portalProps={{ container: portalContainer }}
           className={listClassName}
           data-autofocus={autoFocus || undefined}
+          finalFocus={() => focusTarget() ?? false}
         >
           {renderRows(items, selected, select, selection, pressControl)}
           {!!footer?.length && <MenuSeparator />}
