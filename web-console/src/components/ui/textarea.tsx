@@ -31,6 +31,7 @@ export function Textarea({
       render={(defaultProps: React.ComponentProps<"textarea">) => (
         <textarea
           className={cn(
+            "border-0 bg-transparent",
             !unstyled &&
               "field-sizing-content min-h-17.5 w-full rounded-[inherit] px-[calc(--spacing(3)-1px)] py-[calc(--spacing(1.5)-1px)] text-foreground outline-none placeholder:text-muted-foreground/72 max-sm:min-h-20.5",
             !unstyled && size === "sm" &&

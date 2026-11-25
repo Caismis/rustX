@@ -1,5 +1,6 @@
 /* coss ui design tokens and Tailwind CSS v4 utilities.
    Components are copied from https://coss.com/ui and owned by this repository. */
+@layer base, theme, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
@@ -161,4 +162,14 @@ body[data-ds-dark-theme] {
   --sidebar-accent-foreground: var(--color-neutral-100);
   --sidebar-border: --alpha(var(--color-white) / 5%);
   --sidebar-ring: var(--color-neutral-400);
+}
+
+/* coss ships without Tailwind preflight: clear the native form control chrome
+   its framed wrappers replace. Layered so utilities always win. */
+@layer base {
+  [data-slot="input"],
+  [data-slot="textarea"] {
+    border: 0;
+    background: transparent;
+  }
 }
