@@ -54,9 +54,11 @@ the initial reservation, physical startup, configuration capture, runtime
 preparation and final publication. The Linux supervisor case waits for
 the real ready report while the Client launch grant is withheld. It proves
 that drain joins the startup owner and retains the independent authority
-until the supervisor settles. Each cut checks a cancelled load, clean Host
-shutdown, a returned capacity permit, no resident runtime or Model request,
-and removal of the recovery record.
+until the supervisor settles. The startup owner records when it finished.
+A separate cutoff test covers completion after the deadline both before and
+after the settlement waiter runs. Each normal drain cut checks a cancelled
+load, clean Host shutdown, a returned capacity permit, no resident runtime
+or Model request, and removal of the recovery record.
 
 The four evidence ledgers cover all 73 test IDs by number. The release requires receipts for the same head from the independent native macOS job and the stacked PR's FULL and Merge verification. The measurement samples below identify their distinct baselines.
 

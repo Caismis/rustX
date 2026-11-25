@@ -129,6 +129,7 @@ impl Default for SettlementState {
 enum ClientStartup {
     Idle,
     Owned,
+    FinishedAt(Instant),
     Unconfirmed(Arc<io::Error>),
 }
 
@@ -149,7 +150,10 @@ impl ClientStartupOwner<'_> {
             .settlement
             .lock()
             .expect("execution settlement");
-        state.startup = unconfirmed.map_or(ClientStartup::Idle, ClientStartup::Unconfirmed);
+        state.startup = unconfirmed.map_or_else(
+            || ClientStartup::FinishedAt(Instant::now()),
+            ClientStartup::Unconfirmed,
+        );
         self.endpoint.settlement_changed.notify_all();
         self.endpoint.connection_released.notify_waiters();
     }
@@ -1587,6 +1591,7 @@ impl LocalExecutionEndpoint {
         if matches!(settlement.phase, Settlement::Open) {
             settlement.phase = Settlement::Closing;
         }
+        self.settlement_changed.notify_all();
         self.connection_released.notify_waiters();
     }
 
@@ -1606,9 +1611,15 @@ impl LocalExecutionEndpoint {
         if let Settlement::Finished(outcome) = &state.phase {
             return settlement_result(outcome);
         }
-        if matches!(state.startup, ClientStartup::Idle)
-            && self.reservation().binding.revocation_confirmed()
-        {
+        let binding = &self.reservation().binding;
+        let startup_settled = match state.startup {
+            ClientStartup::Idle => true,
+            ClientStartup::FinishedAt(finished) => binding
+                .revocation_cutoff()
+                .is_none_or(|cutoff| finished < cutoff),
+            ClientStartup::Owned | ClientStartup::Unconfirmed(_) => false,
+        };
+        if startup_settled && binding.revocation_confirmed() {
             let result = Ok(());
             let outcome = settlement_result(&result);
             state.phase = Settlement::Finished(result);
@@ -1662,15 +1673,21 @@ impl LocalExecutionEndpoint {
     /// No caller holds a registry lock while waiting for this receipt.
     pub(super) fn fence_connection_by(&self, deadline: Instant) -> io::Result<()> {
         {
+            let binding = &self.reservation().binding;
+            let cutoff = || {
+                binding
+                    .revocation_cutoff()
+                    .map_or(deadline, |host| deadline.min(host))
+            };
             let mut state = self.settlement.lock().expect("execution settlement");
             if matches!(state.phase, Settlement::Open) {
-                self.reservation().binding.begin_revocation();
+                binding.begin_revocation();
                 state.phase = Settlement::Closing;
             }
             while matches!(state.startup, ClientStartup::Owned)
                 && !matches!(state.phase, Settlement::Finished(_))
             {
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                let remaining = cutoff().saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
@@ -1696,9 +1713,16 @@ impl LocalExecutionEndpoint {
                 self.settlement_changed.notify_all();
                 return outcome;
             }
+            if matches!(state.startup, ClientStartup::FinishedAt(finished) if finished >= cutoff())
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "local Client startup settled after the cutoff",
+                ));
+            }
             match &state.phase {
                 Settlement::Open | Settlement::Closing => {
-                    if self.reservation().binding.may_recover() {
+                    if binding.may_recover() {
                         // A live-instance credential can still identify the
                         // cleanup owner. Keep the durable fence and allow
                         // only the close path to accept its recovery.
@@ -4055,36 +4079,47 @@ mod tests {
 
     #[tokio::test]
     async fn overdue_startup_keeps_the_recovery_fence() {
-        let (_root, workspace) = workspace();
-        let session = SessionId::generate();
-        let endpoint = Arc::new(
-            LocalExecutionEndpoint::new(&session, workspace.clone())
-                .unwrap()
-                .with_recovery_fence(&workspace)
-                .unwrap(),
-        );
-        let reservation = rustx_execution_protocol::SessionId::new(session.as_str());
-        let pending = || {
-            rustx_execution_server::RecoveryFence::session_pending(&workspace, &reservation)
-                .unwrap()
-        };
-        let starting = endpoint.begin_client_startup().unwrap();
-        let failure = endpoint
-            .clone()
-            .settle_for_drain(Instant::now())
-            .await
-            .unwrap_err();
-        assert_eq!(failure.kind(), io::ErrorKind::TimedOut);
-        assert!(pending());
-        starting.finish(None);
-        assert_eq!(
-            endpoint.clone().settle().await.unwrap_err().kind(),
-            io::ErrorKind::TimedOut
-        );
-        assert!(
-            pending(),
-            "late startup completion cannot rewrite an expired settlement"
-        );
+        for publish_before_wait in [false, true] {
+            let (_root, workspace) = workspace();
+            let session = SessionId::generate();
+            let endpoint = Arc::new(
+                LocalExecutionEndpoint::new(&session, workspace.clone())
+                    .unwrap()
+                    .with_recovery_fence(&workspace)
+                    .unwrap(),
+            );
+            let reservation = rustx_execution_protocol::SessionId::new(session.as_str());
+            let pending = || {
+                rustx_execution_server::RecoveryFence::session_pending(&workspace, &reservation)
+                    .unwrap()
+            };
+            let mut starting = Some(endpoint.begin_client_startup().unwrap());
+            let cutoff = Instant::now();
+            endpoint.close_dispatch_by(cutoff);
+            if publish_before_wait {
+                starting.take().unwrap().finish(None);
+                // Even a caller with a longer budget must honor the Host cut.
+                assert_eq!(
+                    endpoint
+                        .fence_connection_by(cutoff + Duration::from_secs(60))
+                        .unwrap_err()
+                        .kind(),
+                    io::ErrorKind::TimedOut
+                );
+                assert!(pending());
+            }
+            let failure = endpoint.clone().settle_for_drain(cutoff).await.unwrap_err();
+            assert_eq!(failure.kind(), io::ErrorKind::TimedOut);
+            assert!(pending());
+            if let Some(starting) = starting {
+                starting.finish(None);
+            }
+            assert_eq!(
+                endpoint.clone().settle().await.unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+            assert!(pending(), "late startup completion cannot clear the marker");
+        }
     }
 
     #[tokio::test]
