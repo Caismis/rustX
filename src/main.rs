@@ -36,7 +36,9 @@ fn main() -> ExitCode {
 }
 
 fn launch_ui(mode: &std::ffi::OsStr, args: &[std::ffi::OsString]) -> Result<(), String> {
-    let binary = std::env::current_exe().map_err(|error| error.to_string())?;
+    let binary = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| format!("cannot resolve the installed rustx executable: {error}"))?;
     let prefix = binary
         .parent()
         .and_then(std::path::Path::parent)

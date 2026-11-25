@@ -46,6 +46,7 @@ PROCESS_CASES = (
     "http_mcp_imports_complete_output_through_the_bound_client",
     "execution_enrollment_precedes_client_and_workspace_configuration_readiness",
     "installed_workspace_picker_uses_a_private_client_and_reaps_before_registration",
+    "installed_stdio_lists_local_workspace_skills_without_the_web_picker",
     "local_execution_fails_exactly_when_the_sibling_client_is_absent",
     "remote_execution_serves_session_reads_over_websocket",
     "explicit_composition_launches_and_reaps_the_sibling_client",
@@ -155,7 +156,7 @@ def tui(binary: Path, cwd: Path, environment: dict, bootstrap: dict, workspace: 
     with open(cwd / "tui-token", "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as token:
         token.write(bootstrap["appServerTransportToken"])
     try:
-        example = binary.parent.parent / "share/examples/app-server/connect.mjs"
+        example = binary.resolve().parent.parent / "share/examples/app-server/connect.mjs"
         info = json.loads(cli(Path(shutil.which("node") or "node"),
                              [str(example), bootstrap["appServerEndpoint"], str(cwd / "tui-token")],
                              cwd, environment))
@@ -525,17 +526,21 @@ def main() -> None:
         require(shutil.which("node") is not None, "Node.js 24 is required for installed Web and TUI proofs")
         environment["PATH"] = os.environ["PATH"]
         environment["TEST_KEY"] = "fake-provider-unused"
-        require("--local-execution-workspace" in cli(bundle, ["tui", "--help"], cwd, environment),
+        links = cwd / "bin"
+        links.mkdir()
+        launcher = links / "rustx"
+        launcher.symlink_to(os.path.relpath(bundle, links))
+        require("--local-execution-workspace" in cli(launcher, ["tui", "--help"], cwd, environment),
                 "Installed TUI help is incomplete")
         with installed_provider() as provider:
             for name in ("web", "terminal", "exact-root"):
                 (cwd / name).mkdir()
             try:
-                web(bundle, cwd / "web", environment, provider.root, browser=options.browser_proof)
+                web(launcher, cwd / "web", environment, provider.root, browser=options.browser_proof)
                 if options.browser_proof:
-                    web(bundle, cwd / "web", environment, provider.root, browser=True, resume=True)
-                    web(bundle, cwd / "exact-root", environment, provider.root, browser=True, grants=False)
-                tui_create(bundle, cwd / "terminal", environment, provider.root)
+                    web(launcher, cwd / "web", environment, provider.root, browser=True, resume=True)
+                    web(launcher, cwd / "exact-root", environment, provider.root, browser=True, grants=False)
+                tui_create(launcher, cwd / "terminal", environment, provider.root)
             finally:
                 require(not provider.errors, f"Installed tool results: {provider.errors}")
             names = {"terminal-session"}

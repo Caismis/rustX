@@ -130,7 +130,7 @@ impl AppServerConnection {
             };
             let unavailable = || domain(ErrorData::ExecutionUnavailable);
             let stop = host.environment_stop();
-            let capacity = host.workspace_picker().ok_or_else(unavailable)?;
+            let capacity = host.local_workspace_probes();
             let _slot = tokio::select! {
                 () = grant.cancelled() => return Err(unavailable()),
                 () = stop.cancelled() => return Err(unavailable()),

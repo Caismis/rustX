@@ -41,7 +41,10 @@ normal and negative picker cases use the same extracted Web distribution.
 The TUI proof continues reading its PTY after requesting shutdown, then
 requires the owner exit and verifies that no Session recovery records remain.
 The release-script regression exercises a child that writes more than the
-PTY buffer while handling termination.
+PTY buffer while handling termination. The Web and TUI are launched through
+an external symlink to the installed binary. The stdio product regression
+lists and reads Workspace Skills without enabling the Web picker, and the
+picker test separately refuses a directory above the 4,096-entry limit.
 
 The in-crate `installed_resume` tests run real sibling Clients through the
 installed composition owner. Eight invalid saved Sessions release their

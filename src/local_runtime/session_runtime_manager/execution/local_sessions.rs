@@ -369,10 +369,15 @@ impl SessionRuntimeManager {
                     wait.await
                 },
             };
+            let endpoint = owner.execution.close_session_admission(&session);
             if let Some(child) = child {
-                owner.execution.close_session_admission(&session);
                 owner.reap_local_client(child, &session).await;
+            } else if let Some(endpoint) = endpoint
+                && let Err(failure) = endpoint.settle().await
+            {
+                tracing::warn!(%session, %failure, "exited local Client settlement is unconfirmed");
             }
+            owner.execution.retire(&session);
         });
     }
 

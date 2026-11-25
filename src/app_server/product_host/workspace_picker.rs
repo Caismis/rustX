@@ -4,7 +4,9 @@
 use crate::app_server::{RequestLane, host::AppServerHost, transport::MAX_MESSAGE_BYTES};
 use crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint;
 use futures_util::{SinkExt, StreamExt};
-use rustx_execution_protocol::{MAX_DIRECTORY_PAGE_ENTRIES, is_normalized_absolute_path};
+use rustx_execution_protocol::{
+    MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES, is_normalized_absolute_path,
+};
 use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
@@ -60,11 +62,20 @@ fn list(
                 offset,
                 u32::try_from(MAX_DIRECTORY_PAGE_ENTRIES).expect("directory page fits u32"),
                 Some(&before.revision),
-            )?;
-            folders.extend(page.entries.into_iter().filter_map(|entry| {
-                (entry.metadata.is_directory && !entry.metadata.is_symlink)
-                    .then_some(entry.file_name)
-            }));
+            ).map_err(|error| io::Error::new(
+                error.kind(),
+                format!("Cannot browse the folder (limit {MAX_DIRECTORY_NAMES} directory entries): {error}"),
+            ))?;
+            for entry in page.entries {
+                if entry.metadata.is_directory && !entry.metadata.is_symlink {
+                    if folders.len() == MAX_DIRECTORY_NAMES {
+                        return Err(io::Error::other(format!(
+                            "Folder selection supports at most {MAX_DIRECTORY_NAMES} folders"
+                        )));
+                    }
+                    folders.push(entry.file_name);
+                }
+            }
             let Some(next) = page.next_offset else { break };
             offset = u32::try_from(next).expect("verified directory cursor fits u32");
         }
@@ -93,9 +104,9 @@ async fn browse(
         .retirement(&request.root)
         .ok_or("Folder selection requires a configured environment root")?;
     let _slot = host
-        .workspace_picker()
-        .and_then(|capacity| capacity.try_acquire().ok())
-        .ok_or("Another folder selection is still settling")?;
+        .local_workspace_probes()
+        .try_acquire()
+        .map_err(|_| "Another folder selection is still settling")?;
     let _operation = host
         .admit_request(RequestLane::Ordinary, |owner| owner)
         .map_err(|_| "Folder selection is unavailable while the Server drains or is at capacity")?;

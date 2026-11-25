@@ -3360,6 +3360,59 @@ fn picker_upgrade(
 }
 
 #[tokio::test]
+async fn installed_stdio_lists_local_workspace_skills_without_the_web_picker() {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::{Method, MethodResult, WorkspaceCatalogAuthority};
+    use rustx::local_runtime::{
+        configuration::settings::SourceTarget, skill_management::SkillContentKind,
+    };
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let workspace = fixture.root.path().join("a");
+        let skill = workspace.join(".agents/skills/local-guide");
+        std::fs::create_dir_all(&skill).unwrap();
+        let instructions = b"---\nname: local-guide\ndescription: Local Workspace guide.\n---\nPrivate Client instructions.\n";
+        std::fs::write(skill.join("SKILL.md"), instructions).unwrap();
+        let (_bin, executable) = isolated_server_pair();
+        let mut server = fixture.command_with_program(executable, "stdio")
+            .arg("--local-session-root").arg(&workspace).spawn().unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let MethodResult::SessionTransition { .. } = result(&client, Method::SessionCreate {
+            settings: SessionPersistentState::from_input(&SessionConfigInput::new(workspace.clone())),
+            input_references: None,
+            submission: None,
+            dynamic_tools: Vec::new(),
+        }).await else { panic!("installed stdio created its local Session") };
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        let markers = || std::fs::read_dir(&pending).unwrap().map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+            .collect::<Vec<_>>();
+        let before = markers();
+        assert_eq!(before.len(), 1);
+        let target = SourceTarget::Workspace { directory: workspace };
+        let MethodResult::Skills { page, authority } = result(&client, Method::SkillsList {
+            target: target.clone(), execution_session: None, offset: 0, limit: 32, expected_revision: None,
+        }).await else { panic!("unscoped Workspace Skills use a private Client") };
+        assert_eq!(authority, WorkspaceCatalogAuthority::Client);
+        let [skill] = page.data.as_slice() else { panic!("expected one Skill, got {page:?}") };
+        assert_eq!(skill.catalog.name, "local-guide");
+        assert!(skill.operation_revision.is_none());
+        let MethodResult::SkillContent { content } = result(&client, Method::SkillsRead {
+            target, execution_session: None, name: "local-guide".into(),
+            kind: SkillContentKind::Instructions, offset: 0, max_bytes: 1024, expected_revision: None,
+        }).await else { panic!("private Client read the Workspace instructions") };
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(content.data_base64).unwrap(), instructions);
+        assert_eq!(markers(), before, "both private Clients settled before the replies");
+        client.close().await;
+        detach_then_shutdown(&mut server).await;
+        assert!(server.wait().await.unwrap().success());
+        assert_eq!(markers(), Vec::<PathBuf>::new());
+    }).await;
+}
+
+#[tokio::test]
 async fn installed_workspace_picker_uses_a_private_client_and_reaps_before_registration() {
     bounded(async {
         use rustx_execution_server::RecoveryFence;
@@ -3416,6 +3469,14 @@ async fn installed_workspace_picker_uses_a_private_client_and_reaps_before_regis
         assert_eq!(confirmation["Ok"]["revision"], current);
         assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
         assert_eq!(std::fs::read(original.join("original")).unwrap(), b"keep");
+        let crowded = workspace.join("crowded");
+        std::fs::create_dir(&crowded).unwrap();
+        for index in 0..=rustx_execution_protocol::MAX_DIRECTORY_NAMES {
+            std::fs::create_dir(crowded.join(format!("folder-{index:04}"))).unwrap();
+        }
+        let overflow = picker_request(&endpoint, SECRET, probe(&crowded)).await;
+        assert!(overflow["Err"].as_str().is_some_and(|error| error.contains("limit 4096 directory entries")), "{overflow}");
+        assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
         terminate(&server);
         assert!(server.wait().await.unwrap().success());
         let catalog = SessionController::open(&runtime).unwrap();

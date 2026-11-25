@@ -10,6 +10,8 @@ import platform
 import subprocess
 import tarfile
 
+from package import pnpm_command
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -45,8 +47,9 @@ def main() -> None:
     harness = native_harness("rustx", "process")
     client_harness = native_harness("rustx-execution-client", "bootstrap")
     run("python3", "release/package.py", "all", "--out", directory)
-    run("corepack", "pnpm@11.13.1", "--dir", "web-console", "install", "--frozen-lockfile")
-    run("corepack", "pnpm@11.13.1", "--dir", "web-console", "exec", "playwright", "install", "chromium")
+    pnpm = pnpm_command(ROOT)
+    run(*pnpm, "--dir", "web-console", "install", "--frozen-lockfile")
+    run(*pnpm, "--dir", "web-console", "exec", "playwright", "install", "chromium")
     archives = sorted(directory.glob("*.tar.gz"))
     run("python3", "release/conformance.py", *archives, "--browser-proof", "--process-harness", harness,
         "--client-harness", client_harness)

@@ -292,8 +292,7 @@ fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Op
         return None;
     }
     if request.uri().path() == workspace_picker::PATH {
-        host.workspace_picker()?;
-        if !offered.contains(&workspace_picker::SUBPROTOCOL) {
+        if !host.workspace_picker_enabled() || !offered.contains(&workspace_picker::SUBPROTOCOL) {
             return None;
         }
         return host

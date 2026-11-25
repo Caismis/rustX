@@ -698,6 +698,42 @@ async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let session = &f.sessions[0].id;
+        let workspace = &f.workspaces[0];
+        f.manager
+            .configure_local_sessions(vec![workspace.parent().unwrap().to_path_buf()])
+            .unwrap();
+        f.manager
+            .environment
+            .configure(std::slice::from_ref(workspace));
+        let capacity = f.manager.available_local_client_slots();
+        let runtime = f.load(0).await.unwrap().unwrap();
+        assert!(f.manager.execution.reserves_workspace(workspace));
+        assert!(pending_execution(&f, session));
+        assert_eq!(f.manager.available_local_client_slots(), capacity - 1);
+        f.manager.environment.configure(&[]);
+        f.manager.join_local_sessions().await.unwrap();
+        assert_eq!(f.manager.available_local_client_slots(), capacity);
+        assert!(!pending_execution(&f, session));
+        assert!(!f.manager.execution.reserves_workspace(workspace));
+        assert!(
+            f.manager
+                .execution
+                .configuration_endpoint(session)
+                .unwrap()
+                .is_none()
+        );
+        drop(runtime);
+        assert_eq!(f.host.drain().await, Vec::<String>::new());
+        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+    }))
+    .await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResumeCut {
     Reservation,

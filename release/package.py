@@ -106,7 +106,11 @@ def runtime_modules(source: Path, project: str, names: list[str], target: Path) 
             source_parent = source_parent.parent
         destination = target / edge.relative_to(modules)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.symlink_to(os.path.relpath(target / package.relative_to(modules), destination.parent))
+        link = os.path.relpath(target / package.relative_to(modules), destination.parent)
+        if not destination.is_symlink():
+            destination.symlink_to(link)
+        elif os.readlink(destination) != link:
+            raise ValueError(f"Conflicting pnpm dependency at {destination}")
         if package in visited:
             return
         visited.add(package)
@@ -125,6 +129,14 @@ def runtime_modules(source: Path, project: str, names: list[str], target: Path) 
         install(modules / name)
 
 
+def pnpm_command(source: Path) -> tuple[str, str]:
+    managers = {json.loads((source / project / "package.json").read_text())["packageManager"]
+                for project in UI_PROJECTS}
+    if len(managers) != 1 or not next(iter(managers)).startswith("pnpm@"):
+        raise ValueError("UI packages must agree on their pinned pnpm release")
+    return "corepack", managers.pop()
+
+
 def install_ui(source: Path, target: Path, revision: str) -> None:
     # An install rebuilds the native modules, and Vite replaces dist. Build
     # from this release's tracked inputs away from any running browser carrier.
@@ -136,11 +148,7 @@ def install_ui(source: Path, target: Path, revision: str) -> None:
         with tarfile.open(fileobj=stream) as tracked:
             tracked.extractall(source, filter="data")
 
-    managers = {json.loads((source / project / "package.json").read_text())["packageManager"]
-                for project in UI_PROJECTS}
-    if len(managers) != 1 or not next(iter(managers)).startswith("pnpm@"):
-        raise ValueError("UI packages must agree on their pinned pnpm release")
-    pnpm = ("corepack", managers.pop())
+    pnpm = pnpm_command(source)
     for project in UI_PROJECTS:
         run(*pnpm, "--dir", project, "install", "--frozen-lockfile", cwd=source)
     run(*pnpm, "--dir", "web-console", "build", cwd=source)
