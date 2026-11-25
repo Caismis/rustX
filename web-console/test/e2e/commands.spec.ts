@@ -40,8 +40,11 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(popup).toHaveCount(0); await expect(message).toHaveValue('');
     await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
     popup = await command('tools');
-    await expect(message).toHaveValue(''); await expect(popup).toBeVisible();
+    await expect(popup).toBeVisible();
+    // The modal dialog inerts the composer behind it: the cleared draft is
+    // verified once the dialog closes and the composer rejoins the tree.
     await popup.getByRole('button', { name: 'Close dialog' }).click();
+    await expect(message).toHaveValue('');
     await message.fill('/model'); popup = page.locator('[data-model-picker]'); await popup.getByRole('combobox', { name: 'Search models…' }).press('Escape');
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');

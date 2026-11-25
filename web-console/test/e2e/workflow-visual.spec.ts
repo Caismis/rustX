@@ -245,8 +245,10 @@ test('refuses destination-only finite schema collisions without adopting extra p
       await name.fill('after'); await dialog.getByRole('button', { name: 'Save', exact: true }).click();
       await expect(name).toHaveValue('after'); await expect(name).toHaveAttribute('aria-invalid', 'true');
       await expect(dialog.getByRole('alert')).toContainText('That ID is already used');
-      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+      // The modal dialog inerts the editor behind it: the undo state is
+      // verified once the dialog closes and the toolbar rejoins the tree.
       await name.press('Escape'); await expect(dialog).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
       expect(parse(readFileSync(file, 'utf8'))).toEqual(before); expect(before.block.input).toEqual(example.schema);
       await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
