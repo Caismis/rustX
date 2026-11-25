@@ -4,18 +4,19 @@ import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { chooseOption, openResourceModule, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { MethodResult } from '../../protocol/app-server/v81';
+import { RpcFailure } from '../src/client/errors';
 
 afterEach(cleanup);
 const writes = (subject: ReturnType<typeof cfg3Client>) => subject.request.mock.calls.flatMap(([op]) => op.method === 'configuration/sourceWrite' ? [op.params] : []);
 
 type SkillsPage = Extract<MethodResult, { type: 'skills' }>;
 async function skills(workspace = false, options: {
-  catalog?: (offset: number) => Promise<SkillsPage>;
-  selection?: 'all' | string[]; workspaceSelection?: 'all' | string[];
+  catalog?: (offset: number, scope: 'workspace' | 'user') => Promise<SkillsPage>;
+  selection?: 'all' | string[]; workspaceSelection?: 'all' | string[]; lifecycle?: 'ready' | 'failed';
 } = {}) {
   let version = 1;
   const subject = cfg3Client(async (op, source) => {
-    if (op.method === 'skills/list' && options.catalog) return options.catalog(op.params.offset ?? 0);
+    if (op.method === 'skills/list' && options.catalog) return options.catalog(op.params.offset ?? 0, op.params.target.kind);
     if (op.method === 'configuration/sourcesRead') {
       const authored = op.params.target.kind === 'workspace' ? source.workspace?.authored?.agent?.skills : undefined;
       source.resolved = { agent: { skills: authored ?? source.user.authored?.agent?.skills ?? 'all' } };
@@ -36,7 +37,7 @@ async function skills(workspace = false, options: {
   })) };
   render(<SettingsSurface client={subject.client} target={workspace ? workspaceSettingsTarget('A', 'A') : userSettingsTarget} host={cfg3Host(subject)} />);
   await settingsReady();
-  await openResourceModule('skills');
+  await openResourceModule('skills', options.lifecycle);
   await screen.findByRole('listitem', { name: 'a' });
   return subject;
 }
@@ -95,6 +96,16 @@ it('can restore Workspace inheritance while discovery is unavailable', async () 
   await chooseOption('Skill access', 'Use global settings');
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0].mutation).toMatchObject({ mutation: { authored: null } });
+});
+
+it('withholds Workspace policy edits when the execution authority refuses discovery', async () => {
+  const subject = await skills(true, { lifecycle: 'failed', catalog: async (_offset, scope) => {
+    if (scope === 'user') return catalogPage(['a', 'b']);
+    throw new RpcFailure({ code: -32000, message: 'Client catalog unavailable', data: { kind: 'execution_unavailable' } });
+  } });
+  await screen.findByText(/Client catalog unavailable/);
+  expect(screen.queryByRole('button', { name: /Skill access$/ })).toBeNull();
+  expect(writes(subject)).toHaveLength(0);
 });
 
 it('restores dynamic all after exact toggles and enables skills discovered afterwards', async () => {

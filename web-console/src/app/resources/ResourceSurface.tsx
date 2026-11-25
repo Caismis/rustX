@@ -94,12 +94,12 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const activeBoundKey = useRef(boundKey);
   activeBoundKey.current = boundKey;
   const [boundObservation, setBoundObservation] = useState<{ key: string; authority?: WorkspaceCatalogAuthority; source?: SourceSettings['user_mcp']; error?: string }>();
-  const [boundSkillObservation, setBoundSkillObservation] = useState<{ key: string; status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }>();
+  const [boundSkillObservation, setBoundSkillObservation] = useState<{ key: string; status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority; clientAuthority?: boolean }>();
   const boundSource = sessionCandidate && module === 'mcp' && boundObservation?.key === boundKey ? boundObservation : undefined;
   const workspaceSkills = showingWorkspace && module === 'skills';
   const boundSkillState = workspaceSkills && boundSkillObservation?.key === boundKey ? boundSkillObservation : undefined;
-  const observeSkills = (state: { status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }) =>
-    setBoundSkillObservation(prev => prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority
+  const observeSkills = (state: { status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority; clientAuthority?: boolean }) =>
+    setBoundSkillObservation(prev => prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority && prev.clientAuthority === state.clientAuthority
       ? prev : { key: boundKey, ...state });
   const authoringConfirmed = !!sessionCandidate && (module === 'mcp' ? boundSource?.authority === 'authoring' : boundSkillState?.authority === 'authoring');
   const bound = sessionCandidate && (module === 'mcp' ? boundSource?.authority === 'client' && !!boundSource.source : boundSkillState?.authority === 'client')
@@ -351,7 +351,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   };
 
   const lifecycle = awaitingAssociation ? 'loading'
-    : workspaceSkills && (!authoringConfirmed || boundSkillState?.status !== 'ready')
+    : workspaceSkills && (sessionCandidate || boundSkillState?.authority === 'client' || boundSkillState?.clientAuthority)
+      && (!authoringConfirmed || boundSkillState?.status !== 'ready')
       ? (boundSkillState?.status ?? (readError ? 'failed' : 'loading'))
     : sessionCandidate && !authoringConfirmed
       ? (boundSource?.authority === 'client' && boundSource.source ? 'ready' : boundSource?.error ? 'failed' : 'loading')
