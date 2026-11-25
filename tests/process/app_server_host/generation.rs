@@ -7,12 +7,13 @@ use nix::{
     unistd::Pid,
 };
 use rustx::app_server::host_upload::{MAX_CHUNK_BYTES, canonical_digest};
+use rustx::runtime::identity::SessionId;
 use rustx::tools::{ManagedOutputContinuation, limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
 use rustx_execution_protocol::{
     Admission, Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, ControlHelloReply,
     DataHelloReply, PeerHello,
     save::{SaveReply, SaveRequest},
-    transport::{MAX_RECORD_BYTES, read_record, write_record},
+    transport::{LOCAL_HANDSHAKE_TIMEOUT, MAX_RECORD_BYTES, read_record, write_record},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -20,7 +21,7 @@ use std::{
     io,
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
@@ -32,8 +33,12 @@ struct Launch {
     admission: Admission,
     pid: Pid,
     scratch: PathBuf,
+    proxy: UnixListener,
+    server_socket: PathBuf,
 }
 
+mod installed_detach;
+mod installed_file_tools;
 mod process_cuts;
 
 const START: &str = "start-of-host-output";
@@ -78,9 +83,18 @@ impl CrashCut {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct SaveTraffic {
+    requests: usize,
+    request_bytes: usize,
+    reply_bytes: usize,
+    max_record_bytes: usize,
+}
+
 struct ObservedSave {
     receipt: SaveReply,
     length: u64,
+    traffic: SaveTraffic,
     late_delivery: Option<LateDelivery>,
 }
 
@@ -90,11 +104,18 @@ struct LateDelivery {
 }
 
 async fn read<T: serde::de::DeserializeOwned>(lane: &mut UnixStream) -> io::Result<T> {
+    read_frame(lane).await.map(|(value, _)| value)
+}
+
+async fn read_frame<T: serde::de::DeserializeOwned>(
+    lane: &mut UnixStream,
+) -> io::Result<(T, usize)> {
     let length = lane.read_u32().await? as usize;
     assert!((1..=MAX_RECORD_BYTES).contains(&length));
     let mut bytes = vec![0; length];
     lane.read_exact(&mut bytes).await?;
-    serde_json::from_slice(&bytes).map_err(io::Error::other)
+    let value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    Ok((value, length + size_of::<u32>()))
 }
 
 async fn write(lane: &mut UnixStream, record: &impl serde::Serialize) -> io::Result<()> {
@@ -207,10 +228,150 @@ async fn proxy_launch(
             admission,
             pid,
             scratch: client_scratch,
+            proxy,
+            server_socket: socket_path,
         },
         data,
         control,
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleted_session_recovers_only_for_cleanup_in_the_original_client() {
+    use rustx::app_server::session_deletion::SessionDeletionResult;
+    use rustx_execution_protocol::{ControlPoll, ControlReply, ControlRequest, ControlTurn};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let Some(provider) = ProviderEmulator::start("app_server_host_broadcast").await else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        config(root.path(), &workspace, &provider);
+        let probe = workspace.join("probe");
+        std::fs::write(&probe, b"original Workspace").unwrap();
+        let (session, _, _) = create_host_session(root.path(), &workspace).await;
+        let (_bins, binary) = super::super::app_server::isolated_server_pair();
+        let scratch = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let witness_path = scratch.path().join("witness");
+        let witness = UnixListener::bind(&witness_path).unwrap();
+        stage_wrapper(&binary, &witness_path);
+        let mut command = server_command(root.path(), &binary);
+        command
+            .args([
+                "--local-execution-session",
+                session.as_str(),
+                "--local-execution-workspace",
+            ])
+            .arg(&workspace);
+        let (
+            (server, endpoint, diagnostics),
+            (old, (client_data, server_data), (mut control, mut server_control)),
+        ) = tokio::join!(launch(command), proxy_launch(&witness, scratch.path(), 1));
+        let mut peer = Peer::connect(&endpoint).await;
+        let data = tokio::spawn(reject_save_replay(client_data, server_data));
+        let control = tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut control, &mut server_control).await;
+        });
+        let read_probe = || Method::FsReadFile {
+            session_id: session.clone(),
+            path: probe.display().to_string(),
+            offset: 0,
+            max_bytes: 32,
+            expected_revision: None,
+        };
+        assert!(matches!(
+            peer.response(read_probe()).await,
+            Response::Success(_)
+        ));
+        control.abort();
+        assert!(control.await.unwrap_err().is_cancelled());
+        data.await.unwrap();
+
+        let MethodResult::Deletion {
+            result: SessionDeletionResult::Preview { preview },
+        } = peer
+            .rpc(Method::SessionDeletePreview {
+                session_id: session.clone(),
+            })
+            .await
+        else {
+            panic!("deletion preview")
+        };
+        let deleted = peer
+            .rpc(Method::SessionDelete {
+                session_id: session.clone(),
+                expected_target_revision: preview.target_revision,
+            })
+            .await;
+        assert!(matches!(deleted, MethodResult::Deletion {
+            result: SessionDeletionResult::CommittedCleanupPending { session_id },
+        } if session_id == session));
+        let check_catalog = || Method::SessionList {
+            query: None,
+            offset: 0,
+            limit: 32,
+        };
+        let MethodResult::Sessions { sessions, .. } = peer.rpc(check_catalog()).await else {
+            panic!("Session catalog")
+        };
+        assert!(sessions.iter().all(|record| record.id != session));
+        let ((mut client_data, mut server_data), (mut control, mut server_control), recovered) =
+            pair(&old.proxy, &old.server_socket).await;
+        assert_eq!(recovered, old.admission);
+        let data = tokio::spawn(async move {
+            assert_eq!(
+                server_data.read(&mut [0; 1]).await.unwrap(),
+                0,
+                "cleanup never dispatches to the data lane"
+            );
+            let _ = client_data.shutdown().await;
+        });
+        let mut revoked = 0;
+        loop {
+            let poll = read::<ControlPoll>(&mut control).await.unwrap();
+            write(&mut server_control, &poll).await.unwrap();
+            let turn = read::<ControlTurn>(&mut server_control).await.unwrap();
+            if let Some(request) = &turn.request {
+                assert!(matches!(request, ControlRequest::Revoke));
+                revoked += 1;
+            }
+            write(&mut control, &turn).await.unwrap();
+            if poll.receipt == Some(ControlReply::Revoked) {
+                assert!(turn.request.is_none());
+                break;
+            }
+        }
+        assert_eq!(revoked, 1);
+        data.await.unwrap();
+        let recovered = peer
+            .rpc(Method::SessionRecoverDeletion {
+                session_id: session.clone(),
+            })
+            .await;
+        assert!(matches!(recovered, MethodResult::Deletion {
+            result: SessionDeletionResult::Deleted { session_id },
+        } if session_id == session));
+        let MethodResult::Sessions { sessions, .. } = peer.rpc(check_catalog()).await else {
+            panic!("Session catalog after cleanup")
+        };
+        assert!(sessions.iter().all(|record| record.id != session));
+        assert!(matches!(
+            peer.response(read_probe()).await,
+            Response::Failure(_)
+        ));
+        assert_eq!(std::fs::read(&probe).unwrap(), b"original Workspace");
+        assert_eq!(provider.requests().await.len(), 0);
+        assert!(matches!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(witness.poll_accept(cx))).await,
+            std::task::Poll::Pending
+        ));
+        drop(peer);
+        shutdown(server, diagnostics).await;
+    })
+    .await
+    .expect("installed Client cleanup recovery");
 }
 
 async fn observe_save_cut(
@@ -221,17 +382,22 @@ async fn observe_save_cut(
     observed: oneshot::Sender<ObservedSave>,
 ) {
     let mut observed = Some(observed);
-    while let Ok(request) = read::<ClientRequest>(&mut server).await {
+    let mut traffic = SaveTraffic::default();
+    while let Ok((request, request_bytes)) = read_frame::<ClientRequest>(&mut server).await {
         if write(&mut client, &request).await.is_err() {
             break;
         }
-        let Ok(reply) = read::<ClientReply>(&mut client).await else {
+        let Ok((reply, reply_bytes)) = read_frame::<ClientReply>(&mut client).await else {
             break;
         };
         let ClientReply::Save(receipt) = &reply else {
             write(&mut server, &reply).await.unwrap();
             continue;
         };
+        traffic.requests += 1;
+        traffic.request_bytes += request_bytes;
+        traffic.reply_bytes += reply_bytes;
+        traffic.max_record_bytes = traffic.max_record_bytes.max(request_bytes.max(reply_bytes));
         if let SaveReply::Chunked {
             next_offset,
             duplicate,
@@ -249,6 +415,7 @@ async fn observe_save_cut(
                     .send(ObservedSave {
                         receipt: receipt.clone(),
                         length,
+                        traffic,
                         late_delivery: None,
                     })
                     .ok()
@@ -261,6 +428,7 @@ async fn observe_save_cut(
                 .send(ObservedSave {
                     receipt: receipt.clone(),
                     length,
+                    traffic,
                     late_delivery: Some(LateDelivery {
                         resume,
                         observed: late_receipt,
@@ -291,6 +459,53 @@ async fn reject_save_replay(mut client: UnixStream, mut server: UnixStream) {
     }
 }
 
+async fn assert_replacement_reads_workspace(peer: &mut Peer, session: &SessionId, probe: &Path) {
+    // The wire Hello can arrive before the Server stores the paired data
+    // connection. A successful read is the readiness witness for the new
+    // generation. Source observation can temporarily hold the same writer.
+    tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, async {
+        loop {
+            let response = peer
+                .response(Method::FsReadFile {
+                    session_id: session.clone(),
+                    path: probe.display().to_string(),
+                    offset: 0,
+                    max_bytes: 64,
+                    expected_revision: None,
+                })
+                .await;
+            match response {
+                Response::Success(success) => {
+                    let MethodResult::FileChunk { chunk } = success.result else {
+                        panic!("the replacement must read the original Workspace");
+                    };
+                    assert_eq!(
+                        STANDARD.decode(chunk.data_base64).unwrap(),
+                        b"original Workspace"
+                    );
+                    break;
+                }
+                Response::Failure(failure)
+                    if matches!(
+                        failure.error.data,
+                        Some(
+                            ErrorData::ExecutionUnavailable
+                                | ErrorData::EnvironmentCapacityOrConflict
+                        )
+                    ) =>
+                {
+                    tokio::task::yield_now().await;
+                }
+                other @ Response::Failure(_) => {
+                    panic!("replacement Workspace read failed: {other:?}")
+                }
+            }
+        }
+    })
+    .await
+    .expect("paired replacement did not publish a usable data lane");
+}
+
 fn config(root: &Path, workspace: &Path, provider: &ProviderEmulator) {
     std::fs::create_dir(workspace).unwrap();
     std::fs::create_dir(root.join("home")).unwrap();
@@ -314,21 +529,22 @@ async fn shutdown(mut process: Child, diagnostics: tokio::task::JoinHandle<()>) 
     diagnostics.await.unwrap();
 }
 
-async fn upload(peer: &mut Peer, verb: &str, params: Value) {
-    let response = peer
-        .raw_request(json!({
-            "jsonrpc": "2.0", "method": format!("item/tool/result/{verb}"), "params": params
-        }))
-        .await;
+async fn upload(peer: &mut Peer, verb: &str, params: Value) -> usize {
+    let value = json!({
+        "jsonrpc": "2.0", "method": format!("item/tool/result/{verb}"), "params": params
+    });
+    let bytes = peer.next_request_bytes(value.clone());
+    let response = peer.raw_request(value).await;
     assert!(matches!(response, Response::Success(success)
         if matches!(success.result, MethodResult::HostUploadAccepted { duplicate: false })));
+    bytes
 }
 
 async fn upload_result(
     peer: &mut Peer,
     request: &ServerRequest,
     mut progress: Option<watch::Receiver<u64>>,
-) -> usize {
+) -> (usize, usize, usize) {
     let ServerRequestMethod::ToolCall(call) = &request.call else {
         panic!("Host callback");
     };
@@ -340,7 +556,7 @@ async fn upload_result(
     candidate["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
     let body = format!("{START}{}{END}", "x".repeat(FILL));
     let items = json!([{"typeTag": 1, "length": body.len().to_string()}]);
-    upload(
+    let mut host_request_bytes = upload(
         peer,
         "begin",
         json!({"candidate": candidate, "success": true, "items": items}),
@@ -348,7 +564,7 @@ async fn upload_result(
     .await;
     let mut offset = 0;
     for (index, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
-        upload(
+        host_request_bytes += upload(
             peer,
             "chunk",
             json!({
@@ -369,7 +585,7 @@ async fn upload_result(
         }
     }
     let digest = sha2::digest::Output::<Sha256>::from(canonical_digest(&[(1, body.as_bytes())]));
-    upload(
+    host_request_bytes += upload(
         peer,
         "end",
         json!({
@@ -378,7 +594,11 @@ async fn upload_result(
         }),
     )
     .await;
-    body.len()
+    (
+        body.len(),
+        body.len().div_ceil(MAX_CHUNK_BYTES) + 2,
+        host_request_bytes,
+    )
 }
 
 async fn create_host_session(
@@ -454,6 +674,16 @@ async fn crash_during_output(cut: CrashCut) {
         let probe = workspace.join("probe");
         std::fs::write(&probe, b"original Workspace").unwrap();
         let (session, thread, node) = create_host_session(root.path(), &workspace).await;
+        let delivered = if cut == CrashCut::Canonical {
+            let sessions = SessionController::open(&root.path().join("runtime")).unwrap();
+            let access = sessions
+                .acquire_session(&session, Some(&node))
+                .await
+                .unwrap();
+            Some(super::super::app_server::seed_sealed_archive_image(&access))
+        } else {
+            None
+        };
 
         let (_bins, binary) = super::super::app_server::isolated_server_pair();
         let scratch = tempfile::tempdir_in("/tmp").unwrap();
@@ -464,6 +694,7 @@ async fn crash_during_output(cut: CrashCut) {
         let (start_old, old_started) = oneshot::channel();
         let (start_new, new_started) = oneshot::channel();
         let (saw_save, reached_cut) = oneshot::channel();
+        let (probe_saved, saved_probe) = oneshot::channel::<ClientRequest>();
         let (offsets, progress) = watch::channel(0);
         let relay = tokio::spawn(async move {
             let (old, (data, server_data), (mut control, mut server_control)) =
@@ -474,8 +705,20 @@ async fn crash_during_output(cut: CrashCut) {
             let old_control = tokio::spawn(async move {
                 let _ = tokio::io::copy_bidirectional(&mut control, &mut server_control).await;
             });
-            let (new, (data, server_data), (mut control, mut server_control)) =
+            let (new, (mut data, server_data), (mut control, mut server_control)) =
                 proxy_launch(&witness, scratch.path(), 2).await;
+            if cut == CrashCut::Canonical {
+                // The replacement cannot be asked to save again. Observe the old
+                // locator against its untouched Client-owned output registry.
+                write(&mut data, &saved_probe.await.unwrap()).await.unwrap();
+                let reply = read::<ClientReply>(&mut data).await.unwrap();
+                assert_eq!(
+                    reply,
+                    ClientReply::Error {
+                        kind: rustx_execution_protocol::ReadError::NotFound,
+                    }
+                );
+            }
             start_new.send(new).ok().unwrap();
             let _ = tokio::join!(
                 reject_save_replay(data, server_data),
@@ -517,7 +760,8 @@ async fn crash_during_output(cut: CrashCut) {
             panic!("Host callback");
         };
         let progress = (cut != CrashCut::Allocated).then_some(progress);
-        let bytes = upload_result(&mut peer, &request, progress).await;
+        let upload_started = Instant::now();
+        let (bytes, host_requests, host_request_bytes) = upload_result(&mut peer, &request, progress).await;
         assert_eq!(bytes as u64, LENGTH);
         let held = reached_cut.await.unwrap();
         let key = match &held.receipt {
@@ -559,6 +803,31 @@ async fn crash_during_output(cut: CrashCut) {
         assert_eq!(file.metadata().unwrap().len(), held.length);
         if cut == CrashCut::Canonical {
             peer.settled(&turn_id).await;
+            assert!(held.traffic.requests > 3);
+            assert!(held.traffic.request_bytes > bytes);
+            assert!(held.traffic.max_record_bytes <= MAX_RECORD_BYTES + size_of::<u32>());
+            if std::env::var_os("RUSTX_HOST_SAVE_MEASUREMENT").is_some() {
+                println!("HOST_SAVE_MEASUREMENT {}", json!({
+                    "body_bytes": bytes,
+                    "host_requests": host_requests,
+                    "host_request_bytes": host_request_bytes,
+                    "save_exchanges": held.traffic.requests,
+                    "save_request_bytes": held.traffic.request_bytes,
+                    "save_reply_bytes": held.traffic.reply_bytes,
+                    "max_save_record_bytes": held.traffic.max_record_bytes,
+                    "upload_through_settlement_ms": upload_started.elapsed().as_secs_f64() * 1000.0,
+                }));
+            }
+            let SaveReply::Published { locator, key, .. } = &held.receipt else {
+                panic!("expected the committed locator");
+            };
+            probe_saved
+                .send(ClientRequest::ReadSavedOutputRange {
+                    locator: locator.clone(),
+                    conversation: key.owner.conversation.clone(),
+                    offset: 0.into(),
+                })
+                .unwrap();
         }
         kill(old.pid, Signal::SIGKILL).unwrap();
 
@@ -586,38 +855,7 @@ async fn crash_during_output(cut: CrashCut) {
                 );
             }
         }
-        let chunk = loop {
-            let response = peer
-                .response(Method::FsReadFile {
-                    session_id: session.clone(),
-                    path: probe.display().to_string(),
-                    offset: 0,
-                    max_bytes: 64,
-                    expected_revision: None,
-                })
-                .await;
-            match response {
-                Response::Success(success) => {
-                    let MethodResult::FileChunk { chunk } = success.result else {
-                        panic!("the replacement reads the original Workspace");
-                    };
-                    break chunk;
-                }
-                Response::Failure(failure)
-                    if failure.error.data == Some(ErrorData::EnvironmentCapacityOrConflict) =>
-                {
-                    // Source observation may own the new data writer just after pairing.
-                    tokio::task::yield_now().await;
-                }
-                other @ Response::Failure(_) => {
-                    panic!("replacement Workspace read failed: {other:?}")
-                }
-            }
-        };
-        assert_eq!(
-            STANDARD.decode(chunk.data_base64).unwrap(),
-            b"original Workspace"
-        );
+        assert_replacement_reads_workspace(&mut peer, &session, &probe).await;
         assert_eq!(
             provider.requests().await.len(),
             2,
@@ -627,6 +865,47 @@ async fn crash_during_output(cut: CrashCut) {
         drop(peer);
         shutdown(server, diagnostics).await;
         relay.await.unwrap();
+        if let Some((artifact, bytes)) = delivered {
+            std::fs::rename(&workspace, root.path().join("retired-workspace")).unwrap();
+            let (_bin, binary) = super::super::app_server::isolated_server_bin();
+            let (cold, endpoint, diagnostics) = launch(server_command(root.path(), binary)).await;
+            let mut peer = Peer::connect(&endpoint).await;
+            let MethodResult::SessionArchive { download } = peer
+                .rpc(Method::SessionExportPrepare {
+                    session_id: session.clone(),
+                })
+                .await
+            else {
+                panic!("a standalone Server must export delivered bytes");
+            };
+            assert!(download.loopback_port.is_none());
+            let mut url = reqwest::Url::parse(&endpoint).unwrap();
+            url.set_scheme("http").unwrap();
+            url.set_path(&download.path);
+            let archive = reqwest::get(url)
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive)).unwrap();
+            let path = format!("artifacts/{thread}/{artifact}/content");
+            let mut stored = Vec::new();
+            std::io::Read::read_to_end(&mut zip.by_name(&path).unwrap(), &mut stored).unwrap();
+            assert_eq!(stored, bytes);
+            assert_eq!(
+                zip.file_names()
+                    .filter(|name| name.starts_with("artifacts/"))
+                    .count(),
+                1
+            );
+            assert!(!workspace.exists());
+            assert!(!old.scratch.exists());
+            drop(peer);
+            shutdown(cold, diagnostics).await;
+        }
         let sessions = SessionController::open(&root.path().join("runtime")).unwrap();
         let access = sessions
             .acquire_session(&session, Some(&node))

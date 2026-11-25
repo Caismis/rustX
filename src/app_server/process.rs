@@ -46,9 +46,12 @@ pub(crate) struct AppServerArgs {
     audience: Option<String>,
     #[arg(long, requires = "shared_secret_file")]
     max_clock_skew_seconds: Option<u64>,
-    /// Separate Product Host-only file-read credential; never the browser token.
+    /// Separate Product Host credential; never the browser token.
     #[arg(long)]
     product_host_token_file: Option<PathBuf>,
+    /// Permit the trusted local Product Host to browse configured environment roots through a sibling Client.
+    #[arg(long, requires = "product_host_token_file")]
+    local_workspace_picker: bool,
     /// Launch the sibling Execution Client bound to this exact existing
     /// Session. Requires --local-execution-workspace; bare mode launches none.
     #[arg(long, requires = "local_execution_workspace")]
@@ -57,6 +60,10 @@ pub(crate) struct AppServerArgs {
     /// enrolls a minimal Session under a configured environment root.
     #[arg(long)]
     local_execution_workspace: Option<PathBuf>,
+    /// Compose one sibling Client per new local Session at an exact root. Descendant Workspaces
+    /// also require a configured environment grant. Repeat for each launcher Workspace.
+    #[arg(long, value_name = "WORKSPACE")]
+    local_session_root: Vec<PathBuf>,
     /// Reserve this Session's execution binding for a remote Execution
     /// Client over WebSocket; no Client is launched — the operator
     /// provisions the bundle privately. Conflicts with the local
@@ -64,7 +71,7 @@ pub(crate) struct AppServerArgs {
     #[arg(
         long,
         requires_all = ["execution_ws_listen", "execution_bootstrap_out"],
-        conflicts_with_all = ["local_execution_workspace", "execution_workspace"]
+        conflicts_with_all = ["local_execution_workspace", "local_session_root", "execution_workspace"]
     )]
     execution_session: Option<String>,
     /// Enroll a minimal Session for this authorized Workspace before
@@ -72,7 +79,7 @@ pub(crate) struct AppServerArgs {
     #[arg(
         long,
         requires_all = ["execution_ws_listen", "execution_bootstrap_out"],
-        conflicts_with = "local_execution_workspace"
+        conflicts_with_all = ["local_execution_workspace", "local_session_root"]
     )]
     execution_workspace: Option<PathBuf>,
     /// The numeric loopback `IP:PORT` the execution WebSocket listener
@@ -87,7 +94,7 @@ pub(crate) struct AppServerArgs {
     /// Deliver it out of band and keep it outside the Client environment.
     #[arg(long, requires = "execution_bootstrap_out")]
     execution_settlement_grant_out: Option<PathBuf>,
-    /// The public `wss://…/execution/v8` ingress endpoint published in
+    /// The public `wss://…/execution/v9` ingress endpoint published in
     /// the bundle instead of the loopback address.
     #[arg(long, requires = "execution_ws_listen")]
     execution_public_url: Option<String>,
@@ -105,8 +112,10 @@ impl AppServerArgs {
             audience: self.audience,
             max_clock_skew_seconds: self.max_clock_skew_seconds,
             product_host_token: self.product_host_token_file,
+            local_workspace_picker: self.local_workspace_picker,
             local_execution_session: self.local_execution_session,
             local_execution_workspace: self.local_execution_workspace,
+            local_session_roots: self.local_session_root,
             execution_session: self.execution_session,
             execution_workspace: self.execution_workspace,
             execution_ws_listen: self.execution_ws_listen,
@@ -130,8 +139,10 @@ pub struct Request {
     audience: Option<String>,
     max_clock_skew_seconds: Option<u64>,
     product_host_token: Option<PathBuf>,
+    local_workspace_picker: bool,
     local_execution_session: Option<String>,
     local_execution_workspace: Option<PathBuf>,
+    local_session_roots: Vec<PathBuf>,
     execution_session: Option<String>,
     execution_workspace: Option<PathBuf>,
     execution_ws_listen: Option<std::net::SocketAddr>,
@@ -212,6 +223,7 @@ fn compose(options: &Request) -> Result<AppServerHost, String> {
         },
     )
     .map_err(|error| error.to_string())?;
+    manager.configure_local_sessions(options.local_session_roots.clone())?;
     Ok(AppServerHost::new(manager, policy))
 }
 
@@ -314,6 +326,9 @@ async fn serve_transport(
             }
             host.bind_product_host(Some(product_host));
         }
+        if options.local_workspace_picker {
+            host.enable_workspace_picker();
+        }
         let listener = tokio::net::TcpListener::bind(address).await?;
         eprintln!(
             "rustx app-server protocol v{} (runtime-client v{})",
@@ -389,12 +404,18 @@ async fn run(options: Request) -> Result<(), String> {
             return Err("stdio does not accept network authentication flags".into());
         }
     } else {
-        options
+        let address = options
             .listen
             .strip_prefix("ws://")
             .ok_or("listen must be stdio or ws://IP:PORT")?
             .parse::<std::net::SocketAddr>()
             .map_err(|error| error.to_string())?;
+        if options.local_workspace_picker && !address.ip().is_loopback() {
+            return Err("local Workspace selection requires a loopback App Server listener".into());
+        }
+        if !options.local_session_roots.is_empty() && !address.ip().is_loopback() {
+            return Err("local Session execution requires a loopback App Server listener".into());
+        }
         // Validate before composition/listening; including loopback, there is
         // no unauthenticated network configuration.
         connection_credential(&options).map_err(|error| error.to_string())?;
@@ -469,11 +490,13 @@ async fn run(options: Request) -> Result<(), String> {
     let reaper_stop = CancellationToken::new();
     #[cfg(target_os = "linux")]
     let mut local_owner = local_client.map(|client| {
-        tokio::spawn(local_execution::maintain(
-            host.manager().clone(),
-            client,
-            reaper_stop.clone(),
-        ))
+        tokio::spawn(
+            crate::local_runtime::session_runtime_manager::maintain_local_client(
+                host.manager().clone(),
+                client,
+                reaper_stop.clone(),
+            ),
+        )
     });
     #[cfg(not(target_os = "linux"))]
     let mut local_client = local_client;
@@ -583,6 +606,7 @@ async fn run(options: Request) -> Result<(), String> {
             source_watch,
             client_exit
         );
+        let local_sessions = host.manager().join_local_sessions().await;
         shutdown.cancel();
         if !transport_finished {
             match (&mut serving).await {
@@ -593,6 +617,7 @@ async fn run(options: Request) -> Result<(), String> {
         }
         host.settle_file_observers().await;
         client_result?;
+        local_sessions?;
         if !failures.is_empty() {
             return Err(format!(
                 "runtime settlement failed: {}",

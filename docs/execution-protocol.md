@@ -6,6 +6,9 @@ mutations, watches, supervised process execution, bounded same-instance
 recovery, Client-owned storage and stdio MCP, and streamed Hosted reception.
 The [EXEC-01](exec-01-evidence.md), [EXEC-02](exec-02-evidence.md) and
 [EXEC-03](exec-03-evidence.md) ledgers record the evidence and verification gates.
+The [EXEC-04 evidence](exec-04-evidence.md) tracks independent installation and
+installed-product tests. See [the installation guide](installation.md) for
+package contents and startup commands.
 
 This ADR grounds its decisions in the verified server/client separation
 plan `rustx-server-client-development-plan-v1.3-2026-11-16.md`
@@ -504,7 +507,9 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v8` path. A port may be omitted to use 443. Userinfo,
+exact `/execution/v9` path. The directory-page entry limit has a distinct
+wire error from a permission denial or revision conflict. A port may be
+omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
 TLS verifies the certificate and IP SAN before the HTTP upgrade on both
 lanes. The upgrade rejects a wrong path and browser `Origin` headers.
@@ -558,7 +563,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v8]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v9]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management

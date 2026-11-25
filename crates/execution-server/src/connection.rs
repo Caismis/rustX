@@ -3062,6 +3062,7 @@ impl PhysicalError {
             ReadError::NoTextLayer => "document has no extractable text layer",
             ReadError::SearchBudgetExceeded => "search exceeded a bounded budget",
             ReadError::SearchNeedsDirectory => "search root is not a directory",
+            ReadError::DirectoryEntryLimit => "directory exceeds the entry bound",
             ReadError::Unavailable => "physical operation unavailable",
             ReadError::Busy => "physical preparation budget is full",
         }
@@ -3088,7 +3089,7 @@ fn read_error(kind: ReadError) -> io::Error {
             io::ErrorKind::InvalidData
         }
         ReadError::UnsupportedDocument => io::ErrorKind::Unsupported,
-        ReadError::DocumentTooLarge => io::ErrorKind::FileTooLarge,
+        ReadError::DocumentTooLarge | ReadError::DirectoryEntryLimit => io::ErrorKind::FileTooLarge,
         ReadError::SearchBudgetExceeded => io::ErrorKind::QuotaExceeded,
         ReadError::Invalid | ReadError::SearchNeedsDirectory => io::ErrorKind::InvalidInput,
         ReadError::Unavailable => io::ErrorKind::Other,

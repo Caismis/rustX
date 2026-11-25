@@ -269,7 +269,7 @@ fn traverse(
         // `names` fails closed past the directory-entry bound with a
         // constructed error — an OS read or a replaced chain carries a
         // raw error or a distinct kind.
-        if error.raw_os_error().is_none() && error.kind() == std::io::ErrorKind::Other {
+        if error.raw_os_error().is_none() && error.kind() == std::io::ErrorKind::FileTooLarge {
             ReadError::SearchBudgetExceeded
         } else {
             read_error(&error)
@@ -951,6 +951,22 @@ mod tests {
                 kind: ReadError::Invalid
             }
         );
+    }
+
+    #[test]
+    fn one_oversized_directory_exceeds_the_glob_and_grep_budget() {
+        let (dir, root) = workspace();
+        for index in 0..=MAX_DIRECTORY_NAMES {
+            std::fs::write(dir.path().join(format!("{index}.txt")), "needle").unwrap();
+        }
+        for spec in [glob_spec("*.txt", 10), grep_spec("needle", 10)] {
+            assert_eq!(
+                search(&root, Path::new(""), &spec, later()),
+                ClientReply::Error {
+                    kind: ReadError::SearchBudgetExceeded,
+                }
+            );
+        }
     }
 
     #[test]

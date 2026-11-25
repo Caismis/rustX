@@ -2513,6 +2513,12 @@ async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
         });
         captured.wait_entered_async().await;
         endpoint.detach_live_pair_for_test();
+        assert!(endpoint.control().is_none());
+        // Accept the original Client's recovery while the stale capture is at
+        // its verification gate. Waiting on the stale request first can
+        // leave the recovery Hello unread for its full transport deadline.
+        Fixture::admit_execution_pair(&endpoint).await;
+        assert!(!endpoint.control().unwrap().same_pair(&lane));
         captured.release();
         let Response::Failure(failure) = stale.await.unwrap() else {
             panic!("lost pair accepted");
@@ -2523,8 +2529,6 @@ async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
             (revision, original)
         );
         assert_eq!(observe(), before);
-        Fixture::admit_execution_pair(&endpoint).await;
-        assert!(!endpoint.control().unwrap().same_pair(&lane));
 
         let disk = Arc::new(Gate::default());
         let _release = disk.arm_scoped();
@@ -3356,7 +3360,7 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
             let _ = live_tx.send(());
 
             let exchange_data = std::thread::spawn(move || {
-                let mut last_recheck = 0;
+                let mut fail_reads = false;
                 let mut affected_capture = None;
                 let mut captured_digest = None;
                 let mut injected = Some(injected);
@@ -3389,18 +3393,16 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
                         (ClientRequest::ReadRange { relative_path, .. }, _) if relative_path == std::path::Path::new("rustx.toml") =>
                         {
                             if let Some(digest) = captured_digest.take() {
-                                reply = ClientReply::Error { kind: ReadError::Unavailable };
+                                fail_reads = true;
                                 injected.take().unwrap().send(digest).unwrap();
-                            } else {
-                                if let Ok(retry) = requested_failure.try_recv() {
-                                    last_recheck = retry;
-                                    if retry != 0 {
-                                        observed_read.send(retry).unwrap();
-                                    }
+                            } else if let Ok(retry) = requested_failure.try_recv() {
+                                fail_reads = retry != 0;
+                                if fail_reads {
+                                    observed_read.send(retry).unwrap();
                                 }
-                                if last_recheck != 0 {
-                                    reply = ClientReply::Error { kind: ReadError::Unavailable };
-                                }
+                            }
+                            if fail_reads {
+                                reply = ClientReply::Error { kind: ReadError::Unavailable };
                             }
                         }
                         _ => {}
@@ -3452,6 +3454,11 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
                 registered.send(()).unwrap();
             },
         );
+        if fail_configuration_read {
+            // This fixture drives the Client's Workspace observation clock.
+            // Unrelated Server authoring notices can start separate captures.
+            fixture.manager.registry.0.lock().unwrap().source_watch_platform = false;
+        }
         let stop = tokio_util::sync::CancellationToken::new();
         let watch = tokio::spawn({
             let manager = fixture.manager.clone();

@@ -191,7 +191,8 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario(uv: std::path::Pat
         )).await.unwrap().unwrap();
         let (_, package) = frozen.packages().iter().next().unwrap();
         package.as_ref().unwrap().prepare_on_client(&crate::runtime::CancellationSignal::new()).await.unwrap().unwrap();
-        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some(session.clone()), Some("python:demo".into()), None, None).await.unwrap();
+        let catalog_execution = crate::local_runtime::session_runtime_manager::SourceCatalogExecution::Session(Some(session.clone()));
+        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), catalog_execution, Some("python:demo".into()), None, None).await.unwrap();
         assert_eq!(catalog.sources[0].tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["hello"]);
         let installed = sandbox.path().join(".local/share/rustx/environments/python-tools/packages");
         assert_eq!(std::fs::read_dir(&installed).unwrap().count(), 1);
@@ -534,6 +535,56 @@ async fn workspace_mcp_management_requires_its_binding_only_after_reservation() 
     assert_eq!(bounded(fixture.host.drain()).await, [] as [String; 0]);
     peer.shutdown().await;
     fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_catalog_disconnect_releases_a_queued_private_probe() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = fixture.workspaces[0].clone();
+        fixture
+            .manager
+            .configure_local_sessions(vec![workspace.clone()])
+            .unwrap();
+        let (client, serving) = connected(&fixture, true).await;
+        initialize(&client).await;
+        let slot = fixture
+            .host
+            .local_workspace_probes()
+            .acquire()
+            .await
+            .unwrap();
+        let mut operations = fixture.host.request_operations();
+        let request = client.try_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(710),
+            call: Method::WorkflowToolCatalog {
+                target: SourceTarget::Workspace {
+                    directory: workspace,
+                },
+                execution_session: None,
+                source: Some("queued".into()),
+                cursor: None,
+                expected_scope: None,
+            },
+        });
+        tokio::pin!(request);
+        tokio::select! {
+            reply = &mut request => panic!("expected a queued request: {reply:?}"),
+            entered = operations.wait_for(|count| *count == 1) => { entered.unwrap(); }
+        }
+        client.close_output().await;
+        serving.await.unwrap().unwrap();
+        assert!(request.await.is_err());
+        // The peer's close retires the queue entry even if the probe slot never opens.
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert_eq!(fixture.host.local_workspace_probes().available_permits(), 0);
+        drop(slot);
+        fixture.close().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

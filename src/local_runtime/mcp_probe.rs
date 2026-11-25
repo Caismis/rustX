@@ -5,13 +5,12 @@ use super::{
         UserConfigManager,
         settings::{SettingsError, SourceTarget},
     },
-    session_runtime_manager::{SessionExecutionScope, SessionRuntimeManager},
+    session_runtime_manager::{
+        SessionExecutionScope, SessionRuntimeManager, SourceCatalogExecution,
+    },
 };
 use crate::{
-    runtime::{
-        CancellationSignal,
-        identity::{McpServerId, SessionId},
-    },
+    runtime::{CancellationSignal, identity::McpServerId},
     tools::{
         mcp::{McpInvalidationState, McpServerRuntime, McpTransportConfig, OwnedConnect},
         workspace::Workspace,
@@ -95,23 +94,23 @@ impl SessionRuntimeManager {
     pub(crate) async fn inspect_mcp_source(
         &self,
         target: SourceTarget,
-        execution_session: Option<&SessionId>,
+        execution: SourceCatalogExecution,
         id: McpServerId,
         revision: String,
         kind: Option<crate::tools::mcp::catalog::CatalogKind>,
         request_owner: impl Send + 'static,
     ) -> Result<McpProbeResult, SettingsError> {
         let manager = self.clone();
-        let session = execution_session.cloned();
         probe_query(
             self.configuration.clone(),
             target,
             move |target| {
-                let Some(workspace) = target.workspace() else {
+                let workspace = target.workspace();
+                if let (None, SourceCatalogExecution::Session(session)) = (workspace, &execution) {
                     return Ok(session.as_ref().map(|id| manager.execution_scope(id)));
-                };
-                manager
-                    .source_catalog_scope(session.as_ref(), Some(workspace))
+                }
+                execution
+                    .scope(&manager, workspace)
                     .map_err(|_| SettingsError::ExecutionUnavailable)
             },
             id,
@@ -434,6 +433,7 @@ async fn inspect_and_close(
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod tests {
     use super::*;
+    use crate::runtime::identity::SessionId;
     use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
     use std::time::Duration;
 

@@ -289,22 +289,7 @@ if sys.argv[2] == 'stay':
     assert_ne!(replacement.admission.instance, original.admission.instance);
     assert!(!original.scratch.exists());
 
-    let MethodResult::FileChunk { chunk } = peer
-        .rpc(Method::FsReadFile {
-            session_id: session.clone(),
-            path: probe.display().to_string(),
-            offset: 0,
-            max_bytes: 64,
-            expected_revision: None,
-        })
-        .await
-    else {
-        panic!("replacement can read the original Workspace");
-    };
-    assert_eq!(
-        STANDARD.decode(chunk.data_base64).unwrap(),
-        b"original Workspace"
-    );
+    assert_replacement_reads_workspace(&mut peer, &session, &probe).await;
     if crossed {
         assert_eq!(
             std::fs::read(&marker).unwrap(),

@@ -1640,10 +1640,13 @@ async fn run_operation(
     // Verify the descended directory one final time immediately before
     // the irreversible boundary: dev/ino must still match what Register
     // retained.
-    let Ok(identity) = nix::sys::stat::fstat(&cwd_fd).map(|s| (s.st_dev, s.st_ino)) else {
+    let cwd_file = std::fs::File::from(cwd_fd);
+    let Ok(metadata) = cwd_file.metadata() else {
         settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
         return;
     };
+    // Use the same device and inode representation as the supervisor's path check.
+    let identity = (metadata.dev(), metadata.ino());
     let Ok(temporary) = tempfile::tempdir() else {
         settle_outcome(&inner, &key, SettledDisposition::Failed, None, true);
         return;

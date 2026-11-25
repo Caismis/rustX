@@ -329,6 +329,19 @@ impl SessionController {
         binding: Option<super::configuration::AdmittedSessionConfig>,
         published: impl FnOnce(&SessionTransitionResult),
     ) -> Result<SessionTransitionResult, SessionError> {
+        self.create_session_for(settings, dynamic_tools, binding, None, || Ok(()), published)
+            .await
+    }
+
+    pub(crate) async fn create_session_for(
+        &self,
+        settings: SessionPersistentState,
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
+        binding: Option<super::configuration::AdmittedSessionConfig>,
+        session: Option<SessionId>,
+        admit: impl FnOnce() -> Result<(), SessionError>,
+        published: impl FnOnce(&SessionTransitionResult),
+    ) -> Result<SessionTransitionResult, SessionError> {
         if !settings.cwd.is_absolute() {
             return Err(SessionError::Catalog {
                 detail: "Session cwd must be absolute".into(),
@@ -367,7 +380,11 @@ impl SessionController {
             if let Some(gate) = gate {
                 gate.enter();
             }
-            let prepared = snapshot.prepare_session(&settings, &[]);
+            let prepared = if let Some(session) = &session {
+                snapshot.prepare_session_for(&settings, &[], Some(session))
+            } else {
+                snapshot.prepare_session(&settings, &[])
+            };
             (preparation, prepared)
         })
         .await
@@ -377,6 +394,10 @@ impl SessionController {
         let mut prepared = prepared?;
         prepared.dynamic_tools = dynamic_tools;
         let mut catalog = self.catalog.lock().await;
+        if let Err(error) = admit() {
+            catalog.discard_prepared_session(&prepared)?;
+            return Err(error);
+        }
         // Keep provisional bindings private from configuration coordination as
         // well as attachment until the catalog visibility decision is complete.
         let mut bindings = self

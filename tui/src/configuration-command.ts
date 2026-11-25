@@ -1,9 +1,13 @@
 /** Configuration commands are Rust-owned. Forward their arguments and streams. */
 import { spawn } from "node:child_process";
 
+export function isNativeConfigurationCommand(argument: string | undefined): boolean {
+  return ["init", "config", "doctor", "workflow"].includes(argument ?? "");
+}
+
 export function configurationCommand(argv: readonly string[]): { binary: string; arguments: string[] } | undefined {
   if (argv[0] !== "--binary" || argv[1] === undefined) return undefined;
-  if (!["init", "config", "doctor", "workflow", "--help"].includes(argv[2] ?? "")) return undefined;
+  if (!isNativeConfigurationCommand(argv[2]) && argv[2] !== "--help") return undefined;
   return { binary: argv[1], arguments: argv.slice(2) };
 }
 

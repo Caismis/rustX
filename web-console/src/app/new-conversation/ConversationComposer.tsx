@@ -71,16 +71,12 @@ export function ConversationComposer({ visible = true, client, host, authority, 
   const bound = sameEndpoint(catalog?.endpoint, transport.endpoint);
   const selected = bound ? catalog?.workspaces.find(w => w.id === workspaceId) : undefined;
   const pick = (id: string) => { setWorkspace(id); workspacePicked?.(id); setMenu(false); };
-  const adopt = async (mutation: WorkspaceMutation, location?: string, selection?: WorkspaceFolderSelection) => {
+  const adopt = async (mutation: WorkspaceMutation, location: string, selection?: WorkspaceFolderSelection) => {
     if (adopting) return;
     setAdopting(true); setError('');
     try {
-      let id: string | null | undefined;
-      if (location === undefined) {
-        id = await host.pickWorkspace?.(mutation.scope);
-        if (!id) return;
-      } else if (selection) id = await host.registerWorkspaceFolder!(mutation.scope, location, selection);
-      else await host.adoptWorkspace(mutation.scope, location);
+      const id = selection ? await host.registerWorkspaceFolder!(mutation.scope, location, selection) : undefined;
+      if (!selection) await host.adoptWorkspace(mutation.scope, location);
       if (!mutation.commit() || !current()) return;
       const next = await authority.observe();
       if (!current() || !mutation.current() || !next.current()) return;
@@ -111,15 +107,13 @@ export function ConversationComposer({ visible = true, client, host, authority, 
     {!active && <div className={hero.headline}><h1 className={hero.titleGroup}>{tx('common:conversation-composer.what-would-you-like-to-build')}</h1></div>}
     {!active && <div className={hero.workspaceRow}>
       <Menu open={menu} autoFocus selectedId={selected?.id} onClose={() => setMenu(false)}
-        items={[...(bound ? catalog?.workspaces ?? [] : []).map(w => ({ id: w.id, label: w.displayName, icon: <IconFolderClose16 size={16}/> })), ...(bound && (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser' && host.browseWorkspace && host.registerWorkspaceFolder
-          || catalog?.picker.kind === 'native' && host.pickWorkspace) ? [{ id: '::add-workspace', label: tx('common:conversation-composer.add-workspace') }] : [])]}
+        items={[...(bound ? catalog?.workspaces ?? [] : []).map(w => ({ id: w.id, label: w.displayName, icon: <IconFolderClose16 size={16}/> })), ...(bound && (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser' && host.browseWorkspace && host.registerWorkspaceFolder) ? [{ id: '::add-workspace', label: tx('common:conversation-composer.add-workspace') }] : [])]}
         onSelect={id => {
           if (id !== '::add-workspace') { pick(id); return; }
           setMenu(false);
           const mutation = associations.captureMutation(catalog);
           if (!mutation) { setError(String(new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced'))); return; }
           if (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser') setAdd({ mutation, picker: catalog.picker });
-          else if (catalog?.picker.kind === 'native') void adopt(mutation);
         }}
         anchor={<button type="button" className={hero.workspace} aria-label={tx('common:conversation-composer.choose-workspace')} aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={hero.workspaceLabel}>{selected?.displayName ?? tx('common:conversation-composer.choose-workspace')}</span><IconChevronDownOutline14 size={12}/></button>}/>
     </div>}

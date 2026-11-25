@@ -28,15 +28,15 @@ export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: s
   return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
 }
 
-export function ResourceBrowser({ client, source: observedSource, target, scope, revision, query, view, refresh, onRefresh, workspaceLabel, executionSession,
+export function ResourceBrowser({ active, client, source: observedSource, target, scope, revision, query, view, refresh, onRefresh, workspaceLabel, executionSession,
   bindDisplayWrite, bindDelete, onTransfer, transferDisabled, onCatalogState }: {
-  client: AppServerClient; source?: SourceSettings; target: SourceTarget; scope: SourceScope; revision?: string;
+  active: boolean; client: AppServerClient; source?: SourceSettings; target: SourceTarget; scope: SourceScope; revision?: string;
   bindDisplayWrite: (skill: SkillDescriptor) => SkillDisplayWriter | undefined;
   bindDelete: (skill: SkillDescriptor) => (() => Promise<void>) | undefined;
   onTransfer?: (from: SourceScope, name: string, revision: string, operation: TransferOperation, taken: ReadonlySet<string>) => void;
   transferDisabled: boolean; workspaceLabel?: string; executionSession?: string;
   query: string; view: CatalogView; refresh: number; onRefresh: () => void;
-  onCatalogState?: (state: { status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }) => void;
+  onCatalogState?: (state: { status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority; clientAuthority?: boolean }) => void;
 }) {
   const tx = useTranslation();
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -45,23 +45,29 @@ export function ResourceBrowser({ client, source: observedSource, target, scope,
   const [deleting, setDeleting] = useState<{ title: string; owner: SourceScope; path: string; remove: () => Promise<void> }>();
   const settings = useSettingsActor();
   const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
-  const effective = useSkillCatalog(client, observedSource, true, scope, refresh + localRefresh, executionSession, target);
-  const global = useSkillCatalog(client, observedSource, scope === 'workspace', 'user', refresh + localRefresh);
+  const effective = useSkillCatalog(client, observedSource, active, scope, refresh + localRefresh, executionSession, target);
+  const global = useSkillCatalog(client, observedSource, active && scope === 'workspace', 'user', refresh + localRefresh);
   const catalogStatus: 'loading' | 'ready' | 'failed' = !effective || effective.pending ? 'loading' : effective.error ? 'failed' : 'ready';
   // A source refresh keeps the last response's authority while the follow-up
   // request is pending. The response that supplies the rows also gates edits.
   const catalogAuthority = effective?.authority;
-  const canAuthor = !executionSession || catalogAuthority === 'authoring';
-  const source = canAuthor ? observedSource : undefined;
-  if (executionSession && catalogAuthority === 'client') {
+  const clientAuthority = effective?.clientAuthority;
+  const canEditCatalog = catalogAuthority === 'authoring';
+  // The authored selection policy has its own source and revision. A
+  // discovery failure cannot invalidate an independent source, but Client
+  // authority or a typed execution refusal withdraws authoring claims.
+  const canAuthorPolicy = scope === 'user' || canEditCatalog
+    || (!executionSession && catalogAuthority !== 'client' && !clientAuthority);
+  const source = canAuthorPolicy ? observedSource : undefined;
+  if (scope === 'workspace' && !canEditCatalog) {
     if (editing) setEditing(undefined);
     if (deleting) setDeleting(undefined);
   }
   const reportCatalogState = useRef(onCatalogState);
   reportCatalogState.current = onCatalogState;
   useLayoutEffect(() => {
-    reportCatalogState.current?.({ status: catalogStatus, authority: catalogAuthority });
-  }, [catalogAuthority, catalogStatus]);
+    reportCatalogState.current?.({ status: catalogStatus, authority: catalogAuthority, clientAuthority });
+  }, [catalogAuthority, catalogStatus, clientAuthority]);
   const listed = effective?.skills ?? [];
   // The effective catalog drives selection. Global's own catalog keeps shadowed
   // definitions accessible by their exact owning scope.
@@ -99,7 +105,7 @@ export function ResourceBrowser({ client, source: observedSource, target, scope,
     const display = skill?.display;
     const operationRevision = skill?.operation_revision;
     const name = display?.authored.display_name ?? row.name;
-    const items: CardMenuItems = !canAuthor ? [] : [
+    const items: CardMenuItems = !canEditCatalog ? [] : [
       ...(display?.revision ? [{ id: 'edit', label: tx('resources:skills.edit-display'), icon: <IconEditOutline16 /> }] : []),
       ...(operationRevision && onTransfer ? transferActions(tx, row.owner, transferDisabled || !effective || !!effective.error
         || effective.pending || !global || !!global.error || global.pending) : []),
@@ -138,10 +144,10 @@ export function ResourceBrowser({ client, source: observedSource, target, scope,
     {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} view={view} empty={null}>
       {inherited.map(renderCard)}
     </ResourceGroup>}
-    {focus && <SkillDetail key={JSON.stringify([focus.owner, focus.name, executionSession])} client={client}
+    {active && focus && <SkillDetail key={JSON.stringify([focus.owner, focus.name, executionSession])} client={client}
       target={focus.owner === 'user' ? userTarget : target} executionSession={focus.owner === 'workspace' ? executionSession : undefined}
       name={focus.name} display={descriptors.get(rowKey(focus.owner, focus.name))?.display} close={() => setFocus(undefined)} />}
-    {canAuthor && editing?.skill.display && <SkillDisplayDialog name={editing.skill.catalog.name} display={editing.skill.display}
+    {canEditCatalog && editing?.skill.display && <SkillDisplayDialog name={editing.skill.catalog.name} display={editing.skill.display}
       close={() => setEditing(undefined)} save={async (authored, upload) => {
         try {
           await editing.write(authored, upload);
@@ -149,7 +155,7 @@ export function ResourceBrowser({ client, source: observedSource, target, scope,
           setLocalRefresh(value => value + 1);
         }
       }} />}
-    {canAuthor && deleting && <SkillDeleteDialog name={deleting.title}
+    {canEditCatalog && deleting && <SkillDeleteDialog name={deleting.title}
       scope={deleting.owner === 'user' ? tx('resources:scope.global') : workspaceLabel ?? tx('resources:scope.workspace')}
       path={deleting.path} close={() => setDeleting(undefined)} remove={async () => {
         try {

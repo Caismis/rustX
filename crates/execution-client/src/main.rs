@@ -1,21 +1,8 @@
 //! `rustx-execution-client` — the physical Execution Client.
 //!
-//! This layer owns exactly one local Session binding: it reads a
-//! server-published [`Bootstrap`] from an owner-only file, opens the bound
-//! workspace as a [`PackageDirectory`] held by descriptor for the whole
-//! session, performs the authenticated `Hello`/`Admission` handshake over
-//! the bound endpoint — the owner-only Unix socket for the local sibling
-//! composition, or the validated `ws`/`wss` execution URL a remote
-//! deployment publishes — then serves the Server's typed requests until
-//! EOF: `Ping` liveness and the implemented physical operations — bounded
-//! revision-checked `ReadRange`, `GetMetadata` stat'ed without following
-//! the leaf, bounded `ReadDirectory` paging, the ticketed
-//! `PrepareWrite`/`CommitWrite`/`AbortWrite` conditional write, the
-//! `PrepareEdit` conditional edit sharing that ticketed kernel, the
-//! `ReadLines` logical-text page, and the `ReadDocument` whitelisted
-//! document page — all executed through `rustx-confined-fs` and
-//! `rustx-document-reader`, the same primitives the Agent Server itself
-//! uses. No process, MCP, or Python I/O exists here.
+//! The Client owns the physical Workspace, filesystem and search operations,
+//! subprocesses, Managed Python, stdio MCP, and temporary output for one
+//! authenticated Session binding. It connects over Unix sockets or WSS.
 //!
 //! The workspace is local policy, never a server request: `--workspace`
 //! must match the bootstrap workspace byte for byte or the client refuses
@@ -84,17 +71,30 @@ const _: () = {
 };
 
 fn main() -> ExitCode {
+    const USAGE: &str =
+        "usage: rustx-client --binding-file PATH --workspace ABSOLUTE_PATH [--tls-ca-file PATH]";
     let mut args = env::args_os();
     let _program = args.next();
     let usage = || {
-        eprintln!(
-            "usage: rustx-execution-client --binding-file PATH --workspace PATH [--tls-ca-file PATH]"
-        );
+        eprintln!("{USAGE}");
         ExitCode::from(2)
     };
     let Some(binding_flag) = args.next() else {
         return usage();
     };
+    if binding_flag == "--help" && args.len() == 0 {
+        println!(
+            "{USAGE}\nConnect to the Server using its private binding file. The Workspace must match the authorized path."
+        );
+        return ExitCode::SUCCESS;
+    }
+    if binding_flag == "--version" && args.len() == 0 {
+        println!(
+            "rustX Client {} (Execution Protocol v{PROTOCOL_VERSION})",
+            env!("CARGO_PKG_VERSION")
+        );
+        return ExitCode::SUCCESS;
+    }
     let Some(binding_path) = args.next() else {
         return usage();
     };
@@ -1662,7 +1662,11 @@ fn read_directory(
                 .and_then(|offset| u32::try_from(offset).ok()),
         },
         Err(error) => ClientReply::Error {
-            kind: read_error(&error),
+            kind: if error.kind() == std::io::ErrorKind::FileTooLarge {
+                ReadError::DirectoryEntryLimit
+            } else {
+                read_error(&error)
+            },
         },
     }
 }

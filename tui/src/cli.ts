@@ -36,6 +36,7 @@
  * global active Session, and opening one never stops another.
  */
 
+import { realpathSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
 import type { AppServerLaunchOptions } from "./app-server/child-process.ts";
@@ -44,11 +45,14 @@ import type { SessionSettings } from "./protocol/app-server.ts";
 export const USAGE = `usage:
   local self-hosted (spawns and owns an App Server child over stdio):
     rustx-tui --binary <rustx> [--config <absolute-rustx.toml>] \\
-              [--runtime-root <dir>] [session options] [routing options]
+              [--runtime-root <dir>] [local execution options] [session options] [routing options]
 
   existing / remote App Server (WebSocket):
     rustx-tui --connect <ws://host:port> --token-file <path> \\
               --workspace <server-absolute-dir> [session options] [routing options]
+
+  local execution options (launch the bundled Client for this existing Session):
+    --local-execution-workspace <absolute-dir> --session <id>
 
   session options (applied to Sessions this launch creates; paths resolve on the App Server host):
     [--workspace <dir>] [--model <model-identity>] [--name <text>]
@@ -105,6 +109,7 @@ const VALUE_FLAGS = [
   "--connect",
   "--token-file",
   "--runtime-root",
+  "--local-execution-workspace",
   "--workspace",
   "--config",
   "--model",
@@ -115,10 +120,11 @@ const VALUE_FLAGS = [
 
 const BOOLEAN_FLAGS = [
   "--resume",
+  "--local-session-execution",
 ] as const;
 
 /** Local-only because they bind sources of the App Server *process*. */
-const PROCESS_FLAGS = ["--config", "--runtime-root"] as const;
+const PROCESS_FLAGS = ["--config", "--runtime-root", "--local-execution-workspace"] as const;
 
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 type BooleanFlag = (typeof BOOLEAN_FLAGS)[number];
@@ -192,10 +198,17 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
 
   // Only a self-hosted child shares the TUI's filesystem namespace. Never
   // resolve, normalize, or default a remote path against the client machine.
+  const localExecution = booleans.has("--local-session-execution");
   let cwd: string;
   if (mode.kind === "local") {
     cwd = values.get("--workspace") ?? process.cwd();
+    if (localExecution) {
+      try { cwd = realpathSync(cwd); }
+      catch { throw new ArgumentError("Cannot resolve the local Session Workspace"); }
+      mode.launch.localSessionRoot = cwd;
+    }
   } else {
+    if (localExecution) throw new ArgumentError("local Session execution requires a self-hosted App Server");
     const explicit = values.get("--workspace");
     if (explicit === undefined || !(
       posix.isAbsolute(explicit) ||
@@ -228,12 +241,25 @@ function localMode(
       "argument --token-file applies only to --connect; a stdio App Server child needs no transport credential",
     );
   }
+  const executionWorkspace = values.get("--local-execution-workspace");
+  const sessionId = values.get("--session");
+  if (executionWorkspace !== undefined) {
+    if (!posix.isAbsolute(executionWorkspace)) {
+      throw new ArgumentError("--local-execution-workspace requires an absolute Workspace path");
+    }
+    if (sessionId === undefined) {
+      throw new ArgumentError("--local-execution-workspace requires --session to select the enrolled Session");
+    }
+  }
   return {
     kind: "local",
     binary,
     launch: {
       config: values.get("--config"),
       runtimeRoot: values.get("--runtime-root"),
+      ...(executionWorkspace === undefined ? {} : {
+        localExecution: { workspace: executionWorkspace, sessionId },
+      }),
     },
   };
 }

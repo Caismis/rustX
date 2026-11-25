@@ -89,7 +89,7 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
   process?: (process: { role: 'native' | 'provider_launcher'; pid: number }) => void;
   /** Runs after both original subprocesses exit, before fixture deletion. */
   afterExit?: () => void | Promise<void>;
-}) {
+}, localWorkspacePicker = false) {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-web-console-'));
   const settings = join(directory, 'rustx.toml');
   const workspaceA = join(directory, 'A'), workspaceB = join(directory, 'B');
@@ -150,6 +150,9 @@ timezone = "UTC"
     // Omit its unused Tool setup; retain all 300 durable Attempts and gates.
     const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ${scenario === 'web_reading_surface' ? '[]' : '["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]'}\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
+    if (localWorkspacePicker) {
+      writeFileSync(settings, readFileSync(settings, 'utf8') + `\n[app_server]\nenvironment_roots = ${JSON.stringify([workspaceA, workspaceB])}\n`);
+    }
     if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');
     // Automatically repairable sources (#464): the App Server repairs the User
     // document at startup and Workspace A before its first Session resolves.
@@ -184,6 +187,7 @@ timezone = "UTC"
     let execution: { sessionId: string; workspace: string } | undefined;
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
       const args = ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile];
+      if (localWorkspacePicker) args.push('--local-workspace-picker');
       if (execution) args.push('--local-execution-session', execution.sessionId, '--local-execution-workspace', execution.workspace);
       app = spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
       appIdentity = nativeIdentity(app.pid);

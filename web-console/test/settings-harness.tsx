@@ -165,9 +165,9 @@ export async function newSubagent(name: string) {
 }
 
 /** Navigate to an independent module, using its real resource surface. */
-export async function openResourceModule(module:ResourceModule) {
+export async function openResourceModule(module:ResourceModule, lifecycle: 'ready' | 'failed' = 'ready') {
  await act(async()=>resourceNavigation?.(module));
- await waitFor(()=>expect(document.querySelector(`[data-resource-module="${module}"][data-lifecycle="ready"]`)).toBeTruthy());
+ await waitFor(()=>expect(document.querySelector(`[data-resource-module="${module}"][data-lifecycle="${lifecycle}"]`)).toBeTruthy());
 }
 
 /** Open a detail from a resource list through its actual row, so list/detail

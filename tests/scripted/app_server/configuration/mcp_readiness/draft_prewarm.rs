@@ -1550,7 +1550,13 @@ async fn a_bound_session_settles_the_authored_http_draft_before_ordinary_admissi
         let credentials = fixture.manager.credentials.clone();
         let input = SessionConfigInput::new(fixture.workspaces[0].clone());
         let paths = tokio::task::spawn_blocking(move || {
-            ApplicationState::initial_bound_session(&configuration, &input, &credentials, &endpoint)
+            ApplicationState::initial_bound_session(
+                &configuration,
+                &input,
+                &credentials,
+                &endpoint,
+                true,
+            )
         })
         .await
         .unwrap()

@@ -1870,11 +1870,7 @@ fn no_guard_directory_rejects_path_lookup_and_keeps_other_commands() {
 fn install_embedded_guard(directory: &Path) {
     std::fs::create_dir_all(directory).expect("guard directory");
     for (name, bytes) in [("python", GUARD_PYTHON), ("python3", GUARD_PYTHON3)] {
-        let path = directory.join(name);
-        std::fs::write(&path, bytes).expect("guard script");
-        let mut permissions = std::fs::metadata(&path).expect("meta").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions).expect("mode");
+        write_executable(&directory.join(name), std::str::from_utf8(bytes).unwrap());
     }
 }
 

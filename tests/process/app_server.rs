@@ -44,7 +44,7 @@ impl Fixture {
         let home = root.path().join("home");
         let config = home.join("rustx");
         std::fs::create_dir_all(&config).unwrap();
-        let initialized = Command::new(env!("CARGO_BIN_EXE_rustx"))
+        let initialized = Command::new(server_program())
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_STATE_HOME")
@@ -114,7 +114,7 @@ impl Fixture {
         }
     }
     fn command(&self, listen: &str) -> Command {
-        self.command_with_program(env!("CARGO_BIN_EXE_rustx"), listen)
+        self.command_with_program(server_program(), listen)
     }
     fn command_with_program(&self, program: impl AsRef<std::ffi::OsStr>, listen: &str) -> Command {
         let mut command = Command::new(program);
@@ -144,7 +144,7 @@ impl Fixture {
         (child, endpoint, stderr)
     }
 }
-async fn bounded<T>(future: impl Future<Output = T>) -> T {
+pub(super) async fn bounded<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(std::time::Duration::from_mins(1), future)
         .await
         .expect("outer liveness guard")
@@ -159,7 +159,7 @@ impl Drop for ReapChild {
     }
 }
 
-fn terminate(child: &Child) {
+pub(super) fn terminate(child: &Child) {
     kill(
         Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
         Signal::SIGTERM,
@@ -275,13 +275,7 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
             std::fs::read_to_string(&stale).unwrap(),
             format!("{}\n", missing.display())
         );
-        assert_eq!(
-            std::fs::read_dir(&bin)
-                .unwrap()
-                .map(|entry| entry.unwrap().file_name())
-                .collect::<Vec<_>>(),
-            ["rustx"]
-        );
+        assert_standalone_product_files(&bin);
     })
     .await;
 }
@@ -305,41 +299,140 @@ async fn standalone_server_commits_a_model_turn_without_a_client_or_helpers() {
         .unwrap();
 
         let (bin, rustx) = isolated_server_bin();
-        let mut child = Command::new(rustx)
-            .args(["app-server", "--listen", "stdio", "--runtime-root"])
-            .arg(fixture.root.path().join("runtime"))
-            .current_dir(fixture.root.path())
-            .env_clear()
-            .env("HOME", &home)
-            .env("PATH", bin.path())
-            .env("TEST_KEY", "fixture")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+        let isolated = || {
+            Command::new(&rustx)
+                .args(["app-server", "--listen", "stdio", "--runtime-root"])
+                .arg(fixture.root.path().join("runtime"))
+                .current_dir(fixture.root.path())
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", bin.path())
+                .env("TEST_KEY", "fixture")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap()
+        };
+        let mut child = isolated();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         let session = fixture.sessions[0].clone();
-        let target = attach(&client, session, 2).await;
+        let target = attach(&client, session.clone(), 2).await;
         start_turn(&client, &target, "standalone model request").await;
         let state = settled(&client, &target).await;
-        assert!(state["messages"].to_string().contains("Hello world"));
+        assert!(
+            state["messages"].to_string().contains("Hello world"),
+            "standalone turn did not commit model output: {state}"
+        );
         let requests = provider.request_bodies();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].contains("standalone model request"));
-        assert_eq!(std::fs::read_dir(bin.path()).unwrap().count(), 1);
+        #[cfg(target_os = "linux")]
+        let warm_measurement = if std::env::var_os("RUSTX_MODEL_MEASUREMENT").is_some() {
+            use rustx::app_server::thread_status::ThreadStatus;
+            // A settled Attempt can still be returning its runtime lease.
+            // Wait for the native Idle proof before starting the measured turn.
+            loop {
+                let response = rpc(&client, 11, Method::ThreadRead { thread_id: target.conversation_id.clone() }).await;
+                match response {
+                    Response::Success(response) => {
+                        let MethodResult::Thread { thread } = response.result else { panic!("thread status") };
+                        if thread.status == ThreadStatus::Idle {
+                            assert!(thread.runtime_incarnation.is_some());
+                            break;
+                        }
+                    }
+                    Response::Failure(failure) if matches!(failure.error.data, Some(ErrorData::ObservationUnavailable { .. })) => {}
+                    other @ Response::Failure(_) => panic!("thread status: {other:?}"),
+                }
+                tokio::task::yield_now().await;
+            }
+            let process = PathBuf::from(format!("/proc/{}", child.id().unwrap()));
+            let (before_cpu, before_writes) = process_cpu_and_write_counters(&process);
+            let started = std::time::Instant::now();
+            let turn = start_turn(&client, &target, "warm standalone model request").await;
+            let warm = loop {
+                let checkpoint = settled(&client, &target).await;
+                if checkpoint["attempt"]["attempt_id"].as_str() == Some(turn.as_str()) {
+                    break checkpoint;
+                }
+                tokio::task::yield_now().await;
+            };
+            let settlement_ms = started.elapsed().as_secs_f64() * 1000.0;
+            assert!(warm["messages"].to_string().contains("Hello world"));
+            assert_eq!(provider.request_bodies().len(), 2);
+            let (cpu, writes) = process_cpu_and_write_counters(&process);
+            let status = std::fs::read_to_string(process.join("status")).unwrap();
+            let peak_kib = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+                .unwrap().split_ascii_whitespace().next().unwrap().parse::<u64>().unwrap();
+            Some((settlement_ms, cpu - before_cpu, writes - before_writes, peak_kib))
+        } else { None };
+        let request_count = provider.request_bodies().len();
+        assert_standalone_product_files(bin.path());
         assert_eq!(
             std::fs::read_dir(fixture.root.path().join("a"))
                 .unwrap()
                 .count(),
             0
         );
+        let owner = target.conversation_id.clone();
         result(&client, Method::SessionDetach { target }).await;
         client.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
+
+        let history = |session_id| Method::SessionHistory {
+            session_id,
+            node_id: None,
+            at: rustx::durable::reading::ConversationWindowAt::Latest,
+            limit: 8,
+        };
+        let workspace = fixture.root.path().join("a");
+        std::fs::rename(&workspace, fixture.root.path().join("retired")).unwrap();
+        let mut cold = isolated();
+        let client = driver::jsonl(cold.stdout.take().unwrap(), cold.stdin.take().unwrap());
+        initialize_client(&client).await;
+        #[cfg(target_os = "linux")]
+        let history_started = std::time::Instant::now();
+        let MethodResult::SessionHistory {
+            conversation_id,
+            window,
+        } = result(&client, history(session)).await
+        else {
+            panic!("cold history")
+        };
+        #[cfg(target_os = "linux")]
+        let history_ms = history_started.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(conversation_id, owner);
+        let history_body = serde_json::to_string(&window).unwrap();
+        assert!(history_body.contains("standalone model request"));
+        assert!(history_body.contains("Hello world"));
+        let sibling = result(&client, history(fixture.sessions[1].clone())).await;
+        assert!(
+            !serde_json::to_string(&sibling)
+                .unwrap()
+                .contains("Hello world")
+        );
+        assert_eq!(
+            provider.request_bodies().len(),
+            request_count,
+            "cold read must not request the model"
+        );
+        #[cfg(target_os = "linux")]
+        if let Some((settlement_ms, cpu_ticks, writes, peak_kib)) = warm_measurement {
+            assert!(history_body.contains("warm standalone model request"));
+            println!("MODEL_MEASUREMENT {}", serde_json::json!({
+                "warm_settlement_ms": settlement_ms, "cold_history_ms": history_ms,
+                "server_cpu_ticks": cpu_ticks, "server_write_bytes": writes, "server_peak_rss_kib": peak_kib,
+                "history_window_json_bytes": history_body.len(), "provider_requests": 1, "history_requests": 1,
+            }));
+        }
+        assert!(!workspace.exists());
+        client.close().await;
+        detach_then_shutdown(&mut cold).await;
+        assert!(cold.wait().await.unwrap().success());
     })
     .await;
 }
@@ -552,17 +645,14 @@ for line in sys.stdin:
     })).await;
 }
 
-#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[cfg(feature = "mcp-fixture")]
 async fn seed_managed_python_wheel_cache(
     bin: &std::path::Path,
     uv: &std::path::Path,
+    interpreter: &std::path::Path,
 ) -> std::path::PathBuf {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     let fixture = tempfile::tempdir().unwrap();
-    let interpreter = ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
-        .into_iter()
-        .find(|path| std::path::Path::new(path).is_file())
-        .expect("Client Python");
     let minor = std::process::Command::new(interpreter)
         .args([
             "-c",
@@ -596,7 +686,7 @@ dependencies = ["fastmcp==4.0.3"]
     if let Some(warmed) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE") {
         let source = std::path::PathBuf::from(warmed).join(".");
         let copied = tokio::process::Command::new("/bin/cp")
-            .args(["-a", "--reflink=auto"])
+            .arg("-pPR")
             .arg(source)
             .arg(&cache)
             .kill_on_drop(true)
@@ -644,16 +734,33 @@ dependencies = ["fastmcp==4.0.3"]
     directory
 }
 
-#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn doctor_probes_selected_managed_python_in_an_owned_client() {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let uv = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|directory| directory.join("uv"))
         .find(|candidate| candidate.is_file())
         .expect("Managed Python acceptance requires uv");
+    let interpreter = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("python3"))
+        .find(|candidate| candidate.is_file())
+        .expect("Managed Python acceptance requires python3");
     let (bin, executable) = isolated_server_pair();
-    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv, &interpreter).await;
+    std::fs::write(
+        uv_path.join("uv"),
+        format!(
+            r#"#!/bin/sh
+case "${{1-}}" in
+    lock|sync) printf '%s\n' "$1" >> "$UV_CACHE_DIR/installed-builds" || exit 1 ;;
+esac
+exec '{}' --offline "$@"
+"#,
+            uv.to_str().unwrap().replace('\'', "'\\''"),
+        ),
+    )
+    .unwrap();
     let client = bin.path().join("rustx-execution-client");
     std::fs::rename(&client, bin.path().join("client-real")).unwrap();
     std::fs::write(
@@ -691,9 +798,14 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
         let scratch = fixture.root.path().join("diagnostic-scratch");
         std::fs::create_dir(&scratch).unwrap();
         let store = bin.path().join("client-home/.local/share");
-        let paths = [uv_path, PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        let paths = [uv_path, interpreter.parent().unwrap().to_path_buf(), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
         let path = std::env::join_paths(paths).unwrap();
-        for prepare in [false, true] {
+        let store_root = store.join("rustx/environments/python-tools");
+        let builds = store_root.join("uv-cache/installed-builds");
+        let packages = store_root.join("packages");
+        let mut first_install = None;
+        for phase in ["plan", "cold", "reopened"] {
+            let prepare = phase != "plan";
             let mut probe = Command::new(&executable);
             probe
                 .current_dir(&workspace)
@@ -711,7 +823,9 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
             if prepare {
                 probe.arg("--prepare");
             }
+            let started = std::time::Instant::now();
             let output = probe.output().await.unwrap();
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             assert_eq!(output.status.code(), Some(3), "{}\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr), std::fs::read_to_string(bin.path().join("client-stderr")).unwrap_or_default());
             let stdout = std::str::from_utf8(&output.stdout).unwrap();
             let records = stdout.lines().map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()).collect::<Vec<_>>();
@@ -728,9 +842,26 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
             }
             assert!(!runtime.exists(), "no diagnostic Session entered product history");
             assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0, "the private diagnostic root was removed after settlement");
+            if prepare {
+                assert_eq!(std::fs::read_to_string(&builds).unwrap(), "lock\nsync\n");
+                let installed = std::fs::read_dir(&packages).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+                let [package] = installed.as_slice() else { panic!("one published Environment: {installed:?}") };
+                let metadata = package.metadata().unwrap();
+                let identity = (package.path(), metadata.dev(), metadata.ino());
+                if let Some(original) = &first_install {
+                    assert_eq!(&identity, original, "the new process reused the original published Environment");
+                } else {
+                    first_install = Some(identity);
+                }
+            } else {
+                assert!(!builds.exists(), "the plan did not start a build");
+            }
+            if std::env::var_os("RUSTX_INSTALLED_PRODUCTS").is_some() {
+                println!("MANAGED_PYTHON_MEASUREMENT {}", serde_json::json!({
+                    "phase": phase, "probe_through_shutdown_ms": elapsed_ms,
+                }));
+            }
         }
-        let packages = store.join("rustx/environments/python-tools/packages");
-        assert_eq!(std::fs::read_dir(packages).unwrap().count(), 1);
     })
     .await;
 }
@@ -758,7 +889,12 @@ async fn managed_python_store_for_client(isolated_mount: bool) {
     let (bin, rustx) = isolated_server_pair();
     // Set up only wheels. The authenticated Client still creates the first
     // fingerprint, resolves its lock offline, and installs the venv itself.
-    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    let interpreter = ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
+        .into_iter()
+        .map(std::path::Path::new)
+        .find(|path| path.is_file())
+        .expect("Client Python");
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv, interpreter).await;
     bounded(Box::pin(async {
         use rustx::app_server::{protocol::{Method, MethodResult}, session_deletion::SessionDeletionResult};
         use std::os::unix::fs::PermissionsExt as _;
@@ -880,6 +1016,27 @@ enum HttpMcpOutput {
     Oversized,
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn process_cpu_and_write_counters(process: &std::path::Path) -> (u64, u64) {
+    let stat = std::fs::read_to_string(process.join("stat")).unwrap();
+    let (_, fields) = stat.rsplit_once(')').unwrap();
+    // utime and stime are fields 14 and 15 in proc_pid_stat(5).
+    let cpu_ticks = fields
+        .split_ascii_whitespace()
+        .skip(11)
+        .take(2)
+        .map(|value| value.parse::<u64>().unwrap())
+        .sum();
+    let writes = std::fs::read_to_string(process.join("io"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("write_bytes: "))
+        .unwrap()
+        .parse()
+        .unwrap();
+    (cpu_ticks, writes)
+}
+
 #[cfg(feature = "mcp-fixture")]
 async fn http_mcp_output(case: HttpMcpOutput) {
     bounded(Box::pin(async {
@@ -902,6 +1059,13 @@ async fn http_mcp_output(case: HttpMcpOutput) {
         let fixture = Fixture::new().await;
         let with_client = matches!(case, HttpMcpOutput::BoundImport);
         let over_limit = matches!(case, HttpMcpOutput::Oversized);
+        #[cfg(target_os = "linux")]
+        let measurement_bytes = std::env::var("RUSTX_HTTP_MCP_MEASUREMENT_BYTES").ok().map(|value| {
+            let bytes: usize = value.parse().expect("measurement body size in bytes");
+            assert!(!over_limit && !with_client, "measure the standalone HTTP MCP path");
+            assert!((FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1..=16 * 1024 * 1024 - 4096).contains(&bytes));
+            bytes
+        });
         let original_bytes = match case {
             HttpMcpOutput::PreviewOverflow => FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1,
             HttpMcpOutput::BoundImport => 5 * rustx_execution_protocol::MAX_RAW_CHUNK_BYTES,
@@ -909,6 +1073,8 @@ async fn http_mcp_output(case: HttpMcpOutput) {
             HttpMcpOutput::NearLimit => 16 * 1024 * 1024 - 4096,
             HttpMcpOutput::Oversized => 16 * 1024 * 1024 + 1,
         };
+        #[cfg(target_os = "linux")]
+        let original_bytes = measurement_bytes.unwrap_or(original_bytes);
         let mcp_calls = fixture.root.path().join("mcp-calls");
         let mcp = McpFixture {
             result_bytes: Some(original_bytes),
@@ -1000,9 +1166,30 @@ exec "$bin/client-real" "$@"
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         let target = attach(&client, session.clone(), 2).await;
+        #[cfg(target_os = "linux")]
+        let measurement = measurement_bytes.map(|_| {
+            let process = PathBuf::from(format!("/proc/{}", child.id().unwrap()));
+            let (cpu, writes) = process_cpu_and_write_counters(&process);
+            (process, cpu, writes, std::time::Instant::now())
+        });
         start_turn(&client, &target, "overflow without execution binding").await;
         let state = settled(&client, &target).await;
         assert_eq!(state["attempt"]["phase"]["outcome"]["type"], "completed");
+        #[cfg(target_os = "linux")]
+        if let Some((process, start_cpu, start_writes, started)) = measurement {
+            let (cpu, writes) = process_cpu_and_write_counters(&process);
+            let status = std::fs::read_to_string(process.join("status")).unwrap();
+            let peak_kib = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+                .unwrap().split_ascii_whitespace().next().unwrap().parse::<u64>().unwrap();
+            println!("HTTP_MCP_MEASUREMENT {}", serde_json::json!({
+                "tool_content_bytes": original_bytes,
+                "settlement_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "server_peak_rss_kib": peak_kib,
+                "server_write_bytes": writes - start_writes,
+                "server_cpu_ticks": cpu - start_cpu,
+                "http_mcp_business_rpcs": 1,
+            }));
+        }
         let scratch_entries = std::fs::read_dir(&scratch).unwrap()
             .map(|entry| entry.unwrap().path()).collect::<Vec<_>>();
         if with_client {
@@ -1145,14 +1332,36 @@ exec "$bin/client-real" "$@"
     .await;
 }
 
-/// A fresh staging directory on the *same filesystem as the staged
-/// sources* so staging is a hard link — no write, so the staged inode
-/// can never still be counted as written at execve. (A tmpfs copy of
-/// the ~600 MB Server binary has a real transient ETXTBSY window under
-/// parallel load: the kernel still counts the just-closed writer when
-/// execve runs.) The returned guard owns the directory; it must outlive
-/// the spawned children.
+fn installed_products() -> Option<PathBuf> {
+    std::env::var_os("RUSTX_INSTALLED_PRODUCTS").map(PathBuf::from)
+}
+
+fn installed_binary(product: &str, name: &str) -> Option<PathBuf> {
+    let binary = installed_products()?.join(product).join("bin").join(name);
+    assert!(binary.is_file(), "installed artifact is absent: {binary:?}");
+    Some(binary)
+}
+
+pub(super) fn server_program() -> PathBuf {
+    installed_binary("rustx-server", "rustx-server")
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_rustx")))
+}
+
+fn staged_execution_client() -> PathBuf {
+    installed_binary("rustx-client", "rustx-client").unwrap_or_else(|| {
+        std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client")
+    })
+}
+
+/// Stage hard links on the same filesystem as the binaries. Copying a
+/// freshly opened executable can race with execve and produce ETXTBSY.
+/// The directory guard must outlive the spawned children.
 fn staged_bin_dir() -> tempfile::TempDir {
+    if let Some(directory) = installed_products() {
+        return tempfile::tempdir_in(directory).unwrap();
+    }
     let base = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
         .parent()
         .unwrap();
@@ -1172,7 +1381,8 @@ fn stage_binary(bin: &std::path::Path, name: &str, source: &std::path::Path) -> 
 
 fn stage_supervisors(bin: &std::path::Path) {
     for supervisor in ["bash-supervisor", "interactive-supervisor"] {
-        let artifact = std::env::current_exe().unwrap().with_file_name(supervisor);
+        let artifact = installed_binary("rustx-client", supervisor)
+            .unwrap_or_else(|| std::env::current_exe().unwrap().with_file_name(supervisor));
         assert!(
             artifact.is_file(),
             "staged supervisor is absent: {artifact:?}"
@@ -1181,8 +1391,28 @@ fn stage_supervisors(bin: &std::path::Path) {
     }
 }
 
-fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn assert_standalone_product_files(bin: &std::path::Path) {
+    let mut files: Vec<_> = std::fs::read_dir(bin)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    files.sort_unstable();
+    let expected: &[&str] = if installed_products().is_some() {
+        &["rustx-server", "workflow-renderer"]
+    } else {
+        &["rustx"]
+    };
+    assert_eq!(files, expected);
+}
+
+pub(super) fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
+    if let Some(artifact) = installed_binary("rustx-server", "rustx-server") {
+        let renderer = installed_binary("rustx-server", "workflow-renderer").unwrap();
+        stage_binary(bin.path(), "workflow-renderer", &renderer);
+        let server = stage_binary(bin.path(), "rustx-server", &artifact);
+        return (bin, server);
+    }
     let rustx = stage_binary(
         bin.path(),
         "rustx",
@@ -1193,6 +1423,22 @@ fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
 
 pub(super) fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
     let bin = staged_bin_dir();
+    if let Some(artifact) = installed_binary("rustx", "rustx") {
+        for companion in [
+            "rustx-execution-client",
+            "bash-supervisor",
+            "interactive-supervisor",
+            "workflow-renderer",
+        ] {
+            stage_binary(
+                bin.path(),
+                companion,
+                &installed_binary("rustx", companion).unwrap(),
+            );
+        }
+        let server = stage_binary(bin.path(), "rustx", &artifact);
+        return (bin, server);
+    }
     // The Client is only ever the artifact preparation staged beside this
     // harness — never a runtime build, a PATH lookup, or a fallback path.
     let client = std::env::current_exe()
@@ -1281,9 +1527,7 @@ fn staged_client_command(
     bundle: &std::path::Path,
     workspace: &std::path::Path,
 ) -> std::process::Command {
-    let executable = std::env::current_exe()
-        .unwrap()
-        .with_file_name("rustx-execution-client");
+    let executable = staged_execution_client();
     assert!(
         executable.is_file(),
         "staged Execution Client is absent: {executable:?}"
@@ -1628,6 +1872,7 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
             std::fs::read(f.root.path().join("b/marker")).unwrap(),
             b"decoy"
         );
+        assert_streamed_bash(&client, f.sessions[0].clone(), &workspace).await;
         client.close().await;
         terminate(&child);
         let output = child.wait_with_output().await.unwrap();
@@ -1638,6 +1883,111 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
         );
     })
     .await;
+}
+
+async fn assert_streamed_bash(
+    client: &driver::Driver,
+    session_id: SessionId,
+    workspace: &std::path::Path,
+) {
+    use app_server_conformance::AppServerConformanceDriver as _;
+    use base64::Engine as _;
+    use rustx::app_server::{command::*, protocol::*};
+    use std::time::Instant;
+
+    const BODY_BYTES: usize = 128 * 1024;
+    let started = Instant::now();
+    let execution = result(
+        client,
+        Method::CommandExec(ExecParams {
+            session_id,
+            command: vec![
+                "/bin/bash".into(),
+                "-c".into(),
+                "printf first; IFS= read -r gate && [[ $gate == go ]] || exit 7; \
+                 dd if=/dev/zero bs=4096 count=32 2>/dev/null && printf done"
+                    .into(),
+            ],
+            cwd: workspace.display().to_string(),
+            env: std::collections::BTreeMap::new(),
+            process_id: Some("installed-stream".into()),
+            tty: false,
+            stream_stdin: true,
+            stream_stdout_stderr: true,
+            output_bytes_cap: Some(262_144),
+            timeout_ms: None,
+            size: None,
+        }),
+    );
+    let consume = async {
+        let mut bytes = Vec::new();
+        let mut first_byte = None;
+        let mut sequence = 0;
+        let mut released = false;
+        while bytes.len() < BODY_BYTES + b"firstdone".len() {
+            let notification = client.next_notification().await;
+            let NotificationMethod::CommandOutputDelta(delta) = notification.notification else {
+                continue;
+            };
+            assert_eq!(delta.process_id, "installed-stream");
+            assert_eq!(delta.stream, OutputStream::Stdout);
+            assert!(!delta.cap_reached);
+            sequence += 1;
+            assert_eq!(delta.sequence, sequence);
+            let chunk = base64::engine::general_purpose::STANDARD
+                .decode(delta.delta_base64)
+                .unwrap();
+            assert_ne!(chunk, b"");
+            first_byte.get_or_insert_with(|| started.elapsed());
+            bytes.extend(chunk);
+            if !released && bytes.len() >= b"first".len() {
+                assert_eq!(bytes, b"first");
+                // The process cannot emit the body until the UI receives the prefix.
+                let Response::Success(write) = rpc(
+                    client,
+                    101,
+                    Method::CommandWrite(WriteParams {
+                        process_id: "installed-stream".into(),
+                        delta_base64: Some(
+                            base64::engine::general_purpose::STANDARD.encode(b"go\n"),
+                        ),
+                        close_stdin: true,
+                    }),
+                )
+                .await
+                else {
+                    panic!("streamed Bash must accept input and EOF");
+                };
+                assert!(matches!(write.result, MethodResult::EnvironmentAccepted {}));
+                released = true;
+            }
+        }
+        let mut expected = b"first".to_vec();
+        expected.resize(b"first".len() + BODY_BYTES, 0);
+        expected.extend_from_slice(b"done");
+        assert_eq!(bytes, expected);
+        assert!(sequence >= 3, "output spans more than one execution page");
+        (first_byte.unwrap(), sequence, bytes.len())
+    };
+    let (terminal, (first_byte, notifications, bytes)) = tokio::join!(execution, consume);
+    let MethodResult::CommandExec { result } = terminal else {
+        panic!("streamed Bash must return a terminal result");
+    };
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert!(result.stdout_base64.is_empty() && result.stderr_base64.is_empty());
+    assert!(!result.stdout_truncated && !result.stderr_truncated);
+    if std::env::var_os("RUSTX_BASH_MEASUREMENT").is_some() {
+        println!(
+            "BASH_MEASUREMENT {}",
+            serde_json::json!({
+                "first_byte_ms": first_byte.as_secs_f64() * 1000.0,
+                "settlement_ms": started.elapsed().as_secs_f64() * 1000.0,
+                "output_bytes": bytes,
+                "output_notifications": notifications,
+            })
+        );
+    }
 }
 
 #[tokio::test]
@@ -1676,7 +2026,8 @@ async fn remote_execution_serves_session_reads_over_websocket() {
     bounded(async {
         use base64::Engine as _;
         use rustx::app_server::protocol::*;
-        use std::os::unix::fs::PermissionsExt;
+        use rustx_execution_protocol::transport::{read_record, write_record};
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt};
         let f = Fixture::new().await;
         let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
         grant_environment_roots(&f, std::slice::from_ref(&workspace));
@@ -1700,6 +2051,29 @@ async fn remote_execution_serves_session_reads_over_websocket() {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600, "bootstrap must be owner-only");
+
+        // The actual Client refuses an incompatible bootstrap before binding.
+        // The same reservation must remain usable by the current wire revision.
+        let mut obsolete: rustx_execution_protocol::Bootstrap =
+            read_record(&mut std::fs::File::open(&bundle).unwrap()).unwrap();
+        obsolete.version -= 1;
+        let stale_path = private.join("previous-version");
+        let mut stale = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&stale_path)
+            .unwrap();
+        write_record(&mut stale, &obsolete).unwrap();
+        drop(stale);
+        let refused = Command::from(staged_client_command(&stale_path, &workspace))
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported protocol version"));
 
         let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
         let mut execution = ReapChild(execution);
@@ -1985,7 +2359,8 @@ async fn assert_seeded_environment_tree(
 #[tokio::test]
 async fn execution_enrollment_precedes_client_and_workspace_configuration_readiness() {
     bounded(async {
-        use rustx::app_server::protocol::*;
+        use rustx::app_server::{protocol::*, session_deletion::SessionDeletionResult};
+        use std::path::Path;
         use rustx_execution_protocol::Bootstrap;
         use rustx_execution_protocol::transport::read_record;
         use std::os::unix::fs::PermissionsExt as _;
@@ -1994,6 +2369,10 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
         let workspace = f.root.path().join("a");
         grant_environment_roots(&f, std::slice::from_ref(&workspace));
         let project = workspace.join("rustx.toml");
+        let choice = workspace.join("selectable");
+        std::fs::create_dir(&choice).unwrap();
+        std::fs::write(choice.join("keep.txt"), b"keep after cancelling selection").unwrap();
+        std::os::unix::fs::symlink(f.root.path().join("b"), workspace.join("outside")).unwrap();
         std::fs::write(&project, b"[agent]\n").unwrap();
         std::fs::write(workspace.join("marker"), b"authorized").unwrap();
         let (_bin, rustx) = isolated_server_bin();
@@ -2050,22 +2429,73 @@ async fn execution_enrollment_precedes_client_and_workspace_configuration_readin
         );
         assert_eq!(diagnostics(&client).await.loaded, 0);
         std::fs::write(project, b"[broken").unwrap();
-        let _execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
+        let execution = ReapChild(staged_client_command(&bundle, &workspace).spawn().unwrap());
         await_admission(&client, &id, &workspace.join("marker")).await;
         assert!(matches!(
             result(&client, browse()).await,
             MethodResult::DirectoryPage { page }
-                if page.entries.iter().any(|entry| entry.file_name == "marker")
+                if page.entries.iter().any(|entry| entry.file_name == "selectable" && entry.metadata.is_directory)
         ));
+        let browse_path = |path: &Path| Method::FsReadDirectory {
+            session_id: id.clone(),
+            path: path.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        };
+        assert!(matches!(
+            result(&client, browse_path(&choice)).await,
+            MethodResult::DirectoryPage { page }
+                if page.next_offset.is_none() && page.entries.len() == 1
+                    && page.entries[0].file_name == "keep.txt"
+        ));
+        let Response::Failure(outside) =
+            rpc(&client, 43, browse_path(&f.root.path().join("b"))).await
+        else {
+            panic!("an absolute path outside the authorized root was accepted");
+        };
+        assert_eq!(outside.error.data, Some(ErrorData::EnvironmentUnauthorized));
+        let Response::Failure(linked) =
+            rpc(&client, 43, browse_path(&workspace.join("outside"))).await
+        else {
+            panic!("a directory symlink escaped the authorized root");
+        };
+        // openat with NOFOLLOW can report ELOOP or ENOTDIR, depending on the OS.
+        assert!(matches!(linked.error.data,
+            Some(ErrorData::EnvironmentUnauthorized | ErrorData::EnvironmentResourceNotFound)));
         assert!(matches!(
             rpc(&client, 44, Method::SessionAttach { thread_id }).await,
             Response::Failure(_)
         ));
         assert!(matches!(
-            result(&client, Method::SessionRead { session_id: id }).await,
+            result(&client, Method::SessionRead { session_id: id.clone() }).await,
             MethodResult::Session { .. }
         ));
         assert_eq!(diagnostics(&client).await.loaded, 0);
+        let MethodResult::Deletion {
+            result: SessionDeletionResult::Preview { preview },
+        } = result(&client, Method::SessionDeletePreview { session_id: id.clone() }).await
+        else {
+            panic!("selection cancellation needs a Session deletion preview");
+        };
+        assert!(matches!(
+            result(&client, Method::SessionDelete {
+                session_id: id.clone(),
+                expected_target_revision: preview.target_revision,
+            }).await,
+            MethodResult::Deletion { result: SessionDeletionResult::Deleted { session_id } }
+                if session_id == id
+        ));
+        assert_eq!(std::fs::read(choice.join("keep.txt")).unwrap(), b"keep after cancelling selection");
+        assert!(matches!(rpc(&client, 45, browse()).await, Response::Failure(_)));
+        assert!(matches!(
+            rpc(&client, 46, Method::SessionRead { session_id: id }).await,
+            Response::Failure(_)
+        ));
+        assert!(tokio::task::spawn_blocking(move || {
+            let mut execution = execution;
+            execution.0.wait().unwrap()
+        }).await.unwrap().success());
         client.close().await;
         terminate(&server);
         let output = server.wait_with_output().await.unwrap();
@@ -2483,9 +2913,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         let bin = bin_dir.path();
         // The staged sibling is the only trusted source for the real
         // Client — never a runtime build, PATH lookup, or fallback.
-        let staged = std::env::current_exe()
-            .unwrap()
-            .with_file_name("rustx-execution-client");
+        let staged = staged_execution_client();
         assert!(
             staged.is_file(),
             "staged Execution Client is absent: {staged:?}"
@@ -2892,6 +3320,376 @@ async fn json_response(socket: &mut Socket) -> serde_json::Value {
             return value;
         }
     }
+}
+
+async fn picker_request(
+    endpoint: &str,
+    token: &str,
+    record: serde_json::Value,
+) -> serde_json::Value {
+    let (mut socket, _) = tokio_tungstenite::connect_async(picker_upgrade(endpoint, token))
+        .await
+        .expect("authenticated Product Host picker");
+    socket
+        .send(Message::Text(record.to_string().into()))
+        .await
+        .unwrap();
+    let Message::Text(response) = socket.next().await.unwrap().unwrap() else {
+        panic!("picker response must be JSON");
+    };
+    serde_json::from_str(response.as_str()).unwrap()
+}
+
+fn picker_upgrade(
+    endpoint: &str,
+    token: &str,
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    let mut request = format!(
+        "{}/product-host/workspace-picker",
+        endpoint.trim_end_matches('/')
+    )
+    .into_client_request()
+    .unwrap();
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!("rustx.product-host.workspace-picker.v1, rustx-product-host.{token}")
+            .parse()
+            .unwrap(),
+    );
+    request
+}
+
+#[tokio::test]
+async fn installed_stdio_lists_local_workspace_skills_without_the_web_picker() {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::{Method, MethodResult, WorkspaceCatalogAuthority};
+    use rustx::local_runtime::{
+        configuration::settings::SourceTarget, skill_management::SkillContentKind,
+    };
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let workspace = fixture.root.path().join("a");
+        let skill = workspace.join(".agents/skills/local-guide");
+        std::fs::create_dir_all(&skill).unwrap();
+        let instructions = b"---\nname: local-guide\ndescription: Local Workspace guide.\n---\nPrivate Client instructions.\n";
+        std::fs::write(skill.join("SKILL.md"), instructions).unwrap();
+        let (_bin, executable) = isolated_server_pair();
+        let mut server = fixture.command_with_program(executable, "stdio")
+            .arg("--local-session-root").arg(&workspace).spawn().unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let MethodResult::SessionTransition { .. } = result(&client, Method::SessionCreate {
+            settings: SessionPersistentState::from_input(&SessionConfigInput::new(workspace.clone())),
+            input_references: None,
+            submission: None,
+            dynamic_tools: Vec::new(),
+        }).await else { panic!("installed stdio created its local Session") };
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        let markers = || std::fs::read_dir(&pending).unwrap().map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+            .collect::<Vec<_>>();
+        let before = markers();
+        assert_eq!(before.len(), 1);
+        let target = SourceTarget::Workspace { directory: workspace };
+        let MethodResult::Skills { page, authority } = result(&client, Method::SkillsList {
+            target: target.clone(), execution_session: None, offset: 0, limit: 32, expected_revision: None,
+        }).await else { panic!("unscoped Workspace Skills use a private Client") };
+        assert_eq!(authority, WorkspaceCatalogAuthority::Client);
+        let [skill] = page.data.as_slice() else { panic!("expected one Skill, got {page:?}") };
+        assert_eq!(skill.catalog.name, "local-guide");
+        assert!(skill.operation_revision.is_none());
+        let MethodResult::SkillContent { content } = result(&client, Method::SkillsRead {
+            target, execution_session: None, name: "local-guide".into(),
+            kind: SkillContentKind::Instructions, offset: 0, max_bytes: 1024, expected_revision: None,
+        }).await else { panic!("private Client read the Workspace instructions") };
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(content.data_base64).unwrap(), instructions);
+        assert_eq!(markers(), before, "both private Clients settled before the replies");
+        client.close().await;
+        detach_then_shutdown(&mut server).await;
+        assert!(server.wait().await.unwrap().success());
+        assert_eq!(markers(), Vec::<PathBuf>::new());
+    }).await;
+}
+
+#[tokio::test]
+async fn installed_workspace_picker_uses_a_private_client_and_reaps_before_registration() {
+    bounded(async {
+        use rustx_execution_server::RecoveryFence;
+        use serde_json::json;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        const SECRET: &str = "workspace-picker-private-authority-0123456789abcdef";
+        let fixture = Fixture::new().await;
+        let workspace = fixture.root.path().join("a");
+        let outside = fixture.root.path().join("b");
+        let child_dir = workspace.join("project");
+        std::fs::create_dir(&child_dir).unwrap();
+        std::fs::write(workspace.join("rustx.toml"), b"invalid [").unwrap();
+        std::fs::write(child_dir.join("original"), b"keep").unwrap();
+        symlink(&outside, workspace.join("alias")).unwrap();
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+
+        let (_bin, executable) = isolated_server_pair();
+        let token_file = fixture.root.path().join("picker-token");
+        std::fs::write(&token_file, SECRET).unwrap();
+        std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut server = fixture.command_with_program(executable, "ws://127.0.0.1:0")
+            .arg("--token-file").arg(fixture.root.path().join("token"))
+            .arg("--product-host-token-file").arg(token_file)
+            .arg("--local-workspace-picker")
+            .spawn().unwrap();
+        let (endpoint, _stderr) = websocket_startup(&mut server).await;
+        let error = tokio_tungstenite::connect_async(picker_upgrade(&endpoint, driver::TOKEN))
+            .await.unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+            panic!("ordinary App Server credentials cannot use the picker");
+        };
+        assert_eq!(response.status(), 401);
+
+        let probe = |directory: &std::path::Path| json!({"root": workspace, "directory": directory});
+        let result = picker_request(&endpoint, SECRET, probe(&workspace)).await;
+        assert_eq!(result["Ok"]["folders"], json!(["project"]), "{result}");
+        for path in [&outside, &workspace.join("alias")] {
+            assert!(picker_request(&endpoint, SECRET, probe(path)).await["Err"].is_string());
+        }
+        let runtime = fixture.root.path().join("runtime");
+        assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
+        let first = picker_request(&endpoint, SECRET, probe(&child_dir)).await;
+        let previous = first["Ok"]["revision"].as_str().expect("directory revision");
+        let original = workspace.join("old");
+        std::fs::rename(&child_dir, &original).unwrap();
+        std::fs::create_dir(&child_dir).unwrap();
+        let verify = |expected: &str| json!({"root": workspace, "directory": child_dir, "expected": expected});
+        let stale = picker_request(&endpoint, SECRET, verify(previous)).await;
+        assert_eq!(stale["Err"], "The folder changed. Browse to it again before adding it.");
+        let updated = picker_request(&endpoint, SECRET, probe(&child_dir)).await;
+        let current = updated["Ok"]["revision"].as_str().unwrap();
+        assert_ne!(current, previous);
+        let confirmation = picker_request(&endpoint, SECRET, verify(current)).await;
+        assert_eq!(confirmation["Ok"]["revision"], current);
+        assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
+        assert_eq!(std::fs::read(original.join("original")).unwrap(), b"keep");
+        let crowded = workspace.join("crowded");
+        std::fs::create_dir(&crowded).unwrap();
+        for index in 0..=rustx_execution_protocol::MAX_DIRECTORY_NAMES {
+            std::fs::create_dir(crowded.join(format!("folder-{index:04}"))).unwrap();
+        }
+        let overflow = picker_request(&endpoint, SECRET, probe(&crowded)).await;
+        assert!(overflow["Err"].as_str().is_some_and(|error| error.contains("limit 4096 directory entries")), "{overflow}");
+        assert!(!RecoveryFence::workspace_pending(&runtime, &workspace).unwrap());
+        terminate(&server);
+        assert!(server.wait().await.unwrap().success());
+        let catalog = SessionController::open(&runtime).unwrap();
+        assert_eq!(
+            catalog.list_sessions(None, 0, 16).await.unwrap().sessions.len(),
+            fixture.sessions.len()
+        );
+    }).await;
+}
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Check all catalog requests and cleanup against one installed Server.
+async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creating_a_session() {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+    use rustx::app_server::protocol::{Method, MethodResult, Response};
+    use rustx::local_runtime::{
+        configuration::settings::SourceTarget, mcp_probe::McpProbeOutcome,
+        workflow_tools::WorkflowToolSourceState,
+    };
+    use rustx::runtime::{identity::McpServerId, resources::SourceScope};
+    use rustx::tools::mcp::{catalog::CatalogKind, fixture::FixtureServer as McpFixture};
+    use rustx_execution_server::RecoveryFence;
+    use sha2::{Digest as _, Sha256};
+    use std::sync::atomic::Ordering;
+
+    bounded(Box::pin(async {
+        let fixture = Fixture::new().await;
+        let root = fixture.root.path().join("a");
+        let workspace = root.join("project");
+        let resources = workspace.join(".agents");
+        std::fs::create_dir_all(&resources).unwrap();
+        grant_environment_roots(&fixture, std::slice::from_ref(&root));
+        let runtime = fixture.root.path().join("runtime");
+        let pending = || RecoveryFence::workspace_pending(&runtime, &workspace).unwrap();
+        let mcp = McpFixture::default();
+        let list_calls = mcp.list_tools_calls.clone();
+        let catalog_reads = || list_calls.load(Ordering::Relaxed);
+        let (mcp_runtime, mcp_workspace) = (runtime.clone(), workspace.clone());
+        let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
+            move || {
+                assert!(
+                    RecoveryFence::workspace_pending(&mcp_runtime, &mcp_workspace).unwrap(),
+                    "the granted Workspace's private Client owns each MCP connection"
+                );
+                Ok(mcp.clone())
+            },
+            std::sync::Arc::default(),
+            StreamableHttpServerConfig::default().with_json_response(true),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (entered, mut first_request) = tokio::sync::watch::channel(false);
+        let (allow, release) = tokio::sync::watch::channel(false);
+        let slow = axum::Router::new()
+            .nest_service("/slow", service.clone())
+            .route_layer(axum::middleware::from_fn(
+                move |request, next: axum::middleware::Next| {
+                    let mut release = release.clone();
+                    entered.send_replace(true);
+                    async move {
+                        release.wait_for(|ready| *ready).await.unwrap();
+                        next.run(request).await
+                    }
+                },
+            ));
+        let _peer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            let router = axum::Router::new().nest_service("/mcp", service).merge(slow);
+            axum::serve(listener, router)
+                .await
+                .unwrap();
+        }));
+        let document = format!(
+            "[mcp_servers.inventory]\nurl = \"http://{address}/mcp\"\n\
+             [mcp_servers.slow_inventory]\nurl = \"http://{address}/slow\"\n"
+        );
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
+        let target = SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let (_bin, executable) = isolated_server_pair();
+        let mut server = fixture
+            .command_with_program(executable, "ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(fixture.root.path().join("token"))
+            .arg("--local-session-root")
+            .arg(&root)
+            .spawn()
+            .unwrap();
+        let (endpoint, _stderr) = websocket_startup(&mut server).await;
+        let client = driver::websocket(&endpoint).await;
+        initialize_client(&client).await;
+        assert!(!pending());
+
+        let id = McpServerId::new("inventory");
+        let MethodResult::McpProbe { result: probe } = result(
+            &client,
+            Method::McpProbe {
+                target: target.clone(),
+                execution_session: None,
+                id: id.clone(),
+                expected_revision: revision.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("MCP probe result")
+        };
+        assert_eq!(probe.outcome, McpProbeOutcome::Reachable);
+        assert!(
+            !pending(),
+            "the Client settles before Test Connection replies"
+        );
+
+        let MethodResult::McpProbe { result: catalog } = result(
+            &client,
+            Method::McpCatalog {
+                target: target.clone(),
+                execution_session: None,
+                id,
+                expected_revision: revision,
+                kind: CatalogKind::Tools,
+            },
+        )
+        .await
+        else {
+            panic!("MCP tools catalog")
+        };
+        assert_eq!(catalog.outcome, McpProbeOutcome::Reachable);
+        assert!(
+            catalog
+                .page
+                .unwrap()
+                .tools
+                .iter()
+                .any(|tool| tool.name == "echo")
+        );
+        assert_eq!(catalog_reads(), 2);
+        assert!(!pending());
+
+        let workflow_tools = |source, expected_scope| Method::WorkflowToolCatalog {
+            target: target.clone(),
+            execution_session: None,
+            source,
+            cursor: None,
+            expected_scope,
+        };
+        let MethodResult::WorkflowToolCatalog { catalog } =
+            result(&client, workflow_tools(None, None)).await
+        else {
+            panic!("Workflow sources")
+        };
+        assert_eq!(catalog.sources.len(), 2);
+        for (source, expected) in catalog.sources.iter().zip(["inventory", "slow_inventory"]) {
+            assert_eq!(source.source_id, expected);
+            assert_eq!(source.scope, SourceScope::Workspace);
+            assert_eq!(source.state, WorkflowToolSourceState::Pending);
+        }
+        assert_eq!(catalog_reads(), 2, "source discovery does not connect");
+        assert!(!pending());
+
+        let list = |id, name: &str| {
+            rpc(&client, id, workflow_tools(Some(name.into()), Some(SourceScope::Workspace)))
+        };
+        let mut first = Box::pin(list(101, "slow_inventory"));
+        tokio::select! {
+            reply = &mut first => panic!("slow source completed before reaching its peer: {reply:?}"),
+            entered = first_request.wait_for(|started| *started) => { entered.unwrap(); }
+        }
+        let mut second = Box::pin(list(102, "inventory"));
+        let queue_witness = rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT
+            + std::time::Duration::from_secs(1);
+        assert!(
+            tokio::time::timeout(queue_witness, &mut second).await.is_err(),
+            "the second request must stay queued past the former five-second cutoff"
+        );
+        assert!(pending());
+        assert_eq!(catalog_reads(), 2, "the queued source has not connected");
+        allow.send_replace(true);
+        let (first, second) = tokio::join!(first, second);
+        for (reply, expected) in [(first, "slow_inventory"), (second, "inventory")] {
+            let Response::Success(response) = reply else { panic!("{expected} failed: {reply:?}") };
+            let MethodResult::WorkflowToolCatalog { catalog } = response.result else {
+                panic!("Workflow tools for {expected}");
+            };
+            let [source] = catalog.sources.as_slice() else {
+                panic!("one listed source: {catalog:?}")
+            };
+            assert_eq!(source.source_id, expected);
+            assert_eq!(source.state, WorkflowToolSourceState::Listed);
+            assert_eq!(source.scope, SourceScope::Workspace);
+            assert!(source.tools.iter().any(|tool| tool.name == "echo"));
+        }
+        assert_eq!(catalog_reads(), 4);
+        assert!(!pending());
+
+        client.close().await;
+        terminate(&server);
+        assert!(server.wait().await.unwrap().success());
+        let sessions = SessionController::open(&runtime).unwrap();
+        let catalog = sessions.list_sessions(None, 0, 16).await.unwrap();
+        assert_eq!(catalog.sessions.len(), fixture.sessions.len());
+        assert!(
+            catalog
+                .sessions
+                .iter()
+                .all(|session| session.cwd != workspace)
+        );
+    }))
+    .await;
 }
 
 #[tokio::test]
@@ -3725,9 +4523,9 @@ async fn start_turn(
     client: &driver::Driver,
     target: &rustx::app_server::protocol::AttachmentTarget,
     text: &str,
-) {
+) -> rustx::runtime::identity::AttemptId {
     use rustx::app_server::protocol::*;
-    result(
+    let MethodResult::TurnInputAccepted { turn_id, .. } = result(
         client,
         Method::TurnStart {
             input_id: uuid::Uuid::new_v4().to_string(),
@@ -3745,7 +4543,11 @@ async fn start_turn(
             .collect(),
         },
     )
-    .await;
+    .await
+    else {
+        panic!("turn admission")
+    };
+    turn_id
 }
 
 fn use_emulator(f: &Fixture, provider: &provider_emulator::ProviderEmulator) {
@@ -3811,8 +4613,10 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         let [a, b]: [AttachmentTarget; 2] = targets.try_into().unwrap();
         start_turn(&client, &a, "tui multi-session: session A long task").await;
         provider.await_gate("session-a-holding").await;
+        let b_started = std::time::Instant::now();
         start_turn(&client, &b, "tui multi-session: session B quick task").await;
         let b_done = settled(&client, &b).await;
+        let b_elapsed = b_started.elapsed();
         assert_eq!(provider.requests().await.len(), 2);
         assert!(b_done["effective_plugins"]["todo"].is_null());
         // Drain through B's authoritative settlement publication. Every event
@@ -3901,6 +4705,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         while diagnostics(&observer).await.external_attachments != 0 {
             tokio::task::yield_now().await;
         }
+        let a_released = std::time::Instant::now();
         provider.release_gate("session-a-holding").await;
         while diagnostics(&observer).await.active_roots != 0 {
             tokio::task::yield_now().await;
@@ -3913,6 +4718,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         assert_eq!(resumed.conversation_id, a.conversation_id);
         assert_ne!(resumed.attachment_id, a.attachment_id);
         let a_done = settled(&reconnected, &resumed).await;
+        let a_elapsed = a_released.elapsed();
         assert_eq!(a_done["attempt"]["phase"]["outcome"]["type"], "completed");
         assert!(!a_done["effective_plugins"]["todo"].is_null());
         let history = a_done["messages"].to_string();
@@ -3927,6 +4733,17 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         );
         assert!(!a_done["transcript"].to_string().contains("cancelled"));
         assert_eq!(provider.requests().await.len(), 2, "no transport retry");
+        if std::env::var_os("RUSTX_PARALLEL_SESSION_MEASUREMENT").is_some() {
+            println!(
+                "PARALLEL_SESSION_MEASUREMENT {}",
+                serde_json::json!({
+                    "sessions": 2,
+                    "model_requests": 2,
+                    "foreground_settlement_ms": b_elapsed.as_secs_f64() * 1000.0,
+                    "detached_release_through_readback_ms": a_elapsed.as_secs_f64() * 1000.0,
+                })
+            );
+        }
         for (target, cwd) in [(&resumed, "a"), (&b, "b")] {
             let MethodResult::Settings { projection, .. } = result(
                 &reconnected,
@@ -4312,19 +5129,116 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
     })).await;
 }
 
+pub(super) fn seed_sealed_archive_image(
+    access: &rustx::local_runtime::session_controller::SessionAccess,
+) -> (rustx::runtime::ArtifactId, Vec<u8>) {
+    use base64::Engine as _;
+    use rustx::durable::SqliteConversationStore;
+    use rustx::message::{
+        content::ImageReference,
+        types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock},
+    };
+    use rustx::runtime::identity::MessageId;
+    use rustx::tools::artifacts::ArtifactStore;
+    use std::io::Write as _;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=").unwrap();
+    let conversation = access.node.conversation_id.clone();
+    let artifacts =
+        ArtifactStore::new(conversation.clone(), access.database_path.parent().unwrap()).unwrap();
+    let artifact = artifacts.create_artifact().unwrap();
+    let mut writer = artifacts.open_writer(&artifact).unwrap();
+    writer.write_all(&bytes).unwrap();
+    writer.finish().unwrap();
+    let store = SqliteConversationStore::open(conversation, &access.database_path).unwrap();
+    store
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("cold-archive-artifact"),
+            content: vec![AssistantContentBlock::Image(ImageReference {
+                artifact_id: artifact.clone(),
+                alt: Some("sealed archive image".to_owned()),
+            })],
+        }))
+        .unwrap();
+    (artifact, bytes)
+}
+
 #[tokio::test]
 async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachment() {
     use app_server_conformance::AppServerConformanceDriver;
+    use base64::Engine as _;
     use rustx::app_server::protocol::*;
-    use std::io::Read;
+    use std::io::Read as _;
     bounded(async {
         let f = Fixture::new().await;
-        let mut child = f.command("stdio").spawn().unwrap();
+        let (conversation_id, artifact, bytes) = {
+            let controller = SessionController::open(&f.root.path().join("runtime")).unwrap();
+            let access = controller.acquire_session(&f.sessions[0], None).await.unwrap();
+            let (artifact, bytes) = seed_sealed_archive_image(&access);
+            (access.node.conversation_id.clone(), artifact, bytes)
+        };
+        let workspace = f.root.path().join("a");
+        std::fs::rename(&workspace, f.root.path().join("retired")).unwrap();
+        let (bin, rustx) = isolated_server_bin();
+        let mut child = f.command_with_program(rustx, "stdio")
+            .env("PATH", bin.path())
+            .spawn().unwrap();
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         let initialized = client
             .request(serde_json::from_str(INITIALIZE).unwrap())
             .await;
         assert!(matches!(initialized, Response::Success(_)));
+        let MethodResult::SessionHistory { conversation_id: owner, window } = result(
+            &client,
+            Method::SessionHistory {
+                session_id: f.sessions[0].clone(),
+                node_id: None,
+                at: rustx::durable::reading::ConversationWindowAt::Latest,
+                limit: 8,
+            },
+        ).await else { panic!("cold history") };
+        assert_eq!(owner, conversation_id);
+        let cut = window.page.source_cut.expect("cold history source cut");
+        let bindings: Vec<_> = window.page.content.iter().filter(|binding| {
+            binding.content_ref.representation == rustx::observation::content::ContentRepresentation::BinaryBytes
+        }).collect();
+        let [binding] = bindings.as_slice() else { panic!("one committed binary binding") };
+        let reference = binding.content_ref.as_ref();
+        assert_eq!(reference.conversation_id, conversation_id);
+        let read = |session_id, offset| Method::SessionHistoryContentRead {
+            session_id,
+            node_id: None,
+            cut: cut.clone(),
+            content_ref: reference.clone(),
+            offset,
+            max_bytes: 32,
+        };
+        assert!(matches!(
+            rpc(&client, 3, read(f.sessions[1].clone(), 0)).await,
+            Response::Failure(failure) if matches!(failure.error.data, Some(ErrorData::ReadCutExpired))
+        ));
+        let mut downloaded = Vec::new();
+        let mut offset = 0;
+        loop {
+            let MethodResult::ContentChunk { chunk } = result(&client, read(f.sessions[0].clone(), offset)).await
+            else { panic!("cold binary range") };
+            let decoded = base64::engine::general_purpose::STANDARD.decode(&chunk.data_base64).unwrap();
+            assert_eq!(&chunk.content_ref, reference);
+            assert_eq!(chunk.offset, offset);
+            assert!(!decoded.is_empty() && decoded.len() <= 32);
+            downloaded.extend_from_slice(&decoded);
+            assert_eq!(chunk.end_offset, downloaded.len() as u64);
+            if let Some(next) = chunk.next_offset {
+                assert_eq!(next, chunk.end_offset);
+                offset = next;
+            } else {
+                assert!(chunk.complete);
+                break;
+            }
+        }
+        assert_eq!(downloaded, bytes);
+        assert_eq!(diagnostics(&client).await.loaded, 0);
         let response = client
             .request(Request {
                 jsonrpc: JsonRpcVersion::V2,
@@ -4345,8 +5259,8 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
         let response = reqwest::get(&url).await.unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.headers()["content-type"], "application/zip");
-        let bytes = response.bytes().await.unwrap();
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let archive_bytes = response.bytes().await.unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive_bytes)).unwrap();
         let mut manifest = String::new();
         zip.by_name("manifest.json")
             .unwrap()
@@ -4366,6 +5280,18 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
         let conversation = manifest["conversations"][0]["conversation_id"]
             .as_str()
             .unwrap();
+        assert_eq!(conversation, conversation_id.as_str());
+        let entry = format!("artifacts/{conversation}/{artifact}/content");
+        let mut stored = Vec::new();
+        zip.by_name(&entry).unwrap().read_to_end(&mut stored).unwrap();
+        assert_eq!(stored, bytes);
+        assert_eq!(manifest["artifacts"].as_array().unwrap().len(), 1);
+        assert_eq!(manifest["artifacts"][0]["conversation_id"], conversation);
+        assert_eq!(manifest["artifacts"][0]["artifact_id"], artifact.as_str());
+        assert_eq!(manifest["artifacts"][0]["entry"], entry);
+        assert_eq!(manifest["artifacts"][0]["bytes"], bytes.len());
+        assert!(!workspace.exists());
+        assert_standalone_product_files(bin.path());
         let mut auxiliary_audit = String::new();
         zip.by_name(&format!("sessions/{conversation}/auxiliary_audit.jsonl"))
             .unwrap()
@@ -5756,6 +6682,119 @@ fn assert_no_local_recovery_owner(pending: &std::path::Path) {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn local_client_setup_failure_settles_before_retrying_the_same_session() {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::{Method, MethodResult};
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let companion = bin.path().join("interactive-supervisor");
+        std::fs::rename(&companion, bin.path().join("domain-real")).unwrap();
+        std::fs::write(
+            &companion,
+            r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+if [ -e "$bin/no-bwrap" ] && [ "$1" = client-domain ]; then
+    export TMPDIR="$bin/scratch"
+    # Hide Bubblewrap only for the real guardian. The Server and the retry
+    # keep their original filesystem, including the original executable.
+    /usr/bin/bwrap --dev-bind / / --tmpfs /usr/bin -- "$bin/domain-real" "$@" > "$bin/report"
+    cp "$2" "$bin/proof"
+    cp "${2%.proof}.authority" "$bin/authority"
+    cat "$bin/report"
+    exit
+fi
+exec "$bin/domain-real" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&companion, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let no_bwrap = bin.path().join("no-bwrap");
+        std::fs::write(&no_bwrap, b"").unwrap();
+        let scratch = bin.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("original-input");
+        std::fs::write(&probe, b"original bytes").unwrap();
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        let failed = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .output()
+            .await
+            .unwrap();
+        assert!(!failed.status.success());
+        let diagnosis = String::from_utf8(failed.stderr).unwrap();
+        assert!(
+            diagnosis.contains("Client namespace setup failed: cannot start /usr/bin/bwrap"),
+            "{diagnosis}"
+        );
+        assert!(
+            !diagnosis.contains("settlement is unconfirmed"),
+            "{diagnosis}"
+        );
+        let report = std::fs::read_to_string(bin.path().join("report")).unwrap();
+        assert!(
+            report.starts_with("not-launched cannot start /usr/bin/bwrap:"),
+            "{report}"
+        );
+        assert_eq!(report.lines().count(), 1);
+        let proof = std::fs::read(bin.path().join("proof")).unwrap();
+        assert_eq!(proof.len(), 32);
+        let published: [u8; 32] = Sha256::digest(&proof).into();
+        assert_eq!(
+            std::fs::read(bin.path().join("authority")).unwrap(),
+            published
+        );
+        assert!(std::fs::read_dir(&scratch).unwrap().next().is_none());
+        assert_no_local_recovery_owner(&pending);
+
+        std::fs::remove_file(no_bwrap).unwrap();
+        let mut replacement =
+            local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+                .spawn()
+                .unwrap();
+        let current = driver::jsonl(
+            replacement.stdout.take().unwrap(),
+            replacement.stdin.take().unwrap(),
+        );
+        initialize_client(&current).await;
+        await_admission(&current, session, &probe).await;
+        let MethodResult::FileChunk { chunk } = result(
+            &current,
+            Method::FsReadFile {
+                session_id: session.clone(),
+                path: probe.display().to_string(),
+                offset: 0,
+                max_bytes: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("the original Session can execute after its setup is repaired")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap(),
+            b"original bytes"
+        );
+        current.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+        assert_no_local_recovery_owner(&pending);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
     use rustx::app_server::{
         command::ExecParams,
@@ -6022,8 +7061,8 @@ os.execv({client:?}, [{client:?}, *sys.argv[1:]])
     .await;
 }
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One original physical domain across both admission paths.
 async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
     use rustx::app_server::protocol::{ErrorData, Method, MethodResult, Response};
     use rustx::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
@@ -6034,7 +7073,7 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
     use rustx::message::{content::TextBlock, types::UserContentBlock};
     use sha2::{Digest as _, Sha256};
     use std::os::unix::fs::DirBuilderExt as _;
-    bounded(async {
+    Box::pin(bounded(async {
         let fixture = Fixture::new().await;
         let (_bin, executable) = isolated_server_pair();
         let session = &fixture.sessions[0];
@@ -6166,6 +7205,126 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             "{diagnostic}"
         );
 
+        let document = format!("[mcp_servers.decoy]\nurl = {:?}\n", provider.url("/mcp"));
+        let resources = workspace.join(".agents");
+        std::fs::create_dir(&resources).unwrap();
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
+        let target = rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let catalogs = |execution_session: Option<SessionId>| {
+            let id = rustx::runtime::identity::McpServerId::new("decoy");
+            [
+                Method::WorkflowToolCatalog {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    source: None,
+                    cursor: None,
+                    expected_scope: None,
+                },
+                Method::McpProbe {
+                    target: target.clone(),
+                    execution_session: execution_session.clone(),
+                    id: id.clone(),
+                    expected_revision: revision.clone(),
+                },
+                Method::McpCatalog {
+                    target: target.clone(),
+                    execution_session,
+                    id,
+                    expected_revision: revision.clone(),
+                    kind: rustx::tools::mcp::catalog::CatalogKind::Tools,
+                },
+            ]
+        };
+        let mut composed = Command::new(&executable)
+            .current_dir(fixture.root.path())
+            .env_clear()
+            .env("HOME", fixture.root.path().join("home"))
+            .env("PATH", "/usr/bin:/bin")
+            .env("TEST_KEY", "fixture")
+            .args(["app-server", "--listen", "stdio", "--runtime-root"])
+            .arg(fixture.root.path().join("runtime"))
+            .arg("--local-session-root")
+            .arg(&workspace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let composed_driver = driver::jsonl(
+            composed.stdout.take().unwrap(),
+            composed.stdin.take().unwrap(),
+        );
+        initialize_client(&composed_driver).await;
+        assert_eq!(
+            serde_json::to_value(result(&composed_driver, history()).await).unwrap(),
+            history_before
+        );
+        let thread_id = app_server_conformance::thread_id(&composed_driver, session.clone()).await;
+        let Response::Failure(refused) =
+            rpc(&composed_driver, 71, Method::SessionAttach { thread_id }).await
+        else {
+            panic!("installed live composition replaced an unsettled Client");
+        };
+        assert!(
+            refused
+                .error
+                .message
+                .contains("requires physical settlement"),
+            "{refused:?}"
+        );
+        assert!(execution.0.try_wait().unwrap().is_none());
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        // Physical Client death without a settlement grant is still insufficient.
+        execution.0.kill().unwrap();
+        let death = execution.0.wait().unwrap();
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&death),
+            Some(libc::SIGKILL)
+        );
+        let pending = || {
+            rustx_execution_server::RecoveryFence::workspace_pending(
+                &fixture.root.path().join("runtime"),
+                &workspace,
+            )
+            .unwrap()
+        };
+        assert!(pending());
+        for method in catalogs(None)
+            .into_iter()
+            .chain([Method::WorkflowToolCatalog {
+                target: target.clone(),
+                execution_session: None,
+                source: Some("decoy".into()),
+                cursor: None,
+                expected_scope: None,
+            }])
+        {
+            let Response::Failure(refused) = rpc(&composed_driver, 72, method).await else {
+                panic!("the local Workspace grant cannot bypass its pending physical owner");
+            };
+            assert_eq!(refused.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
+        assert!(pending());
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        composed_driver.close().await;
+        detach_then_shutdown(&mut composed).await;
+        assert!(composed.wait().await.unwrap().success());
+
+        let rejected_after_death =
+            local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+                .output()
+                .await
+                .unwrap();
+        assert!(!rejected_after_death.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected_after_death.stderr)
+                .contains("previous Session execution domain requires physical settlement")
+        );
+
         let other = &fixture.sessions[1];
         let mut replacement =
             local_exec_command(&executable, &fixture, other.as_str(), &other_workspace)
@@ -6182,11 +7341,6 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         assert!(matches!(cold_history, MethodResult::SessionHistory { .. }));
         assert_eq!(serde_json::to_value(cold_history).unwrap(), history_before);
 
-        let document = format!("[mcp_servers.decoy]\nurl = {:?}\n", provider.url("/mcp"));
-        let resources = workspace.join(".agents");
-        std::fs::create_dir(&resources).unwrap();
-        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
-        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
         let MethodResult::SessionTransition {
             session: alternate, ..
         } = result(
@@ -6204,33 +7358,8 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         else {
             panic!("another unbound Session in the same Workspace");
         };
-        let target = rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
-            directory: workspace.clone(),
-        };
         for execution_session in [Some(session.clone()), Some(alternate.id), None] {
-            let id = rustx::runtime::identity::McpServerId::new("decoy");
-            for method in [
-                Method::WorkflowToolCatalog {
-                    target: target.clone(),
-                    execution_session: execution_session.clone(),
-                    source: None,
-                    cursor: None,
-                    expected_scope: None,
-                },
-                Method::McpProbe {
-                    target: target.clone(),
-                    execution_session: execution_session.clone(),
-                    id: id.clone(),
-                    expected_revision: revision.clone(),
-                },
-                Method::McpCatalog {
-                    target: target.clone(),
-                    execution_session: execution_session.clone(),
-                    id,
-                    expected_revision: revision.clone(),
-                    kind: rustx::tools::mcp::catalog::CatalogKind::Tools,
-                },
-            ] {
+            for method in catalogs(execution_session) {
                 let Response::Failure(refused) = rpc(&driver, 80, method).await else {
                     panic!("a prior physical owner bars the Server-authored Workspace catalog");
                 };
@@ -6283,7 +7412,7 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         driver.close().await;
         detach_then_shutdown(&mut replacement).await;
         assert!(replacement.wait().await.unwrap().success());
-    })
+    }))
     .await;
 }
 
@@ -6411,7 +7540,6 @@ async fn trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session() 
     }).await;
 }
 
-#[cfg(target_os = "linux")]
 async fn assert_offline_session_deletion(driver: &driver::Driver, session: &SessionId) {
     use rustx::app_server::{
         protocol::{Method, MethodResult},

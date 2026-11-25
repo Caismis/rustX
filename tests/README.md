@@ -1,5 +1,9 @@
 # rustX test architecture
 
+For executable and asset checks against extracted release archives, see
+[Verifying extracted packages](../docs/installation.md#verifying-extracted-packages).
+The installed replay uses this workspace's existing process test harness.
+
 rustX tests are organized by the runtime layer that **owns the invariant**
 under test, never by the issue or milestone that introduced them. Every
 important architectural invariant has exactly one authoritative owner suite;

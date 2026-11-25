@@ -49,6 +49,8 @@ struct HostInner {
     #[cfg(test)]
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
+    workspace_picker_enabled: AtomicBool,
+    local_workspace_probes: Arc<tokio::sync::Semaphore>,
     revocations: Arc<super::delivery_access::Revocations>,
     authority_id: String,
     manager: SessionRuntimeManager,
@@ -185,6 +187,22 @@ impl AppServerHost {
         self.0.file_read_probe.authenticating.enter();
         authority.as_ref()?.authenticate(offered)
     }
+
+    pub(crate) fn enable_workspace_picker(&self) {
+        self.0
+            .workspace_picker_enabled
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn workspace_picker_enabled(&self) -> bool {
+        self.0.workspace_picker_enabled.load(Ordering::Acquire)
+    }
+
+    // Browsing and catalog reads use the same private Client capacity. Only
+    // the WebSocket picker route needs the separate Product Host switch.
+    pub(crate) fn local_workspace_probes(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.0.local_workspace_probes
+    }
     /// One authority transition of a credential slot, linearized in the
     /// exclusive side of [`Self::revocations`] and the slot's own mutex.
     ///
@@ -298,6 +316,8 @@ impl AppServerHost {
             )),
             file_routes: Mutex::default(),
             file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
+            workspace_picker_enabled: AtomicBool::new(false),
+            local_workspace_probes: Arc::new(tokio::sync::Semaphore::new(1)),
             unconfirmed_file_observer: AtomicBool::new(false),
         }))
     }

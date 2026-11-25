@@ -77,7 +77,7 @@ impl ChildExecutionGrant {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             connection_released: tokio::sync::Notify::new(),
             accept_stop: tokio_util::sync::CancellationToken::new(),
-            settlement: Mutex::new(super::Settlement::Open),
+            settlement: Mutex::default(),
             settlement_changed: std::sync::Condvar::new(),
             #[cfg(test)]
             settlement_joined: tokio::sync::Notify::new(),

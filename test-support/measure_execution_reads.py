@@ -1,12 +1,12 @@
-"""Linux read, search and write wire probe. Run with the absolute
-staged Client binary.
+"""Linux file I/O and cancellation capacity wire probe. Run with the
+absolute staged Client binary.
 
 The probe acts as a measuring UDS peer. Its footprint is separate from the
 product Agent Server measurements. Each
 sample starts a new peer process and Client; fixtures are warm-cache. rchar
 counts process-wide logical reads, not disk traffic or source-only reads.
 
-The current results carry `"probe": "paired-v7"`. The data `Hello` receives
+The current results carry `"probe": "paired-v8"`. The data `Hello` receives
 a fresh 256-bit pairing challenge, and the independent `ControlHello` must
 echo it. The Client paces `ControlPoll` and `ControlTurn` for the whole
 session. Older single-lane measurements exclude the control traffic.
@@ -16,6 +16,7 @@ process. Report observed rchar and the expected source bytes separately.
 
 import argparse
 import base64
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -33,9 +34,10 @@ import time
 FRAME = 1024 * 1024
 WIDTH = 128
 MARKER = 'needle:"\\\t' + chr(0x96EA)
-PROBE_REVISION = "paired-v7"
-WIRE_VERSION = 7
+PROBE_REVISION = "paired-v8"
+WIRE_VERSION = 8
 WRITE_CHUNK_BYTES = 64 * 1024
+CANCELLATION_TOMBSTONES = 4096
 
 
 def pack(value):
@@ -69,18 +71,21 @@ def counter(pid, filename, name):
 class PollResponder:
     """The Server side of the paired control lane, on its own thread.
 
-    Every `ControlPoll` is answered with the `ControlTurn` echoing its
-    sequence and fresh health nonce and no request — exactly what an idle
-    paired lane exchanges. The thread counts the turn bytes it sends as
-    wire traffic, not as Client-side reads. Socket
-    deadlines bound every frame; `close()` shuts the lane and `join()`
-    reaps the thread, both bounded.
+    Each turn echoes its poll's sequence and health nonce. The peer
+    exchanges idle turns until the cancellation probe or shutdown
+    supplies a request. It counts serialized bytes on the control lane
+    separately from Client process I/O. Socket deadlines bound each
+    frame.
     """
 
     def __init__(self, conn):
         self.conn = conn
         self.lock = threading.Lock()
         self.bytes_sent = 0
+        self.bytes_received = 0
+        self.cancel_plan = deque()
+        self.cancel_signal = threading.Event()
+        self.cancel_error = None
         self.revoking = threading.Event()
         self.revoked = threading.Event()
         self.thread = threading.Thread(target=self._serve, daemon=True)
@@ -88,19 +93,45 @@ class PollResponder:
     def start(self):
         self.thread.start()
 
-    def sent(self):
+    def traffic(self):
         with self.lock:
-            return self.bytes_sent
+            return self.bytes_sent, self.bytes_received
+
+    def start_cancellation_capacity(self, identity, count):
+        def key():
+            return dict(incarnation=identity["server_incarnation"], session=identity["session"],
+                        instance=identity["instance"], generation=identity["generation"],
+                        operation=str(uuid.uuid4()))
+
+        first = key()
+        admitted = [first] + [key() for _ in range(count - 1)]
+        self.cancel_plan = deque([(entry, "cancelled-before-start") for entry in admitted]
+                                 + [(key(), "unknown"), (first, "already-settled")])
+        return first
 
     def _serve(self):
+        pending = None
         try:
             while True:
-                poll, _ = receive(self.conn)
+                poll, received = receive(self.conn)
+                with self.lock:
+                    self.bytes_received += received
+                if pending is not None:
+                    key, disposition = pending
+                    expected = {"process-cancelled": {"key": key, "disposition": disposition}}
+                    assert poll["receipt"] == expected, poll["receipt"]
+                    pending = None
+                    if not self.cancel_plan:
+                        self.cancel_signal.set()
                 settled = poll["receipt"] == "revoked"
+                request = "revoke" if self.revoking.is_set() and not settled else None
+                if request is None and self.cancel_plan:
+                    pending = self.cancel_plan.popleft()
+                    request = {"cancel-process": {"key": pending[0]}}
                 turn = {
                     "sequence": poll["sequence"],
                     "health": poll["health"],
-                    "request": "revoke" if self.revoking.is_set() and not settled else None,
+                    "request": request,
                 }
                 frame = pack(turn)
                 self.conn.sendall(frame)
@@ -109,6 +140,9 @@ class PollResponder:
                 if settled:
                     self.revoked.set()
                     return
+        except AssertionError as error:
+            self.cancel_error = error
+            self.cancel_signal.set()
         except (EOFError, OSError, socket.timeout):
             return
 
@@ -169,7 +203,7 @@ def sample(client, size, operation):
         workspace.mkdir()
         rows, rem = divmod(size, WIDTH)
         source_size = size + len(MARKER.encode())
-        if operation != "write":
+        if operation in ("lines", "grep"):
             assert not rem and rows % 512 == 0
             with (workspace / "input").open("wb") as out:
                 block = (b"x" * (WIDTH - 1) + b"\n") * 512
@@ -233,9 +267,22 @@ def sample(client, size, operation):
                                 context=0, limit="1")})}
                         before = counter(proc.pid, "io", "rchar")
                         writes_before = counter(proc.pid, "io", "wchar")
-                        control_before = responder.sent()
+                        control_tx_before, control_rx_before = responder.traffic()
                         start = time.perf_counter_ns()
-                        if operation == "write":
+                        if operation == "tombstones":
+                            key = responder.start_cancellation_capacity(server_identity, size)
+                            assert responder.cancel_signal.wait(15), "Client cancellation receipts did not settle"
+                            if responder.cancel_error is not None:
+                                raise responder.cancel_error
+                            frame = pack({"process": {"start": {"key": key}}})
+                            conn.sendall(frame)
+                            reply, rx = receive(conn)
+                            terminal = reply["process"]["state"]["state"]["settled"]
+                            assert terminal["disposition"] == "cancelled"
+                            assert terminal["physical_settlement_proven"]
+                            assert terminal["stdout_total"] == terminal["stderr_total"] == "0"
+                            tx, rpc, selected_bytes, scan_bytes = len(frame), 1, 0, 0
+                        elif operation == "write":
                             tx, rx, rpc = write_sample(conn, workspace, size)
                             selected_bytes = size
                             scan_bytes = 0
@@ -260,18 +307,26 @@ def sample(client, size, operation):
                         elapsed = time.perf_counter_ns() - start
                         read_bytes = counter(proc.pid, "io", "rchar") - before
                         written_bytes = counter(proc.pid, "io", "wchar") - writes_before
-                        control_tx = responder.sent() - control_before
+                        control_tx, control_rx = responder.traffic()
                         assert read_bytes >= scan_bytes, (read_bytes, scan_bytes)
                         result = dict(operation=operation,
-                                      source_bytes=size if operation == "write" else source_size,
+                                      source_bytes=(0 if operation == "tombstones" else
+                                                    size if operation == "write" else source_size),
                                       rpc=rpc, probe=PROBE_REVISION,
                                       selected_bytes=selected_bytes, tx=tx, rx=rx,
                                       client_process_rchar=read_bytes, client_process_wchar=written_bytes,
-                                      control_tx_sample=control_tx,
+                                      control_tx_sample=control_tx - control_tx_before,
                                       scan_bytes_by_algorithm=scan_bytes,
                                       startup_ns=startup_ns, elapsed_ns=elapsed,
                                       client_hwm_kib=counter(proc.pid, "status", "VmHWM"),
                                       probe_hwm_kib=counter("self", "status", "VmHWM"))
+                        if operation == "tombstones":
+                            result.update(
+                                control_rx_sample=control_rx - control_rx_before,
+                                admitted_tombstones=size,
+                                control_commands=size + 2,
+                                cancelled_start_replays=1,
+                            )
                         if operation == "write":
                             with (workspace / "output").open("rb") as output:
                                 for offset in range(0, size, WRITE_CHUNK_BYTES):
@@ -300,10 +355,12 @@ def sample(client, size, operation):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("client", type=Path)
-    parser.add_argument("--one", choices=("lines", "grep", "write"))
+    parser.add_argument("--one", choices=("lines", "grep", "write", "tombstones"))
     parser.add_argument("--size", type=int)
     args = parser.parse_args()
     if args.one:
+        if args.one == "tombstones" and args.size != CANCELLATION_TOMBSTONES:
+            parser.error(f"--one tombstones requires --size {CANCELLATION_TOMBSTONES}")
         if args.size is None:
             parser.error("--one requires --size")
         print(json.dumps(sample(args.client.resolve(strict=True), args.size, args.one)))

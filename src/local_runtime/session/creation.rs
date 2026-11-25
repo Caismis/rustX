@@ -348,9 +348,19 @@ impl SessionCatalog {
     pub(super) fn allocate_ids(
         &self,
     ) -> Result<(SessionId, SessionNodeId, ConversationId), SessionError> {
+        self.allocate_ids_for(None)
+    }
+
+    pub(super) fn allocate_ids_for(
+        &self,
+        session: Option<&SessionId>,
+    ) -> Result<(SessionId, SessionNodeId, ConversationId), SessionError> {
         for _ in 0..16 {
-            let session_id = SessionId::from_uuid(self.identities.next_uuid())
-                .map_err(|detail| SessionError::Catalog { detail })?;
+            let session_id = match session {
+                Some(id) => id.clone(),
+                None => SessionId::from_uuid(self.identities.next_uuid())
+                    .map_err(|detail| SessionError::Catalog { detail })?,
+            };
             let node_id = SessionNodeId::from_uuid(self.identities.next_uuid())
                 .map_err(|detail| SessionError::Catalog { detail })?;
             let uuid = self.identities.next_uuid();

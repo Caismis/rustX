@@ -250,7 +250,7 @@ impl ChangeRecording {
         released
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn hold_final_observation(
         &self,
     ) -> (

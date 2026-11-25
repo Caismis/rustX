@@ -102,7 +102,7 @@ rustx app-server \
   --execution-session ses_01900000-0000-7000-8000-000000000001 \
   --execution-ws-listen 127.0.0.1:0 \
   --execution-bootstrap-out /private/dir/bootstrap
-# Optionally add --execution-public-url wss://IP:PORT/execution/v8 when a
+# Optionally add --execution-public-url wss://IP:PORT/execution/v9 when a
 # trusted ingress terminates TLS and forwards to the loopback listener.
 
 # On the Client host, out of band:
@@ -119,7 +119,7 @@ in the `0600` bundle. The Client uses that certificate as its only trust
 anchor. With `--execution-public-url`, the operator provides and secures
 the ingress and its cleartext loopback hop. The Client may use
 `--tls-ca-file` for that ingress. It validates the numeric IP and the
-exact `/execution/v8` path and completes TLS before sending a credential.
+exact `/execution/v9` path and completes TLS before sending a credential.
 
 
 **TUI** — existing TUI composition root and `AppServerHost.spawnLocal`:
@@ -180,18 +180,15 @@ Select Remote explicitly and enter its endpoint and transport token there. Faile
 local startup never chooses Remote; failed Remote never chooses Local. Remote
 attachment grants no Product Host filesystem authority. See [connection security](web-console/CONNECTION.md).
 
-The Product Host owns Workspace navigation and authorization. **Add Workspace**
-opens the Host's system folder chooser on Linux with Zenity or on macOS in an
-Aqua desktop session. When a desktop chooser is unavailable, the Web UI lets
-you browse the configured roots on the Host and explicitly add a subfolder.
-The Composer's **Add Workspace** entry uses the same picker.
+The Product Host owns Workspace navigation and registration. **Add Workspace**
+in the sidebar or Composer lists only operator-configured roots. To browse
+descendants, give the App Server corresponding `app_server.environment_roots`.
+The launcher enables the private, loopback-only Workspace picker over the
+Product Host credential. Each query admits a minimal Session on the sibling
+Execution Client. It verifies the Client directory revision before registering
+a folder and settles the Client before responding. Closing the dialog cancels
+the query. Browsing opens no Agent, provider or Managed Python runtime.
 
-The dev launcher enables both pickers. An independently managed Product Host
-can opt in with `nativePicker: true` for the system chooser or `browsePicker: true`
-with `picker: true` for the in-browser directory list. Both require a shared
-Host and App Server filesystem and a configured native transport. Browsing
-only lists folders under the configured roots. Adding a folder authorizes its
-exact location, and native configuration resolution remains separate.
 Dev Host registrations, names, order and the manually selected Workspace persist
 in `$XDG_STATE_HOME/rustx/web/<profile>/workspaces.json` (defaulting to
 `~/.local/state`). The profile hashes the canonical Workspace root set and opaque
