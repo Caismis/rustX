@@ -111,8 +111,8 @@ Each Server allows one private Workspace Client at a time across these
 requests and the picker. Catalog requests already admitted by the Server wait
 in order for that slot. Their handshake and listing deadlines start after
 admission to the slot. Disconnect, grant revocation, or Server shutdown
-cancels the wait. The Workflow editor lists Workspace sources one at a time
-and closes its catalog connection when the editor closes. The Server
+cancels the wait. Each Workflow or Subagent editor lists Workspace sources
+one at a time and cancels its catalog requests when it closes. The Server
 settles any probe that already acquired the slot. The picker reports busy
 immediately if the slot is occupied.
 

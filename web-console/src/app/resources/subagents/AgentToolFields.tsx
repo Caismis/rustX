@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useLayoutEffect, useState } from 'react';
 import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice, WorkflowToolSource } from '../../../../../protocol/app-server/v81';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
@@ -10,7 +10,7 @@ import css from './Subagents.module.css';
 
 type Tools = NonNullable<NamedAgentProfileDocument['tools']>;
 type Grants = Pick<NamedAgentProfileDocument, 'tools'>;
-export type LoadMcpTools = (scope: SourceScope, server: string, owner: SourceScope, owns: () => boolean) => Promise<WorkflowToolSource | undefined>;
+export type LoadMcpTools = (scope: SourceScope, server: string, owner: SourceScope, signal: AbortSignal) => Promise<WorkflowToolSource | undefined>;
 
 export function AgentToolFields({ source, scope, value, change, loadMcpTools }: {
   source: SourceSettings; scope: SourceScope; value: Grants; change: (grants: Partial<Grants>) => void;
@@ -70,18 +70,19 @@ function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: 
   const current = result?.attempt === attempt ? result : undefined;
   const discovered = current?.tools;
   const failed = current !== undefined && !discovered;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!loadMcpTools || current) return;
-    let active = true;
-    void loadMcpTools(scope, name, owner, () => active).then(
+    const controller = new AbortController();
+    const { signal } = controller;
+    void loadMcpTools(scope, name, owner, signal).then(
       listed => {
-        if (!active) return;
+        if (signal.aborted) return;
         const tools = listed?.kind === 'mcp' && listed.scope === owner && listed.state === 'listed' ? listed.tools : undefined;
         setResult({ attempt, tools });
       },
-      () => { if (active) setResult({ attempt }); },
+      () => { if (!signal.aborted) setResult({ attempt }); },
     );
-    return () => { active = false; };
+    return () => controller.abort();
   }, [attempt, current, loadMcpTools, name, owner, scope]);
   const all = selected === 'all';
   const exact = all ? (discovered ?? []).map(tool => tool.name) : selected ?? [];

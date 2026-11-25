@@ -3,6 +3,7 @@ import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import type { SkillDescriptor, SourceMutation, SourceScope, SourceSettings, WorkspaceCatalogAuthority } from '../../../../protocol/app-server/v81';
+import { withWorkflowOperation } from '../../../../protocol/app-server/workflow-documents';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -216,14 +217,18 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setTab(next.kind === 'user' ? 'global' : 'workspace');
     if (next.kind === 'workspace') { chosen.current = true; setWorkspace(next.id); }
   };
-  const loadMcpTools = useCallback<LoadMcpTools>(async (scope, server, owner, owns) => {
+  const mcpToolsLane = useRef({});
+  const loadMcpTools = useCallback<LoadMcpTools>(async (scope, server, owner, signal) => {
     const hostAuthority = authority.capture();
     const currentHost = hostAuthority && JSON.stringify([hostAuthority.scope.authorityId, hostAuthority.scope.endpoint]);
     if (scope === 'workspace' && (!workspaceId || !directory || !hostAuthority || currentHost !== hostOwner)) return;
     const port = createWorkflowPort({ client, host: () => host, hostAuthority, expectedWorkspaceDirectory: directory, executionSession,
       scope: scope === 'workspace' && workspaceId ? { kind: 'workspace', workspaceId } : USER_SCOPE });
-    const catalog = await readToolCatalog(port, server, owner, { owns: () => owns() && (scope === 'user' || !!hostAuthority?.current()) });
-    return catalog.sources.find(entry => entry.source_id === server);
+    const list = async () => {
+      const catalog = await readToolCatalog(port, server, owner, { signal, owns: () => scope === 'user' || !!hostAuthority?.current() });
+      return catalog.sources.find(entry => entry.source_id === server);
+    };
+    return scope === 'workspace' ? withWorkflowOperation(mcpToolsLane.current, list) : list();
   }, [client, host, authority, workspaceId, directory, hostOwner, executionSession]);
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);

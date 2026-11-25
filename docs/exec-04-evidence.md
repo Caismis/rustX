@@ -70,6 +70,12 @@ editor closes both and skips the remaining sources. A separate WebSocket
 test closes a client waiting for the private probe slot and observes its Host
 request permit return while the slot is still held.
 
+The Subagent editor applies the same connection bound across Workspace and
+inherited User MCP sources. The Web regression opens a Workspace Subagent
+with eight sources, completes one listing, and closes the editor while the
+next is in flight. It verifies that both connections close, six queued
+listings never dispatch, and the Product Host still answers Workspace listing.
+
 The in-crate `installed_resume` tests run real sibling Clients through the
 installed composition owner. Eight invalid saved Sessions release their
 Client slots and recovery records, a healthy Session can still be created,
