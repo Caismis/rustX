@@ -86,8 +86,16 @@ export function TabMenu({ labels, anchor, onClose, onDismiss, extras }: TabMenuP
         collisionPadding={MENU_GAP}
         initialFocus={false}
         // Base UI treats the returned element as a focus container rather than the
-        // target itself, so restoration focuses the chip here and opts out.
+        // target itself, so restoration focuses the chip here and opts out. Only a
+        // dismissal that owns the keyboard — Escape inside the menu, focus released
+        // to the document — earns the chip back: an outside press has already put
+        // the keyboard where the user means to work, and stealing it back would
+        // undo the click.
         finalFocus={() => {
+          const active = document.activeElement
+          const inMenu = active instanceof HTMLElement && self.current?.contains(active) === true
+          const released = active === document.body || active === document.documentElement
+          if (!inMenu && !released) return false
           const target = anchorRef.current
           if (target?.isConnected) focusWithoutRing(target)
           return false
