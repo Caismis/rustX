@@ -10,6 +10,7 @@ import { ReferencePicker } from '../forms/ReferencePicker';
 import { ValueEditor } from '../forms/ValueEditor';
 import { IconPencil } from '../../icons';
 import type { Edit } from './shared';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 import css from '../Editor.module.css';
 import styles from './DataPanels.module.css';
 
@@ -132,10 +133,8 @@ export function BooleanInput({ value, address, edit, label, onChange }: {
         onClick={() => { if (variable) onChange({ type: 'literal', value: false }); }}><IconPencil size={14} /></button>
     </div>
     {variable ? <ReferencePicker token address={address} path={value.path} edit={edit} />
-      : <select className={css.input} aria-label={label} value={String(value.value)}
-        onChange={event => onChange({ type: 'literal', value: event.target.value === 'true' })}>
-        <option value="true">{/* i18n-raw: boolean literal */ 'True'}</option>
-        <option value="false">{/* i18n-raw: boolean literal */ 'False'}</option>
-      </select>}
+      : <EnumSelect className={css.input} label={label} value={String(value.value)}
+        onChange={next => onChange({ type: 'literal', value: next === 'true' })}
+        options={[{ value: 'true', label: 'True' }, { value: 'false', label: 'False' }]} />}
   </div>;
 }

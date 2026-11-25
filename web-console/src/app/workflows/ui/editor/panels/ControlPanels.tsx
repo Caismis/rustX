@@ -3,6 +3,7 @@ import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, Workflo
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 import { setField, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
 import { renameLoopVariable } from '../../../document/commands';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
@@ -33,9 +34,7 @@ function ConstantField({ label, type, value, address, edit }: { label: string; t
   if (value.type !== 'literal') return null;
   if (type === 'string' && typeof value.value === 'string') return <DraftTextField label={label} value={value.value} address={within(address, ['value'])} />;
   if (type === 'boolean') return <label className={css.inlineField}><span>{label}</span>
-    <select className={css.input} aria-label={label} value={String(value.value === true)} onChange={event => edit(document => setField(document, address, { type: 'literal', value: event.target.value === 'true' }))}>
-      <option value="true">{tx('workflows:port.true')}</option><option value="false">{tx('workflows:port.false')}</option>
-    </select></label>;
+    <EnumSelect className={css.input} label={label} value={String(value.value === true)} onChange={next => edit(document => setField(document, address, { type: 'literal', value: next === 'true' }))} options={[{ value: 'true', label: tx('workflows:port.true') }, { value: 'false', label: tx('workflows:port.false') }]} /></label>;
   return <JsonField label={label} value={value.value} rows={3} line={type === 'number'} address={within(address, ['value'])} />;
 }
 

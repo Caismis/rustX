@@ -19,6 +19,7 @@ import { TemplateInput, templateParts, templateValue } from '../forms/TemplateIn
 import { useReferenceSchema } from '../forms/useReferenceSchema';
 import { comparisonSymbols } from '../summary';
 import type { PanelProps } from './shared';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 import css from '../Editor.module.css';
 
 const unfinished = (): Predicate => ({
@@ -333,20 +334,18 @@ function SimpleCondition({
                   line
                 />
               ) : right.type === 'literal' && typeof right.value === 'boolean' ? (
-                <select
+                <EnumSelect
                   className={css.input}
-                  aria-label={tx('workflows:branch.value')}
+                  label={tx('workflows:branch.value')}
                   value={String(right.value)}
-                  onChange={(event) =>
+                  onChange={(next) =>
                     binary(operator as Exclude<SimpleOperator, 'empty' | 'not_empty'>, {
                       type: 'literal',
-                      value: event.target.value === 'true',
+                      value: next === 'true',
                     })
                   }
-                >
-                  <option value="true">{tx('workflows:port.true')}</option>
-                  <option value="false">{tx('workflows:port.false')}</option>
-                </select>
+                  options={[{ value: 'true', label: tx('workflows:port.true') }, { value: 'false', label: tx('workflows:port.false') }]}
+                />
               ) : null}
             </>
           )}

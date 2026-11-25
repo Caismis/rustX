@@ -115,7 +115,14 @@ it.each([
   const view = await open(condition, schema);
   expect(view.panel.queryByRole('combobox', { name: 'Predicate' })).toBeNull();
   const field = view.panel.getByLabelText('Value');
-  fireEvent.change(field, { target: { value: edited } });
+  if (type === 'equal' && typeof value === 'boolean') {
+    fireEvent.click(field);
+    const option = await screen.findByRole('option', { name: edited });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+  } else {
+    fireEvent.change(field, { target: { value: edited } });
+  }
   expect(view.save()).toEqual({ ...condition, right: { type: 'literal', value: expected } });
 });
 
