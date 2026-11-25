@@ -18,7 +18,6 @@ import css from './InputFields.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Radio, RadioGroup } from '@/components/ui/radio-group';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
-import { Textarea } from '@/components/ui/textarea';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -101,7 +100,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
       {field('name', tx('workflows:fields.name'), controlId => <TextInput id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} autoFocus spellCheck={false}
         placeholder={tx('workflows:fields.name-placeholder')} {...invalid('name')} onChange={event => change({ name: event.target.value })} />)}
 
-      {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <Textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}
+      {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}
         placeholder={tx('workflows:fields.description-placeholder')} onChange={event => change({ description: event.target.value })} />)}
 
       {type === 'string' && <>

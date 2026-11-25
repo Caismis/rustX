@@ -315,12 +315,14 @@ it('replaces default model intent on the Models page', async () => {
   } }, 'root-r1'));
   await chooseOption('Profile', 'quick', model);
   await chooseOption('Model', 'other', model);
-  expect(model.getByRole('button', { name: /Profile$/ }).textContent).toContain('Model default profile');
-  fireEvent.click(model.getByRole('button', { name: /Profile$/ }));
+  expect(model.getByRole('combobox', { name: /Profile$/ }).textContent).toContain('Model default profile');
+  fireEvent.click(model.getByRole('combobox', { name: /Profile$/ }));
   expect(screen.queryByRole('option', { name: 'deep' })).toBeNull();
-  fireEvent.click(screen.getByRole('option', { name: 'high' }));
+  const high = screen.getByRole('option', { name: 'high' });
+  fireEvent.pointerDown(high);
+  fireEvent.click(high);
   await chooseOption('Model', 'plain', model);
-  expect(model.queryByRole('button', { name: /Profile$/ })).toBeNull();
+  expect(model.queryByRole('combobox', { name: /Profile$/ })).toBeNull();
   fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
     authored: { model: 'plain', auxiliary },
@@ -396,7 +398,7 @@ it('the explicit Auxiliary Model variant owns complete labels in each locale wit
     const nested = within(group);
     return {
       group,
-      profile: screen.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.auxiliary-profile')) }),
+      profile: screen.getByRole('combobox', { name: (name: string) => name.endsWith(tx('settings:models-page.auxiliary-profile')) }),
       limit: nested.getByLabelText(tx('settings:models-page.output-limit-auxiliary')) as HTMLInputElement,
       params: nested.getByLabelText(tx('settings:models-page.request-parameter-overrides-auxiliary')) as HTMLElement,
       outer: screen.getByLabelText(tx('settings:models-page.request-parameter-overrides')) as HTMLElement,
@@ -413,7 +415,7 @@ it('the explicit Auxiliary Model variant owns complete labels in each locale wit
   expect([chinese.limit, chinese.params, chinese.outer]).toEqual([english.limit, english.params, english.outer]);
   expect(screen.getByLabelText('输出上限（辅助）')).toBe(english.limit);
   expect(screen.getByLabelText('请求参数覆盖（辅助）')).toBe(english.params);
-  expect(screen.getByRole('button', { name: /辅助配置档$/ })).toBe(chinese.profile);
+  expect(screen.getByRole('combobox', { name: /辅助配置档$/ })).toBe(chinese.profile);
   expect(within(chinese.group).queryAllByRole('button', { name: /Summary|Auxiliary/ })).toEqual([]);
   expect(chinese.group.textContent).not.toMatch(/Summary|Profile|Output limit|Request parameter/);
   expect(write).not.toHaveBeenCalled();
@@ -432,7 +434,7 @@ it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an 
   const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={[]} profiles={{}} name="optional" />, { source, context: source });
-  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'read' }));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
   fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'optional', authored: { ...authored, tools: { builtin: ['read'] } } }, 'optional-r1'));

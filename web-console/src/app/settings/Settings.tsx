@@ -41,6 +41,7 @@ import {
   admitsFocus, connectionFocus, settingsPages,
   type FocusMap, type SettingsFocus, type SettingsNavigationActor, type SettingsPage,
 } from './machines/navigation';
+import { Textarea } from '@/components/ui/textarea';
 
 export interface SettingsProps {
   client: AppServerClient; host?: ProductHostWorkspaces; associations?: WorkspaceAssociations;
@@ -313,7 +314,7 @@ function RepairSourceForm({ revision }: { revision: string }) {
   return <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={revision} removable={false}
     presentation="dialog" saveLabel={tx('settings:bridge.save')}
     mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
-    {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
+    {(value, change) => <label>{tx('settings:settings.replacement-toml')}<Textarea value={value} onChange={event => change(event.target.value)} /></label>}
   </UnitForm>;
 }
 

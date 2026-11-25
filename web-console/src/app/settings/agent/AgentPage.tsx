@@ -9,6 +9,7 @@ import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import css from './AgentPage.module.css';
+import { Textarea } from '@/components/ui/textarea';
 
 /** The Agent product page: the AGENTS.md instruction document and the
  * project-guidance inherit switch. Both stage into the shared page
@@ -49,7 +50,7 @@ export function AgentPage({ scope = 'user', config, globalGuidance, closed, body
           >
             {(value, change) => (
               <div className={css.instructions}>
-                <textarea
+                <Textarea
                   aria-label={instructions}
                   value={value}
                   disabled={!!globalGuidance.diagnostic}

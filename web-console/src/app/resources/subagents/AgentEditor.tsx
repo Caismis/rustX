@@ -21,6 +21,7 @@ import css from './Subagents.module.css';
 import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
 import { AgentSkillFields } from './AgentSkillFields';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 
 export type AgentDraft = NamedAgentProfileDocument & { name?: string };
 
@@ -229,7 +230,7 @@ export function AgentEditor({
                 </label>
                 <div className={css.prompt}>
                   <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
-                  <textarea id={promptId} rows={4} value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
+                  <Textarea id={promptId} rows={4} value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
                 </div>
                 <div className={css.settingRow}>
                   <span>{tx('resources:subagents.inject-guidance')}</span>

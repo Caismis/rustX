@@ -15,6 +15,7 @@ import { IconPicker } from '../../workflows/ui/WorkflowIcon';
 import { SkillIcon, skillAssetUrl } from './SkillIcon';
 import css from './SkillDetail.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 
 /** The display write fences its own compare-and-set: `expected_revision` is
  * the authoritative revision the draft was seeded from — supplied per call,
@@ -189,7 +190,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
           onChange={event => update('display_name', event.target.value)} />
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.short-description')} vertical>
-        <textarea value={draft.short_description ?? ''} rows={2} maxLength={1024} aria-label={tx('resources:skills.short-description')} disabled={saving}
+        <Textarea value={draft.short_description ?? ''} rows={2} maxLength={1024} aria-label={tx('resources:skills.short-description')} disabled={saving}
           onChange={event => update('short_description', event.target.value)} />
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.icon')} vertical description={iconLabel}>
