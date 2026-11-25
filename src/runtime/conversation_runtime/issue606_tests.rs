@@ -979,6 +979,7 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
             test_support::one_turn_script(),
         ],
         Some(coordinator_probe),
+        None,
     )
     .await;
     let runtime = fixture.runtime.clone();
@@ -1014,6 +1015,25 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         "idle epoch is fenced while the unreaped tail retains its admission"
     );
 
+    // Attempt — proven with no catalog observation and no staged candidate
+    // in flight, so neither publication nor commit back-pressure can mask a
+    // missing tail check in the admission path itself. The observations are
+    // cumulative facts, not a momentary slot read: the admission counter
+    // never moves and the inbound is never consumed.
+    let admitted_before = runtime.inner.lock_state().foreground.admitted_attempts;
+    runtime
+        .submit_inbound(test_support::text_content("held behind Joining"))
+        .expect("inbound queued");
+    runtime.inner.admit_next_attempt();
+    assert_eq!(
+        runtime.inner.lock_state().foreground.admitted_attempts,
+        admitted_before,
+        "no admission counter advance is possible behind the unreaped tail"
+    );
+    assert!(
+        runtime.inner.mailbox.has_pending().unwrap_or(false),
+        "the queued inbound is never consumed behind the unreaped tail"
+    );
     // Every remaining leg's work item is prepared only now — with the
     // barrier already holding — so nothing could have been consumed before
     // the fence existed, and the tail is each item's only refuser.
@@ -1073,23 +1093,6 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
             "the staged candidate survives the fenced commit pass"
         );
     }
-    // Attempt: queue the real work item, then drive the admission pass
-    // directly — a competing caller, not the reaper-parked worker. With the
-    // conversation restored by the finished compaction, the tail fence is
-    // the only thing that can refuse it.
-    runtime
-        .submit_inbound(test_support::text_content("held behind Joining"))
-        .expect("inbound queued");
-    runtime.inner.admit_next_attempt();
-    assert!(
-        !runtime
-            .inner
-            .lock_state()
-            .foreground
-            .slot
-            .is_foreground_active(),
-        "a directly-driven admission pass is fenced by the unreaped tail"
-    );
     // Release the join: `joined` publishes, the tail is reaped, and every
     // fenced work item — the same instances prepared above — proceeds
     // through the real consumer path: the admission worker's own pass
@@ -1175,6 +1178,11 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         "{:?}",
         settlement.outcome
     );
+    assert_eq!(
+        runtime.inner.lock_state().foreground.admitted_attempts,
+        admitted_before + 1,
+        "the same fenced inbound produces exactly one admitted attempt after the join"
+    );
     // Idle probe: with the mailbox empty and no active owner, the same
     // probe that errored under `Joining` now succeeds.
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -1199,6 +1207,192 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         .expect("fixture shutdown");
 }
 
+/// A controlled Tool executor whose remote response channel can be lost on
+/// demand: the physical dispatch starts (and is counted), then the dropped
+/// channel ends the execution as `OutcomeUnknown` — the effect's physical
+/// settlement is unproven even though the graph itself finishes
+/// (Issue #606).
+struct ResponseLossTool {
+    started: tokio::sync::watch::Sender<bool>,
+    starts: std::sync::atomic::AtomicUsize,
+    response: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+impl crate::tools::executor::ToolExecutor for ResponseLossTool {
+    fn start<'a>(
+        &'a self,
+        _: crate::tools::types::ToolInvocation,
+        _: crate::tools::executor::ToolExecutionContext<'a>,
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        self.starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::tools::executor::ToolExecutionHandle::new(
+            Box::pin(async move {
+                self.started.send_replace(true);
+                let _ = self.response.lock().await.take().unwrap().await;
+                crate::tools::invocation::terminal(
+                    crate::tools::types::ToolExecutionStatus::OutcomeUnknown {
+                        detail: "dispatched remote response channel closed".into(),
+                    },
+                )
+            }),
+            Box::pin(async move { std::future::pending().await }),
+        )
+    }
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        crate::tools::deadline::ToolProgressCapability::None
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_runner_reconciles_awaiting_native_proof_until_the_proof_arrives() {
+    // Issue #606: the real runner must RECEIVE `AwaitingNativeProof` from
+    // its own settlement, retain the exact slot owner, the capability
+    // lease and the durable Claim through the reconciliation wait, never
+    // replay the graph, and — once the physical proof arrives — settle,
+    // release and drop the lease entirely by itself.
+    use crate::runtime::workflow::scheduled::lifecycle::{
+        ClaimedScheduledWorkflow, ScheduledWorkflowOutcome, ScheduledWorkflowState,
+    };
+    let gate = Arc::new(probe::Gate::default());
+    let _guard = gate.arm_scoped();
+    let coordinator_probe = probe::CoordinatorProbe {
+        scheduled_awaiting_proof_gate: Some(gate.clone()),
+        ..Default::default()
+    };
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    let tool = Arc::new(ResponseLossTool {
+        started: tokio::sync::watch::channel(false).0,
+        starts: std::sync::atomic::AtomicUsize::new(0),
+        response: tokio::sync::Mutex::new(Some(response_rx)),
+    });
+    let fixture =
+        scheduled_fixture_with(Vec::new(), Some(coordinator_probe), Some(tool.clone())).await;
+    let runtime = fixture.runtime.clone();
+    assert!(
+        runtime.inner.scheduled_executor.admit_next(),
+        "the admitted start is reserved"
+    );
+    // The graph physically dispatches the Tool node.
+    let mut started = tool.started.subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        started
+            .wait_for(|entered| *entered)
+            .await
+            .expect("tool watch")
+    })
+    .await
+    .expect("the graph physically starts the Tool node");
+    // The remote response is lost: the execution ends `OutcomeUnknown`, the
+    // effect can never carry a positive physical proof, and the graph
+    // finishes with that uncertainty.
+    drop(response_tx);
+    // The runner itself processes the real `AwaitingNativeProof` settlement
+    // result and enters the reconciliation loop — the probe parks it inside
+    // that branch, after the blocked diagnostic is durably written.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        gate.wait_entered_async(),
+    )
+    .await
+    .expect("the runner received AwaitingNativeProof and entered reconciliation");
+    // Retention through the reconciliation wait: exact owner, slot,
+    // capability lease, durable Claim — and the graph ran exactly once.
+    let owner_probe = runtime
+        .inner
+        .probe_scheduled_owner(&fixture.start.id)
+        .expect("the exact owner is retained in reconciliation");
+    assert!(owner_probe.graph_finished);
+    assert!(
+        runtime
+            .inner
+            .lock_state()
+            .foreground
+            .slot
+            .as_scheduled()
+            .is_some(),
+        "the slot owner is retained while the proof is missing"
+    );
+    assert!(
+        runtime.capability().active_attempts() >= 1,
+        "the capability lease is still held by the reconciling runner"
+    );
+    let view = fixture
+        .store
+        .scheduled_workflow_get(&fixture.start.id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(view.head.state, ScheduledWorkflowState::Claimed { .. }),
+        "the durable row stays Claimed through reconciliation: {:?}",
+        view.head.state
+    );
+    assert_eq!(
+        tool.starts.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the graph executed exactly once — no replay"
+    );
+    let page = fixture
+        .store
+        .scheduled_workflow_recovery(&fixture.start.id, 0, 100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.effects.len(), 1, "one physical effect owner");
+    assert!(
+        !page.effects[0].physical_settlement_proven,
+        "the lost response keeps the effect unproven"
+    );
+    // The physical completion proof finally arrives through the effect
+    // ownership seam — the runner's own retry must observe it.
+    let claim = ClaimedScheduledWorkflow { start: view };
+    fixture
+        .store
+        .scheduled_workflow_effect_settled(
+            &claim,
+            &page.effects[0].node,
+            true,
+            Some("test: the physical settlement proof arrived"),
+        )
+        .unwrap();
+    gate.release();
+    owner_probe.settlement_wake.notify_one();
+    // The runner — never the test — completes the durable settlement. The
+    // outcome is honestly `OutcomeUnknown`: ownership was uncertain, so no
+    // success can be claimed even though the graph returned.
+    let outcome = scheduled_settled(fixture.store.as_ref(), &fixture.start.id).await;
+    assert!(
+        matches!(outcome, ScheduledWorkflowOutcome::OutcomeUnknown { .. }),
+        "an uncertain run settles OutcomeUnknown, never Completed: {outcome:?}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let slot_free = runtime
+                .inner
+                .lock_state()
+                .foreground
+                .slot
+                .as_scheduled()
+                .is_none();
+            if slot_free && runtime.capability().active_attempts() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner releases the slot owner and the capability lease after settlement");
+    assert_eq!(
+        tool.starts.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the graph was never replayed across the whole reconciliation"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), runtime.shutdown())
+        .await
+        .expect("shutdown timeout")
+        .expect("fixture shutdown");
+}
+
 // ---- Issue #606 acceptance-matrix: scheduled-workflow shared fixture ----
 
 struct ScheduledFixture {
@@ -1213,13 +1407,14 @@ struct ScheduledFixture {
 }
 
 async fn scheduled_fixture() -> ScheduledFixture {
-    scheduled_fixture_with(Vec::new(), None).await
+    scheduled_fixture_with(Vec::new(), None, None).await
 }
 
 #[allow(clippy::too_many_lines, clippy::items_after_statements)]
 async fn scheduled_fixture_with(
     scripts: Vec<Vec<test_support::FakeStep>>,
     probe: Option<probe::CoordinatorProbe>,
+    tool: Option<Arc<dyn crate::tools::executor::ToolExecutor>>,
 ) -> ScheduledFixture {
     use crate::runtime::workflow::scheduled::{
         ScheduledWorkflowPreparation, lifecycle::ScheduledWorkflowState,
@@ -1233,20 +1428,52 @@ async fn scheduled_fixture_with(
 
     let dir = tempfile::tempdir().expect("temp dir");
     let workflow_id = crate::runtime::workflow::WorkflowId::parse("scheduled").unwrap();
+    let empty_schema: serde_json::Value =
+        serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
     let program = WorkflowProgram::compile(
         workflow_id.clone(),
-        serde_json::from_value(serde_json::json!({
-            "description":"Native scheduled run","timeout_ms":1000,
-            "block":{"input":{"type":"object","properties":{"answer":{"type":"string","default":"native durable return"}},"additionalProperties":false},
-            "nodes":{"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","answer"]}]}},
-            "edges":[{"from":"workflow_start","to":"done"}]}
-        }))
+        serde_json::from_value(if tool.is_some() {
+            serde_json::json!({
+                "description":"Native scheduled tool run","timeout_ms":20000,
+                "block":{"input":{"type":"object","properties":{"task":{"type":"string","default":"review"}},"additionalProperties":false},
+                "nodes":{"workflow_start":{"type":"start"},"work":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"literal","value":{}},"result":{"type":"json","schema":empty_schema}},"done":{"type":"return","outputs":[]}},
+                "edges":[{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}]}
+            })
+        } else {
+            serde_json::json!({
+                "description":"Native scheduled run","timeout_ms":1000,
+                "block":{"input":{"type":"object","properties":{"answer":{"type":"string","default":"native durable return"}},"additionalProperties":false},
+                "nodes":{"workflow_start":{"type":"start"},"done":{"type":"return","outputs":[{"variable":"answer","value_selector":["args","answer"]}]}},
+                "edges":[{"from":"workflow_start","to":"done"}]}
+            })
+        })
         .unwrap(),
     )
     .unwrap();
+    let tool_registry = tool.map(|executor| {
+        let definition = crate::tools::types::ToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-check"),
+            name: "check".into(),
+            description: "Controlled response-loss tool".into(),
+            input_schema: empty_schema.clone().into(),
+            execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+            origin: crate::tools::types::ToolOrigin::Builtin,
+        };
+        crate::tools::executor::ToolRegistry::from_registrations([
+            crate::tools::executor::ToolRegistration::plain(definition, executor),
+        ])
+        .expect("controlled tool registry")
+    });
     let mut workflows = WorkflowCatalog::new([program]).unwrap();
+    let available_tools = tool_registry.as_ref().map_or_else(
+        crate::capabilities::AvailableToolCatalog::default,
+        |registry| {
+            crate::capabilities::AvailableToolCatalog::new(registry.validated_registrations())
+        },
+    );
     workflows.admit(
-        &crate::capabilities::AvailableToolCatalog::default(),
+        &available_tools,
         &crate::capabilities::CapabilityAvailability::new(),
         &crate::skills::SkillSnapshot::new(Vec::new()),
         &crate::runtime::subagent::AgentCatalog::empty(),
@@ -1255,7 +1482,7 @@ async fn scheduled_fixture_with(
     let (runtime, model) = test_support::headless_runtime_with_options(
         &dir,
         scripts,
-        None,
+        tool_registry,
         probe,
         test_support::HeadlessRuntimeOptions {
             workflow_catalog: workflows,
@@ -1750,7 +1977,7 @@ async fn the_runner_owns_settlement_after_the_graph_finishes() {
         scheduled_settlement_gate: Some(gate.clone()),
         ..Default::default()
     };
-    let fixture = scheduled_fixture_with(Vec::new(), Some(coordinator_probe)).await;
+    let fixture = scheduled_fixture_with(Vec::new(), Some(coordinator_probe), None).await;
     let runtime = fixture.runtime.clone();
     assert!(
         runtime.inner.scheduled_executor.admit_next(),

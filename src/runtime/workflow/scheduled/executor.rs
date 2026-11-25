@@ -638,6 +638,18 @@ impl ScheduledExecutor {
                 Ok(ScheduledWorkflowSettlement::AwaitingNativeProof) => {
                     uncertain = true;
                     let _=self.store.scheduled_workflow_blocked(id,"recovery_blocked: native physical proof is missing; inspect exact effect owners and reconcile, never replay this run");
+                    #[cfg(test)]
+                    {
+                        let awaiting_gate = self
+                            .probe
+                            .lock()
+                            .expect("coordinator probe lock poisoned")
+                            .as_ref()
+                            .and_then(|probe| probe.scheduled_awaiting_proof_gate.clone());
+                        if let Some(gate) = awaiting_gate {
+                            tokio::task::block_in_place(|| gate.enter());
+                        }
+                    }
                 }
                 Err(error) => {
                     tracing::warn!(%error,"scheduled settlement retains its native owner until durability recovers");

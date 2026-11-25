@@ -71,6 +71,11 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
     pub(crate) scheduled_settlement_gate: Option<Arc<Gate>>,
+    /// Parks the scheduled runner inside the settlement-reconciliation loop
+    /// after it has processed a real `AwaitingNativeProof` — proving the
+    /// runner reached the reconciliation wait while the physical proof is
+    /// still missing (Issue #606).
+    pub(crate) scheduled_awaiting_proof_gate: Option<Arc<Gate>>,
     /// Parks after durable terminal publication, before restoring conversation state.
     pub(crate) before_restore_gate: Option<Arc<Gate>>,
     /// Parks the next activation before the lifecycle transition when
