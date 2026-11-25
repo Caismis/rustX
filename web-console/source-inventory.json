@@ -4391,11 +4391,11 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./StatDialog.module.css",
-        "@base-ui/react/popover",
+        "@/components/ui/popover",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "cde1d28a47bb870a63ea94fd13a37ea30064d3cfc97746bccf5aa54a319af97e"
+      "local_sha256": "a385434b04ab83483d7e6990c64b98f191c19a6d87e17a9e7162fefe331d3fa1"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.module.css",
@@ -4407,7 +4407,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "6b290931c5423b543c27f6777111c7f2061e56aa2ac1af229e237cec0a3c4e79"
+      "local_sha256": "e58477a8632d49723e589ba2151e82cc3eb9174f5358bcc3e4bec9ed917881ac"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/token-format.ts",
