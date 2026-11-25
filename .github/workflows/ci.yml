@@ -323,9 +323,10 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Bound compiler parallelism on this heavy all-feature lane.
-      # libtest concurrency, targets, assertions, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "1"
+      # Phase-2 experiment: the hosted runner has 4 vCPU; compile-phase
+      # parallelism previously serialized at 1. libtest concurrency,
+      # targets, assertions, and the 90-minute ceiling stay unchanged.
+      CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -354,8 +355,44 @@ jobs:
           nproc
           awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the contracts harnesses and stage the real executables
+        env:
+          RUSTX_PREPARED_JSON_OUT: ${{ runner.temp }}/contracts-artifacts.json
         run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
+      # Build-once/test-many: the compiled harnesses plus the staged real
+      # executables are packed with their repo-relative layout (the tests'
+      # compile-time CARGO_BIN_EXE_* paths still resolve on a shard runner),
+      # inventoried by libtest discovery under this lane's own filters, and
+      # split across the shard jobs by duration weight. rust-contracts-shard
+      # executes the assigned tests; rust-contracts-report proves every
+      # inventoried test ran exactly once.
+      - name: Bind the prepared artifacts to this checkout
+        run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/contracts-manifest/manifest.json"
+      - name: Pack the harnesses and staged executables
+        run: python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/contracts-artifacts.json" --out "$RUNNER_TEMP/contracts-prepared"
+      - name: Discover the contracts inventory and assign the shards
+        run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/contracts-manifest/manifest.json" --prepared "$RUNNER_TEMP/contracts-prepared" --spec test-support/rust-lanes/contracts.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/contracts-inventory"
+      - name: Package the prepared artifacts
+        run: tar -C "$RUNNER_TEMP/contracts-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/contracts-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-prepared
+          path: ${{ runner.temp }}/contracts-prepared.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-inventory
+          path: |
+            ${{ runner.temp }}/contracts-inventory/
+            ${{ runner.temp }}/contracts-manifest/
+          retention-days: 14
+          if-no-files-found: error
+
+      # The tests these steps used to run in this job now execute on the
+      # rust-contracts-shard runners against the packed artifact above; the
+      # shard reports prove the same coverage this lane asserted before.
       # Source-module unit tests + the scripted contract suites
       # (`scripted_suites::`) + the App Server scripted contracts compiled
       # under the session runtime manager's private test module
@@ -369,16 +406,39 @@ jobs:
       # discovery, so a test added to a bin or an example is picked up here
       # automatically — which is simpler than a second repository policy
       # saying those targets must stay test-free forever.
-      - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
       # normalization over the in-process FixtureServer. The provider
       # target also carries the #[ignore]d opt-in live smoke tests, which
       # never run here.
-      - name: Run the pure contract targets
-        run: cargo test --test contracts --test provider --all-features --locked
+
+  # The contracts lane's non-artifact tail — doctests, extracted member
+  # unit tests, and the lane coverage check — runs in parallel with the
+  # shards instead of delaying their start. It rebuilds on its own runner;
+  # the shards are the critical path.
+  rust-contracts-post:
+    name: Deterministic contracts (doctests + members)
+    needs: [plan, rust-contracts]
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts-post']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-contracts
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # Doctests (both positive API counterparts and `compile_fail` encapsulation
       # proofs) are not executed by `--all-targets`; execute them explicitly
@@ -398,9 +458,8 @@ jobs:
       # step that selects them: an unassigned target, a stale filter or
       # --skip, or a Linux test no lane executes fails here. The checker's own
       # deterministic tests ran above as part of `--examples`.
-      # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard --job rust-contracts-post
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -409,6 +468,75 @@ jobs:
   # step that runs a uv-dependent boundary (the emulator and the managed
   # FastMCP children): RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing
   # toolchain into a hard failure instead of a silent skip.
+  # Three shard runners, each executing its assigned slice of the packed
+  # contracts inventory by exact test name. All shards always finish so one
+  # failure never hides the others; rust-contracts-report owns the verdict.
+  rust-contracts-shard:
+    name: Deterministic contracts (shard ${{ matrix.shard }}/3)
+    needs: [plan, rust-contracts]
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts-shard']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the provider emulator used by contract tests
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-prepared
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-inventory
+          path: ${{ runner.temp }}/inventory
+      - name: Restore the packed artifacts at their compile-time paths
+        run: tar -C . -xf "$RUNNER_TEMP/contracts-prepared.tar.zst"
+      - name: Execute shard ${{ matrix.shard }}
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --spec test-support/rust-lanes/contracts.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+      - name: Shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-shard-${{ matrix.shard }}
+          path: shard-report/
+          if-no-files-found: ignore
+
+  # The one contracts verdict: every inventoried test ran exactly once and
+  # every selected shard succeeded.
+  rust-contracts-report:
+    name: Deterministic contracts coverage
+    needs: [plan, rust-contracts, rust-contracts-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['rust-contracts-report'] }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-inventory
+          path: ${{ runner.temp }}/inventory
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rust-contracts-shard-*
+          path: ${{ runner.temp }}/runs
+      - name: Verify complete coverage across shards
+        run: python3 test-support/rust_test_shards.py verify --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --runs "$RUNNER_TEMP/runs"
+      - name: All selected shards succeeded
+        run: test "${{ needs.rust-contracts-shard.result }}" = success
+
   rust-boundaries:
     name: Boundary suites (Linux)
     needs: plan
@@ -421,9 +549,9 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Same compiler serialization as rust-contracts. Targets, assertions,
-      # libtest concurrency, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "1"
+      # Same Phase-2 compiler-parallelism experiment as rust-contracts.
+      # Targets, assertions, libtest concurrency, and the 90-minute ceiling stay.
+      CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -468,6 +596,8 @@ jobs:
           nproc
           awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the boundary harnesses and stage the real executables
+        env:
+          RUSTX_PREPARED_JSON_OUT: ${{ runner.temp }}/boundaries-artifacts.json
         run: >-
           python3 test-support/prepare_native_tests.py --
           cargo test --all-features --locked --no-run
@@ -480,23 +610,35 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
-      - name: Run the external boundary targets
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: >-
-          cargo test --all-features --locked
-          --test durable
-          --test process
-          --test subagent
-          --test tools
-          --test conformance
-          --test cfg3_catalog
-          --test cfg3_managed_output
-
-      - name: Run the in-crate boundary suites
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- boundary_suites::'
+      # Build-once/test-many, mirroring rust-contracts: pack the compiled
+      # harnesses plus the staged real executables, inventory them under
+      # this lane's own filters, split across shard runners by duration
+      # weight, and prove in rust-boundaries-report that every inventoried
+      # test ran exactly once. The two executing steps this lane used to
+      # carry now run on the rust-boundaries-shard runners.
+      - name: Bind the prepared artifacts to this checkout
+        run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/boundaries-manifest/manifest.json"
+      - name: Pack the harnesses and staged executables
+        run: python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/boundaries-artifacts.json" --out "$RUNNER_TEMP/boundaries-prepared"
+      - name: Discover the boundaries inventory and assign the shards
+        run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/boundaries-manifest/manifest.json" --prepared "$RUNNER_TEMP/boundaries-prepared" --spec test-support/rust-lanes/boundaries.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/boundaries-inventory"
+      - name: Package the prepared artifacts
+        run: tar -C "$RUNNER_TEMP/boundaries-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/boundaries-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-boundaries-prepared
+          path: ${{ runner.temp }}/boundaries-prepared.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-boundaries-inventory
+          path: |
+            ${{ runner.temp }}/boundaries-inventory/
+            ${{ runner.temp }}/boundaries-manifest/
+          retention-days: 14
+          if-no-files-found: error
 
       # Extracted workspace crate unit tests run once, in rust-contracts:
       # executing them here too was a measured six-to-seven-minute duplicate
@@ -507,7 +649,77 @@ jobs:
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries --job rust-boundaries-shard
+
+  # Three shard runners, each executing its assigned slice of the packed
+  # boundaries inventory by exact test name. All shards always finish so
+  # one failure never hides the others; rust-boundaries-report owns the
+  # verdict.
+  rust-boundaries-shard:
+    name: Boundary suites (shard ${{ matrix.shard }}/3)
+    needs: [plan, rust-boundaries]
+    if: fromJSON(needs.plan.outputs.run)['rust-boundaries-shard']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the provider emulator used by boundary tests
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-boundaries-prepared
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-boundaries-inventory
+          path: ${{ runner.temp }}/inventory
+      - name: Restore the packed artifacts at their compile-time paths
+        run: tar -C . -xf "$RUNNER_TEMP/boundaries-prepared.tar.zst"
+      - name: Execute shard ${{ matrix.shard }}
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/boundaries-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/boundaries-inventory/inventory.json" --spec test-support/rust-lanes/boundaries.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+      - name: Shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-boundaries-shard-${{ matrix.shard }}
+          path: shard-report/
+          if-no-files-found: ignore
+
+  # The one boundaries verdict: every inventoried test ran exactly once and
+  # every selected shard succeeded.
+  rust-boundaries-report:
+    name: Boundary suites coverage
+    needs: [plan, rust-boundaries, rust-boundaries-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['rust-boundaries-report'] }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-boundaries-inventory
+          path: ${{ runner.temp }}/inventory
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rust-boundaries-shard-*
+          path: ${{ runner.temp }}/runs
+      - name: Verify complete coverage across shards
+        run: python3 test-support/rust_test_shards.py verify --inventory "$RUNNER_TEMP/inventory/boundaries-inventory/inventory.json" --runs "$RUNNER_TEMP/runs"
+      - name: All selected shards succeeded
+        run: test "${{ needs.rust-boundaries-shard.result }}" = success
 
   # Rust platform coverage is intentional, not duplicated by habit. macOS
   # runs only platform-sensitive classes, natively; desktop-macos separately
@@ -837,6 +1049,9 @@ jobs:
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
       # select only the root package, so run every member except rustx once.
       # check_test_lanes fails closed when a new member is left unselected.
+      # Kept in this job on purpose: macos-15 concurrency is limited to two
+      # slots on the free tier, and a separate member job was measured to
+      # delay this lane's start by ~40 minutes (run 45555289930).
       - name: Run extracted workspace crate tests
         run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
@@ -1349,7 +1564,12 @@ jobs:
       - rust-fast
       - documentation-contracts
       - rust-contracts
+      - rust-contracts-shard
+      - rust-contracts-report
+      - rust-contracts-post
       - rust-boundaries
+      - rust-boundaries-shard
+      - rust-boundaries-report
       - rust-platform-core
       - rust-platform-boundaries
       - tui
