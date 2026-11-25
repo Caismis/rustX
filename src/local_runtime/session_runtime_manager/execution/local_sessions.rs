@@ -48,11 +48,11 @@ pub(in crate::local_runtime::session_runtime_manager) struct PendingClient {
 impl PendingClient {
     pub fn admit(&self) -> Result<(), SessionError> {
         if self.grant.is_cancelled()
-            || !self
+            || self
                 .client
                 .endpoint
                 .with_live_control_lane(&self.lane, || ())
-                .is_some()
+                .is_none()
         {
             return Err(creation_error(
                 "the local Client or its Workspace grant is unavailable",
