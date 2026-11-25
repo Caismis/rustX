@@ -8,6 +8,7 @@ import type { TrajectoryFacet } from '../../src/app/trajectory/layout';
 import { nativeToolCases } from '../native-tool-cases';
 import { traceTool, toolDetail } from '../trace-fixture';
 import { localeController } from '../../src/locale/controller';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

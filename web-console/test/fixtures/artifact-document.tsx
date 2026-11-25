@@ -8,6 +8,7 @@ import { WorkspaceSessionAdmission } from '../../src/workspaces/session-admissio
 import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { ArtifactPreview, type PreviewArtifact } from '../../src/app/components/ArtifactPreview';
 import type { PreviewViewState } from '../../src/presentation/right-panel/preview-view-state';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';

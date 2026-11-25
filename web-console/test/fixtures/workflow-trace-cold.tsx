@@ -4,6 +4,7 @@ import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { Server, snapshot } from '../fixture';
 import { traceRecord } from '../trace-fixture';
 import { workflowTraceFixture } from '../workflow-trace-fixture';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

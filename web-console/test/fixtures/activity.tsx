@@ -17,6 +17,7 @@ import { SessionPanelProvider } from '../../src/app/agent/session-panel-state';
 import { InboundMessage } from '../../src/app/agent/InboundMessage';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v80';
 import { Server, snapshot, childConversation } from '../fixture';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

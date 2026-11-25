@@ -7,6 +7,7 @@ import { workflowTraceRefreshFixture } from './workflow-trace-refresh';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v80';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

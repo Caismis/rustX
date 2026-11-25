@@ -22,6 +22,7 @@ export function PreviewCardPopup({
   side,
   sideOffset = 4,
   anchor,
+  collisionPadding,
   portalProps,
   ref,
   ...props
@@ -30,6 +31,7 @@ export function PreviewCardPopup({
   side?: PreviewCardPrimitive.Positioner.Props["side"];
   sideOffset?: PreviewCardPrimitive.Positioner.Props["sideOffset"];
   anchor?: PreviewCardPrimitive.Positioner.Props["anchor"];
+  collisionPadding?: PreviewCardPrimitive.Positioner.Props["collisionPadding"];
   portalProps?: PreviewCardPrimitive.Portal.Props;
   ref?: React.Ref<HTMLDivElement>;
 }): React.ReactElement {
@@ -38,6 +40,7 @@ export function PreviewCardPopup({
       <PreviewCardPrimitive.Positioner
         align={align}
         anchor={anchor}
+        collisionPadding={collisionPadding}
         className="z-50"
         data-slot="preview-card-positioner"
         side={side}

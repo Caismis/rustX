@@ -10,7 +10,7 @@
 .submenu {
   /* min-widths below are the design's outer card widths — include the pad. */
   box-sizing: border-box;
-  padding: 4px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -28,15 +28,15 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
   /* Design size within the room the viewport leaves. The design owns the
    * bounds (--menu-min-width per card, 360 max); Floating UI owns the room
-   * and the position: it publishes --menu-available-width/height and fixed
+   * and the position: it publishes --available-width/height and fixed
    * coordinates for every surface it places (Menu.tsx), and a bound never
    * exceeds that room, so a card never leaves the viewport. A long label
    * therefore truncates at the design cap rather than widening the card.
    * Until the first placement, before any paint, the design bounds alone
    * apply. */
-  min-width: min(var(--menu-min-width), var(--menu-available-width, var(--menu-min-width)));
-  max-width: min(360px, var(--menu-available-width, 360px));
-  max-height: var(--menu-available-height, none);
+  min-width: min(var(--menu-min-width), var(--available-width, var(--menu-min-width)));
+  max-width: min(360px, var(--available-width, 360px));
+  max-height: var(--available-height, none);
   /* Floating surfaces layer above modal overlays (z 1000) — an anchor inside
    * a dialog still expects its menu on top. */
   z-index: 1100;
@@ -45,6 +45,12 @@
 /* Primary card is 218 wide in the design across both hosts. */
 .list {
   --menu-min-width: 218px;
+}
+
+/* coss wraps rows in its own scrolling container; compact surfaces use its
+   reduced inset while the card itself stays unpadded. */
+.compactList > div {
+  padding: 2px;
 }
 
 /* Rows taller than the card's height scroll here, so a pinned .footer stays
@@ -111,7 +117,6 @@
 .list.compactList,
 .submenu.compactList {
   --menu-min-width: 164px;
-  padding: 2px;
   border-radius: 7px;
 }
 
@@ -217,6 +222,7 @@
  * same layer. */
 .submenu {
   --menu-min-width: 163px;
+  --menu-submenu-gap: 10px;
 }
 
 /* The bridge spans the row-to-card gap on whichever side the card opened, so

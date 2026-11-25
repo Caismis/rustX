@@ -36,7 +36,9 @@ export function MenuPopup({
   alignOffset,
   side = "bottom",
   anchor,
+  collisionPadding,
   portalProps,
+  ref,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -44,7 +46,9 @@ export function MenuPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
+  collisionPadding?: MenuPrimitive.Positioner.Props["collisionPadding"];
   portalProps?: MenuPrimitive.Portal.Props;
+  ref?: React.Ref<HTMLDivElement>;
 }): React.ReactElement {
   return (
     <MenuPortal {...portalProps}>
@@ -52,12 +56,14 @@ export function MenuPopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        collisionPadding={collisionPadding}
         className="z-[1300]"
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}
       >
         <MenuPrimitive.Popup
+          ref={ref}
           className={cn(
             "relative flex not-[class*='w-']:min-w-32 origin-(--transform-origin) rounded-lg border bg-popover not-dark:bg-clip-padding shadow-lg/5 outline-none before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] focus:outline-none dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             className,
@@ -65,7 +71,7 @@ export function MenuPopup({
           data-slot="menu-popup"
           {...props}
         >
-          <div className="max-h-(--available-height) w-full overflow-y-auto p-1">
+          <div className="max-h-(--available-height) w-full overflow-y-auto p-1" role="presentation">
             {children}
           </div>
         </MenuPrimitive.Popup>
@@ -310,11 +316,15 @@ export function MenuSubPopup({
   sideOffset = 0,
   alignOffset,
   align = "start",
+  collisionPadding,
+  ref,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
+  collisionPadding?: MenuPrimitive.Positioner.Props["collisionPadding"];
+  ref?: React.Ref<HTMLDivElement>;
 }): React.ReactElement {
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
@@ -323,6 +333,8 @@ export function MenuSubPopup({
       align={align}
       alignOffset={alignOffset ?? defaultAlignOffset}
       className={className}
+      collisionPadding={collisionPadding}
+      ref={ref}
       data-slot="menu-sub-content"
       side="inline-end"
       sideOffset={sideOffset}

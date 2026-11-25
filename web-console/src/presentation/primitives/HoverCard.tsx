@@ -281,6 +281,7 @@ export function HoverCard({
           align="start"
           side={previewAnchor ? 'top' : 'right'}
           sideOffset={VIEWPORT_MARGIN}
+          collisionPadding={VIEWPORT_MARGIN}
           className={clsx(
             previewAnchor ? 'p-0 overflow-hidden' : 'w-[244px] px-4 py-3 overflow-auto',
             copyable && 'cursor-pointer focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2',

@@ -8,6 +8,7 @@ import { traceRecord } from '../trace-fixture';
 import { cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
 import { Server, interaction, snapshot, endpoint } from '../fixture';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
