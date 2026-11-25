@@ -729,6 +729,32 @@ for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dism
   expect(errors).toEqual([]);
 });
 
+test('Keep editing a keyboard navigation request does not reopen the discard prompt', async ({ page }) => {
+  const errors = await start(page, '?write=held');
+  await openUserSettings(page);
+  const settings = settingsPage(page);
+  await openSettingsPage(page, 'Agent');
+  // Stage a draft, then request another page from the rail by keyboard: the
+  // guard asks, Keep editing answers, and the keyboard landing on the
+  // still-selected tab must not read as another navigation request.
+  const instructions = settings.getByRole('form', { name: 'Global instructions' });
+  await instructions.getByRole('textbox', { name: 'Global instructions', exact: true }).fill('Review the changes.');
+  await expect(settings.getByRole('button', { name: 'Keep editing', exact: true })).toHaveCount(0);
+  const rail = page.getByRole('tablist', { name: 'Settings pages' });
+  await rail.getByRole('tab', { name: 'Agent', exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('button', { name: 'Keep editing', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Keep editing', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Keep editing', exact: true })).toHaveCount(0);
+  // The prompt stays closed: focus settled on the still-selected Agent tab,
+  // and the draft remains editable.
+  await expect(rail.getByRole('tab', { name: 'Agent', exact: true })).toBeFocused();
+  await expect(instructions.getByRole('textbox', { name: 'Global instructions', exact: true })).toHaveValue('Review the changes.');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  await expect(page.getByRole('button', { name: 'Keep editing', exact: true })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('reduced motion removes Settings transitions', async ({ page }) => {
   const errors = await start(page, '?session=preparing');
   await expect(banner(page)).toHaveCount(0);

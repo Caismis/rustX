@@ -65,6 +65,11 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
     {children}
     <Modal open={confirming} onClose={keepEditing} title={tx('settings:unsaved.title')}
       rootClassName={css.aboveDialogs}
+      // Keep editing must not hand the keyboard back to the rail tab that
+      // asked for the navigation: focus there reads as another request and
+      // the prompt reopens. The still-selected tab is active already, so it
+      // accepts focus without re-requesting anything.
+      finalFocus={() => document.querySelector<HTMLElement>('[data-settings-navigation] [role="tab"][aria-selected="true"]') ?? false}
       description={tx('settings:unsaved.description')} closeLabel={tx('settings:aria.cancel')}
       footer={<>
         <Button variant="outline" onClick={keepEditing}>{tx('settings:unsaved.cancel')}</Button>
