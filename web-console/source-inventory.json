@@ -2792,7 +2792,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "2b8f13f631b9eba3baa0e7b52f6965e26f50db03294baa1cb7df2b92fbc2bc83",
+      "local_sha256": "6ba0252234432d17d242f7d75236f0cd83692fc4c6e6acb7cf553e7859876976",
       "classification": "B"
     },
     {
@@ -5133,7 +5133,7 @@
         "@/components/ui/popover",
         "react"
       ],
-      "local_sha256": "299cd41b7e26791474d95be39c71e89f8a8bb1d54fc4f2ab8c9ca25560e1b2d6"
+      "local_sha256": "134a8854fbad99bd81b92acfbcf3b4dda26c14b6e15e7c32613324367e3ee441"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
