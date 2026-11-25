@@ -829,7 +829,13 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
       if (!writable) return;
       const value = update(cleanValue);
       if (sameValue(value, cleanValue)) { setPending(undefined); actor.send({ type: 'UNIT.DISCARD', identity }); }
-      else begin(value);
+      else if (!sameValue(value, displayed)) {
+        // A mutation in flight owns the intent generation until its outcome;
+        // superseding it is new intent. Only an already materialized draft is
+        // repaired in place, so a refused generation is never re-authorized.
+        if (busy) begin(value);
+        else actor.send({ type: 'UNIT.RESTORE', identity, selector, revision, value });
+      }
     },
     apply: (value: T) => {
       if (!writable || !admitted || busy || draft || (snapshot && requiresReview(snapshot))) return;

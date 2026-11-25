@@ -107,6 +107,10 @@ export interface UnitTransactionContext {
 
 export type UnitTransactionEvent =
   | { type: 'EDIT'; value: unknown }
+  /** Replace a superseded part of the existing draft without making a new
+   * authoring generation. Invalid local input uses this to withdraw a pending
+   * value; it must not re-authorize a generation native already refused. */
+  | { type: 'RESTORE'; value: unknown }
   | { type: 'DISCARD' }
   | { type: 'REVIEW' }
   | { type: 'AUTOSAVE'; action: 'idle' | 'blur' | 'now' | 'flush' | 'hold' | 'cancel' }
@@ -187,8 +191,11 @@ export const unitTransactionMachine = setup({
     } }),
     dropDraft: assign({ draft: () => undefined }),
     recordEdit: assign({
-      draft: ({ context, event }) => event.type === 'EDIT' ? { value: event.value } : context.draft,
+      draft: ({ context, event }) => event.type === 'EDIT' || event.type === 'RESTORE' ? { value: event.value } : context.draft,
       generation: ({ context }) => context.generation + 1,
+    }),
+    restoreDraft: assign({
+      draft: ({ context, event }) => event.type === 'RESTORE' ? { value: event.value } : context.draft,
     }),
     /** The explicit review gesture re-arms the write path: the kept draft is
      * rebased on the reviewed revision and may be submitted again. */
@@ -217,6 +224,7 @@ export const unitTransactionMachine = setup({
       initial: 'off',
       on: {
         EDIT: { guard: 'editable', target: '.off', actions: 'clearAutosave' },
+        RESTORE: { guard: 'editable', target: '.off', actions: 'clearAutosave' },
         DISCARD: { guard: not('inFlight'), target: '.off', actions: 'clearAutosave' },
         SUBMIT: { target: '.off', actions: 'clearAutosave' },
         AUTOSAVE: [
@@ -262,10 +270,14 @@ export const unitTransactionMachine = setup({
         DISCARD: { guard: not('inFlight'), target: '.clean', actions: ['dropDraft', 'announceReset', raise({ type: 'RELEASE' })] },
       },
       states: {
-        clean: { on: { EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' } } },
+        clean: { on: {
+          EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
+          RESTORE: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
+        } },
         dirty: {
           on: {
             EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
+            RESTORE: { guard: 'editable', target: 'dirty', actions: 'restoreDraft' },
             // A confirmed commit of exactly this intent drops the authored
             // draft. A newer intent survives its own older acknowledgement.
             COMMITTED: { guard: 'intentUnchanged', target: 'clean', actions: 'dropDraft' },
@@ -282,6 +294,7 @@ export const unitTransactionMachine = setup({
           on: {
             OBSERVED: { actions: ['recordObservation', 'followObservation'] },
             EDIT: { guard: 'editable', target: 'pinned' },
+            RESTORE: { guard: 'editable', target: 'pinned' },
             SUBMIT: 'pinned',
             REVIEW: { target: 'pinned', actions: ['reviewObservation', 'announceReset'] },
           },
@@ -352,6 +365,7 @@ export const unitTransactionMachine = setup({
         settled: {
           on: {
             EDIT: 'idle',
+            RESTORE: 'idle',
             SUBMIT: { target: 'submitting', actions: 'beginSubmission' },
           },
         },
