@@ -15,6 +15,7 @@ import type { WorkflowDocument } from '../../../document/model';
 import { WorkflowIcon } from '../../WorkflowIcon';
 import editorCss from '../Editor.module.css';
 import css from './InputFields.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -94,19 +95,19 @@ export function FieldDialog({ document, address, keys, original, schema, require
           </button>} />
       </div>}
 
-      {field('name', tx('workflows:fields.name'), controlId => <input id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} autoFocus spellCheck={false}
+      {field('name', tx('workflows:fields.name'), controlId => <TextInput id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} autoFocus spellCheck={false}
         placeholder={tx('workflows:fields.name-placeholder')} {...invalid('name')} onChange={event => change({ name: event.target.value })} />)}
 
       {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}
         placeholder={tx('workflows:fields.description-placeholder')} onChange={event => change({ description: event.target.value })} />)}
 
       {type === 'string' && <>
-        {field('maxLength', tx('workflows:fields.max-length'), controlId => <input id={controlId} className={editorCss.input} type="number" min={1} max={MAX_LENGTH_LIMIT} step={1} inputMode="numeric"
+        {field('maxLength', tx('workflows:fields.max-length'), controlId => <TextInput id={controlId} className={editorCss.input} type="number" min={1} max={MAX_LENGTH_LIMIT} step={1} inputMode="numeric"
           value={form.maxLength} placeholder={tx('workflows:fields.max-length-placeholder')} {...invalid('maxLength')} onChange={event => change({ maxLength: event.target.value })} />, tx('workflows:fields.max-length-hint', { p0: MAX_LENGTH_LIMIT }))}
         <fieldset className={css.options} aria-describedby={problem('options') ? `${id}-options` : undefined}>
           <legend className={editorCss.fieldLabel}>{tx('workflows:fields.options')}</legend>
           {form.options.map((option, index) => <div key={index} className={css.option}>
-            <input className={editorCss.input} value={option} aria-label={tx('workflows:fields.option', { p0: index + 1 })} placeholder={tx('workflows:fields.option-placeholder')}
+            <TextInput className={editorCss.input} value={option} aria-label={tx('workflows:fields.option', { p0: index + 1 })} placeholder={tx('workflows:fields.option-placeholder')}
               onChange={event => change({ options: form.options.map((current, at) => at === index ? event.target.value : current) })} />
             <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:fields.option-remove', { p0: index + 1 })}
               onClick={() => { const options = form.options.filter((_, at) => at !== index); change({ options, defaultText: options.includes(form.defaultText) ? form.defaultText : '' }); }}><IconCloseOutline16 /></button>
@@ -162,7 +163,7 @@ function DefaultValue({ id, form, change, problem }: { id: string; form: FieldFo
           {!options.includes('') && <option value="" disabled>{tx('workflows:fields.default-choose')}</option>}
           {[...new Set(options)].map(option => <option key={option} value={option}>{option}</option>)}
         </select>
-        : <input id={control} className={clsx(editorCss.input, form.type !== 'string' && editorCss.mono)} value={form.defaultText} {...described}
+        : <TextInput id={control} className={clsx(editorCss.input, form.type !== 'string' && editorCss.mono)} value={form.defaultText} {...described}
           type={form.type === 'string' ? 'text' : 'number'} step={form.type === 'integer' ? 1 : 'any'} inputMode={form.type === 'string' ? undefined : form.type === 'integer' ? 'numeric' : 'decimal'}
           maxLength={form.type === 'string' && Number(form.maxLength) > 0 ? Number(form.maxLength) : undefined}
           placeholder={tx(form.type === 'string' ? 'workflows:fields.default-text-placeholder' : 'workflows:fields.default-number-placeholder')} onChange={event => change({ defaultText: event.target.value })} />}

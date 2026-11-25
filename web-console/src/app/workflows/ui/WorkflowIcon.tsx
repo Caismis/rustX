@@ -7,6 +7,7 @@ import { useTranslation } from '../../../locale/react';
 import { ICON_CATEGORIES, type IconCategory } from './iconCategories';
 import { IconWorkflow } from './icons';
 import css from './WorkflowIcon.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** The icon a Workflow shows when its display names none. */
 export const DEFAULT_WORKFLOW_ICON = 'lucide:workflow';
@@ -73,7 +74,7 @@ function IconGrid({ value, onChange }: { value: string; onChange: (icon: string)
   }, [set, search, category, value]);
   const chips: (IconCategory | 'all')[] = ['all', ...Object.keys(ICON_CATEGORIES) as IconCategory[]];
   return <>
-    <input type="search" value={query} autoFocus onChange={event => setQuery(event.target.value)}
+    <TextInput type="search" value={query} autoFocus onChange={event => setQuery(event.target.value)}
       placeholder={tx('workflows:icon.search')} aria-label={tx('workflows:icon.search')} />
     <div className={css.categories} role="group" aria-label={tx('workflows:icon.categories')}>
       {chips.map(id => <button key={id} type="button" aria-pressed={!search && id === category}

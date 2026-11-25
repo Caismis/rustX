@@ -14,6 +14,7 @@ import { promptText } from '../summary';
 import { InsertVariable, RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 type Review = Extract<NodeDefinition, { type: 'review' }>;
 const MINUTE = 60_000, HOUR = 60 * MINUTE, MAX_TIMEOUT = 24 * HOUR;
@@ -101,7 +102,7 @@ function ReviewTimeout(props: PanelProps) {
   };
   return <section className={clsx(css.group, css.reviewTimeout)}>
     <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:review.timeout')}</span></h3>
-    <input className={css.input} type="number" min={1} max={MAX_TIMEOUT / unit} aria-label={tx('workflows:review.timeout')} value={value}
+    <TextInput className={css.input} type="number" min={1} max={MAX_TIMEOUT / unit} aria-label={tx('workflows:review.timeout')} value={value}
       onChange={event => { if (event.target.value !== '') commit(Number(event.target.value), unit); }} />
     <div className={css.typeSwitch} role="radiogroup" aria-label={tx('workflows:review.timeout')}>
       {([HOUR, MINUTE] as const).map(per => <button key={per} type="button" role="radio" aria-checked={unit === per} className={clsx(unit === per && css.typeSwitchActive)}

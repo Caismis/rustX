@@ -7,6 +7,7 @@ import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor'
 import type { McpFieldBuffers } from '../types';
 import { formatArguments, parseArguments, formatReferences, parseReferences } from './form-values';
 import css from './McpPage.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** Intermediate text stays in the field; every valid value goes straight to
  * the native-source transaction draft. Invalid text blocks Save and JSON. */
@@ -31,7 +32,7 @@ function DraftText<T>({ value, format, parse, change, validity, field, invalidTe
   };
   if (json) return <JsonCodeEditor label={label} value={text} placeholder={placeholder} error={invalid ? error : ''} onChange={update} minHeight={112} />;
   return <label>{label}
-    <input value={text} placeholder={placeholder} aria-invalid={invalid || undefined} onChange={event => update(event.target.value)}/>
+    <TextInput value={text} placeholder={placeholder} aria-invalid={invalid || undefined} onChange={event => update(event.target.value)}/>
     {invalid && <span role="alert" className={css.error}>{error}</span>}
   </label>;
 }
@@ -50,9 +51,9 @@ export function McpFormFields({ value, change, invalidFields, validity, identity
         onChange={next => { if (next !== (http ? 'http' : 'stdio')) change({definition:next === 'http' ? {type:'http',url:''} : {type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}); }}/></div>
     </div>
     <fieldset className={css.formBody} disabled={disabled}>
-      {http ? <label>{tx('settings:mcp.url')}<input value={definition.url ?? ''} placeholder={tx('settings:mcp.url-placeholder')} onChange={event => patch({url:event.target.value})}/></label>
+      {http ? <label>{tx('settings:mcp.url')}<TextInput value={definition.url ?? ''} placeholder={tx('settings:mcp.url-placeholder')} onChange={event => patch({url:event.target.value})}/></label>
         : <>
-          <label>{tx('settings:mcp.command')}<input value={definition.command ?? ''} placeholder={tx('settings:mcp.command-placeholder')} onChange={event => patch({command:event.target.value})}/></label>
+          <label>{tx('settings:mcp.command')}<TextInput value={definition.command ?? ''} placeholder={tx('settings:mcp.command-placeholder')} onChange={event => patch({command:event.target.value})}/></label>
           <DraftText field="args" invalidText={invalidFields.args} label={tx('settings:mcp.arguments')} value={definition.args ?? []} format={formatArguments} parse={parseArguments}
             change={args => patch({args})} validity={validity} error={tx('settings:mcp.args-error')} placeholder={tx('settings:mcp.args-placeholder')}/>
         </>}

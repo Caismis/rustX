@@ -3,6 +3,8 @@ import { SettingsNotice, useSettingsFeedback } from '../SettingsFeedback';
 import { useTranslation, useNotice } from '../../../locale/react';
 import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
+import { Input } from '../../../presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import { Choice, Toggle } from '../primitives/aria';
 import { UnitReset, type TypedUnitForm } from './bridge';
@@ -66,7 +68,7 @@ export function Text<T>({ form, name, label, required = false, url = false, plac
   const validate = ({ value }: { value: unknown }) => (required ? syntactic.required(value) : undefined) ?? (url ? syntactic.url(value) : undefined) ?? additional?.(value);
   const Field = form.Field as unknown as (props: { name: string; validators: { onChange: typeof validate }; children: (field: BoundField) => ReactNode }) => ReactNode;
   return <Field name={name as string} validators={{ onChange: validate }}>{field => <label>{label}
-    <input aria-label={label} value={(field.state.value as string | null | undefined) ?? ''} placeholder={placeholder} required={required}
+    <Input aria-label={label} value={(field.state.value as string | null | undefined) ?? ''} placeholder={placeholder} required={required}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange(event.target.value as never)} />
     <Errors field={field} label={label}/>
@@ -80,14 +82,14 @@ export function Secret<T>({ form, name, label, required = false }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; required?: boolean;
 }) {
   return <Bound<T, string | null | undefined> form={form} name={name}>{(value, change, field) => <label>{label}
-    <input type="password" autoComplete="new-password" spellCheck={false} value={value ?? ''}
+    <Input type="password" autoComplete="new-password" spellCheck={false} value={value ?? ''}
       required={required} onBlur={field.handleBlur} onChange={event => change(event.target.value)} />
   </label>}</Bound>;
 }
 
 export function Area<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
   return <Bound<T, string | null | undefined> form={form} name={name}>{(value, change, field) => <label>{label}
-    <textarea value={value ?? ''} onBlur={field.handleBlur} onChange={event => change(event.target.value)} />
+    <Textarea value={value ?? ''} onBlur={field.handleBlur} onChange={event => change(event.target.value)} />
   </label>}</Bound>;
 }
 
@@ -99,7 +101,7 @@ export function Numeric<T>({ form, name, label, min = 1, empty = null, required 
   const validate = ({ value }: { value: unknown }) => (required ? syntactic.required(value) : undefined) ?? syntactic.positive(value) ?? additional?.(value);
   const Field = form.Field as unknown as (props: { name: string; validators: { onChange: typeof validate; onChangeListenTo?: string[] }; children: (field: BoundField) => ReactNode }) => ReactNode;
   return <Field name={name as string} validators={{ onChange: validate, onChangeListenTo: listenTo }}>{field => <label>{label}
-    <input aria-label={label} type="number" min={min} required={required} value={(field.state.value as number | string | null | undefined) ?? ''}
+    <Input aria-label={label} type="number" min={min} required={required} value={(field.state.value as number | string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value ? Number(event.target.value) : empty) as never)} />
     <Errors field={field} label={label}/>
@@ -117,7 +119,7 @@ export function NumericText<T>({ form, name, label, required = false }: { form: 
   };
   const Field = form.Field as unknown as (props: { name: string; validators: { onChange: typeof validate }; children: (field: BoundField) => ReactNode }) => ReactNode;
   return <Field name={name as string} validators={{ onChange: validate }}>{field => <label>{label}
-    <input aria-label={label} type="number" min={1} required={required} value={(field.state.value as string | null | undefined) ?? ''}
+    <Input aria-label={label} type="number" min={1} required={required} value={(field.state.value as string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value || null) as never)} />
     <Errors field={field} label={label}/>
@@ -161,7 +163,7 @@ export function Strings<T>({ form, name, label }: { form: TypedUnitForm<T>; name
     const value = (field.state.value as string[] | null | undefined) ?? [];
     return <fieldset><legend>{label}</legend>
       {value.map((entry, index) => <div className={css.names} key={index}>
-        <input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={entry}
+        <Input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={entry}
           onChange={event => field.handleChange(value.map((item, at) => at === index ? event.target.value : item) as never)} />
         <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => field.removeValue(index)}>{tx('settings:controls.remove')}{' '}</Button>
       </div>)}
@@ -191,12 +193,12 @@ export function EntryRows({ label, value, change, secret = false }: {
   const duplicate = key !== '' && key in value;
   return <fieldset><legend>{label}</legend>
     {Object.entries(value).map(([entry, current]) => <div key={entry}>
-      <label>{entry}<input type={secret ? 'password' : 'text'} autoComplete={secret ? 'new-password' : undefined} value={current}
+      <label>{entry}<Input type={secret ? 'password' : 'text'} autoComplete={secret ? 'new-password' : undefined} value={current}
         onChange={event => change({ ...value, [entry]: event.target.value })} /></label>
       <Button onClick={() => { const next = { ...value }; delete next[entry]; change(next); }}>{tx('settings:controls.remove')}{' '}{entry}</Button>
     </div>)}
     <label htmlFor={id}>{label} {tx('settings:fields.name')}</label>
-    <input id={id} value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} />
+    <Input id={id} value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} />
     <SettingsNotice text={duplicate ? `${key} ${tx('settings:fields.is-already-listed')}` : undefined}/>
     <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
   </fieldset>;

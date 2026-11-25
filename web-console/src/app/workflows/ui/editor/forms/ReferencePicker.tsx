@@ -12,6 +12,7 @@ import { IconEntry, IconPlus, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** A bounded native consumer query. Titles decorate the catalog; they never
  * decide availability, compatibility or lexical reference paths. `token`
@@ -88,7 +89,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
         if (choices[next]) { event.preventDefault(); choices[next].focus(); }
       }
     }}>
-      <input ref={searchInput} className={css.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
+      <TextInput ref={searchInput} className={css.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
       {!result && <p role="status" className={css.note}>{tx('workflows:value.analyzing')}</p>}
       {result?.failed && <p role="alert" className={css.note}>{tx('workflows:value.analysis-failed')}</p>}
       {report?.diagnostic && <p className={css.note}>{report.diagnostic}</p>}

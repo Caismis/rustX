@@ -10,6 +10,7 @@ import { rankByName } from '../primitives/rank-by-name';
 import { StateDot } from '../primitives/StateDot';
 import { IconCheckOutline16, IconCloseFill14, IconDataOutline16, IconChevronDownOutline14, IconChevronRightOutline14 } from '../primitives/icons';
 import css from './ModelSelect.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export interface ModelChoice { id: string; profiles: { id: string; label: string }[]; defaultProfile?: string }
 /** Exact native configuration intent. Choosing the current Model keeps its
@@ -187,7 +188,7 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
     {!!efforts.length && <button type="button" role="menuitem" aria-label={tx('agent:model-select.effort')} data-pane="effort" className={css.cell} onClick={() => drill('effort')}><span className={css.cellLabel}>{tx('agent:model-select.effort')}</span><span className={css.cellValue}>{effortLabel ?? modelDefaultLabel(tx, selected!)}</span><IconChevronRightOutline14 className={css.cellChevron}/></button>}
    </>}
    {pane === 'model' && <>
-    {showSearch && <div className={css.searchRow}><div className={clsx(css.search, query && css.searchWithQuery)}><input ref={search} role="searchbox" type="text" aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} aria-controls={`${id}-models`} aria-activedescendant={activeIndex < 0 ? undefined : `${id}-model-${activeIndex}`} value={query} readOnly={busy} onChange={event => { setQuery(event.target.value); setHighlight(0); }}/></div>{query && <button type="button" className={css.searchClear} aria-label={tx('agent:model-picker.clear-search')} disabled={busy} onClick={() => { setQuery(''); setHighlight(0); search.current?.focus(); }}><IconCloseFill14/></button>}</div>}
+    {showSearch && <div className={css.searchRow}><div className={clsx(css.search, query && css.searchWithQuery)}><TextInput ref={search} role="searchbox" type="text" aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} aria-controls={`${id}-models`} aria-activedescendant={activeIndex < 0 ? undefined : `${id}-model-${activeIndex}`} value={query} readOnly={busy} onChange={event => { setQuery(event.target.value); setHighlight(0); }}/></div>{query && <button type="button" className={css.searchClear} aria-label={tx('agent:model-picker.clear-search')} disabled={busy} onClick={() => { setQuery(''); setHighlight(0); search.current?.focus(); }}><IconCloseFill14/></button>}</div>}
     <div ref={groups} id={`${id}-models`} className={css.groups}>
      {modelGroups.map(group => <MenuGroup key={group.provider} label={group.provider}>{group.models.map(choice => {
       const index = modelIndex++, intent: ModelSelectionIntent = { kind: 'model', model: choice.id };

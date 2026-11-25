@@ -9,6 +9,7 @@ import { blockAt, sameDocument, type BlockPath, type NodeKind, type WorkflowDocu
 import { KindIcon, SourceIcon, ToolIcon } from '../icons';
 import { useToolCatalog } from './toolCatalog';
 import css from './Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** A node kind, or a Tool node for one builtin Tool or one Tool of an MCP
  * server or Managed Python package, as Dify's Tools tab adds a node per tool. */
@@ -113,7 +114,7 @@ export function NodeChooser({ tools, omit = [], existing, onChoose, input, previ
       {tabs.map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} className={clsx(css.chooserTab, tab === value && css.chooserTabActive)}
         onClick={() => choose(value)}>{tx(`workflows:palette.tab-${value}`)}</button>)}
     </div>
-    <label className={css.chooserSearch}><IconSearchOutline16 /><input ref={field} value={queries[tab]} placeholder={tx(`workflows:palette.search-${tab}`)} aria-label={tx(`workflows:palette.search-${tab}`)}
+    <label className={css.chooserSearch}><IconSearchOutline16 /><TextInput ref={field} value={queries[tab]} placeholder={tx(`workflows:palette.search-${tab}`)} aria-label={tx(`workflows:palette.search-${tab}`)}
       aria-controls="workflow-chooser" aria-activedescendant={items[active] ? `workflow-choice-${active}` : undefined}
       onChange={event => { const text = event.target.value; setQueries(value => ({ ...value, [tab]: text })); setActive(0); setShown(undefined); }}
       onKeyDown={event => {

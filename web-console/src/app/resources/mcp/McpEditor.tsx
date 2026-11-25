@@ -13,6 +13,7 @@ import { McpFormFields } from './McpFormFields';
 import { formatMcpJson, parseMcpJson } from './json';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import css from './McpPage.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 interface EditorProps {
   source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus; scopeControl: ReactNode; close: () => void;
@@ -216,7 +217,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
           {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} disabled={reviewNeeded} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
         </> : <fieldset className={css.formBody}>
           <McpFormFields key={formReset} value={value} change={unit.edit} invalidFields={invalidFields} validity={validity} disabled={duplicate || !unit.writable}
-            identity={<label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')}
+            identity={<label>{tx('settings:mcp.name')}<TextInput value={name} placeholder={tx('settings:mcp.name-placeholder')}
               disabled={!!focus.name || reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}/>
         </fieldset>}
         {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}

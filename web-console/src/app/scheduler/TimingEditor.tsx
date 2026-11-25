@@ -1,9 +1,10 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness Run time controls adapted to native timing; see PROVENANCE.md. */
 import { useId, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { ComboBox, Input, Button as ComboButton, ListBox, ListBoxItem, Popover } from 'react-aria-components';
+import { Autocomplete, AutocompleteInput, AutocompleteItem, AutocompleteList, AutocompletePopup } from '@/components/ui/autocomplete';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
+import { Input } from '../../presentation/primitives/Input';
 import { IconChevronDownOutline14, IconClockOutline16 } from '../../presentation/primitives/icons';
 import { DatePicker } from './DatePicker';
 import { ClockPicker } from './ClockPicker';
@@ -44,7 +45,7 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
           anchor={<Button size="sm" className={css.ruleCurrent} disabled={disabled} aria-label={t('timing.repeat')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{label(selected)}<IconChevronDownOutline14/></Button>}/>
       </div>
       {value.kind === 'interval' ? <div className={css.ruleRow}><label className={css.ruleLabel} htmlFor={id + '-quantity'}>{t('timing.number')}</label>
-        <div className={css.ruleInterval}><input id={id + '-quantity'} className={css.ruleIntervalInput} type="number" min={value.unit === 'second' ? 60 : 1} step="any" disabled={disabled} value={value.quantity} onChange={event => update({ quantity: event.target.value })}/>
+        <div className={css.ruleInterval}><Input id={id + '-quantity'} className={css.ruleIntervalInput} type="number" min={value.unit === 'second' ? 60 : 1} step="any" disabled={disabled} value={value.quantity} onChange={event => update({ quantity: event.target.value })}/>
           <span className={css.ruleIntervalUnit}>{t(value.unit === 'hour' ? 'timing.hours' : value.unit === 'minute' ? 'timing.minutes' : 'timing.seconds')}</span></div>
       </div> : <>
         {value.kind === 'weekly' && <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.weekday')}</span><div className={css.ruleWeekdays} role="group" aria-label={t('timing.weekday')}>
@@ -59,18 +60,18 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
           <ClockPicker open={picker === 'time'} anchorRef={clock} value={value.time} seconds={value.kind === 'once'} onPick={time => update({ time })} onClose={() => setPicker(undefined)} t={t}/>
         </div>}
         {value.kind === 'cron' && <div className={css.ruleRow}><label className={css.ruleLabel} htmlFor={id + '-cron'}>{t('timing.expression')}</label><div className={css.ruleControl}>
-          <input id={id + '-cron'} className={css.ruleInput} disabled={disabled} value={value.expression} spellCheck={false} onChange={event => update({ expression: event.target.value })}/>
+          <Input id={id + '-cron'} className={css.ruleInput} disabled={disabled} value={value.expression} spellCheck={false} onChange={event => update({ expression: event.target.value })}/>
           <p className={parsed ? css.ruleHint : css.ruleHintError}>{parsed ? cronPreview(parsed, t, locale) : t('timing.invalid-cron')}</p>
         </div></div>}
         <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.zone')}</span>
-          <ComboBox className={custom.zoneCombo} aria-label={t('timing.zone')} isDisabled={disabled} selectedKey={value.zone} inputValue={zoneQuery ?? zoneLabel(value.zone, locale)}
-            onInputChange={setZoneQuery} onSelectionChange={key => { if (typeof key === 'string') update({ zone: key }); setZoneQuery(undefined); }}
-            defaultFilter={(text, input) => text.toLocaleLowerCase().includes(input.toLocaleLowerCase())} menuTrigger="focus" allowsEmptyCollection>
-            <div className={custom.zoneInput}><Input placeholder={t('timing.zone-search')} onBlur={() => setZoneQuery(undefined)}/><ComboButton aria-label={t('timing.zone-search')}><IconChevronDownOutline14/></ComboButton></div>
-            <Popover className={custom.zonePopup} placement="bottom end"><ListBox items={zones} className={custom.zoneList} aria-label={t('timing.zone')}>
-              {zone => <ListBoxItem id={zone.id} textValue={zone.search} className={custom.zoneOption}>{zone.label}</ListBoxItem>}
-            </ListBox></Popover>
-          </ComboBox>
+          <div className={custom.zoneCombo}><Autocomplete items={zones.map(zone => zone.label)} value={zoneQuery ?? zoneLabel(value.zone, locale)}
+            onValueChange={setZoneQuery} openOnInputClick disabled={disabled}>
+            <AutocompleteInput aria-label={t('timing.zone')} placeholder={t('timing.zone-search')} showTrigger onBlur={() => setZoneQuery(undefined)} />
+            <AutocompletePopup className={custom.zonePopup} align="end"><AutocompleteList className={custom.zoneList} aria-label={t('timing.zone')}>
+              {zones.map((zone, index) => <AutocompleteItem key={zone.id} value={zone.label} index={index} className={custom.zoneOption}
+                onClick={() => { update({ zone: zone.id }); setZoneQuery(undefined); }}>{zone.label}</AutocompleteItem>)}
+            </AutocompleteList></AutocompletePopup>
+          </Autocomplete></div>
         </div>
       </>}
     </div>

@@ -23,6 +23,7 @@ import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../../presen
 import { IconBold, IconBulletList, IconExternal, IconFontSize, IconItalic, IconLink, IconPencil, IconStrikethrough, IconUnlink } from '../../icons';
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from '../shortcuts';
 import css from './Note.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** What a note does to the document; the canvas owns selection and history. */
 export const NoteActions = createContext<{
@@ -225,7 +226,7 @@ function LinkBar({ link, unlink }: { link: { key: string; url: string }; unlink:
   return createPortal(<div ref={element => { bar.current = element; refs.setFloating(element); }} style={floatingStyles} className={clsx(css.linkBar, !editing && css.linkOperator)}
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); dismiss(); editor.focus(); } }}>
     {editing ? <>
-      <input className={css.linkInput} value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
+      <TextInput className={css.linkInput} value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
         onChange={event => { setUrl(event.target.value); setInvalid(false); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (url) save(); } }} />
       <button type="button" className={css.primary} disabled={!url} onClick={save}>{tx('workflows:note.ok')}</button>
     </> : <>

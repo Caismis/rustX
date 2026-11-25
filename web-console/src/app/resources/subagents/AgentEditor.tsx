@@ -20,6 +20,7 @@ import { extensionEntries } from '../shared/inventory';
 import css from './Subagents.module.css';
 import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
 import { AgentSkillFields } from './AgentSkillFields';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export type AgentDraft = NamedAgentProfileDocument & { name?: string };
 
@@ -189,7 +190,7 @@ export function AgentEditor({
                   <div>
                     <label>
                       {tx('resources:subagents.name')}
-                      <input
+                      <TextInput
                         value={name ?? value.name ?? ''}
                         readOnly={!creating}
                         maxLength={64}
@@ -224,7 +225,7 @@ export function AgentEditor({
                 </div>
                 <label>
                   {tx('settings:extension-detail.description')}
-                  <input value={value.description ?? ''} onChange={event => update({ description: event.target.value })} />
+                  <TextInput value={value.description ?? ''} onChange={event => update({ description: event.target.value })} />
                 </label>
                 <div className={css.prompt}>
                   <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
@@ -260,7 +261,7 @@ export function AgentEditor({
                 <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
                 <label className={css.timeout}>
                   {tx('settings:extension-detail.child-timeout-ms')}
-                  <input type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
+                  <TextInput type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
                 </label>
                 <fieldset className={css.featureGroup}>
                   <legend>{tx('settings:extension-detail.extensions-default-off')}</legend>

@@ -14,6 +14,7 @@ import { useNavigationGuard } from '../../settings/forms/guard';
 import { IconPicker } from '../../workflows/ui/WorkflowIcon';
 import { SkillIcon, skillAssetUrl } from './SkillIcon';
 import css from './SkillDetail.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** The display write fences its own compare-and-set: `expected_revision` is
  * the authoritative revision the draft was seeded from — supplied per call,
@@ -184,7 +185,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
     </div>
     {editable && <SettingsGroup title={tx('resources:skills.edit-display')}>
       <SettingsRow label={tx('resources:skills.display-name')}>
-        <input value={draft.display_name ?? ''} maxLength={128} aria-label={tx('resources:skills.display-name')} disabled={saving}
+        <TextInput value={draft.display_name ?? ''} maxLength={128} aria-label={tx('resources:skills.display-name')} disabled={saving}
           onChange={event => update('display_name', event.target.value)} />
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.short-description')} vertical>
@@ -208,10 +209,10 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
       <SettingsRow label={tx('resources:skills.asset-paths')} vertical>
         <div className={css.pathFields} id={iconSectionId}>
           <label>{tx('resources:skills.small-icon-path')}
-            <input value={draft.icon_small ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
+            <TextInput value={draft.icon_small ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
               onChange={event => update('icon_small', event.target.value)} /></label>
           <label>{tx('resources:skills.large-icon-path')}
-            <input value={draft.icon_large ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
+            <TextInput value={draft.icon_large ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
               onChange={event => update('icon_large', event.target.value)} /></label>
         </div>
       </SettingsRow>

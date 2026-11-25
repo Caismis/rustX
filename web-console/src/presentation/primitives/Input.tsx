@@ -2,7 +2,7 @@
 // Input: coss ui text input atom. Composer textareas are NOT this atom — they
 // live with the conversation package.
 
-import type { InputHTMLAttributes, ReactNode } from 'react'
+import { forwardRef, type InputHTMLAttributes, type ReactNode } from 'react'
 import { Input as CossInput } from '@/components/ui/input'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 
@@ -11,17 +11,17 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
  * @param props.icon - optional leading icon node.
  * @returns the coss input, or an input group when an icon is present.
  */
-export function Input({ icon, className, ...rest }: {
+export const Input = forwardRef<HTMLInputElement, {
   icon?: ReactNode
   className?: string
-} & InputHTMLAttributes<HTMLInputElement>) {
+} & InputHTMLAttributes<HTMLInputElement>>(function Input({ icon, className, ...rest }, ref) {
   if (icon == null) {
-    return <CossInput data-primitive-input="" className={className} {...rest} />
+    return <CossInput ref={ref} data-primitive-input="" className={className} {...rest} />
   }
   return (
     <InputGroup className={className}>
       <InputGroupAddon>{icon}</InputGroupAddon>
-      <InputGroupInput data-primitive-input="" {...rest} />
+      <InputGroupInput ref={ref} data-primitive-input="" {...rest} />
     </InputGroup>
   )
-}
+})

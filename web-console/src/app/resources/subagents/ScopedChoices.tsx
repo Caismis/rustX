@@ -3,6 +3,7 @@ import type { SourceScope } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { IconSearchOutline16 } from '../../../presentation/primitives/icons';
 import css from './Subagents.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export function resourceScopes(scope: SourceScope): readonly SourceScope[] {
   return scope === 'workspace' ? ['workspace', 'user'] : ['user'];
@@ -33,7 +34,7 @@ export function ResourceChoices({ label, options, selected, change }: {
   return <div className={css.resourceList} role="group" aria-label={label}>
     {searchable && <div className={css.filter}>
       <IconSearchOutline16 />
-      <input type="search" aria-label={tx('resources:subagents.filter-choices-for', { p0: label })}
+      <TextInput type="search" aria-label={tx('resources:subagents.filter-choices-for', { p0: label })}
         placeholder={tx('resources:subagents.filter-choices')} value={query} onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter') event.preventDefault(); }} />
     </div>}

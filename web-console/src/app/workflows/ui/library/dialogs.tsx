@@ -11,6 +11,7 @@ import { FailureText } from '../notices';
 import { DEFAULT_WORKFLOW_ICON, IconPicker } from '../WorkflowIcon';
 import css from '../Workflows.module.css';
 import catalog from '../../../../presentation/catalog/Catalog.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** The native identity rule, checked early for presentation; native decides. */
 const ID = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -48,7 +49,7 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   const facts = (target: string) => <Facts scopeLabel={scopeLabel} target={target} directory={directory} />;
   const idField = <label className={css.field}>
     <span>{tx('workflows:dialog.id')}</span>
-    <input value={id} autoFocus spellCheck={false} placeholder={tx('workflows:dialog.id-placeholder')} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
+    <TextInput value={id} autoFocus spellCheck={false} placeholder={tx('workflows:dialog.id-placeholder')} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
       onChange={event => { setId(event.target.value.trim()); setTouched(true); }} disabled={blocked} />
     <small id="workflow-id-hint" className={touched && problem ? css.error : undefined}>{touched && problem ? tx(problem) : tx('workflows:dialog.id-hint')}</small>
   </label>;
@@ -159,7 +160,7 @@ function InfoForm({ confirmation, scopeLabel, library, busy, title: heading, sou
             <IconPicker value={icon} onChange={setIcon} disabled={blocked} className={css.iconTile} />
             <label className={css.field}>
               <span>{tx('workflows:dialog.title')}</span>
-              <input className={css.plain} value={title} autoFocus maxLength={128} disabled={blocked} placeholder={tx('workflows:dialog.title-placeholder')}
+              <TextInput className={css.plain} value={title} autoFocus maxLength={128} disabled={blocked} placeholder={tx('workflows:dialog.title-placeholder')}
                 onChange={event => { setTitle(event.target.value); setTouched(true); if (!source && !idEdited) setId(suggestedId(event.target.value)); }} />
               <small>{touched && !title.trim() ? tx('workflows:dialog.title-required') : tx('workflows:dialog.title-hint')}</small>
             </label>
@@ -173,7 +174,7 @@ function InfoForm({ confirmation, scopeLabel, library, busy, title: heading, sou
           <p className={css.formSection}>{tx('workflows:dialog.for-model')}</p>
           <label className={css.field}>
             <span>{tx('workflows:dialog.id')}</span>
-            <input value={id} spellCheck={false} placeholder={tx('workflows:dialog.id-placeholder')} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint" readOnly={!!source}
+            <TextInput value={id} spellCheck={false} placeholder={tx('workflows:dialog.id-placeholder')} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint" readOnly={!!source}
               onChange={event => { setId(event.target.value.trim()); setTouched(true); setIdEdited(true); }} disabled={blocked} />
             <small id="workflow-id-hint" className={touched && problem ? css.error : undefined}>{touched && problem ? tx(problem) : tx(source ? 'workflows:dialog.id-fixed' : 'workflows:dialog.id-hint')}</small>
           </label>

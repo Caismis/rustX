@@ -20,6 +20,7 @@ import { ConflictActions, DraftTextField, JsonField, useFieldError } from '../fo
 import { useNode, type PanelProps } from './shared';
 import { useFieldDraft } from '../forms/drafts';
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 const StructuredOutputDialog = lazy(() => import('../forms/structured-output/StructuredOutputDialog').then(module => ({ default: module.StructuredOutputDialog })));
 
@@ -152,7 +153,7 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
 export function SliderField({ label, unit, min, max, step, value, onChange, numberFirst = false }: { label: string; unit?: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void; numberFirst?: boolean }) {
   const set = (text: string) => { const next = Number(text); if (Number.isInteger(next) && next >= min && next <= max) onChange(next); };
   const range = <input type="range" min={min} max={max} step={step} value={value} aria-label={label} onChange={event => set(event.target.value)} />;
-  const number = <span className={css.retryNumber}><input type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
+  const number = <span className={css.retryNumber}><TextInput type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
   // As Dify's Loop count: the number, then the slider, under the heading.
   return numberFirst ? <div className={css.sliderRow}>{number}{range}</div>
     : <label className={css.retryField}><span>{label}</span>{range}{number}</label>;
@@ -288,7 +289,7 @@ export function RouteId({ value, address, label, className, rename }: { value: s
   } });
   let shown = field.text;
   if (!key) try { const parsed: unknown = JSON.parse(shown); if (typeof parsed === 'string') shown = parsed; } catch { /* Detached text remains visible. */ }
-  return <><input className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
+  return <><TextInput className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />
     {field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></>;
 }

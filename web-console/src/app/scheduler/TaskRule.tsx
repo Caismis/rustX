@@ -10,6 +10,7 @@ import { TimingEditor } from './TimingEditor';
 import css from './TaskManager.module.css';
 import extra from './scheduler.module.css';
 import { hasUnrepresentableProperty, readJson } from '../../../shared/json-numbers';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export function TaskRule({ value, record, model, connected, reload }: {
   value: ScheduleSnapshot; record: ScheduleHeader; model: SchedulerModel; connected: boolean; reload: () => Promise<void>;
@@ -72,7 +73,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
   const instant = record.state === 'enabled' && record.next_due_utc ? displayInstant(record.next_due_utc, locale) : undefined;
   return <>
     <header className={css.detailHeader}>
-      {finished ? <h2 className={css.readonlyName}>{value.title}</h2> : <input className={css.editName} aria-label={t('detail.name')} value={draft.title} disabled={disabled} maxLength={240} onChange={event => editor.edit({ ...draft, title: event.target.value })}/>}
+      {finished ? <h2 className={css.readonlyName}>{value.title}</h2> : <TextInput className={css.editName} aria-label={t('detail.name')} value={draft.title} disabled={disabled} maxLength={240} onChange={event => editor.edit({ ...draft, title: event.target.value })}/>}
     </header>
     {record.state === 'disabled' && <p className={css.detailNotice} role="status">{t('task.paused-note')}</p>}
     {instant && <div className={css.nextRun}><span>{t('detail.nextRun')}</span><span>{instant.absolute} <span className={css.nextRunRelative}>({instant.relative})</span></span></div>}

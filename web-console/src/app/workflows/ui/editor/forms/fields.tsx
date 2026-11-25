@@ -8,6 +8,7 @@ import { readJson } from '../../../../../../shared/json-numbers';
 import { IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {
   const id = useId(), hintId = `${id}-hint`;
@@ -30,7 +31,7 @@ export function TextField({ label, hint, value, field, onChange, multiline, mono
   return <Field label={label} hint={hint}>{(id, describedBy) => multiline
     ? <textarea id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(css.input, css.textarea, mono && css.mono)} value={value} placeholder={placeholder}
       onFocus={() => setSession(value => value + 1)} onChange={event => onChange(event.target.value, `${key}:${session}`)} />
-    : <input id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(css.input, mono && css.mono)} value={value} placeholder={placeholder} list={list} spellCheck={false}
+    : <TextInput id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(css.input, mono && css.mono)} value={value} placeholder={placeholder} list={list} spellCheck={false}
       onFocus={() => setSession(value => value + 1)} onChange={event => onChange(event.target.value, `${key}:${session}`)} />}
   </Field>;
 }
@@ -85,7 +86,7 @@ export function JsonField({ label, hint, value, rows = 6, line, address }: { lab
   const describe = useFieldError();
   const field = useFieldDraft({ address, canonical: JSON.stringify(value, null, 2) ?? 'null', command: jsonCommand(address) });
   return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <>
-    {line ? <input id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.mono)} value={field.text} spellCheck={false}
+    {line ? <TextInput id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.mono)} value={field.text} spellCheck={false}
       onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
     : <textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
       onChange={event => field.change(event.target.value)} onBlur={field.apply}
@@ -109,7 +110,7 @@ export function DraftTextField({ label, value, address, multiline, compact, bare
   try { const parsed: unknown = JSON.parse(field.text); if (typeof parsed === 'string') text = parsed; } catch { /* Kept detached text remains inspectable. */ }
   const control = (id?: string, describedBy?: string) => multiline
     ? <textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={bare ? css.bareTextarea : clsx(css.input, css.textarea)} rows={bare ? 1 : undefined} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
-    : <input id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.currentTarget.blur(); field.apply(); } }} />;
+    : <TextInput id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.currentTarget.blur(); field.apply(); } }} />;
   return compact ? <>{control()}{field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></> : <Field label={label} error={describe(field.error)}>{(id, describedBy) => <>{control(id, describedBy)}<ConflictActions field={field} /></>}</Field>;
 }
 
@@ -125,7 +126,7 @@ export function NumberField({ label, value, address, min = 0, max = Number.MAX_S
     if (number < min || number > max) return { status: 'rejected', error: { kind: 'range', min, max } };
     return { status: 'applied', document: setField(document, location, number) };
   } });
-  return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <><input id={id} data-workflow-field={encodeField(location)} className={css.input} type="text" inputMode="numeric" value={field.text} aria-describedby={describedBy} aria-invalid={!!field.error || undefined}
+  return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <><TextInput id={id} data-workflow-field={encodeField(location)} className={css.input} type="text" inputMode="numeric" value={field.text} aria-describedby={describedBy} aria-invalid={!!field.error || undefined}
     onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} /><ConflictActions field={field} /></>}</Field>;
 }
 
@@ -149,7 +150,7 @@ export function KeyField({ label, hint, value, address, rename, onRenamed, error
     },
   });
   const shown = describe(field.error) ?? error;
-  const input = (id?: string, describedBy?: string) => <input id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-label={compact} aria-invalid={!!field.error || !!error || undefined} className={clsx(css.input, css.mono, compact && css.branchKey)} value={field.text} spellCheck={false}
+  const input = (id?: string, describedBy?: string) => <TextInput id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-label={compact} aria-invalid={!!field.error || !!error || undefined} className={clsx(css.input, css.mono, compact && css.branchKey)} value={field.text} spellCheck={false}
     onChange={event => field.change(event.target.value)} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />;
   if (compact) return <span className={css.keyField}>{input()}{shown && <small className={clsx(css.hint, css.hintError)} role="alert">{shown}</small>}<ConflictActions field={field} /></span>;

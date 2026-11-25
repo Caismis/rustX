@@ -20,6 +20,7 @@ import { IconFile, IconFolder } from '../icons';
 import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText } from '../notices';
 import { LibraryDialog } from './dialogs';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 const VIEW = 'rustx-workflows-library-view';
 const readView = (): CatalogView => {
@@ -262,7 +263,7 @@ function WorkspaceChooser({ workspaces, selected, onSelect }: { workspaces: read
       else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(index - 1, 0)); }
       else if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active].id); }
     }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) close(false); }}>
-      <label className={css.search}><IconSearchOutline16 /><input autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder={tx('workflows:scope.search-workspaces')} aria-label={tx('workflows:scope.search-workspaces')} aria-controls="workflow-workspaces" aria-activedescendant={matches[active] ? `workflow-workspace-${matches[active].id}` : undefined} /></label>
+      <label className={css.search}><IconSearchOutline16 /><TextInput autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder={tx('workflows:scope.search-workspaces')} aria-label={tx('workflows:scope.search-workspaces')} aria-controls="workflow-workspaces" aria-activedescendant={matches[active] ? `workflow-workspace-${matches[active].id}` : undefined} /></label>
       <ul id="workflow-workspaces" role="listbox" className={css.options} aria-label={tx('workflows:scope.choose-workspace')}>
         {matches.map((row, index) => <li key={row.id} id={`workflow-workspace-${row.id}`} role="option" aria-selected={row.id === selected} className={clsx(css.option, index === active && css.optionActive)}
           onMouseDown={event => event.preventDefault()} onClick={() => choose(row.id)}>

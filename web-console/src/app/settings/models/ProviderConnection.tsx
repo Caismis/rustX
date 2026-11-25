@@ -3,6 +3,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ProviderView, ProviderWrite, SourceScope } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
+import { Input } from '../../../presentation/primitives/Input';
 import { Menu } from '../../../presentation/primitives/Menu';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { IconEditOutline16, IconEllipsisOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
@@ -102,7 +103,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     <div className={cards.detailHeader}>
       <h3 title={name} aria-label={title}>
         <ProviderIcon icon={value.icon} size={18}/>
-        {renaming ? <input ref={nameInput} className={cards.providerRename} type="text" defaultValue={name}
+        {renaming ? <Input ref={nameInput} className={cards.providerRename} type="text" defaultValue={name}
           aria-label={tx('settings:models.provider-display-name')}
           onCompositionStart={() => { nameEditing.current.composing = true; }}
           onCompositionEnd={() => { nameEditing.current.composing = false; }}
@@ -160,7 +161,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     {inspecting && <p className={cards.inherited}>{tx('settings:forms.using-global')}</p>}
     <fieldset disabled={inspecting} className={cards.connectionFields}>
       <label>{tx('settings:models-page.endpoint')}
-        <input type="url" required value={value.base_url} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && endpointError}
+        <Input type="url" required value={value.base_url} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && endpointError}
           placeholder={/* i18n-raw: example URL */ 'https://api.example.com/v1'}
           onChange={event => edit({ ...value, base_url: event.target.value })}/>
       </label>
@@ -170,14 +171,14 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         ['anthropic_messages', tx('settings:models.api-anthropic')],
       ]} onChange={protocol => edit({ ...value, protocol })}/>
       {credential.kind === 'environment' ? <label>{tx('settings:models-page.environment-variable')}
-        <input required value={credential.variable} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
+        <Input required value={credential.variable} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
           onChange={event => changeCredential({ kind: 'environment', variable: event.target.value })}/>
       </label> : <div ref={keyEditor} className={cards.secret}>
         <div className={cards.keyHeading}>
           <label htmlFor={keyId}>{tx('settings:models-page.new-literal-credential')}</label>
           {getKey && !authored && <a href={getKey} target="_blank" rel="noreferrer">{tx('settings:models.get-key')}</a>}
         </div>
-        <input id={keyId} type={keyVisible ? 'text' : 'password'} autoComplete="new-password" spellCheck={false}
+        <Input id={keyId} type={keyVisible ? 'text' : 'password'} autoComplete="new-password" spellCheck={false}
           value={key} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
           placeholder={credential.kind === 'retain' || inspecting ? tx('settings:models.saved-key-placeholder') : tx('settings:models.enter-key')}
           onChange={event => {

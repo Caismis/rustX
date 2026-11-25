@@ -4,7 +4,6 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
-import { Button as AriaButton } from 'react-aria-components';
 import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
@@ -31,6 +30,7 @@ import { ProviderConnection } from './ProviderConnection';
 import { ProviderNameDialog } from './ProviderTemplates';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export interface ModelsPageProps {
   client: AppServerClient; host?: ProductHostWorkspaces; target: SettingsTarget;
@@ -261,9 +261,9 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
         tone={restoresGlobal ? 'restore' : 'destructive'} settle={settle} disabled={removeDisabled} onConfirm={() => unit.submit(true)}
         title={restoresGlobal ? tx('settings:bridge.use-the-global-default-for-value', { p0: title }) : tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: tx(scope === 'workspace' ? 'settings:extension-detail.workspace' : 'settings:extension-detail.user') })}
         description={<p>{tx(restoresGlobal ? 'settings:forms.restore-help' : 'settings:models-page.any-source-that-names-this-model-identity-keeps-naming-it-native')}</p>}
-        renderTrigger={(open, ref) => <AriaButton ref={ref} className={cards.iconButton} aria-label={removeLabel} isDisabled={removeDisabled} onPress={open}>
+        renderTrigger={(open, ref) => <Button ref={ref} className={cards.iconButton} aria-label={removeLabel} disabled={removeDisabled} onClick={open}>
           {restoresGlobal ? <IconRefreshOutline16 size={14}/> : <IconTrashOutline16 size={14}/>}
-        </AriaButton>}/>}
+        </Button>}/>}
       <Switch checked={!model.hidden && !providerHidden} label={tx('settings:models.show-model', { p0: model.id })}
         disabled={!entry.authored || providerHidden || !unit.admitted || unit.draft || unit.awaitingObservation}
         onChange={checked => unit.apply({ ...model, hidden: !checked })}/>
@@ -394,7 +394,7 @@ function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSele
           if (!id) setProfile({ mode: 'model_default' });
           else setProfile({ mode: 'explicit', id });
         }} />}
-      <label>{tx('settings:models-page.output-limit-auxiliary')}<input type="number" min="1" value={auxiliary.max_output_tokens?.mode === 'limit' ? auxiliary.max_output_tokens.tokens : ''}
+      <label>{tx('settings:models-page.output-limit-auxiliary')}<TextInput type="number" min="1" value={auxiliary.max_output_tokens?.mode === 'limit' ? auxiliary.max_output_tokens.tokens : ''}
         onChange={event => setAuxiliary({ ...auxiliary, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
       <JsonObjectEditor label={tx('settings:models-page.request-parameter-overrides-auxiliary')} value={auxiliary.request_params ?? undefined}
         change={request_params => setAuxiliary({ ...auxiliary, request_params })} />
@@ -414,7 +414,7 @@ function ModelRequestFields<T extends RequestFields>({ value, change, profiles, 
   return <>
     {showProfile && <ModelProfileChoice label={tx(labels.profile)} profile={value.profile} profiles={profiles}
       onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }}/>}
-    <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
+    <label>{tx(labels.limit)}<TextInput type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
       onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
     <JsonObjectEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
   </>;

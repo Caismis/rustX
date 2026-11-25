@@ -15,6 +15,7 @@ import { SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presenta
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
 import css from '../../../presentation/settings/SettingsContent.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** User-adjustable runtime limits and environment values. Source revisions,
  * raw projections and process internals are not settings controls. */
@@ -152,7 +153,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
               {value.summary_output_cap?.mode === 'limit' && (
                 <label>
                   {tx('settings:advanced-page.summary-token-limit')}
-                  <input
+                  <TextInput
                     type="number"
                     min="1"
                     value={value.summary_output_cap.tokens}
@@ -228,7 +229,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           {(value, change) => (
             <label>
               {tx('settings:advanced-page.maximum-concurrent-children')}
-              <input
+              <TextInput
                 type="number"
                 min="1"
                 value={value.max_concurrent ?? ''}
