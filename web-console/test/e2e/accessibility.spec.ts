@@ -54,7 +54,10 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     expect(await selectedSettingsPage(page)).toBe('General');
     await keyboardPage('Advanced');
     await tabTo(page.getByRole('button', { name: 'Connection', exact: true })); await page.keyboard.press('Enter');
-    await tabTo(page.getByLabel('Connection mode')); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+    await tabTo(page.getByLabel('Connection mode'));
+    // Base UI select vocabulary: the first ArrowDown opens the listbox on the
+    // current value, the second moves to the next option, Enter chooses it.
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('WebSocket endpoint')); await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type(fixture.endpoint);
     await tabTo(page.getByLabel('Access token')); await page.keyboard.type(fixture.token);
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
