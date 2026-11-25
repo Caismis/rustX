@@ -18,17 +18,17 @@ impl RuntimeInner {
     fn complete_runtime_catalog_observation(&self, state: &mut CoordinatorState, observed: u64) {
         // This candidate's observation cut belongs to its newly adopted
         // physical authority; an older generation's cursor cannot cover it.
-        state.catalog_revision = observed;
-        if self.capability.catalog_revision() > state.catalog_revision {
+        state.config.catalog_revision = observed;
+        if self.capability.catalog_revision() > state.config.catalog_revision {
             // A committed older capture cannot consume a later live result.
             self.wake.eligibility.notify_one();
-        } else if std::mem::take(&mut state.catalog_admission_deferred) {
+        } else if std::mem::take(&mut state.config.catalog_admission_deferred) {
             // Resume only the admission pass that previously reached this cut.
             self.wake.notify.notify_one();
         }
         #[cfg(test)]
         self.runtime_catalog_processed
-            .send_replace(state.catalog_revision);
+            .send_replace(state.config.catalog_revision);
     }
 
     /// An older candidate cannot consume a distinct, later successful result.
@@ -46,13 +46,15 @@ impl RuntimeInner {
     /// observed during an Attempt stays pending until that whole Attempt settles.
     #[allow(clippy::too_many_lines)] // One native capture, validation and capability commit boundary.
     pub(super) fn publish_runtime_catalogs_locked(&self, state: &mut CoordinatorState) {
-        state.catalog_commit_blocked = false;
+        state.config.catalog_commit_blocked = false;
         let Some(prepare) = self.runtime_catalog_preparer.get() else {
             return;
         };
         let observed = self.capability.catalog_revision();
-        if observed == state.catalog_revision && state.pending_runtime_catalog.is_none() {
-            if state.catalog_admission_deferred {
+        if observed == state.config.catalog_revision
+            && state.config.pending_runtime_catalog.is_none()
+        {
+            if state.config.catalog_admission_deferred {
                 self.complete_runtime_catalog_observation(state, observed);
             }
             return;
@@ -60,13 +62,13 @@ impl RuntimeInner {
         // Detached executions and children retain their frozen tools/specs and
         // physical leases. They do not own publication of future runtime facts.
         if !self.lifecycle.is_running()
-            || state.current_attempt.is_some()
-            || state.manual_compaction.is_some()
+            || state.foreground.slot.blocks_runtime_publication()
+            || state.foreground.manual_tail.is_unreaped()
         {
             return;
         }
         let (captured, authority, refresh_sequence, candidate) =
-            match state.pending_runtime_catalog.take() {
+            match state.config.pending_runtime_catalog.take() {
                 Some(pending) => (
                     pending.catalog_revision,
                     pending.authority,
@@ -100,7 +102,7 @@ impl RuntimeInner {
         };
         let prepared = match candidate.and_then(|candidate| {
             candidate
-                .map(|candidate| prepare(candidate, &state.resources))
+                .map(|candidate| prepare(candidate, &state.config.resources))
                 .transpose()
         }) {
             Ok(Some(prepared)) => prepared,
@@ -123,13 +125,14 @@ impl RuntimeInner {
         {
             Ok(committed) => committed,
             Err(crate::capabilities::CapabilityCommitError::Busy) => {
-                state.pending_runtime_catalog = candidate.map(|candidate| PendingRuntimeCatalog {
-                    catalog_revision: captured,
-                    authority,
-                    refresh_sequence,
-                    candidate,
-                });
-                state.catalog_commit_blocked = true;
+                state.config.pending_runtime_catalog =
+                    candidate.map(|candidate| PendingRuntimeCatalog {
+                        catalog_revision: captured,
+                        authority,
+                        refresh_sequence,
+                        candidate,
+                    });
+                state.config.catalog_commit_blocked = true;
                 #[cfg(test)]
                 self.runtime_catalog_blocked.notify_one();
                 return;
@@ -168,16 +171,25 @@ impl RuntimeInner {
         }
         self.complete_runtime_catalog_observation(state, observed);
         if state
+            .config
             .runtime_catalog_failure
             .as_ref()
             .is_none_or(|failure| failure.refresh_sequence.is_none())
         {
-            state.runtime_catalog_failure = Some(RuntimeCatalogFailure {
+            state.config.runtime_catalog_failure = Some(RuntimeCatalogFailure {
                 authority: authority.clone(),
                 refresh_sequence: None,
             });
-            state.resources = Arc::new(state.resources.with_runtime_catalog_failure(diagnostic));
-            self.observe_resources(state, state.resources.capability_availability().clone());
+            state.config.resources = Arc::new(
+                state
+                    .config
+                    .resources
+                    .with_runtime_catalog_failure(diagnostic),
+            );
+            self.observe_resources(
+                state,
+                state.config.resources.capability_availability().clone(),
+            );
         }
     }
 
@@ -190,36 +202,39 @@ impl RuntimeInner {
         refresh_sequence: Option<u64>,
     ) {
         let failure_reason = state
+            .config
             .resources
             .inspection()
             .resource_diagnostics
             .iter()
             .find(|diagnostic| diagnostic.field == "runtime.catalog")
             .map(|diagnostic| diagnostic.reason.clone());
-        let may_clear_failure = state
-            .runtime_catalog_failure
-            .as_ref()
-            .is_none_or(|failure| {
-                failure.refresh_sequence.is_none_or(|failed_sequence| {
-                    refresh_sequence.is_some_and(|sequence| sequence > failed_sequence)
-                })
-            });
+        let may_clear_failure =
+            state
+                .config
+                .runtime_catalog_failure
+                .as_ref()
+                .is_none_or(|failure| {
+                    failure.refresh_sequence.is_none_or(|failed_sequence| {
+                        refresh_sequence.is_some_and(|sequence| sequence > failed_sequence)
+                    })
+                });
         let clears_failure = failure_reason.is_some() && may_clear_failure;
         if may_clear_failure {
-            state.runtime_catalog_failure = None;
-        } else if let Some(failure) = &mut state.runtime_catalog_failure {
+            state.config.runtime_catalog_failure = None;
+        } else if let Some(failure) = &mut state.config.runtime_catalog_failure {
             failure.authority = self
                 .capability
                 .reanchor_runtime_refresh_authority(&failure.authority);
         }
-        if snapshot.revision() == state.resources.capability().revision()
-            && availability == *state.resources.capability_availability()
+        if snapshot.revision() == state.config.resources.capability().revision()
+            && availability == *state.config.resources.capability_availability()
             && !clears_failure
         {
             return;
         }
         let resources = RuntimeResourceSnapshot::from_prepared(
-            state.resources.revision().next(),
+            state.config.resources.revision().next(),
             resources,
             snapshot,
         );
@@ -228,14 +243,15 @@ impl RuntimeInner {
         } else {
             resources
         };
-        state.resources = Arc::new(resources);
-        state.binding_revision = state
+        state.config.resources = Arc::new(resources);
+        state.config.binding_revision = state
+            .config
             .binding_revision
             .checked_add(1)
             .expect("Session binding revision exhausted");
         self.observe_resources(state, availability);
         self.runtime_catalog_publication
-            .send_replace(state.binding_revision);
+            .send_replace(state.config.binding_revision);
     }
 
     /// Publishes the adopted generation, Session model and approval mode of
@@ -246,11 +262,12 @@ impl RuntimeInner {
         state: &CoordinatorState,
         availability: crate::capabilities::CapabilityAvailability,
     ) {
-        let resources = &state.resources;
+        let resources = &state.config.resources;
         let model = state
+            .config
             .model
             .read_source()
-            .at_binding_revision(state.binding_revision);
+            .at_binding_revision(state.config.binding_revision);
         self.observe(ConversationObservation::Resources {
             capability: crate::observation::capability_source::CapabilityReadSource::new(
                 Arc::clone(resources.capability()),
@@ -258,7 +275,7 @@ impl RuntimeInner {
                 model.capabilities().cloned(),
             ),
             model,
-            approval_mode: state.effective_approval_mode,
+            approval_mode: state.config.effective_approval_mode,
             display: crate::observation::resource_source::ResourceReadSource::new(Arc::clone(
                 resources,
             )),
@@ -287,14 +304,8 @@ impl RuntimeInner {
     /// does not use this predicate: it applies under the coordinator lock
     /// without waiting on background or subagent residency (Issue #544 P13).
     fn live_execution_blocks_configuration(&self, state: &CoordinatorState) -> bool {
-        state.current_attempt.is_some()
-            || state.scheduled.is_some()
-            || state.manual_compaction.is_some()
-            || self
-                .manual_tail
-                .lock()
-                .expect("manual tail owner")
-                .is_some()
+        state.foreground.slot.is_foreground_active()
+            || state.foreground.manual_tail.is_unreaped()
             || self.durability_gate.is_failed()
     }
 
@@ -330,20 +341,20 @@ impl RuntimeInner {
     /// before Attempt admission, so commit and admission have one order.
     #[allow(clippy::too_many_lines)] // One validation, publication and evidence boundary.
     pub(super) fn commit_staged_configuration_locked(&self, state: &mut CoordinatorState) {
-        state.configuration_commit_waiting = false;
-        let Some(staged) = state.staged_configuration.take() else {
+        state.config.configuration_commit_waiting = false;
+        let Some(staged) = state.config.staged_configuration.take() else {
             return;
         };
         if !self.lifecycle.is_running()
             || !staged.desired.is_current()
-            || state.binding_revision != staged.prepared.baseline
+            || state.config.binding_revision != staged.prepared.baseline
             || !Arc::ptr_eq(&staged.prepared.owner, &self.configuration_owner)
         {
             self.settle_staged_configuration(staged, StagedOutcome::Superseded);
             return;
         }
         if self.configuration_commit_blocked(state) {
-            state.staged_configuration = Some(staged);
+            state.config.staged_configuration = Some(staged);
             return;
         }
         let StagedConfiguration {
@@ -354,13 +365,14 @@ impl RuntimeInner {
             settled,
         } = staged;
         let failure_reason = state
+            .config
             .resources
             .inspection()
             .resource_diagnostics
             .iter()
             .find(|diagnostic| diagnostic.field == "runtime.catalog")
             .map(|diagnostic| diagnostic.reason.clone());
-        let revision = state.resources.revision().next();
+        let revision = state.config.resources.revision().next();
         let context_only = prepared.capability.is_none();
         let (resources, availability) = if prepared.capability.is_some() {
             let committed = match self
@@ -371,8 +383,8 @@ impl RuntimeInner {
                 Err(crate::capabilities::CapabilityCommitError::Busy) => {
                     // A lifecycle admission is crossing the capability plane;
                     // the worker waits for that exact owner to release it.
-                    state.configuration_commit_waiting = true;
-                    state.staged_configuration = Some(StagedConfiguration {
+                    state.config.configuration_commit_waiting = true;
+                    state.config.staged_configuration = Some(StagedConfiguration {
                         prepared,
                         desired,
                         reason,
@@ -416,8 +428,8 @@ impl RuntimeInner {
             ) {
                 Ok(()) => {}
                 Err(crate::capabilities::CapabilityCommitError::Busy) => {
-                    state.configuration_commit_waiting = true;
-                    state.staged_configuration = Some(StagedConfiguration {
+                    state.config.configuration_commit_waiting = true;
+                    state.config.staged_configuration = Some(StagedConfiguration {
                         prepared,
                         desired,
                         reason,
@@ -444,6 +456,7 @@ impl RuntimeInner {
         };
         let preserves_failure = context_only
             || state
+                .config
                 .runtime_catalog_failure
                 .as_ref()
                 .is_some_and(|failure| {
@@ -455,29 +468,30 @@ impl RuntimeInner {
         } else {
             resources
         };
-        let previous_binding = state.binding_revision;
+        let previous_binding = state.config.binding_revision;
         let binding_revision = previous_binding
             .checked_add(1)
             .expect("Session binding revision exhausted");
         let change = ConfigurationChange::between(
             reason,
             (previous_binding, binding_revision),
-            (&state.resources, &state.model),
+            (&state.config.resources, &state.config.model),
             (&resources, &prepared.model),
         );
         retain(binding_revision);
         if !preserves_failure {
-            state.runtime_catalog_failure = None;
+            state.config.runtime_catalog_failure = None;
         }
-        let reopens = state.model.unavailable().is_some() && prepared.model.unavailable().is_none();
-        state.model = prepared.model;
-        state.effective_approval_mode = resources
+        let reopens =
+            state.config.model.unavailable().is_some() && prepared.model.unavailable().is_none();
+        state.config.model = prepared.model;
+        state.config.effective_approval_mode = resources
             .configuration()
-            .map_or(state.effective_approval_mode, |generation| {
+            .map_or(state.config.effective_approval_mode, |generation| {
                 generation.config.approval_mode
             });
-        state.resources = resources;
-        state.binding_revision = binding_revision;
+        state.config.resources = resources;
+        state.config.binding_revision = binding_revision;
         // The change record and the generation it describes share this
         // critical section: no Attempt can be admitted between them. A record
         // that cannot be made durable fences admission instead of letting new
@@ -578,6 +592,7 @@ impl ConversationRuntime {
         let state = self.inner.lock_state();
         self.inner.capability.needs_mcp_refresh()
             || state
+                .config
                 .runtime_catalog_failure
                 .as_ref()
                 .is_some_and(|failure| {
@@ -592,17 +607,19 @@ impl ConversationRuntime {
     /// An explicit retry uses the committed source closure and queues only its
     /// capability result. The eventual idle commit retains whatever model and
     /// context the runtime has adopted by then.
+    #[allow(clippy::too_many_lines)] // One capture/validate/commit pass, kept linear.
     pub(crate) async fn refresh_runtime_catalogs(&self) -> Result<(), String> {
         let sequence = {
             let mut state = self.inner.lock_state();
             if !self.inner.lifecycle.is_running() {
                 return Err("runtime is not running".into());
             }
-            state.runtime_refresh_sequence = state
+            state.config.runtime_refresh_sequence = state
+                .config
                 .runtime_refresh_sequence
                 .checked_add(1)
                 .expect("runtime refresh sequence exhausted");
-            state.runtime_refresh_sequence
+            state.config.runtime_refresh_sequence
         };
         let captured = self.inner.capability.catalog_revision();
         let (authority, outcome) = self.inner.capability.prepare_runtime_refresh().await;
@@ -621,7 +638,9 @@ impl ConversationRuntime {
         // owners are returned out of the native lock before they are retired.
         let completion = (|| {
             let mut state = self.inner.lock_state();
-            if !self.inner.lifecycle.is_running() || sequence != state.runtime_refresh_sequence {
+            if !self.inner.lifecycle.is_running()
+                || sequence != state.config.runtime_refresh_sequence
+            {
                 return Err((
                     "runtime refresh was superseded".to_owned(),
                     outcome.ok().map(Box::new),
@@ -651,23 +670,25 @@ impl ConversationRuntime {
                         return Err(("runtime refresh was superseded".to_owned(), None));
                     }
                     let diagnostic = format!("last explicit MCP refresh failed: {error}");
-                    state.runtime_catalog_failure = Some(RuntimeCatalogFailure {
+                    state.config.runtime_catalog_failure = Some(RuntimeCatalogFailure {
                         authority: authority.clone(),
                         refresh_sequence: Some(sequence),
                     });
-                    state.resources = Arc::new(
+                    state.config.resources = Arc::new(
                         state
+                            .config
                             .resources
                             .with_runtime_catalog_failure(diagnostic.clone()),
                     );
                     self.inner.observe_resources(
                         &state,
-                        state.resources.capability_availability().clone(),
+                        state.config.resources.capability_availability().clone(),
                     );
                     return Err((diagnostic, None));
                 }
             };
             let previous = state
+                .config
                 .pending_runtime_catalog
                 .replace(PendingRuntimeCatalog {
                     catalog_revision: captured,
@@ -710,7 +731,11 @@ impl ConversationRuntime {
 
     #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn has_pending_runtime_catalog(&self) -> bool {
-        self.inner.lock_state().pending_runtime_catalog.is_some()
+        self.inner
+            .lock_state()
+            .config
+            .pending_runtime_catalog
+            .is_some()
     }
 
     #[cfg(all(test, feature = "mcp-fixture"))]
@@ -743,7 +768,10 @@ impl ConversationRuntime {
     ) -> Result<PreparedConfiguration, String> {
         let (baseline, old) = {
             let state = self.inner.lock_state();
-            (state.binding_revision, state.resources.clone())
+            (
+                state.config.binding_revision,
+                state.config.resources.clone(),
+            )
         };
         let prepared = prepare(&self.inner.capability)
             .await
@@ -780,7 +808,7 @@ impl ConversationRuntime {
         binding: &ContextBinding,
         selection: SessionModelConfig,
     ) -> Result<(), String> {
-        let current = self.inner.lock_state().model.clone();
+        let current = self.inner.lock_state().config.model.clone();
         let model = current
             .carry(binding.configuration.models.clone(), selection)
             .map_err(|error| error.to_string())?;
@@ -807,9 +835,9 @@ impl ConversationRuntime {
         let (baseline, old, old_model) = {
             let state = self.inner.lock_state();
             (
-                state.binding_revision,
-                state.resources.clone(),
-                state.model.clone(),
+                state.config.binding_revision,
+                state.config.resources.clone(),
+                state.config.model.clone(),
             )
         };
         let binding = compose(old.configuration().ok_or("missing configuration")?);
@@ -841,7 +869,7 @@ impl ConversationRuntime {
     /// between its currency check and this staging.
     pub(crate) fn stage_configuration(&self, staged: StagedConfiguration) {
         let mut state = self.inner.lock_state();
-        if let Some(previous) = state.staged_configuration.replace(staged) {
+        if let Some(previous) = state.config.staged_configuration.replace(staged) {
             self.inner
                 .settle_staged_configuration(previous, StagedOutcome::Superseded);
         }
@@ -866,13 +894,17 @@ impl ConversationRuntime {
     /// The Session model state configuration changes are compared against.
     #[cfg(test)]
     pub(crate) fn model_state_for_test(&self) -> crate::model::session::SessionModelState {
-        self.inner.lock_state().model.clone()
+        self.inner.lock_state().config.model.clone()
     }
 
     /// Whether a candidate is staged and waiting for the safe boundary.
     #[cfg(test)]
     pub(crate) fn has_staged_configuration(&self) -> bool {
-        self.inner.lock_state().staged_configuration.is_some()
+        self.inner
+            .lock_state()
+            .config
+            .staged_configuration
+            .is_some()
     }
 
     /// Publish the shared child capacity unit. `capacity` is the desired
@@ -888,8 +920,14 @@ impl ConversationRuntime {
             subagents.publish_configuration(capacity);
         }
         let mut state = self.inner.lock_state();
-        if let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) {
-            state.resources = Arc::new(state.resources.with_configuration(configuration));
+        if let Some(configuration) = state
+            .config
+            .resources
+            .configuration()
+            .and_then(|c| compose(c))
+        {
+            state.config.resources =
+                Arc::new(state.config.resources.with_configuration(configuration));
         }
     }
 
@@ -905,7 +943,7 @@ impl ConversationRuntime {
             self.inner.lifecycle.state(),
             ConversationLifecycleState::Inactive
         );
-        state.binding_revision = revision;
+        state.config.binding_revision = revision;
     }
 
     /// Publish a newly available Model Catalog to this Session for future
@@ -941,31 +979,34 @@ impl ConversationRuntime {
         retain: impl FnOnce(u64) -> Result<(), String>,
     ) -> Result<bool, String> {
         let mut state = self.inner.lock_state();
-        let mut model = state.model.clone();
+        let mut model = state.config.model.clone();
         if !model.publish_catalog(models) {
             return Ok(false);
         }
         let configuration = compose(
             state
+                .config
                 .resources
                 .configuration()
                 .ok_or("the adopted generation carries no configuration")?,
         );
         let resources = Arc::new(
             state
+                .config
                 .resources
                 .with_configuration(configuration)
-                .with_revision(state.resources.revision().next()),
+                .with_revision(state.config.resources.revision().next()),
         );
         let revision = state
+            .config
             .binding_revision
             .checked_add(1)
             .expect("Session binding revision exhausted");
         retain(revision)?;
-        state.binding_revision = revision;
-        state.model = model;
+        state.config.binding_revision = revision;
+        state.config.model = model;
         let availability = resources.capability_availability().clone();
-        state.resources = resources;
+        state.config.resources = resources;
         self.inner.observe_resources(&state, availability);
         Ok(true)
     }
@@ -991,27 +1032,33 @@ impl ConversationRuntime {
         // Approval / ExecutionPolicy publishes immediately under this lock.
         // Live Attempts keep the mode frozen at their admission; background and
         // subagent residency never delay the session-level mode swap (P13).
-        let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) else {
+        let Some(configuration) = state
+            .config
+            .resources
+            .configuration()
+            .and_then(|c| compose(c))
+        else {
             return Ok(StagedOutcome::Committed);
         };
         let approval_mode = configuration.config.approval_mode;
         let resources = Arc::new(
             state
+                .config
                 .resources
                 .with_configuration(configuration)
-                .with_revision(state.resources.revision().next()),
+                .with_revision(state.config.resources.revision().next()),
         );
         // The unit keeps its own commit identity: it changes the generation
         // future Attempts freeze, never the Session binding.
         let change = ConfigurationChange::between(
             crate::runtime::configuration_commit::ConfigurationChangeReason::Source,
-            (state.binding_revision, state.binding_revision),
-            (&state.resources, &state.model),
-            (&resources, &state.model),
+            (state.config.binding_revision, state.config.binding_revision),
+            (&state.config.resources, &state.config.model),
+            (&resources, &state.config.model),
         );
-        state.effective_approval_mode = approval_mode;
+        state.config.effective_approval_mode = approval_mode;
         let availability = resources.capability_availability().clone();
-        state.resources = resources;
+        state.config.resources = resources;
         let outcome = self.inner.record_effective_change(&mut state, change);
         self.inner.observe_resources(&state, availability);
         Ok(outcome)
@@ -1023,14 +1070,18 @@ impl ConversationRuntime {
     pub(crate) fn configuration_cut(&self) -> ConfigurationCut {
         let state = self.inner.lock_state();
         ConfigurationCut {
-            binding_revision: state.binding_revision,
-            resources: state.resources.clone(),
-            approval_mode: state.effective_approval_mode,
-            session_model: state.explicit_model.then(|| state.model.view().configured),
-            effective_model: state.model.view(),
+            binding_revision: state.config.binding_revision,
+            resources: state.config.resources.clone(),
+            approval_mode: state.config.effective_approval_mode,
+            session_model: state
+                .config
+                .explicit_model
+                .then(|| state.config.model.view().configured),
+            effective_model: state.config.model.view(),
             admitted_attempt: state
-                .current_attempt
-                .as_ref()
+                .foreground
+                .slot
+                .as_attempt()
                 .map(|attempt| attempt.configuration.clone()),
         }
     }

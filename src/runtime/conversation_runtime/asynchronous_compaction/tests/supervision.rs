@@ -91,11 +91,7 @@ async fn failed_primary_staging_returns_the_ready_result_to_its_owner() {
     }));
     runtime.submit_inbound(text_content("next turn")).unwrap();
     runtime.inner.admit_next_attempt();
-    within_liveness_guard(
-        "failed staging settlement",
-        runtime.child_attempt_settlement(0),
-    )
-    .await;
+    within_liveness_guard("failed staging settlement", runtime.attempt_settlement(0)).await;
     assert!(observed.load(Ordering::Acquire));
     assert!(runtime.cancel_compaction(&admission.operation_id).unwrap());
     runtime.inner.reap_async_compaction(false).await;
@@ -335,14 +331,11 @@ async fn capture_failure_keeps_cancellation(named: bool) {
         );
     } else {
         // Represent the foreground owner holding capture until settlement.
-        runtime.inner.lock_state().manual_compaction = Some(CurrentManualCompaction {
-            operation_id: admission.operation_id.clone(),
-            cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-        });
+        hold_idle_installation(&mut runtime.inner.lock_state());
         runtime.inner.begin_drain().unwrap();
         assert!(admission.cancellation.is_cancelled());
         coordinator.fail_admission(&admission, &error).unwrap();
-        runtime.inner.lock_state().manual_compaction = None;
+        release_idle_installation(&mut runtime.inner.lock_state());
         runtime.inner.settlement.notify_waiters();
     }
     assert!(work.lifecycle.lock().unwrap().is_none());
@@ -405,7 +398,7 @@ async fn manual_compaction_hydration_failure_fences_subsequent_admission() {
 
     let directory = tempfile::tempdir().unwrap();
     let (runtime, _, store) = fixture(&directory, Vec::new()).await;
-    assert!(runtime.inner.lock_state().conversation.owned().is_none());
+    assert!(runtime.inner.lock_state().foreground.slot.owned().is_none());
     *store.fail_projected_history_when.lock().unwrap() = Some(Box::new(|| true));
     let Err(ManualCompactionError::Durable { message }) = runtime.admit_compaction(None, None)
     else {

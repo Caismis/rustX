@@ -197,7 +197,7 @@ async fn t08_t14_t19_pages_and_value_reads_leave_native_progress_queued() {
     );
     inner.unpark_projection_worker();
     release.send_replace(true);
-    let settlement = fixture.runtime.child_attempt_settlement(0).await;
+    let settlement = fixture.runtime.attempt_settlement(0).await;
     assert_eq!(
         Some(settlement.attempt_id),
         checkpoint.snapshot.attempt.as_ref().unwrap().attempt_id

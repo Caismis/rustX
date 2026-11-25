@@ -83,12 +83,9 @@ fn parked_script(release: watch::Receiver<bool>) -> Vec<GatedStep> {
 }
 
 async fn settle(runtime: &ConversationRuntime, after: u64) -> NativeAttemptSettlement {
-    tokio::time::timeout(
-        BACKGROUND_LIVENESS_GUARD,
-        runtime.child_attempt_settlement(after),
-    )
-    .await
-    .expect("the original native attempt settles")
+    tokio::time::timeout(BACKGROUND_LIVENESS_GUARD, runtime.attempt_settlement(after))
+        .await
+        .expect("the original native attempt settles")
 }
 
 async fn cancel(attachment: Arc<RuntimeAttachment>, id: u64) -> RuntimeClientResponse {

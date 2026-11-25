@@ -369,7 +369,9 @@ async fn child_fixture_scoped_at_with_mode(
             // A child has no subagent registry: recursion is absent by
             // construction.
             subagents: None,
-            workflow_output: None,
+            // The fixture serves `serve_child_delegation`, which requires a
+            // declared child role for `child_control` (Issue #606).
+            role: crate::runtime::conversation_runtime::ConversationRole::SubagentChild,
         },
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )
@@ -565,9 +567,17 @@ async fn parent_runtime_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> ParentRuntimePlane {
-    compose_parent_runtime_plane(dir, conversation, parent_scripts, false, false, None)
-        .await
-        .0
+    compose_parent_runtime_plane(
+        dir,
+        conversation,
+        parent_scripts,
+        false,
+        false,
+        None,
+        crate::runtime::conversation_runtime::ConversationRole::Root,
+    )
+    .await
+    .0
 }
 
 /// The same parent plane with a Runtime Client host bound before
@@ -579,8 +589,16 @@ async fn parent_runtime_host_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> (ParentRuntimePlane, rustx::runtime_client::RuntimeClientHost) {
-    let (plane, host) =
-        compose_parent_runtime_plane(dir, conversation, parent_scripts, true, false, None).await;
+    let (plane, host) = compose_parent_runtime_plane(
+        dir,
+        conversation,
+        parent_scripts,
+        true,
+        false,
+        None,
+        crate::runtime::conversation_runtime::ConversationRole::Root,
+    )
+    .await;
     (plane, host.expect("the host plane composes the host"))
 }
 
@@ -589,6 +607,7 @@ async fn parent_runtime_host_plane_for_activation(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
     activation: SubagentId,
+    role: crate::runtime::conversation_runtime::ConversationRole,
 ) -> (ParentRuntimePlane, rustx::runtime_client::RuntimeClientHost) {
     let (plane, host) = compose_parent_runtime_plane(
         dir,
@@ -597,6 +616,7 @@ async fn parent_runtime_host_plane_for_activation(
         true,
         false,
         Some(activation),
+        role,
     )
     .await;
     (plane, host.expect("scoped host before activation"))
@@ -610,6 +630,7 @@ async fn compose_parent_runtime_plane(
     with_host: bool,
     with_goal: bool,
     activation: Option<SubagentId>,
+    role: crate::runtime::conversation_runtime::ConversationRole,
 ) -> (
     ParentRuntimePlane,
     Option<rustx::runtime_client::RuntimeClientHost>,
@@ -700,7 +721,7 @@ async fn compose_parent_runtime_plane(
         clock: None,
         initial_messages: Vec::new(),
         subagents: Some(registry.clone()),
-        workflow_output: None,
+        role,
     };
     // The scoped intermediate Child is intentionally parked while its nested
     // source is inspected. A real elapsed model-idle timeout would retire the
@@ -6438,6 +6459,7 @@ async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
         false,
         true,
         None,
+        crate::runtime::conversation_runtime::ConversationRole::Root,
     )
     .await;
     let (finish, wait) = support::fake::model_release();

@@ -10,6 +10,26 @@ mod cancellation;
 mod idle_fit;
 mod supervision;
 
+const TEST_SCHEDULE_OWNER: &str = "compaction-test-scheduled-owner";
+
+fn hold_idle_installation(state: &mut super::super::CoordinatorState) {
+    use super::super::foreground::{CurrentScheduled, ScheduledCancellation};
+    use crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId;
+
+    assert!(state.foreground.slot.start_scheduled(CurrentScheduled {
+        id: ScheduledWorkflowStartId::try_from(format!("swf_{:064x}", 0)).unwrap(),
+        owner: TEST_SCHEDULE_OWNER.into(),
+        cancellation: ScheduledCancellation::new(),
+        graph_finished: false,
+        recovered_writer: false,
+        settlement_wake: Arc::default(),
+    }));
+}
+
+fn release_idle_installation(state: &mut super::super::CoordinatorState) {
+    assert!(state.foreground.slot.finish_scheduled(TEST_SCHEDULE_OWNER));
+}
+
 fn permission_reminder_ids(
     request: &crate::model::ModelRequest,
     mode: crate::runtime::ApprovalMode,
@@ -55,8 +75,8 @@ async fn capture_background(
 ) {
     let (context, revision, tools, prompt) = {
         let mut state = runtime.inner.lock_state();
-        let model = state.model.snapshot().unwrap();
-        let resources = state.resources.clone();
+        let model = state.config.model.snapshot().unwrap();
+        let resources = state.config.resources.clone();
         let context = runtime
             .inner
             .context_runtime_with_assembly(
@@ -64,7 +84,7 @@ async fn capture_background(
                 resources.context_assembly().clone(),
                 runtime.inner.model_timeout_policy,
                 &resources,
-                Arc::new(runtime.inner.auxiliary.clone()),
+                Arc::new(runtime.inner.auxiliary_executor.clone()),
             )
             .unwrap()
             .with_runtime_resources(&resources);
@@ -75,7 +95,8 @@ async fn capture_background(
         (
             context,
             state
-                .conversation
+                .foreground
+                .slot
                 .hydrate(runtime.inner.store.as_ref())
                 .unwrap()
                 .unwrap()
@@ -158,7 +179,7 @@ async fn ready_background_cancels_and_joins_competing_blocking_scope() {
     )
     .await;
     let adapter: Arc<dyn ModelAdapter> = model.clone();
-    runtime.inner.lock_state().model = fixture_session_model(
+    runtime.inner.lock_state().config.model = fixture_session_model(
         &[
             FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions)
                 .with_context_window(4_096)
@@ -167,8 +188,12 @@ async fn ready_background_cancels_and_joins_competing_blocking_scope() {
         "scripted/scripted",
         &ScriptedAdapterFactory::new(adapter),
     );
-    let mode = runtime.inner.lock_state().effective_approval_mode;
-    runtime.inner.lock_state().last_permission_reminder_mode = Some(mode);
+    let mode = runtime.inner.lock_state().config.effective_approval_mode;
+    runtime
+        .inner
+        .lock_state()
+        .config
+        .last_permission_reminder_mode = Some(mode);
     runtime.activate();
     let background = start_background(&runtime).await;
     let work = runtime.inner.async_work(&background).unwrap();
@@ -196,7 +221,7 @@ async fn ready_background_cancels_and_joins_competing_blocking_scope() {
     .await;
     release_background.send(true).unwrap();
     let _ = within_liveness_guard("recovered Attempt settlement", async {
-        let settled = runtime.child_attempt_settlement(0);
+        let settled = runtime.attempt_settlement(0);
         tokio::pin!(settled);
         loop {
             let changed = work.changed.notified();
@@ -353,7 +378,7 @@ async fn mandatory_join_rejects_provably_insufficient_frozen_scope() {
     )
     .await;
     let adapter: Arc<dyn ModelAdapter> = model.clone();
-    runtime.inner.lock_state().model = fixture_session_model(
+    runtime.inner.lock_state().config.model = fixture_session_model(
         &[
             FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions)
                 .with_context_window(4_096)
@@ -371,8 +396,8 @@ async fn mandatory_join_rejects_provably_insufficient_frozen_scope() {
     .await;
     let (context, request) = {
         let state = runtime.inner.lock_state();
-        let model = state.model.snapshot().unwrap();
-        let resources = state.resources.clone();
+        let model = state.config.model.snapshot().unwrap();
+        let resources = state.config.resources.clone();
         let context = runtime
             .inner
             .context_runtime_with_assembly(
@@ -380,7 +405,7 @@ async fn mandatory_join_rejects_provably_insufficient_frozen_scope() {
                 resources.context_assembly().clone(),
                 runtime.inner.model_timeout_policy,
                 &resources,
-                Arc::new(runtime.inner.auxiliary.clone()),
+                Arc::new(runtime.inner.auxiliary_executor.clone()),
             )
             .unwrap();
         let request = crate::model::ModelRequest {
@@ -446,8 +471,12 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
         },
     )
     .await;
-    let mode = runtime.inner.lock_state().effective_approval_mode;
-    runtime.inner.lock_state().last_permission_reminder_mode = Some(mode);
+    let mode = runtime.inner.lock_state().config.effective_approval_mode;
+    runtime
+        .inner
+        .lock_state()
+        .config
+        .last_permission_reminder_mode = Some(mode);
     runtime.activate();
     let admission = start_background(&runtime).await;
     let mut parks = model.parks();
@@ -535,7 +564,7 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
     assert!(runtime.inner.store.projection_head().unwrap().is_none());
     assert_eq!(model.requests()[1], frozen_primary);
     release_primary.send(true).unwrap();
-    let _ = within_liveness_guard("primary settlement", runtime.child_attempt_settlement(0)).await;
+    let _ = within_liveness_guard("primary settlement", runtime.attempt_settlement(0)).await;
     within_liveness_guard("idle installation", async {
         loop {
             let changed = work.changed.notified();
@@ -567,17 +596,17 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
     // The actual idle commit re-arms the reminder after the older frozen
     // primary has settled. Only the next started primary consumes it.
     assert_eq!(
-        runtime.inner.lock_state().last_permission_reminder_mode,
+        runtime
+            .inner
+            .lock_state()
+            .config
+            .last_permission_reminder_mode,
         None
     );
     runtime
         .submit_inbound(text_content("after idle activation"))
         .unwrap();
-    let _ = within_liveness_guard(
-        "post-activation primary",
-        runtime.child_attempt_settlement(1),
-    )
-    .await;
+    let _ = within_liveness_guard("post-activation primary", runtime.attempt_settlement(1)).await;
     let after_activation = model.requests()[2].clone();
     let reminder_ids = permission_reminder_ids(&after_activation, mode);
     assert_eq!(reminder_ids.len(), 1);
@@ -586,13 +615,17 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
         frozen_primary.effective_system_prompt
     );
     assert_eq!(
-        runtime.inner.lock_state().last_permission_reminder_mode,
+        runtime
+            .inner
+            .lock_state()
+            .config
+            .last_permission_reminder_mode,
         Some(mode)
     );
     runtime
         .submit_inbound(text_content("after reminder consumption"))
         .unwrap();
-    let _ = within_liveness_guard("subsequent primary", runtime.child_attempt_settlement(2)).await;
+    let _ = within_liveness_guard("subsequent primary", runtime.attempt_settlement(2)).await;
     let subsequent = model.requests()[3].clone();
     assert_eq!(
         subsequent.effective_system_prompt,
@@ -700,7 +733,7 @@ async fn late_ready_before_start_preserves_the_prepared_snapshot() {
         "primary provider has not started"
     );
     pre_start.release();
-    let _ = within_liveness_guard("primary settlement", runtime.child_attempt_settlement(0)).await;
+    let _ = within_liveness_guard("primary settlement", runtime.attempt_settlement(0)).await;
     let snapshots = runtime
         .inner
         .store
@@ -847,8 +880,8 @@ async fn accepted_ready_result_can_install_after_original_scope_deadline() {
     let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
     let (mut context, model, tools, prompt, mut conversation) = {
         let mut state = runtime.inner.lock_state();
-        let model = state.model.snapshot().unwrap();
-        let resources = state.resources.clone();
+        let model = state.config.model.snapshot().unwrap();
+        let resources = state.config.resources.clone();
         let context = runtime
             .inner
             .context_runtime_with_assembly(
@@ -856,7 +889,7 @@ async fn accepted_ready_result_can_install_after_original_scope_deadline() {
                 resources.context_assembly().clone(),
                 runtime.inner.model_timeout_policy,
                 &resources,
-                Arc::new(runtime.inner.auxiliary.clone()),
+                Arc::new(runtime.inner.auxiliary_executor.clone()),
             )
             .unwrap();
         let sections = resources
@@ -870,10 +903,11 @@ async fn accepted_ready_result_can_install_after_original_scope_deadline() {
             render_effective_system_prompt(&sections),
             {
                 state
-                    .conversation
+                    .foreground
+                    .slot
                     .hydrate(runtime.inner.store.as_ref())
                     .unwrap();
-                state.conversation.lend().unwrap()
+                state.foreground.slot.lend().unwrap()
             },
         )
     };
@@ -970,11 +1004,9 @@ async fn accepted_ready_result_can_install_after_original_scope_deadline() {
     )
     .unwrap();
     assert!(matches!(result, ActivationOutcome::Committed(_)));
-    runtime
-        .inner
-        .lock_state()
-        .conversation
-        .restore(conversation);
+    runtime.inner.lock_state().foreground.slot = super::super::foreground::ForegroundSlot::Idle(
+        super::super::foreground::IdleConversation::Owned(conversation),
+    );
     runtime
         .inner
         .publish_compaction_status(CompactionOperationStatus {
@@ -1133,8 +1165,9 @@ async fn explicit_cancel_targets_only_the_named_independent_operation() {
         !runtime
             .inner
             .lock_state()
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .unwrap()
             .cancellation
             .is_cancelled()
@@ -1142,7 +1175,7 @@ async fn explicit_cancel_targets_only_the_named_independent_operation() {
     assert!(!runtime.cancel_compaction(&admission.operation_id).unwrap());
     assert_eq!(model.requests().len(), 2);
     release_primary.send(true).unwrap();
-    let _ = within_liveness_guard("primary settlement", runtime.child_attempt_settlement(0)).await;
+    let _ = within_liveness_guard("primary settlement", runtime.attempt_settlement(0)).await;
     assert!(runtime.inner.store.projection_head().unwrap().is_none());
     runtime.shutdown().await.unwrap();
 }
@@ -1266,8 +1299,8 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
     runtime.activate();
     let (context, revision, tools, prompt) = {
         let mut state = runtime.inner.lock_state();
-        let model = state.model.snapshot().unwrap();
-        let resources = state.resources.clone();
+        let model = state.config.model.snapshot().unwrap();
+        let resources = state.config.resources.clone();
         let context = runtime
             .inner
             .context_runtime_with_assembly(
@@ -1275,7 +1308,7 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
                 resources.context_assembly().clone(),
                 runtime.inner.model_timeout_policy,
                 &resources,
-                Arc::new(runtime.inner.auxiliary.clone()),
+                Arc::new(runtime.inner.auxiliary_executor.clone()),
             )
             .unwrap()
             .with_runtime_resources(&resources);
@@ -1286,7 +1319,8 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
         (
             context,
             state
-                .conversation
+                .foreground
+                .slot
                 .hydrate(runtime.inner.store.as_ref())
                 .unwrap()
                 .unwrap()
@@ -1378,14 +1412,14 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
         (
             crate::runtime::configuration_commit::PreparedConfiguration {
                 owner: runtime.inner.configuration_owner.clone(),
-                baseline: state.binding_revision,
-                preview: Arc::new(state.resources.with_configuration(configuration)),
+                baseline: state.config.binding_revision,
+                preview: Arc::new(state.config.resources.with_configuration(configuration)),
                 model: replacement,
                 capability: None,
                 resources: None,
             },
-            state.binding_revision,
-            state.resources.revision(),
+            state.config.binding_revision,
+            state.config.resources.revision(),
         )
     };
     assert!(runtime.idle_epoch().is_err());
@@ -1410,14 +1444,17 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
             .unwrap(),
         crate::runtime::configuration_commit::StagedOutcome::Committed
     );
-    assert_eq!(runtime.inner.lock_state().binding_revision, baseline + 1);
+    assert_eq!(
+        runtime.inner.lock_state().config.binding_revision,
+        baseline + 1
+    );
     assert_ne!(
-        runtime.inner.lock_state().resources.revision(),
+        runtime.inner.lock_state().config.resources.revision(),
         prior_revision
     );
     {
         let state = runtime.inner.lock_state();
-        let current = state.model.snapshot().unwrap();
+        let current = state.config.model.snapshot().unwrap();
         assert_ne!(
             current.primary().invocation_config().model,
             frozen_request.invocation.model
@@ -1452,11 +1489,8 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
     })
     .await;
     runtime.cancel_current_attempt(&trigger).unwrap();
-    let _ = within_liveness_guard(
-        "trigger Attempt settlement",
-        runtime.child_attempt_settlement(0),
-    )
-    .await;
+    let _ =
+        within_liveness_guard("trigger Attempt settlement", runtime.attempt_settlement(0)).await;
     assert!(!runtime.has_current_attempt());
     assert!(!admission.cancellation.is_cancelled());
     assert_eq!(
@@ -1466,19 +1500,12 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
     runtime
         .submit_inbound(text_content("a later Attempt completes"))
         .unwrap();
-    let _ = within_liveness_guard(
-        "later Attempt settlement",
-        runtime.child_attempt_settlement(1),
-    )
-    .await;
+    let _ = within_liveness_guard("later Attempt settlement", runtime.attempt_settlement(1)).await;
     assert!(!admission.cancellation.is_cancelled());
 
     // Prevent idle maintenance from consuming Ready while the test controls
     // the selected-result handoff below.
-    runtime.inner.lock_state().manual_compaction = Some(CurrentManualCompaction {
-        operation_id: crate::runtime::identity::CompactionOperationId::new("test-maintenance"),
-        cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-    });
+    hold_idle_installation(&mut runtime.inner.lock_state());
 
     let waiting = AttemptId::new("waiting-attempt");
     let waiter_cancel = CancellationSignal::new();
@@ -1555,7 +1582,7 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
         .unwrap();
 
     runtime.inner.cancel_async_compaction();
-    runtime.inner.lock_state().manual_compaction = None;
+    release_idle_installation(&mut runtime.inner.lock_state());
     runtime.shutdown().await.unwrap();
     assert_eq!(model.streams_exited_count(), 3);
     let mut events = Vec::new();
@@ -1589,7 +1616,7 @@ async fn settled_trigger_releases_its_abandoned_capture() {
     runtime
         .submit_inbound(text_content("finish the trigger"))
         .unwrap();
-    within_liveness_guard("trigger settlement", runtime.child_attempt_settlement(0)).await;
+    within_liveness_guard("trigger settlement", runtime.attempt_settlement(0)).await;
     within_liveness_guard("abandoned capture status", async {
         loop {
             let changed = work.changed.notified();
@@ -1632,7 +1659,7 @@ async fn drain_releases_abandoned_capture_after_unrelated_attempt() {
     runtime
         .submit_inbound(text_content("unrelated turn"))
         .unwrap();
-    within_liveness_guard("unrelated settlement", runtime.child_attempt_settlement(0)).await;
+    within_liveness_guard("unrelated settlement", runtime.attempt_settlement(0)).await;
     assert!(matches!(work.state.lock().unwrap().phase, Phase::Capturing));
     assert!(!admission.cancellation.is_cancelled());
     within_liveness_guard("abandoned capture drain", runtime.shutdown())
@@ -1701,10 +1728,7 @@ async fn idle_claim_retires_deferred_ready_and_supervises_generation() {
 
     // Hold the idle slot while the physical worker settles, then change the
     // current model so this previously valid capture cannot fit now.
-    runtime.inner.lock_state().manual_compaction = Some(CurrentManualCompaction {
-        operation_id: crate::runtime::identity::CompactionOperationId::new("idle-test-slot"),
-        cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-    });
+    hold_idle_installation(&mut runtime.inner.lock_state());
     release.send(true).unwrap();
     within_liveness_guard("Summary worker joined", async {
         loop {
@@ -1721,7 +1745,7 @@ async fn idle_claim_retires_deferred_ready_and_supervises_generation() {
     let adapter: Arc<dyn ModelAdapter> = model.clone();
     {
         let mut state = runtime.inner.lock_state();
-        state.model = fixture_session_model(
+        state.config.model = fixture_session_model(
             &[
                 FixtureModel::text("scripted/small", ModelProtocol::OpenAiChatCompletions)
                     .with_context_window(1_024)
@@ -1730,7 +1754,7 @@ async fn idle_claim_retires_deferred_ready_and_supervises_generation() {
             "scripted/small",
             &ScriptedAdapterFactory::new(adapter),
         );
-        state.manual_compaction = None;
+        release_idle_installation(&mut state);
     }
     runtime.inner.install_ready_async_when_idle().await;
     within_liveness_guard("ineligible Ready result deferred", async {

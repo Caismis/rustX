@@ -27,12 +27,7 @@ async fn selected_work() -> SelectedWork {
     .await;
     runtime.activate();
     // Keep idle installation out of the selection handoff owned by this test.
-    runtime.inner.lock_state().manual_compaction = Some(CurrentManualCompaction {
-        operation_id: crate::runtime::identity::CompactionOperationId::new(
-            "cancel-defer-maintenance",
-        ),
-        cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-    });
+    hold_idle_installation(&mut runtime.inner.lock_state());
     let admission = start_background(&runtime).await;
     let work = runtime.inner.async_work(&admission).unwrap();
     within_liveness_guard("defer fixture Ready publication", async {
@@ -110,7 +105,7 @@ async fn assert_cancelled_and_retired(selected: &SelectedWork) {
     );
     // Return the test installer's foreground ownership only after its status
     // settles, just as a real installer returns the checked-out conversation.
-    selected.runtime.inner.lock_state().manual_compaction = None;
+    release_idle_installation(&mut selected.runtime.inner.lock_state());
     selected.runtime.inner.settlement.notify_waiters();
     within_liveness_guard(
         "cancelled installation shutdown",

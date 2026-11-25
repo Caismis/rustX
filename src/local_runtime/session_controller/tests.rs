@@ -12,7 +12,7 @@ use super::*;
 async fn session_create_publishes_while_another_session_provider_is_blocked() {
     use crate::model::{ModelEvent, ModelFinishReason};
     use crate::runtime::conversation_runtime::{
-        ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
+        ConversationContextConfig, ConversationRole, ConversationRuntime, RuntimeConversationConfig,
     };
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep, model_release};
 
@@ -63,7 +63,7 @@ async fn session_create_publishes_while_another_session_provider_is_blocked() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect("runtime");
     let controller = crate::local_runtime::session_controller::SessionController::new(catalog);

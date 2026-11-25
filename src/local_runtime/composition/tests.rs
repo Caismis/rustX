@@ -676,7 +676,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
         .unwrap();
     tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        runtime.runtime().child_attempt_settlement(0),
+        runtime.runtime().attempt_settlement(0),
     )
     .await
     .unwrap();

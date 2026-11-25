@@ -91,7 +91,7 @@ impl RuntimeInner {
                 resources.context_assembly().clone(),
                 model_timeout_policy,
                 &resources,
-                Arc::new(self.auxiliary.clone()),
+                Arc::new(self.auxiliary_executor.clone()),
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
@@ -101,19 +101,22 @@ impl RuntimeInner {
             permission_task_message,
             recovered_permission_task_message,
         ) = {
-            let mut state = self.state.lock().expect("coordinator lock");
+            let mut state = self.lock_state();
             (
-                state.parent_turn_permits.is_none(),
-                state.last_permission_reminder_mode,
-                state.permission_task_message.clone(),
-                state.recovered_permission_task_message.take(),
+                state
+                    .child()
+                    .and_then(|child| child.parent_turn_permits)
+                    .is_none(),
+                state.config.last_permission_reminder_mode,
+                state.config.permission_task_message.clone(),
+                state.foreground.recovered_permission_task_message.take(),
             )
         };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
             asynchronous: Some(Arc::new(
                 super::asynchronous_compaction::RuntimeCompactionCoordinator(Arc::downgrade(self)),
             )),
-            workspace_changes: if record_changes && self.workflow_output.is_none() {
+            workspace_changes: if record_changes && self.role.is_root() {
                 Some(crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
@@ -154,13 +157,13 @@ impl RuntimeInner {
                             tool_deadline: tool_deadline_policy,
                         },
                     )
-                    .with_workflow_models(self.auxiliary.clone());
+                    .with_workflow_models(self.auxiliary_executor.clone());
                     if let Some(registry) = self.subagents.clone() {
                         context = context.with_agent_registry(std::sync::Arc::new(registry));
                     }
                     context
                 }),
-            workflow_output: self.workflow_output.clone(),
+            workflow_output: self.role.workflow_output(),
             approval_mode,
             last_permission_reminder_mode,
             permission_task_message,
@@ -181,7 +184,7 @@ impl RuntimeInner {
         };
         let reviewer = std::sync::Arc::new(
             crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
-                self.auxiliary.clone(),
+                self.auxiliary_executor.clone(),
                 auxiliary_invocation,
                 model_timeout_policy,
                 resources.revision().get(),
@@ -298,17 +301,21 @@ impl RuntimeInner {
             // (its in-memory content stayed consistent with the durable
             // Ledger: the failed commit installed nothing).
             let durable_failure = result.durable_failure.clone();
-            state.latest_settlement = Some(NativeAttemptSettlement {
-                ordinal: state.admitted_attempts,
+            let ordinal = state.foreground.admitted_attempts;
+            state.foreground.latest_settlement = Some(NativeAttemptSettlement {
+                ordinal,
                 attempt_id: attempt_id.clone(),
                 outcome: NativeAttemptOutcome::from_execution(&result.outcome),
             });
             if let Some(fanout) = self.pending.get() {
                 fanout.child_settled();
             }
-            state.conversation.restore(result.conversation);
-            state.permission_task_message = result.permission_task_message;
-            state.last_permission_reminder_mode = result.permission_reminder_consumed;
+            let finished = state
+                .foreground
+                .slot
+                .finish_attempt(&attempt_id, result.conversation);
+            state.config.permission_task_message = result.permission_task_message;
+            state.config.last_permission_reminder_mode = result.permission_reminder_consumed;
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
                     Some(crate::agent::DurableFailureKind::Compaction) => {
@@ -324,13 +331,7 @@ impl RuntimeInner {
                 };
                 self.record_durability_failure(&mut state, operation, diagnostic);
             }
-            if state
-                .current_attempt
-                .as_ref()
-                .is_some_and(|current| current.attempt_id == attempt_id)
-            {
-                state.current_attempt = None;
-            }
+            drop(finished);
             self.settlement.notify_waiters();
             // Test-only gate: the conversation state is restored and the
             // current-attempt slot is cleared, but the next-admission
@@ -370,10 +371,10 @@ impl RuntimeInner {
         if let Some(gate) = attempt_exit_gate {
             gate.enter();
         }
-        // A ready independent Summary may have arrived while this Attempt
-        // held the conversation. Settlement opens the idle installation cut.
+        // Settlement hands the freed foreground back to the single admission
+        // worker pass order (reap → catalogs → staged config → scheduled →
+        // attempt); no inline successor admission here (Issue #606).
         self.wake.notify.notify_one();
-        self.admit_next_attempt();
     }
 }
 
@@ -427,8 +428,9 @@ impl ConversationRuntime {
     ) -> Result<AttemptId, CancelAttemptError> {
         let mut state = self.inner.lock_state();
         if state
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .is_none_or(|current| current.attempt_id != *attempt_id)
         {
             return Err(CancelAttemptError::NoCurrentAttempt);
@@ -460,8 +462,9 @@ impl ConversationRuntime {
         state: &mut CoordinatorState,
     ) -> Result<AttemptId, CancelAttemptError> {
         let current = state
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .ok_or(CancelAttemptError::NoCurrentAttempt)?;
         let attempt_id = current.attempt_id.clone();
         let cancellation = current.cancellation.clone();
@@ -533,11 +536,11 @@ impl ConversationRuntime {
         reason: CancellationReason,
     ) -> Option<AttemptId> {
         let mut state = self.inner.lock_state();
-        if let Some(current) = &state.current_attempt {
+        if let Some(current) = state.foreground.slot.as_attempt() {
             let _ = current.cancellation.request_cancel(reason);
             return Some(current.attempt_id.clone());
         }
-        state.one_shot_cancel = Some(reason);
+        state.foreground.one_shot_cancel = Some(reason);
         None
     }
 }

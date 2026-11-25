@@ -1714,10 +1714,10 @@ pub enum MethodResult {
     WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
     WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
     McpDraftAccepted {},
-    AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
-    AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
+    AuxiliarySubmitted { receipt: crate::runtime::auxiliary::external::AuxiliarySubmissionReceipt },
+    AuxiliaryStatus { status: crate::runtime::auxiliary::external::AuxiliaryStatus },
     AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },
-    AuxiliarySubmissionLookup { lookup: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup },
+    AuxiliarySubmissionLookup { lookup: crate::runtime::auxiliary::external::AuxiliarySubmissionLookup },
     AuxiliaryCancelled { accepted: bool },
     AuxiliaryDiscarded { discarded: bool },
 

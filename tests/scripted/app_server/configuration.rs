@@ -37,7 +37,7 @@ impl SettlementReceiptWait {
         }
     }
     async fn wait(&mut self) {
-        let receipt = self.runtime.child_attempt_settlement(self.after).await;
+        let receipt = self.runtime.attempt_settlement(self.after).await;
         assert_eq!(
             receipt.ordinal,
             self.after + 1,

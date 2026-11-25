@@ -415,7 +415,7 @@ impl RuntimeClientFixtureBuilder {
             clock: None,
             initial_messages: self.initial_messages,
             subagents: None,
-            workflow_output: None,
+            role: crate::runtime::conversation_runtime::ConversationRole::Root,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {

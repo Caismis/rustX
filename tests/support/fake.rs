@@ -46,6 +46,10 @@ pub enum FakeStep {
     /// watch retains its value, so a release signalled before the park is
     /// observed is never lost.
     ParkUntilReleased(tokio::sync::watch::Receiver<bool>),
+    /// Panic the invocation's own task on reach: a real unwind through the
+    /// agent loop that the owning task's poison guard must settle, unlike a
+    /// scripted `Failed` event which returns through the error path.
+    Panic,
 }
 
 /// Creates a release channel for [`FakeStep::ParkUntilReleased`]: the test
@@ -275,6 +279,9 @@ impl ModelAdapter for FakeModel {
                                 }),
                                 script,
                             ));
+                        }
+                        FakeStep::Panic => {
+                            panic!("fake model scripted panic");
                         }
                         FakeStep::ParkUntilReleased(mut release) => {
                             parked.send_replace(true);

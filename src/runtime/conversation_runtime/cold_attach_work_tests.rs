@@ -39,8 +39,8 @@ async fn cold_attach(id: &ConversationId, path: &std::path::Path) -> ColdAttach 
         // Attach left the active working set in the durable store; its
         // first consumer hydrates exactly the durable Surface head.
         assert!(matches!(
-            runtime.inner.state.lock().unwrap().conversation,
-            super::conversation_slot::ConversationSlot::Durable
+            runtime.inner.state.lock().unwrap().foreground.slot,
+            super::foreground::ForegroundSlot::Idle(super::foreground::IdleConversation::Durable)
         ));
         assert_eq!(
             runtime.coordinator_active_ids().unwrap(),

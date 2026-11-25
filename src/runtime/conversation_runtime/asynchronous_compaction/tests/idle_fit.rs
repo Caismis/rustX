@@ -11,7 +11,7 @@ use crate::scripted_suites::support::model::{
 const OUTPUT: u32 = 256;
 
 fn set_model_window(runtime: &ConversationRuntime, model: &Arc<FakeModel>, window: u64) {
-    runtime.inner.lock_state().model = fixture_session_model(
+    runtime.inner.lock_state().config.model = fixture_session_model(
         &[
             FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions)
                 .with_context_window(window)
@@ -26,8 +26,8 @@ fn current_input(
     runtime: &ConversationRuntime,
 ) -> (crate::context::ContextRuntime, crate::model::ModelRequest) {
     let state = runtime.inner.lock_state();
-    let model = state.model.snapshot().unwrap();
-    let resources = state.resources.clone();
+    let model = state.config.model.snapshot().unwrap();
+    let resources = state.config.resources.clone();
     let context = runtime
         .inner
         .context_runtime_with_assembly(
@@ -35,7 +35,7 @@ fn current_input(
             resources.context_assembly().clone(),
             runtime.inner.model_timeout_policy,
             &resources,
-            Arc::new(runtime.inner.auxiliary.clone()),
+            Arc::new(runtime.inner.auxiliary_executor.clone()),
         )
         .unwrap()
         .with_runtime_resources(&resources);
@@ -95,18 +95,13 @@ async fn ready_fixture() -> IdleFixture {
     set_model_window(&runtime, &model, 100_000);
     {
         let mut state = runtime.inner.lock_state();
-        state.last_permission_reminder_mode = Some(ApprovalMode::FullAccess);
-        state.manual_compaction = Some(CurrentManualCompaction {
-            operation_id: crate::runtime::identity::CompactionOperationId::new(
-                "idle-fit-maintenance",
-            ),
-            cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-        });
+        state.config.last_permission_reminder_mode = Some(ApprovalMode::FullAccess);
+        hold_idle_installation(&mut state);
     }
     runtime.activate();
     let (admission, work, generated) = generate_ready(&runtime).await;
     // Installation must use current authority, not the capture's Full Access mode.
-    runtime.inner.lock_state().effective_approval_mode = ApprovalMode::Automatic;
+    runtime.inner.lock_state().config.effective_approval_mode = ApprovalMode::Automatic;
     let (context, mut request) = current_input(&runtime);
     let mut projected = vec![ModelInputMessage::Derived(
         generated.generated_summary().clone(),
@@ -175,7 +170,7 @@ async fn generate_ready(
 }
 
 async fn install_at_idle(fixture: &IdleFixture) {
-    fixture.runtime.inner.lock_state().manual_compaction = None;
+    release_idle_installation(&mut fixture.runtime.inner.lock_state());
     fixture.runtime.inner.install_ready_async_when_idle().await;
     // The ordinary driver may claim maintenance first. In either ordering,
     // observe its durable settlement before inspecting admission or history.
@@ -242,7 +237,7 @@ async fn idle_install_leaves_ready_work_for_already_accepted_input() {
         admission_gate.wait_entered_async(),
     )
     .await;
-    fixture.runtime.inner.lock_state().manual_compaction = None;
+    release_idle_installation(&mut fixture.runtime.inner.lock_state());
     fixture.runtime.inner.install_ready_async_when_idle().await;
     assert!(
         fixture
@@ -261,7 +256,7 @@ async fn idle_install_leaves_ready_work_for_already_accepted_input() {
     drop(parked);
     within_liveness_guard(
         "accepted input adoption",
-        fixture.runtime.child_attempt_settlement(0),
+        fixture.runtime.attempt_settlement(0),
     )
     .await;
     let events = fixture
@@ -352,6 +347,7 @@ async fn idle_install_prices_rearmed_user_reminder_and_commits_only_checkpoint()
             .runtime
             .inner
             .lock_state()
+            .config
             .last_permission_reminder_mode,
         None
     );
@@ -397,7 +393,7 @@ async fn assert_later_start_owns_reminder(fixture: &IdleFixture) {
         .unwrap();
     within_liveness_guard(
         "later primary settlement",
-        fixture.runtime.child_attempt_settlement(0),
+        fixture.runtime.attempt_settlement(0),
     )
     .await;
     let snapshots = request_snapshots(&fixture.runtime.request_history());
@@ -455,7 +451,7 @@ async fn idle_owner_remains_busy_through_deferred_status_publication() {
     let (settling, finish) = cancellation::install_gate(&fixture.work.defer_settlement_gate);
     let epoch = {
         let mut state = fixture.runtime.inner.lock_state();
-        state.manual_compaction = None;
+        release_idle_installation(&mut state);
         fixture.runtime.inner.idle_epoch_locked(&state).unwrap()
     };
     let runtime = fixture.runtime.clone();

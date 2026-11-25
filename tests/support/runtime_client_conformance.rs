@@ -387,7 +387,7 @@ pub async fn stdio_subscription_change_retires_buffered_notifications(detach: bo
         let mut driver = StdioJsonlDriver::new(&fixture.host);
         let (_, cursor) = initialize(&mut driver, 1).await;
         submit(&mut driver, 2, "complete before replay").await;
-        fixture.runtime.child_attempt_settlement(0).await;
+        fixture.runtime.attempt_settlement(0).await;
         fixture.host.projection_settled().await;
         let (_, settled) = snapshot(&mut driver, 3).await;
 

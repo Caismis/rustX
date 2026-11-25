@@ -345,7 +345,7 @@ impl RuntimeInner {
             // Close the live Attempt's start gate before publishing the
             // absorbing failure. A start already granted remains real; no
             // later primary request can cross this native arbitration.
-            if let Some(current) = &state.current_attempt {
+            if let Some(current) = state.foreground.slot.as_attempt() {
                 let _ = current
                     .cancellation
                     .request_cancel(CancellationReason::RuntimeShutdown);
@@ -561,16 +561,15 @@ impl RuntimeInner {
             let mut state = self.lock_state();
             if !self.lifecycle.is_running()
                 || self.durability_gate.is_failed()
-                || state.current_attempt.is_some()
-                || state.scheduled.is_some()
-                || state.manual_compaction.is_some()
+                || !state.foreground.slot.is_idle()
+                || state.foreground.manual_tail.is_unreaped()
             {
                 return;
             }
-            let Ok(model) = state.model.snapshot() else {
+            let Ok(model) = state.config.model.snapshot() else {
                 return;
             };
-            let resources = state.resources.clone();
+            let resources = state.config.resources.clone();
             let Ok(context) = self.context_runtime_with_assembly(
                 &model,
                 resources.context_assembly().clone(),
@@ -583,7 +582,7 @@ impl RuntimeInner {
                             .expect("validated generation")
                     }),
                 &resources,
-                Arc::new(self.auxiliary.clone()),
+                Arc::new(self.auxiliary_executor.clone()),
             ) else {
                 return;
             };
@@ -604,10 +603,6 @@ impl RuntimeInner {
                 let _ = coordinator.settle(&ready.admission, CompactionDisposition::Cancelled);
                 return;
             };
-            state.manual_compaction = Some(CurrentManualCompaction {
-                operation_id: ready.admission.operation_id.clone(),
-                cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
-            });
             let request = crate::model::ModelRequest {
                 prompt_fallback_authorization:
                     crate::model::types::PromptFallbackAuthorization::default(),
@@ -627,33 +622,41 @@ impl RuntimeInner {
             };
             let staged_request_context = [super::compaction::prospective_permission_reminder(
                 &ready.admission.operation_id,
-                state.effective_approval_mode,
+                state.config.effective_approval_mode,
             )];
-            match state.conversation.hydrate(self.store.as_ref()) {
+            match state.foreground.slot.hydrate(self.store.as_ref()) {
                 Ok(Some(_)) => {}
                 outcome => {
-                    let error = outcome.err();
-                    drop(state);
-                    let disposition = if let Some(error) = error {
+                    let diagnostic = outcome.err().map(|error| {
                         let diagnostic =
                             format!("idle compaction could not load the conversation: {error}");
-                        self.fail_async_native(
-                            DurableOperation::CanonicalCommit,
+                        self.record_durability_failure(
+                            &mut state,
+                            DurableOperation::HydrateConversation,
                             diagnostic.clone(),
                         );
+                        diagnostic
+                    });
+                    drop(state);
+                    let disposition = if let Some(diagnostic) = diagnostic {
+                        let _ = self.begin_drain();
                         CompactionDisposition::Failed(diagnostic)
                     } else {
                         CompactionDisposition::Defer(None)
                     };
                     let _ = coordinator.settle(&ready.admission, disposition);
-                    self.lock_state().manual_compaction = None;
                     self.settlement.notify_waiters();
                     return;
                 }
             }
             let conversation = state
-                .conversation
-                .lend()
+                .foreground
+                .slot
+                .lend_for_manual_compaction(CurrentManualCompaction {
+                    kind: super::foreground::CompactionOwnerKind::BackgroundInstall,
+                    operation_id: ready.admission.operation_id.clone(),
+                    cancellation: AgentCancellation::new(CancellationReason::RuntimeShutdown),
+                })
                 .expect("idle coordinator owns the conversation state");
             (
                 ready,
@@ -703,20 +706,13 @@ impl RuntimeInner {
             )
         }
         .await;
-        {
-            let mut state = self.lock_state();
-            state.conversation.restore(conversation);
-            let activated = match &result {
-                Ok(ActivationOutcome::Committed(completed))
-                | Err(CompactionExecutionError::Committed { completed, .. }) => {
-                    completed.newly_committed
-                }
-                _ => false,
-            };
-            if activated {
-                state.last_permission_reminder_mode = None;
+        let activated = match &result {
+            Ok(ActivationOutcome::Committed(completed))
+            | Err(CompactionExecutionError::Committed { completed, .. }) => {
+                completed.newly_committed
             }
-        }
+            _ => false,
+        };
         let disposition = match result {
             Ok(ActivationOutcome::Committed(completed)) => {
                 if completed.newly_committed {
@@ -759,7 +755,18 @@ impl RuntimeInner {
         if let Err(error) = coordinator.settle(&ready.admission, disposition) {
             tracing::error!(diagnostic = %error.message, "idle compaction status settlement failed");
         }
-        self.lock_state().manual_compaction = None;
+        let mut state = self.lock_state();
+        let owner = state
+            .foreground
+            .slot
+            .finish_manual_compaction(conversation)
+            .expect("background installation owns the foreground maintenance slot");
+        assert!(owner.kind == super::foreground::CompactionOwnerKind::BackgroundInstall);
+        assert_eq!(owner.operation_id, ready.admission.operation_id);
+        if activated {
+            state.config.last_permission_reminder_mode = None;
+        }
+        drop(state);
         self.settlement.notify_waiters();
     }
 }

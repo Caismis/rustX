@@ -90,7 +90,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
     ));
     let runtime = ConversationRuntime::new(runtime_config).expect("bound runtime");
     runtime.activate();
-    let baseline = runtime.inner.lock_state().binding_revision;
+    let baseline = runtime.inner.lock_state().config.binding_revision;
     let stale_candidate = prepare_context(&runtime);
     let desire = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
@@ -156,7 +156,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
         DesiredApplication::new(desire.clone(), 1),
     );
     assert!(runtime.has_staged_configuration());
-    assert_eq!(runtime.inner.lock_state().binding_revision, baseline);
+    assert_eq!(runtime.inner.lock_state().config.binding_revision, baseline);
     // Newer desire is captured while V1 waits; V1 can never commit now.
     desire.store(2, std::sync::atomic::Ordering::SeqCst);
     let current = stage(
@@ -169,7 +169,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
         StagedOutcome::Superseded
     );
     assert!(runtime.has_staged_configuration());
-    assert_eq!(runtime.inner.lock_state().binding_revision, baseline);
+    assert_eq!(runtime.inner.lock_state().config.binding_revision, baseline);
 
     // The exact child settles through its real terminal publication.
     crate::runtime::subagent::ipc::write_child_frame(
@@ -203,7 +203,10 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
         StagedOutcome::Committed
     );
     assert!(!runtime.has_staged_configuration());
-    assert_eq!(runtime.inner.lock_state().binding_revision, baseline + 1);
+    assert_eq!(
+        runtime.inner.lock_state().config.binding_revision,
+        baseline + 1
+    );
     // The only model activity across settlement is the orphan result's
     // own continuation: the runtime consumes the terminal notice with one
     // attempt, admitted after the commit. The commit itself invokes no model.
@@ -237,7 +240,10 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
         stale.await.expect("stale outcome"),
         StagedOutcome::Superseded
     );
-    assert_eq!(runtime.inner.lock_state().binding_revision, baseline + 1);
+    assert_eq!(
+        runtime.inner.lock_state().config.binding_revision,
+        baseline + 1
+    );
     // An identical generation records no change fact.
     assert!(
         !store

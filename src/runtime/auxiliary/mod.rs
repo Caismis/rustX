@@ -12,4 +12,5 @@ pub(crate) mod classification;
 pub mod delivery;
 pub mod submission;
 
+pub mod external;
 pub mod observer;

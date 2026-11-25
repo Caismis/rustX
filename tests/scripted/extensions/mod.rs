@@ -2154,7 +2154,7 @@ fn conversation_runtime_over_model(
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
-            workflow_output: None,
+            role: crate::runtime::conversation_runtime::ConversationRole::Root,
         })?;
     Ok(ComposedRuntime { runtime, _dir: dir })
 }

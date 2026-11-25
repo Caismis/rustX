@@ -271,7 +271,7 @@ async fn runtime_with_manual_clock(
             clock: None,
             initial_messages,
             subagents: None,
-            workflow_output: None,
+            role: crate::runtime::conversation_runtime::ConversationRole::Root,
         },
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )

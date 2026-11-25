@@ -135,13 +135,13 @@ impl ConversationRuntime {
     /// Reads the authoritative session model catalog.
     #[must_use]
     pub fn model_catalog(&self) -> ModelCatalogView {
-        self.inner.lock_state().model.catalog_view()
+        self.inner.lock_state().config.model.catalog_view()
     }
 
     /// Reads the authoritative effective/desired `ApprovalMode` control state.
     #[must_use]
     pub fn approval_mode(&self) -> ApprovalMode {
-        self.inner.lock_state().effective_approval_mode
+        self.inner.lock_state().config.effective_approval_mode
     }
 
     /// Replaces a standalone conversation's in-memory model configuration.
@@ -211,9 +211,9 @@ impl ConversationRuntime {
         self.check_model_selection_lifecycle()?;
         Ok(PreparedModelSelection {
             owner: self.inner.configuration_owner.clone(),
-            baseline: state.binding_revision,
-            resources: state.resources.clone(),
-            model: state.model.clone(),
+            baseline: state.config.binding_revision,
+            resources: state.config.resources.clone(),
+            model: state.config.model.clone(),
         })
     }
 
@@ -301,17 +301,19 @@ impl ConversationRuntime {
         if let Some(gate) = commit_gate {
             gate.enter();
         }
-        if state.binding_revision != candidate.baseline
+        if state.config.binding_revision != candidate.baseline
             || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
-            || !Arc::ptr_eq(&candidate.resources, &state.resources)
+            || !Arc::ptr_eq(&candidate.resources, &state.config.resources)
         {
             return Err(ModelUpdateError::Conflict);
         }
-        let unchanged = state.explicit_model && state.model.view() == candidate.model.view();
+        let unchanged =
+            state.config.explicit_model && state.config.model.view() == candidate.model.view();
         let revision = if unchanged {
-            state.binding_revision
+            state.config.binding_revision
         } else {
             state
+                .config
                 .binding_revision
                 .checked_add(1)
                 .expect("Session binding revision exhausted")
@@ -321,21 +323,22 @@ impl ConversationRuntime {
         let persisted = commit(revision)?;
         if unchanged {
             return Ok(ModelSelectionCommit {
-                view: state.model.view(),
+                view: state.config.model.view(),
                 changed: persisted,
             });
         }
-        let reopens = state.model.unavailable().is_some();
-        state.model = candidate.model;
-        state.explicit_model = true;
-        state.binding_revision = revision;
-        let view = state.model.view();
+        let reopens = state.config.model.unavailable().is_some();
+        state.config.model = candidate.model;
+        state.config.explicit_model = true;
+        state.config.binding_revision = revision;
+        let view = state.config.model.view();
         self.inner
             .observe(ConversationObservation::SessionModelChanged {
                 model: state
+                    .config
                     .model
                     .read_source()
-                    .at_binding_revision(state.binding_revision),
+                    .at_binding_revision(state.config.binding_revision),
                 capability: None,
             });
         if reopens {
@@ -348,7 +351,7 @@ impl ConversationRuntime {
     }
 
     pub(crate) fn model_is_frozen(&self) -> bool {
-        self.inner.lock_state().model.registry().is_none()
+        self.inner.lock_state().config.model.registry().is_none()
     }
 
     /// Immutable native read evidence for transport boundary tests.
@@ -356,21 +359,22 @@ impl ConversationRuntime {
     pub(crate) fn model_read_source(&self) -> crate::model::session::SessionModelReadSource {
         let state = self.inner.lock_state();
         state
+            .config
             .model
             .read_source()
-            .at_binding_revision(state.binding_revision)
+            .at_binding_revision(state.config.binding_revision)
     }
 
     /// The authoritative session model view.
     #[must_use]
     pub fn model_view(&self) -> SessionModelView {
-        self.inner.lock_state().model.view()
+        self.inner.lock_state().config.model.view()
     }
 
     /// The authoritative session model configuration (test convenience).
     #[cfg(test)]
     pub(crate) fn model_config(&self) -> SessionModelConfig {
-        self.inner.lock_state().model.config().clone()
+        self.inner.lock_state().config.model.config().clone()
     }
 
     /// The resolved invocations the next Attempt would freeze, adapter
@@ -379,6 +383,7 @@ impl ConversationRuntime {
     pub(crate) fn model_snapshot(&self) -> AttemptModelSnapshot {
         self.inner
             .lock_state()
+            .config
             .model
             .snapshot()
             .expect("an admissible selection")
