@@ -51,8 +51,8 @@ impl PendingClient {
             || !self
                 .client
                 .endpoint
-                .control()
-                .is_some_and(|lane| lane.same_pair(&self.lane))
+                .with_live_control_lane(&self.lane, || ())
+                .is_some()
         {
             return Err(creation_error(
                 "the local Client or its Workspace grant is unavailable",
