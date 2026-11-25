@@ -91,7 +91,14 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
       details.cancel();
       return;
     }
-    if (!next && active) onClose();
+    if (!next && active) {
+      // Closing is the user's leaving signal for whatever held focus inside:
+      // blur it while the popup is still mounted so deferred-commit fields
+      // apply exactly as an explicit focus move would.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && popupRef.current?.contains(focused) === true) focused.blur();
+      onClose();
+    }
   }}>
     <Dialog.Portal ref={setPortal} container={container} keepMounted={open}>
       <Dialog.Viewport className={overlayClassName}>

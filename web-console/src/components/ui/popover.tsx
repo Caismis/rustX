@@ -2,7 +2,7 @@
 
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import type React from "react";
-import { createContext, useRef } from "react";
+import { createContext, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 export const PopoverCreateHandle: typeof PopoverPrimitive.createHandle =
@@ -53,6 +53,18 @@ export function PopoverPopup({
   collisionPadding?: PopoverPrimitive.Positioner.Props["collisionPadding"];
 }): React.ReactElement {
   const popupRef = useRef<HTMLDivElement | null>(null);
+  // Escape closes the popup through the dismiss layer after capture runs:
+  // blurring a focused descendant first is the same leaving signal an explicit
+  // focus move gives, so deferred-commit fields apply instead of stranding.
+  useEffect(() => {
+    const blurOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && popupRef.current?.contains(focused) === true) focused.blur();
+    };
+    document.addEventListener('keydown', blurOnEscape, true);
+    return () => document.removeEventListener('keydown', blurOnEscape, true);
+  }, []);
   return (
     <PopoverPrimitive.Portal {...portalProps}>
       <PopoverPrimitive.Positioner
