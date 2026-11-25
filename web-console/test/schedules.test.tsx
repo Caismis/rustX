@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { TaskDetail, TaskDeleteDialog } from '../src/app/scheduler/TaskDetail';
@@ -8,7 +9,9 @@ import { CreatedTasks, createdReceipt } from '../src/app/scheduler/CreatedTasks'
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { checkpoint, snapshot } from './fixture';
 import type { ForegroundToolExecution } from '../../protocol/app-server/v80';
-import { timingDraft, timingValue, TimingInputError } from '../src/app/scheduler/timing';
+import { timingDraft, timingValue, TimingInputError, type TimingDraft } from '../src/app/scheduler/timing';
+import { TimingEditor } from '../src/app/scheduler/TimingEditor';
+import type { TaskManagerKey } from '../src/app/scheduler/copy';
 import { localeController } from '../src/locale/controller';
 import { schedulerFixture, task, header, nodeA, nodeB, workflowFixture } from './scheduler-fixture';
 import type { Server } from './fixture';
@@ -534,6 +537,26 @@ it('provides Chinese labels and keyboard tab navigation', async () => {
   fireEvent.keyDown(screen.getByRole('tab', { name: '规则' }), { key: 'ArrowRight' });
   expect(screen.getByRole('tab', { name: '任务运行记录' }).getAttribute('aria-selected')).toBe('true'); expect(screen.getByText('暂无任务运行记录')).toBeTruthy();
 });
+
+it('keeps filtered time zone keyboard selection aligned with the visible row', async () => {
+  const initial: TimingDraft = { kind: 'daily', date: '2028-11-01', time: '09:00:00', zone: 'UTC', quantity: '1', unit: 'hour', weekdays: [1], expression: '0 9 * * *' };
+  const t = (key: TaskManagerKey) => key === 'timing.zone' ? 'Time zone' : key === 'timing.zone-search' ? 'Search time zones' : key;
+  let current = initial;
+  function Harness() {
+    const [value, setValue] = useState(initial);
+    current = value;
+    return <TimingEditor value={value} change={setValue} disabled={false} t={t} locale="en"/>;
+  }
+  render(<Harness/>);
+  const input = await screen.findByRole('combobox', { name: 'Time zone' });
+  fireEvent.click(document.querySelector('[data-slot="autocomplete-trigger"]')!);
+  fireEvent.change(input, { target: { value: 'America/New_York' } });
+  await screen.findByText(/America\/New_York/);
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  await waitFor(() => expect(current.zone).toBe('America/New_York'));
+});
+
 it('converts local time, rejects DST gaps and cron seconds, and preserves large creation identities', () => {
   const draft = timingDraft({ type: 'at', at_utc: '2028-03-01T10:00:00Z' });
   expect(timingValue({ ...draft, date: '2028-11-01', time: '09:30:00', zone: 'Asia/Shanghai' }, 0)).toEqual({ type: 'at', at: '2028-11-01T01:30:00.000Z' });

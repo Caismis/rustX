@@ -45,7 +45,7 @@ export function Modal({
       className={clsx(css.dialog, className)}
       contentRef={popup}
       finalFocus={finalFocus}
-      initialFocus={() => popup.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? false}
+      initialFocus={() => popup.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? true}
     >
       {headless
         ? children

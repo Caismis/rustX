@@ -38,6 +38,11 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
     return [...names].map(id => { const label = zoneLabel(id, locale) + ' · ' + id; return { id, label, search: label }; });
   }, [value.zone, locale]);
   const [zoneQuery, setZoneQuery] = useState<string | undefined>();
+  const visibleZones = useMemo(() => {
+    if (!zoneQuery) return zones;
+    const query = zoneQuery.toLocaleLowerCase();
+    return zones.filter(zone => zone.search.toLocaleLowerCase().includes(query));
+  }, [zones, zoneQuery]);
   return <section className={css.ruleCard} aria-label={t('timing.title')}>
     <div className={css.ruleRows}>
       <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.repeat')}</span>
@@ -64,11 +69,11 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
           <p className={parsed ? css.ruleHint : css.ruleHintError}>{parsed ? cronPreview(parsed, t, locale) : t('timing.invalid-cron')}</p>
         </div></div>}
         <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.zone')}</span>
-          <div className={custom.zoneCombo}><Autocomplete items={zones.map(zone => zone.label)} value={zoneQuery ?? zoneLabel(value.zone, locale)}
+          <div className={custom.zoneCombo}><Autocomplete items={visibleZones.map(zone => zone.label)} value={zoneQuery ?? zoneLabel(value.zone, locale)}
             onValueChange={setZoneQuery} openOnInputClick disabled={disabled}>
             <AutocompleteInput aria-label={t('timing.zone')} placeholder={t('timing.zone-search')} showTrigger onBlur={() => setZoneQuery(undefined)} />
             <AutocompletePopup className={custom.zonePopup} align="end"><AutocompleteList className={custom.zoneList} aria-label={t('timing.zone')}>
-              {zones.map((zone, index) => <AutocompleteItem key={zone.id} value={zone.label} index={index} className={custom.zoneOption}
+              {visibleZones.map((zone, index) => <AutocompleteItem key={zone.id} value={zone.label} index={index} className={custom.zoneOption}
                 onClick={() => { update({ zone: zone.id }); setZoneQuery(undefined); }}>{zone.label}</AutocompleteItem>)}
             </AutocompleteList></AutocompletePopup>
           </Autocomplete></div>
