@@ -1,7 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Catalog tree and hover/focus behavior adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
-import { createPortal } from 'react-dom';
-import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
 import type { RuntimeClientAgent } from '../../../../protocol/app-server/v80';
 import type { WorkflowChild } from '../../bindings/workflow-children';
 import { useTranslation } from '../../locale/react';
@@ -13,6 +11,7 @@ import { agentDot, agentRunning, agentStatus, agentDuration } from './subagent-s
 import { formatDuration, formatTokens } from './token-format';
 import { workflowDot, workflowStatus } from './workflow-state';
 import css from './SubagentCatalog.module.css';
+import { Popover, PopoverPopup } from '@/components/ui/popover';
 
 function SwitcherIcon() {
   return <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -27,8 +26,6 @@ export function SubagentMenu({ agents, workflowChildren = [], limited, selected,
   const [open, setOpen] = useState(false), [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set()), [now, setNow] = useState(Date.now);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null), pinned = useRef(false);
   const hoverOpen = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), hoverClose = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const { refs, floatingStyles, isPositioned } = useFloating({ open, placement: 'bottom-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
-    middleware: [offset(5), flip({ padding: 16 }), shift({ padding: 16 }), size({ padding: 16, apply: ({ availableHeight, elements }) => { elements.floating.style.maxHeight = `${Math.min(560, availableHeight)}px`; } })] });
   const cancelOpen = () => { clearTimeout(hoverOpen.current); hoverOpen.current = undefined; };
   const cancelClose = () => { clearTimeout(hoverClose.current); hoverClose.current = undefined; };
   const close = (restore = false) => { cancelOpen(); cancelClose(); pinned.current = false; setOpen(false); setExpanded(new Set()); if (restore) trigger.current?.focus({ preventScroll: true }); };
@@ -37,12 +34,7 @@ export function SubagentMenu({ agents, workflowChildren = [], limited, selected,
   const items = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role=treeitem]:not([aria-disabled="true"])') ?? [])];
   const focusAt = (index: number) => { const rows = items(); if (rows.length) rows[(index + rows.length) % rows.length].focus({ preventScroll: true }); };
   useEffect(() => () => { cancelOpen(); cancelClose(); }, []);
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: PointerEvent) => { if (event.target instanceof Node && !trigger.current?.contains(event.target) && !menu.current?.contains(event.target)) close(); };
-    document.addEventListener('pointerdown', dismiss); return () => document.removeEventListener('pointerdown', dismiss);
-  }, [open]);
-  useLayoutEffect(() => { if (open && isPositioned && pinned.current) focusAt(0); }, [open, isPositioned]);
+  useLayoutEffect(() => { if (open && pinned.current) focusAt(0); }, [open]);
   useEffect(() => {
     if (!open || !inventory.some(agentRunning)) return;
     setNow(Date.now()); const clock = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(clock);
@@ -86,17 +78,18 @@ export function SubagentMenu({ agents, workflowChildren = [], limited, selected,
       {branch && isExpanded && <div role="group" className={css.children}>{rows(children, level + 1, new Set([...lineage, agent.agent_id]))}</div>}
     </div>;
   });
-  return <div className={`${css.root} ${selected ? css.switcherRoot : ''}`} onMouseEnter={scheduleOpen} onMouseLeave={scheduleClose}>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} id={selected && !openTitle ? 'session-title' : undefined} type="button" className={selected ? `${css.switcherTrigger} ${openTitle ? css.ancestorSwitcherTrigger : ''}` : css.trigger} aria-label={openTitle ? label : tx('common:subagents.list')} aria-haspopup="tree" aria-expanded={open}
+  return <Popover open={open} onOpenChange={(next, details) => { if (!next) close(details.reason === 'escape-key'); }}><div className={`${css.root} ${selected ? css.switcherRoot : ''}`} onMouseEnter={scheduleOpen} onMouseLeave={scheduleClose}>
+    <button ref={element => { trigger.current = element; }} id={selected && !openTitle ? 'session-title' : undefined} type="button" className={selected ? `${css.switcherTrigger} ${openTitle ? css.ancestorSwitcherTrigger : ''}` : css.trigger} aria-label={openTitle ? label : tx('common:subagents.list')} aria-haspopup="tree" aria-expanded={open}
       onClick={() => { cancelOpen(); cancelClose(); if (openTitle) { close(); openTitle(); } else { pinned.current = true; setOpen(true); } }}
-      onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); cancelOpen(); cancelClose(); pinned.current = true; setOpen(true); if (open && isPositioned) focusAt(0); } }}>
+      onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); cancelOpen(); cancelClose(); pinned.current = true; setOpen(true); if (open) focusAt(0); } }}>
       {!selected && (agents.some(agentRunning) || workflowChildren.some(child => child.instance.state.type !== 'settled')) && <span className={css.activitySlot}><StateDot state="ongoing"/></span>}<span className={selected ? css.switcherTitle : css.count}>{label}</span>{selected ? <SwitcherIcon/> : <span aria-hidden="true"><IconChevronDownOutline14 className={open ? css.triggerOpen : undefined}/></span>}
     </button>
-    {open && createPortal(<div ref={element => { menu.current = element; refs.setFloating(element); }} className={css.menu} style={floatingStyles} onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onKeyDown={navigate}><div className={css.menuBody} role="tree" aria-label={tx('common:subagents.list')}>{rows(agents)}
+    {open && <PopoverPopup ref={menu} className={css.menu} anchor={trigger} positionMethod="fixed" side="bottom" align="start" sideOffset={5} collisionPadding={16}
+      initialFocus={false} finalFocus={() => false} onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onKeyDownCapture={navigate}><div className={css.menuBody} role="tree" aria-label={tx('common:subagents.list')}>{rows(agents)}
       {workflowChildren.map(child => <WorkflowChildRow key={JSON.stringify([child.agentId, child.activationId])} child={child} selected={selected === child.agentId} close={close}/>)}
     </div>{limited && <p role="status" className={css.notice}>{tx(scope.workflows?.loading ? 'common:activity.loading' : 'common:subagents.workflow-records-limited')}</p>}
-    {scope.workflows?.error && <p role="alert" className={css.notice}>{scope.workflows.error}</p>}</div>, document.body)}
-  </div>;
+    {scope.workflows?.error && <p role="alert" className={css.notice}>{scope.workflows.error}</p>}</PopoverPopup>}
+  </div></Popover>;
 }
 
 /** Inspection resolves one exact native child only when selected. */

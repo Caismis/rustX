@@ -5127,10 +5127,10 @@
         "../contract/adapter.ts",
         "../primitives",
         "./dockkit.module.css",
-        "react",
-        "react-dom"
+        "@/components/ui/popover",
+        "react"
       ],
-      "local_sha256": "322456b721eb48d911b5244c00c7a8c13b28bda6045154b9fe1c5d3559858f2d"
+      "local_sha256": "9376140496ed28c44f8b4ce055d4a73a66c0d4941a12d6e5c845217132f14dea"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
@@ -5190,7 +5190,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "102ed447057b3f04745c3de395a61de6bf45ec6e906607f5ac2057d95f246e14"
+      "local_sha256": "c02aac1695e8f1233228d0822a8ed33333cae88a5293891540f341971ce4a38e"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/measure.ts",
@@ -6622,13 +6622,12 @@
         "./subagent-state",
         "./token-format",
         "./workflow-state",
-        "@floating-ui/react-dom",
-        "react",
-        "react-dom"
+        "@/components/ui/popover",
+        "react"
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "5e926e6bb6b6eac6615cf4aa5e80a9c2c1ad8985053df085b173ae369c0f3003",
+      "local_sha256": "e71e5b4b596f6695eb5008cde7b2d08daf76cc8b7a20366f2d63b128e8db5984",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
@@ -6647,7 +6646,7 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "dd62752be73dda0133874d3af9157ab7e446f96f34e5ed93f5e2316d9a7033e8",
+      "local_sha256": "f9cf2a42c27819d943a2ed886e7004035457f53605f7397f15a76979bbddaa0f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
