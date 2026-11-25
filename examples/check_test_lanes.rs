@@ -661,7 +661,7 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                 }
             }
             if shard {
-                match shard_steps(run, targets) {
+                match shard_steps(run, targets, platform) {
                     Ok(shard_commands) => steps.extend(shard_commands.iter().flat_map(|command| {
                         profiles.iter().map(|profile| Step {
                             job: id.into(),
@@ -702,7 +702,7 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
 /// root package's targets and its `libtest_args` parsed like the `--` tail
 /// of a `cargo test` command. Every shard leg declares the same spec, and
 /// the report job proves their union covers it exactly once.
-fn shard_steps(run: &str, targets: &[Target]) -> Result<Vec<Step>, String> {
+fn shard_steps(run: &str, targets: &[Target], platform: Platform) -> Result<Vec<Step>, String> {
     let lines: Vec<&str> = run.lines().filter(|line| !line.trim().is_empty()).collect();
     let [line] = lines.as_slice() else {
         return Err("a rust_test_shards run step must be a single command line".into());
@@ -745,7 +745,7 @@ fn shard_steps(run: &str, targets: &[Target]) -> Result<Vec<Step>, String> {
         let mut step = Step {
             job: String::new(),
             name: String::new(),
-            platform: Platform::Linux,
+            platform,
             executes: true,
             features: entry["features"].as_array().map_or_default(|features| {
                 features

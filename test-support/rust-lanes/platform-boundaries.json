@@ -1,0 +1,22 @@
+[
+  {"name": "unit and in-crate boundary suites", "harness": "lib:rustx",
+   "features": ["--all-features"],
+   "libtest_args": ["--skip", "local_runtime::session_runtime_manager::tests::"]},
+  {"name": "package binaries", "harness": "bin:*",
+   "features": ["--all-features"],
+   "libtest_args": ["--skip", "local_runtime::session_runtime_manager::tests::"]},
+  {"name": "durable", "harness": "test:durable",
+   "features": ["--all-features"], "libtest_args": []},
+  {"name": "process", "harness": "test:process",
+   "features": ["--all-features"], "libtest_args": []},
+  {"name": "subagent", "harness": "test:subagent",
+   "features": ["--all-features"], "libtest_args": []},
+  {"name": "tools", "harness": "test:tools",
+   "features": ["--all-features"], "libtest_args": []},
+  {"name": "conformance", "harness": "test:conformance",
+   "features": ["--all-features"], "libtest_args": []},
+  {"name": "cfg3_catalog", "harness": "test:cfg3_catalog",
+   "features": ["--all-features"], "libtest_args": []},
+  {"name": "cfg3_managed_output", "harness": "test:cfg3_managed_output",
+   "features": ["--all-features"], "libtest_args": []}
+]

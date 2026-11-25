@@ -985,13 +985,20 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      # Compiling the external targets first also builds every real executable
-      # against the same all-feature library; staging places them beside each
-      # emitted integration test harness executable.
-      - name: Compile the external boundary targets and stage the real executables
+      # One compile feeds the three shard runners: prepare stages every
+      # real executable beside each emitted harness and leaves Cargo's
+      # artifact JSON for the pack step, which then binds identity
+      # (manifest), inventories the lane's own filters, splits the
+      # inventory by duration weight, and uploads it for the shard legs.
+      # rust-platform-boundaries-report proves every inventoried test ran
+      # exactly once.
+      - name: Compile the boundary harnesses and stage the real executables
+        env:
+          RUSTX_PREPARED_JSON_OUT: ${{ runner.temp }}/platform-artifacts.json
         run: >-
           /usr/bin/time -l python3 test-support/prepare_native_tests.py --
           cargo test --all-features --locked --no-run --timings
+          --lib --bins
           --test durable
           --test process
           --test subagent
@@ -1000,51 +1007,29 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
-      # App Server scripted contracts live under the manager's cfg(test) module
-      # to reach its private owner gates; their physical test class is still
-      # deterministic and Linux-only, despite this different name prefix.
-      #
-      # `--bins` executes zero tests today and removing it was measured, but it
-      # is retained so Cargo's normal target discovery picks up any future test
-      # added to a binary. `--test durable` is already fresh from the step
-      # above and re-emits the package binary records without recompiling the
-      # ordinary library so they stage beside the lib/bin test harnesses too.
-      - name: Compile unit and in-crate boundary test harnesses and stage the real executables
-        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
-
-      # macOS runners start with a 256-descriptor soft limit while the lib
-      # test binary drives ~4400 unit tests concurrently, each holding
-      # tempdirs, watchers and collection locks; the exhaustion surfaces as
-      # transient `Io` failures. `ulimit` must run inside the step's shell, so
-      # export BASH_ENV via GITHUB_ENV: the runner does not set BASH_ENV
-      # itself, but every later bash step sources the file it names, which
-      # also keeps the cargo test steps single-line as the lane checker
-      # requires.
-      - name: Raise the file-descriptor ceiling for test steps
-        run: |
-          printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' > "$RUNNER_TEMP/raise-fd-limit.sh"
-          echo "BASH_ENV=$RUNNER_TEMP/raise-fd-limit.sh" >> "$GITHUB_ENV"
-
-      - name: Run unit tests and the in-crate boundary suites
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        # The scripted contract suites are `cfg(target_os = "linux")` and are
-        # not compiled on macOS, so no `scripted_suites::` skip belongs here:
-        # a skip that excludes nothing fails the lane checker.
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::'
-
-      - name: Run the external boundary targets
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: >-
-          /usr/bin/time -l cargo test --all-features --locked
-          --test durable
-          --test process
-          --test subagent
-          --test tools
-          --test conformance
-          --test cfg3_catalog
-          --test cfg3_managed_output
+      - name: Bind the prepared artifacts to this checkout
+        run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/platform-manifest/manifest.json"
+      - name: Pack the harnesses and staged executables
+        run: python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/platform-artifacts.json" --out "$RUNNER_TEMP/platform-prepared"
+      - name: Discover the boundary inventory and assign the shards
+        run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/platform-manifest/manifest.json" --prepared "$RUNNER_TEMP/platform-prepared" --spec test-support/rust-lanes/platform-boundaries.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/platform-inventory"
+      - name: Package the prepared artifacts
+        run: tar -C "$RUNNER_TEMP/platform-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/platform-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-platform-boundaries-prepared
+          path: ${{ runner.temp }}/platform-prepared.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-platform-boundaries-inventory
+          path: |
+            ${{ runner.temp }}/platform-inventory/
+            ${{ runner.temp }}/platform-manifest/
+          retention-days: 14
+          if-no-files-found: error
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
       # select only the root package, so run every member except rustx once.
@@ -1053,11 +1038,12 @@ jobs:
         run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
 
-      # Native macOS discovery: both --skip selectors must still exclude
-      # tests, and `boundary_suites::` and every external target (see
-      # REQUIREMENTS in the checker) must execute here entirely.
+      # Native macOS discovery: the spec's --skip selectors must still
+      # exclude tests, and `boundary_suites::` and every external target
+      # (see REQUIREMENTS in the checker) must execute across the lane and
+      # its shard legs entirely.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries --job rust-platform-boundaries-shard
 
       - name: Native Cargo timing reports
         if: always()
@@ -1067,6 +1053,81 @@ jobs:
           path: target/cargo-timings/*.html
           retention-days: 7
           if-no-files-found: warn
+
+  # Three macOS shard runners, each executing its assigned slice of the
+  # packed platform-boundary inventory by exact test name.
+  # rust-platform-boundaries-report owns the verdict.
+  rust-platform-boundaries-shard:
+    name: Platform-sensitive boundaries (macOS shard ${{ matrix.shard }}/3)
+    needs: [plan, rust-platform-boundaries]
+    if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries-shard']
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the provider emulator used by boundary tests
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      # Same descriptor ceiling as the build job: the lib harness drives
+      # thousands of unit tests concurrently.
+      - name: Raise the file-descriptor ceiling for test steps
+        run: |
+          printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' > "$RUNNER_TEMP/raise-fd-limit.sh"
+          echo "BASH_ENV=$RUNNER_TEMP/raise-fd-limit.sh" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-platform-boundaries-prepared
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-platform-boundaries-inventory
+          path: ${{ runner.temp }}/inventory
+      - name: Restore the packed artifacts at their compile-time paths
+        run: tar -C . -xf "$RUNNER_TEMP/platform-prepared.tar.zst"
+      - name: Execute shard ${{ matrix.shard }}
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/platform-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/platform-inventory/inventory.json" --spec test-support/rust-lanes/platform-boundaries.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+      - name: Shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-platform-boundaries-shard-${{ matrix.shard }}
+          path: shard-report/
+          if-no-files-found: ignore
+
+  # The one macOS boundary verdict: every inventoried test ran exactly
+  # once and every selected shard succeeded.
+  rust-platform-boundaries-report:
+    name: Platform-sensitive boundaries coverage
+    needs: [plan, rust-platform-boundaries, rust-platform-boundaries-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['rust-platform-boundaries-report'] }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-platform-boundaries-inventory
+          path: ${{ runner.temp }}/inventory
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rust-platform-boundaries-shard-*
+          path: ${{ runner.temp }}/runs
+      - name: Verify complete coverage across shards
+        run: python3 test-support/rust_test_shards.py verify --inventory "$RUNNER_TEMP/inventory/platform-inventory/inventory.json" --runs "$RUNNER_TEMP/runs"
+      - name: All selected shards succeeded
+        run: test "${{ needs.rust-platform-boundaries-shard.result }}" = success
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.
@@ -1569,6 +1630,8 @@ jobs:
       - rust-boundaries-report
       - rust-platform-core
       - rust-platform-boundaries
+      - rust-platform-boundaries-shard
+      - rust-platform-boundaries-report
       - tui
       - app-server-protocol
       - desktop-macos

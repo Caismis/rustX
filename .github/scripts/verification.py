@@ -152,6 +152,8 @@ def selected_jobs(profile, surfaces):
         "rust-boundaries-report": full,
         "rust-platform-core": not full and rust,
         "rust-platform-boundaries": full,
+        "rust-platform-boundaries-shard": full,
+        "rust-platform-boundaries-report": full,
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,
         "desktop-macos": full or bool(s & {"web", "tui"}),
