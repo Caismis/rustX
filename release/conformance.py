@@ -2,6 +2,7 @@
 """Verify and exercise the extracted rustX products outside the source tree."""
 
 import argparse
+import errno
 import fcntl
 import hashlib
 from http.client import HTTPConnection
@@ -163,6 +164,43 @@ def tui(binary: Path, cwd: Path, environment: dict, bootstrap: dict, workspace: 
         (cwd / "tui-token").unlink()
 
 
+def stop_terminal(terminal: subprocess.Popen, master: int, timeout: float) -> bytes:
+    terminal.terminate()
+    deadline = time.monotonic() + timeout
+    tail = bytearray()
+    # Keep receiving terminal output until the owner exits. A real terminal
+    # continues consuming display writes while the TUI drains its Server.
+    with selectors.DefaultSelector() as selector:
+        selector.register(master, selectors.EVENT_READ)
+        while True:
+            status = terminal.poll()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if status is None:
+                    raise TimeoutError(f"Installed TUI did not exit: {bytes(tail)!r}")
+                break
+            if not selector.select(min(remaining, 0.1) if status is None else 0):
+                if status is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master, 8192)
+            except OSError as error:
+                if error.errno != errno.EIO:
+                    raise
+                break
+            if not chunk:
+                break
+            tail.extend(chunk)
+            del tail[:-8192]
+    try:
+        status = terminal.wait(timeout=max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError(f"Installed TUI did not exit: {bytes(tail)!r}") from error
+    require(status == 143, f"Unexpected TUI owner shutdown status {status}: {bytes(tail)!r}")
+    return bytes(tail)
+
+
 def tui_terminal(binary: Path, cwd: Path, environment: dict, bootstrap: dict, workspace: Path) -> None:
     master, slave = pty.openpty()
     try:
@@ -185,8 +223,7 @@ def tui_terminal(binary: Path, cwd: Path, environment: dict, bootstrap: dict, wo
                         require(len(screen) <= 128 * 1024, "Installed TUI emitted excessive startup output")
                 require(b"Resume session" in screen or b"Enter Send" in screen,
                         "Installed TUI did not connect to the running Server")
-                terminal.terminate()
-                require(terminal.wait(timeout=20) == 143, "Unexpected TUI owner shutdown status")
+                stop_terminal(terminal, master, timeout=20)
             finally:
                 if terminal.poll() is None:
                     os.killpg(terminal.pid, signal.SIGKILL)
@@ -273,9 +310,10 @@ def tui_create(binary: Path, cwd: Path, environment: dict, endpoint: str) -> Non
                 require((workspace / "written.txt").read_text() == "write-terminal-session\n" and
                         (workspace / "bash-cwd.txt").read_text().strip() == str(workspace),
                         "Installed TUI tools used the wrong Workspace")
-                terminal.terminate()
-                require(terminal.wait(timeout=30) == 143, "Unexpected TUI owner shutdown status")
-                require(not bindings(), "Installed TUI left Session execution unsettled")
+                tail = stop_terminal(terminal, master, timeout=30)
+                remaining = bindings()
+                require(not remaining,
+                        f"Installed TUI left Session execution unsettled {sorted(remaining)}: {tail!r}")
             finally:
                 if terminal.poll() is None:
                     os.killpg(terminal.pid, signal.SIGTERM)

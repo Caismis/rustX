@@ -38,6 +38,10 @@ identity, and starts a fresh owner on a clean restart of the original
 Session. The installed strong-kill case confirms that cold history stays
 readable and live composition refuses an unresolved physical domain. The
 normal and negative picker cases use the same extracted Web distribution.
+The TUI proof continues reading its PTY after requesting shutdown, then
+requires the owner exit and verifies that no Session recovery records remain.
+The release-script regression exercises a child that writes more than the
+PTY buffer while handling termination.
 
 The in-crate `installed_resume` tests run real sibling Clients through the
 installed composition owner. Eight invalid saved Sessions release their
