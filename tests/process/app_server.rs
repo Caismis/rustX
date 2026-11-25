@@ -6416,6 +6416,119 @@ fn assert_no_local_recovery_owner(pending: &std::path::Path) {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn local_client_setup_failure_settles_before_retrying_the_same_session() {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::{Method, MethodResult};
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let (bin, executable) = isolated_server_pair();
+        let companion = bin.path().join("interactive-supervisor");
+        std::fs::rename(&companion, bin.path().join("domain-real")).unwrap();
+        std::fs::write(
+            &companion,
+            r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+if [ -e "$bin/no-bwrap" ] && [ "$1" = client-domain ]; then
+    export TMPDIR="$bin/scratch"
+    # Hide Bubblewrap only for the real guardian. The Server and the retry
+    # keep their original filesystem, including the original executable.
+    /usr/bin/bwrap --dev-bind / / --tmpfs /usr/bin -- "$bin/domain-real" "$@" > "$bin/report"
+    cp "$2" "$bin/proof"
+    cp "${2%.proof}.authority" "$bin/authority"
+    cat "$bin/report"
+    exit
+fi
+exec "$bin/domain-real" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&companion, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let no_bwrap = bin.path().join("no-bwrap");
+        std::fs::write(&no_bwrap, b"").unwrap();
+        let scratch = bin.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+
+        let session = &fixture.sessions[0];
+        let workspace = fixture.root.path().join("a");
+        grant_environment_roots(&fixture, std::slice::from_ref(&workspace));
+        let probe = workspace.join("original-input");
+        std::fs::write(&probe, b"original bytes").unwrap();
+        let pending = fixture.root.path().join("runtime/execution-pending");
+        let failed = local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+            .output()
+            .await
+            .unwrap();
+        assert!(!failed.status.success());
+        let diagnosis = String::from_utf8(failed.stderr).unwrap();
+        assert!(
+            diagnosis.contains("Client namespace setup failed: cannot start /usr/bin/bwrap"),
+            "{diagnosis}"
+        );
+        assert!(
+            !diagnosis.contains("settlement is unconfirmed"),
+            "{diagnosis}"
+        );
+        let report = std::fs::read_to_string(bin.path().join("report")).unwrap();
+        assert!(
+            report.starts_with("not-launched cannot start /usr/bin/bwrap:"),
+            "{report}"
+        );
+        assert_eq!(report.lines().count(), 1);
+        let proof = std::fs::read(bin.path().join("proof")).unwrap();
+        assert_eq!(proof.len(), 32);
+        let published: [u8; 32] = Sha256::digest(&proof).into();
+        assert_eq!(
+            std::fs::read(bin.path().join("authority")).unwrap(),
+            published
+        );
+        assert!(std::fs::read_dir(&scratch).unwrap().next().is_none());
+        assert_no_local_recovery_owner(&pending);
+
+        std::fs::remove_file(no_bwrap).unwrap();
+        let mut replacement =
+            local_exec_command(&executable, &fixture, session.as_str(), &workspace)
+                .spawn()
+                .unwrap();
+        let current = driver::jsonl(
+            replacement.stdout.take().unwrap(),
+            replacement.stdin.take().unwrap(),
+        );
+        initialize_client(&current).await;
+        await_admission(&current, session, &probe).await;
+        let MethodResult::FileChunk { chunk } = result(
+            &current,
+            Method::FsReadFile {
+                session_id: session.clone(),
+                path: probe.display().to_string(),
+                offset: 0,
+                max_bytes: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("the original Session can execute after its setup is repaired")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap(),
+            b"original bytes"
+        );
+        current.close().await;
+        detach_then_shutdown(&mut replacement).await;
+        assert!(replacement.wait().await.unwrap().success());
+        assert_no_local_recovery_owner(&pending);
+    })
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn local_restart_requires_namespace_settlement_after_server_sigkill() {
     use rustx::app_server::{
         command::ExecParams,

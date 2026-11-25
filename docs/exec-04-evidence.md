@@ -64,6 +64,15 @@ after the settlement waiter runs. Each normal drain cut checks a cancelled
 load, clean Host shutdown, a returned capacity permit, no resident runtime
 or Model request, and removal of the recovery record.
 
+`local_client_setup_failure_settles_before_retrying_the_same_session` hides
+Bubblewrap only in the guardian's mount view. The supervisor reports no
+launch with the original setup error after cleaning its scratch and writing
+a proof that matches the exact reservation's authority. Once Bubblewrap is
+available, the same saved Session reads its original Workspace and shuts
+down cleanly. The detached-namespace guardian test separately exercises
+real launch and confirmed cleanup, and withholding a receipt when the
+only publishing guardian dies.
+
 The four evidence ledgers cover all 73 test IDs by number. The release requires receipts for the same head from the independent native macOS job and the stacked PR's FULL and Merge verification. The measurement samples below identify their distinct baselines.
 
 ## Linux Client I/O baseline

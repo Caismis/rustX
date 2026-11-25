@@ -66,7 +66,7 @@ impl<'a> Receipt<'a> {
         })
     }
 
-    fn publish(&self) -> io::Result<()> {
+    fn publish(&self) -> io::Result<bool> {
         use rustix::fs::{
             AtFlags, Mode, OFlags, RenameFlags, fstat, openat, renameat_with, statat,
         };
@@ -78,14 +78,14 @@ impl<'a> Receipt<'a> {
             Mode::empty(),
         ) {
             Ok(descriptor) => File::from(descriptor),
-            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(rustix::io::Errno::NOENT) => return Ok(false),
             Err(error) => return Err(error.into()),
         };
         authority_fd.lock()?;
         let retained = fstat(&authority_fd)?;
         let named = match statat(&self.directory, &authority, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(identity) => identity,
-            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(rustix::io::Errno::NOENT) => return Ok(false),
             Err(error) => return Err(error.into()),
         };
         if (named.st_dev, named.st_ino) != (retained.st_dev, retained.st_ino) {
@@ -107,7 +107,8 @@ impl<'a> Receipt<'a> {
             self.name,
             RenameFlags::NOREPLACE,
         )?;
-        self.directory.sync_all()
+        self.directory.sync_all()?;
+        Ok(true)
     }
 }
 
@@ -356,22 +357,26 @@ fn arm_lease(
     Ok((supervisor, child))
 }
 
-fn run_in_namespace(
+enum NamespaceOutcome {
+    NotLaunched(io::Error),
+    Exited(ExitStatus),
+}
+
+fn spawn_namespace(
     receipt_path: &Path,
     scratch: &Scratch,
+    staging_socket: &Path,
     program: &Path,
     arguments: impl IntoIterator<Item = OsString>,
-    input: &mut io::Stdin,
-) -> io::Result<ExitStatus> {
-    let (mut guardian, launch) = UnixStream::pair()?;
+) -> io::Result<(UnixStream, std::process::Child)> {
+    let (guardian, launch) = UnixStream::pair()?;
     guardian.set_read_timeout(Some(Duration::from_secs(2)))?;
     set_socket_passcred(&guardian, true)?;
     let uid = geteuid().as_raw().to_string();
     let receipt_directory = receipt_path.parent().expect("validated receipt directory");
     let launcher_input = OwnedFd::from(launch.try_clone()?);
     let launcher_output = OwnedFd::from(launch);
-    let staging_socket = scratch.logical_path.join("staging.sock");
-    let mut launcher = Command::new("/usr/bin/bwrap")
+    let launcher = Command::new("/usr/bin/bwrap")
         .args([
             "--unshare-user",
             "--unshare-pid",
@@ -390,10 +395,34 @@ fn run_in_namespace(
         .arg(program)
         .args(arguments)
         .env("TMPDIR", &scratch.logical_path)
-        .env(staging::SOCKET_ENV, &staging_socket)
+        .env(staging::SOCKET_ENV, staging_socket)
         .stdin(launcher_input)
         .stdout(launcher_output)
-        .spawn()?;
+        .spawn()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("cannot start /usr/bin/bwrap: {error}"),
+            )
+        })?;
+    Ok((guardian, launcher))
+}
+
+fn run_in_namespace(
+    receipt_path: &Path,
+    scratch: &Scratch,
+    program: &Path,
+    arguments: impl IntoIterator<Item = OsString>,
+    input: &mut io::Stdin,
+) -> io::Result<NamespaceOutcome> {
+    let staging_socket = scratch.logical_path.join("staging.sock");
+    let (mut guardian, mut launcher) =
+        match spawn_namespace(receipt_path, scratch, &staging_socket, program, arguments) {
+            Ok(launched) => launched,
+            // No Bubblewrap executable started. There is no namespace to
+            // await, but the owner must still settle its scratch and receipt.
+            Err(error) => return Ok(NamespaceOutcome::NotLaunched(error)),
+        };
     let (descriptor, sender) = match namespace_init(&guardian) {
         Ok(ready) => ready,
         Err(error) => {
@@ -401,7 +430,7 @@ fn run_in_namespace(
             drop(guardian);
             let status = launcher.wait()?;
             eprintln!("Client namespace setup failed: {error}");
-            return Ok(status);
+            return Ok(NamespaceOutcome::Exited(status));
         }
     };
     let mut result = io::stdout().lock();
@@ -440,7 +469,7 @@ fn run_in_namespace(
     if let Err(error) = boot_and_wait {
         eprintln!("Client namespace lease closed: {error}");
     }
-    Ok(status)
+    Ok(NamespaceOutcome::Exited(status))
 }
 
 /// Keeps independent ownership of the local Client's exact Linux PID
@@ -459,15 +488,38 @@ pub fn supervise(
     input.read_exact(&mut token)?;
     let receipt = Receipt::open(receipt_path, token)?;
     let scratch = Scratch::create()?;
-    let status = run_in_namespace(receipt_path, &scratch, program, arguments, &mut input)?;
-    scratch.release()?;
-    receipt.publish()?;
-    let exit = status
-        .code()
-        .or_else(|| status.signal().map(|signal| 128 + signal));
+    let outcome = run_in_namespace(receipt_path, &scratch, program, arguments, &mut input)?;
+    let settlement = scratch
+        .release()
+        .and_then(|()| receipt.publish())
+        .and_then(|published| {
+            if !published && matches!(outcome, NamespaceOutcome::NotLaunched(_)) {
+                return Err(io::Error::other(
+                    "Client domain authority absent before no-launch settlement",
+                ));
+            }
+            Ok(())
+        });
+    if let Err(error) = settlement {
+        return Err(match outcome {
+            NamespaceOutcome::NotLaunched(failure) => io::Error::other(format!(
+                "Client namespace setup failed: {failure}; settlement failed: {error}"
+            )),
+            NamespaceOutcome::Exited(_) => error,
+        });
+    }
     let mut result = io::stdout().lock();
-    let exit = exit.ok_or_else(|| io::Error::other("invalid Client exit state"))?;
-    match writeln!(result, "settled {exit}").and_then(|()| result.flush()) {
+    let report = match outcome {
+        NamespaceOutcome::NotLaunched(error) => writeln!(result, "not-launched {error}"),
+        NamespaceOutcome::Exited(status) => {
+            let exit = status
+                .code()
+                .or_else(|| status.signal().map(|signal| 128 + signal))
+                .ok_or_else(|| io::Error::other("invalid Client exit state"))?;
+            writeln!(result, "settled {exit}")
+        }
+    };
+    match report.and_then(|()| result.flush()) {
         Ok(()) => Ok(()),
         // The durable observation remains authoritative after the Server
         // and its reporting pipe have gone away.

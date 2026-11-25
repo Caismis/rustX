@@ -74,6 +74,7 @@ CLIENT_CASES = (
     "either_one_way_control_failure_recovers_the_same_authenticated_instance",
 )
 LINUX_CASES = (
+    "local_client_setup_failure_settles_before_retrying_the_same_session",
     "local_restart_requires_namespace_settlement_after_server_sigkill",
     "client_sigkill_advances_only_the_original_session_generation",
     "trusted_remote_host_receipt_allows_a_new_server_to_admit_the_session",

@@ -56,14 +56,18 @@ impl SiblingClient {
         #[cfg(target_os = "linux")]
         if status.success() {
             use std::os::unix::process::ExitStatusExt as _;
-            let code = report(&mut self.reports, "settled ", &mut self.final_report).await?;
-            let code = i32::try_from(code)
-                .ok()
-                .filter(|code| *code <= 255)
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "invalid Client exit status")
-                })?;
-            let status = ExitStatus::from_raw(code << 8);
+            let mut report = supervisor_report(&mut self.reports, &mut self.final_report).await?;
+            if matches!(report, SupervisorReport::Ready) {
+                // Startup may have stopped waiting before consuming readiness.
+                self.final_report.clear();
+                report = supervisor_report(&mut self.reports, &mut self.final_report).await?;
+            }
+            let code = match report {
+                SupervisorReport::Settled(code) => code,
+                SupervisorReport::NotLaunched(_) => 1,
+                SupervisorReport::Ready => return Err(invalid_supervisor_report()),
+            };
+            let status = ExitStatus::from_raw(i32::from(code) << 8);
             self.exit = Some(status);
             return Ok(status);
         }
@@ -82,25 +86,54 @@ impl SiblingClient {
 }
 
 #[cfg(target_os = "linux")]
-async fn report(
+enum SupervisorReport<'a> {
+    Ready,
+    Settled(u8),
+    NotLaunched(&'a str),
+}
+
+#[cfg(target_os = "linux")]
+fn invalid_supervisor_report() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "invalid Client supervisor report",
+    )
+}
+
+#[cfg(target_os = "linux")]
+async fn supervisor_report<'a>(
     reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
-    prefix: &str,
-    bytes: &mut Vec<u8>,
-) -> io::Result<u32> {
+    bytes: &'a mut Vec<u8>,
+) -> io::Result<SupervisorReport<'a>> {
     use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _};
-    let remaining = 64u64.saturating_sub(bytes.len() as u64);
-    reader.take(remaining).read_until(b'\n', bytes).await?;
-    std::str::from_utf8(bytes)
+    // Keep the line until its consumer advances past readiness. A final
+    // report may arrive before readiness, and still needs the process wait.
+    if !bytes.ends_with(b"\n") {
+        let remaining = 512u64.saturating_sub(bytes.len() as u64);
+        reader.take(remaining).read_until(b'\n', bytes).await?;
+    }
+    let line = std::str::from_utf8(bytes)
         .ok()
-        .and_then(|line| line.strip_prefix(prefix))
-        .and_then(|value| value.strip_suffix('\n'))
-        .and_then(|value| value.parse().ok())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid Client supervisor report",
-            )
-        })
+        .and_then(|line| line.strip_suffix('\n'))
+        .ok_or_else(invalid_supervisor_report)?;
+    if let Some(sender) = line.strip_prefix("ready ") {
+        return sender
+            .parse::<u32>()
+            .ok()
+            .filter(|sender| *sender > 0)
+            .map(|_| SupervisorReport::Ready)
+            .ok_or_else(invalid_supervisor_report);
+    }
+    if let Some(code) = line.strip_prefix("settled ") {
+        return code
+            .parse()
+            .map(SupervisorReport::Settled)
+            .map_err(|_| invalid_supervisor_report());
+    }
+    line.strip_prefix("not-launched ")
+        .filter(|failure| !failure.is_empty())
+        .map(SupervisorReport::NotLaunched)
+        .ok_or_else(invalid_supervisor_report)
 }
 
 fn client_arguments(command: &mut Command, endpoint: &LocalExecutionEndpoint) {
@@ -161,14 +194,26 @@ async fn start_supervisor(
     grant: &rustx_execution_server::LocalDomainGrant,
 ) -> Result<(), RuntimeManagerError> {
     use tokio::io::AsyncWriteExt as _;
-    let lease = child.lease.as_mut().expect("local startup lease");
-    lease.write_all(grant.token()).await.map_err(error)?;
-    if report(&mut child.reports, "ready ", &mut Vec::new())
+    child
+        .lease
+        .as_mut()
+        .expect("local startup lease")
+        .write_all(grant.token())
+        .await
+        .map_err(error)?;
+    match supervisor_report(&mut child.reports, &mut child.final_report)
         .await
         .map_err(error)?
-        == 0
     {
-        return Err(error("invalid Client namespace init"));
+        SupervisorReport::Ready => child.final_report.clear(),
+        SupervisorReport::Settled(code) => {
+            return Err(error(format!(
+                "Client supervisor settled before launch (exit {code})"
+            )));
+        }
+        SupervisorReport::NotLaunched(failure) => {
+            return Err(error(format!("Client namespace setup failed: {failure}")));
+        }
     }
     #[cfg(test)]
     endpoint.reach_startup_hook("after_local_supervisor_ready");
@@ -177,7 +222,13 @@ async fn start_supervisor(
     if !endpoint.dispatch_open() {
         return Err(RuntimeManagerError::LoadingCancelled);
     }
-    lease.write_all(b"G").await.map_err(error)
+    child
+        .lease
+        .as_mut()
+        .expect("local startup lease")
+        .write_all(b"G")
+        .await
+        .map_err(error)
 }
 
 #[cfg(not(target_os = "linux"))]
