@@ -28,6 +28,7 @@ type ToastData = {
     "children" | "className" | "swipeDirection" | "toast"
   >;
   tooltipStyle?: boolean;
+  icon?: React.ReactNode;
 };
 
 function getSwipeDirection(position: ToastPosition): SwipeDirection[] {
@@ -150,12 +151,12 @@ function Toasts({
             >
               <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm transition-opacity duration-250 data-behind:not-data-expanded:pointer-events-none data-behind:opacity-0 data-expanded:opacity-100">
                 <div className="flex gap-2">
-                  {Icon && (
+                  {(toastData?.icon ?? (Icon && <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />)) && (
                     <div
                       className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
                       data-slot="toast-icon"
                     >
-                      <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
+                      {toastData?.icon ?? (Icon && <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />)}
                     </div>
                   )}
 
@@ -239,12 +240,12 @@ function AnchoredToasts({
                 ) : (
                   <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm">
                     <div className="flex gap-2">
-                      {Icon && (
+                      {(toastData?.icon ?? (Icon && <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />)) && (
                         <div
                           className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
                           data-slot="toast-icon"
                         >
-                          <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
+                          {toastData?.icon ?? (Icon && <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />)}
                         </div>
                       )}
 

@@ -9,7 +9,9 @@ it('parent updates do not extend an announcement and completion uses the latest 
  const first = vi.fn(), latest = vi.fn();
  const ui = render(<Toast text="Missing credential" icon={null} anchor={null} onDone={first}/>);
  await act(async () => {});
- expect(screen.getByRole('alert').parentElement).toBe(document.body);
+ const alert = screen.getByRole('alert');
+ expect(alert.closest('[data-base-ui-portal]')).toBeTruthy();
+ expect(document.body.contains(alert)).toBe(true);
  await act(async () => vi.advanceTimersByTime(3000));
  ui.rerender(<Toast text="Updated translation" icon={null} anchor={null} onDone={latest}/>);
  await act(async () => vi.advanceTimersByTime(999));
