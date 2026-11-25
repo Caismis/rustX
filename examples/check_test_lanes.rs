@@ -402,6 +402,20 @@ struct PackageMetadata {
     /// (Doc excluded). A member target no lane selects fails the member
     /// coverage check.
     members: BTreeMap<String, BTreeSet<Kind>>,
+    /// Extracted members: name → artifact identity of its lib harness.
+    /// Member discovery binds `--list` output to the harness executable
+    /// Cargo emitted for the step's own package selection, so coverage
+    /// never recompiles a member under a different feature unification.
+    member_identities: BTreeMap<String, MemberIdentity>,
+}
+
+/// Artifact identity of an extracted member's lib test harness: its Cargo
+/// package id and canonical lib target source, used to prove a listed
+/// executable is the member's own harness for this checkout.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MemberIdentity {
+    package_id: String,
+    lib_src: Option<PathBuf>,
 }
 
 fn emit_stderr(stderr: &str, emit: &mut dyn FnMut(&str)) {
@@ -431,18 +445,30 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
     parse_metadata(&metadata)
 }
 
-/// Target kinds each extracted workspace member exposes; used to prove every
-/// non-doc kind is selected by some executing step on every platform.
-fn member_kinds(
-    packages: &[serde_json::Value],
-) -> Result<BTreeMap<String, BTreeSet<Kind>>, String> {
+/// Target kinds and harness identity each extracted workspace member exposes;
+/// used to prove every non-doc kind is selected by some executing step on
+/// every platform, and to bind member test discovery to the exact executable
+/// Cargo built for it.
+type MemberMaps = (
+    BTreeMap<String, BTreeSet<Kind>>,
+    BTreeMap<String, MemberIdentity>,
+);
+
+fn member_metadata(packages: &[serde_json::Value]) -> Result<MemberMaps, String> {
     let mut members = BTreeMap::new();
+    let mut identities = BTreeMap::new();
     for member in packages
         .iter()
         .filter(|package| package["name"].as_str().is_some_and(|name| name != "rustx"))
     {
         let name = member["name"].as_str().ok_or("a package has no name")?;
+        let package_id = member["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| format!("member {name} has no package id"))?
+            .to_owned();
         let mut kinds = BTreeSet::new();
+        let mut lib_src = None;
         for target in member["targets"]
             .as_array()
             .ok_or("a member package has no target list")?
@@ -471,6 +497,14 @@ fn member_kinds(
                     if all_lib.iter().all(|kind| kind.ends_with("lib")) && !all_lib.is_empty() =>
                 {
                     kinds.insert(Kind::Lib);
+                    let src_path = target["src_path"]
+                        .as_str()
+                        .ok_or_else(|| format!("member {name} lib target has no src_path"))?;
+                    lib_src = Some(std::fs::canonicalize(src_path).map_err(|error| {
+                        format!(
+                            "cannot canonicalize lib source `{src_path}` for member {name}: {error}"
+                        )
+                    })?);
                 }
                 other => {
                     return Err(format!(
@@ -480,8 +514,15 @@ fn member_kinds(
             }
         }
         members.insert(name.to_owned(), kinds);
+        identities.insert(
+            name.to_owned(),
+            MemberIdentity {
+                package_id,
+                lib_src,
+            },
+        );
     }
-    Ok(members)
+    Ok((members, identities))
 }
 
 fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
@@ -498,7 +539,7 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, Strin
             .find(|package| package["name"].as_str() == Some("rustx"))
             .ok_or("cargo metadata has no rustx package")?
     };
-    let members = member_kinds(packages)?;
+    let (members, member_identities) = member_metadata(packages)?;
     let package_id = package["id"]
         .as_str()
         .filter(|id| !id.is_empty())
@@ -554,6 +595,7 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, Strin
         targets,
         sources,
         members,
+        member_identities,
     })
 }
 
@@ -941,12 +983,17 @@ trait Discovery {
         Ok((listed.difference(&ignored).cloned().collect(), count))
     }
 
-    /// The libtest harness list of extracted member `member`'s lib target:
-    /// `cargo test -p <member> --lib <features> -- <libtest> --list`. Member
-    /// discovery is what makes a filter or `--skip` on a member step
-    /// verifiable instead of silently selecting zero tests.
+    /// The libtest harness list of extracted member `member`'s lib target,
+    /// listed by the harness executable Cargo emitted under `selection` —
+    /// the package selectors (`-p`/`--workspace`/`--exclude`) of the step
+    /// whose coverage is being verified, so discovery reuses exactly the
+    /// binaries that step's execution compiled instead of spawning Cargo
+    /// under a different feature unification. Member discovery is what
+    /// makes a filter or `--skip` on a member step verifiable instead of
+    /// silently selecting zero tests.
     fn member_lib_list(
         &self,
+        selection: &[String],
         member: &str,
         features: &[String],
         libtest: &[String],
@@ -955,20 +1002,41 @@ trait Discovery {
 
     fn member_lib_runnable(
         &self,
+        selection: &[String],
         member: &str,
         features: &[String],
         libtest: &[String],
     ) -> Result<(BTreeSet<String>, usize), String> {
-        let listed = self.member_lib_list(member, features, libtest, false)?;
-        let ignored = self.member_lib_list(member, features, libtest, true)?;
+        let listed = self.member_lib_list(selection, member, features, libtest, false)?;
+        let ignored = self.member_lib_list(selection, member, features, libtest, true)?;
         let count = ignored.len();
         Ok((listed.difference(&ignored).cloned().collect(), count))
     }
 }
 
+/// The package-selection tokens a member step hands Cargo, so harness
+/// lookup reuses the artifacts that step's own `cargo test` compiled.
+/// Workspace scope carries every `--exclude`; explicit scope carries the
+/// step's `-p` list verbatim.
+fn member_package_selection(step: &Step) -> Vec<String> {
+    if step.scope == PackageScope::Workspace {
+        let mut selection = vec!["--workspace".to_owned()];
+        for excluded in &step.member_excludes {
+            selection.extend(["--exclude".to_owned(), excluded.clone()]);
+        }
+        selection
+    } else {
+        step.member_packages
+            .iter()
+            .flat_map(|package| ["-p".to_owned(), package.clone()])
+            .collect()
+    }
+}
+
 type ListKey = (Vec<String>, Target, Vec<String>, bool);
 type HarnessKey = (Vec<String>, Target);
-type MemberKey = (String, Vec<String>, Vec<String>, bool);
+type MemberHarnessKey = (Vec<String>, Vec<String>);
+type MemberKey = (String, Vec<String>, Vec<String>, Vec<String>, bool);
 
 struct CargoDiscovery<'a> {
     cargo: String,
@@ -979,6 +1047,7 @@ struct CargoDiscovery<'a> {
     harnesses: std::cell::RefCell<BTreeMap<HarnessKey, PathBuf>>,
     cache: std::cell::RefCell<BTreeMap<ListKey, BTreeSet<String>>>,
     member_cache: std::cell::RefCell<BTreeMap<MemberKey, BTreeSet<String>>>,
+    member_harnesses: std::cell::RefCell<BTreeMap<MemberHarnessKey, BTreeMap<String, PathBuf>>>,
 }
 
 impl<'a> CargoDiscovery<'a> {
@@ -998,6 +1067,7 @@ impl<'a> CargoDiscovery<'a> {
             harnesses: std::cell::RefCell::default(),
             cache: std::cell::RefCell::default(),
             member_cache: std::cell::RefCell::default(),
+            member_harnesses: std::cell::RefCell::default(),
         }
     }
 
@@ -1080,6 +1150,45 @@ impl<'a> CargoDiscovery<'a> {
         .map_err(|problem| format!("{rendered}: {problem}"))?;
         Ok(parsed.tests)
     }
+
+    /// Locates the member lib harnesses Cargo emitted under `selection` +
+    /// `features` (minus `--workspace`, which `selection` encodes). One
+    /// `--no-run` fingerprint check per selection covers every member in
+    /// it; when the lane's own `cargo test` already built the harnesses
+    /// this emits artifact receipts without compiling anything, and each
+    /// member's `--list` then runs the executable directly.
+    fn acquire_member_harnesses(
+        &self,
+        selection: &[String],
+        features: &[String],
+    ) -> Result<BTreeMap<String, PathBuf>, String> {
+        let key = (selection.to_vec(), features.to_vec());
+        if let Some(harnesses) = self.member_harnesses.borrow().get(&key) {
+            return Ok(harnesses.clone());
+        }
+        let mut command = Command::new(&self.cargo);
+        command
+            .args(["test", "--locked", "--color", "never", "--lib"])
+            .args(selection)
+            .args(features)
+            .args(["--no-run", "--message-format", "json"]);
+        let rendered = format!("{command:?}");
+        let output = command
+            .current_dir(self.root)
+            .output()
+            .map_err(|error| format!("cannot run {rendered}: {error}"))?;
+        let harnesses = parse_member_artifact_build(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            &self.metadata.member_identities,
+        )
+        .map_err(|problem| format!("{rendered}: {problem}"))?;
+        self.member_harnesses
+            .borrow_mut()
+            .insert(key, harnesses.clone());
+        Ok(harnesses)
+    }
 }
 
 impl Discovery for CargoDiscovery<'_> {
@@ -1141,13 +1250,14 @@ impl Discovery for CargoDiscovery<'_> {
 
     fn member_lib_list(
         &self,
+        selection: &[String],
         member: &str,
         features: &[String],
         libtest: &[String],
         ignored: bool,
     ) -> Result<BTreeSet<String>, String> {
-        // `-p <member>` already scopes the invocation; `--workspace` would
-        // re-widen it.
+        // `selection` owns the package selectors, so `--workspace` drops
+        // out of the feature flags.
         let features: Vec<String> = features
             .iter()
             .filter(|flag| flag.as_str() != "--workspace")
@@ -1155,6 +1265,7 @@ impl Discovery for CargoDiscovery<'_> {
             .collect();
         let key = (
             member.to_owned(),
+            selection.to_vec(),
             features.clone(),
             libtest.to_vec(),
             ignored,
@@ -1162,15 +1273,15 @@ impl Discovery for CargoDiscovery<'_> {
         if let Some(listed) = self.member_cache.borrow().get(&key) {
             return Ok(listed.clone());
         }
-        let mut command = Command::new(&self.cargo);
-        command
-            .args([
-                "test", "-p", member, "--lib", "--locked", "--color", "never",
-            ])
-            .args(&features)
-            .arg("--")
-            .args(libtest)
-            .args(["--list", "--format", "terse"]);
+        let harnesses = self.acquire_member_harnesses(selection, &features)?;
+        let executable = harnesses.get(member).ok_or_else(|| {
+            format!(
+                "Cargo emitted no lib test harness for member `{member}` under its step's \
+                 package selection"
+            )
+        })?;
+        let mut command = Command::new(executable);
+        command.args(libtest).args(["--list", "--format", "terse"]);
         if ignored {
             command.arg("--ignored");
         }
@@ -1361,6 +1472,131 @@ fn parse_artifact_build_with(
             many.len()
         )),
     }
+}
+
+/// Validates the artifact stream of one member-package `cargo test --lib
+/// --no-run --message-format=json` invocation and returns each member's
+/// lib harness executable, bound by package id and canonical lib source.
+fn parse_member_artifact_build(
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+    identities: &BTreeMap<String, MemberIdentity>,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    emit_stderr(stderr, &mut |line| eprintln!("{line}"));
+    let mut diagnostics = Vec::new();
+    let mut harnesses = BTreeMap::new();
+    let mut build_finished = None;
+
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let record: serde_json::Value = serde_json::from_str(line)
+            .map_err(|error| format!("malformed cargo json record `{line}`: {error}"))?;
+        match record["reason"].as_str() {
+            Some("compiler-message") => {
+                if let Some(rendered) = record["message"]["rendered"].as_str() {
+                    let trimmed = rendered.trim_end();
+                    if !trimmed.is_empty() {
+                        eprintln!("{trimmed}");
+                        diagnostics.push(trimmed.to_owned());
+                    }
+                }
+            }
+            Some("build-finished") => {
+                if build_finished.is_some() {
+                    return Err("duplicate build-finished record in cargo json stream".into());
+                }
+                build_finished = Some(
+                    record["success"]
+                        .as_bool()
+                        .ok_or_else(|| format!("malformed build-finished record `{line}`"))?,
+                );
+            }
+            Some("compiler-artifact") => {
+                if let Some((member, path)) = match_member_harness_artifact(&record, identities)? {
+                    if harnesses.insert(member.clone(), path).is_some() {
+                        return Err(format!(
+                            "Cargo emitted two lib harness executables for member `{member}`"
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let diagnostic_context = || {
+        let mut parts = Vec::new();
+        if !diagnostics.is_empty() {
+            parts.push(diagnostics.join("\n"));
+        }
+        if !stderr.trim().is_empty() {
+            parts.push(stderr.trim_end().to_owned());
+        }
+        parts.join("\n")
+    };
+
+    if !success || build_finished != Some(true) {
+        return Err(format!(
+            "member harness build failed (exit_ok={success}, build_finished={build_finished:?}):\n{}",
+            diagnostic_context()
+        ));
+    }
+    Ok(harnesses)
+}
+
+/// One member's lib test-harness executable from a `compiler-artifact`
+/// record, or `None` when the record belongs to another package, target, or
+/// profile.
+fn match_member_harness_artifact(
+    record: &serde_json::Value,
+    identities: &BTreeMap<String, MemberIdentity>,
+) -> Result<Option<(String, PathBuf)>, String> {
+    if record["profile"]["test"].as_bool() != Some(true) {
+        return Ok(None);
+    }
+    let Some(package_id) = record["package_id"].as_str() else {
+        return Ok(None);
+    };
+    let Some((member, identity)) = identities
+        .iter()
+        .find(|(_, identity)| identity.package_id == package_id)
+    else {
+        return Ok(None);
+    };
+    let kinds: Vec<&str> = record["target"]["kind"]
+        .as_array()
+        .map_or_default(|items| items.iter().filter_map(serde_json::Value::as_str).collect());
+    if !target_kinds_match(&kinds, Kind::Lib) {
+        return Ok(None);
+    }
+    let src_path = record["target"]["src_path"]
+        .as_str()
+        .ok_or_else(|| format!("member `{member}` harness artifact missing target.src_path"))?;
+    let artifact_src = std::fs::canonicalize(src_path).map_err(|error| {
+        format!("cannot canonicalize member `{member}` harness src `{src_path}`: {error}")
+    })?;
+    let expected_src = identity
+        .lib_src
+        .as_ref()
+        .ok_or_else(|| format!("member `{member}` has no lib target source in cargo metadata"))?;
+    if artifact_src != *expected_src {
+        return Err(format!(
+            "member `{member}` harness source {} does not match metadata source {}",
+            artifact_src.display(),
+            expected_src.display()
+        ));
+    }
+    let executable = record["executable"]
+        .as_str()
+        .ok_or_else(|| format!("member `{member}` lib harness artifact has no executable path"))?;
+    let path = PathBuf::from(executable);
+    if !path.is_file() {
+        return Err(format!(
+            "member `{member}` lib harness executable does not exist: {}",
+            path.display()
+        ));
+    }
+    Ok(Some((member.clone(), path)))
 }
 
 /// Parses `--list --format terse` output emitted directly by one compiled
@@ -1653,26 +1889,17 @@ fn check(
             })
             .collect();
         // The universe is every member lib target cargo metadata lists,
-        // enumerated from `members` itself — not only the members the
-        // surviving FULL steps happen to name — so a dropped or excluding
-        // FULL step still fails closed instead of shrinking the demand.
-        for (member, kinds) in members {
-            if !kinds.contains(&Kind::Lib) {
-                continue;
-            }
-            match discovery.member_lib_runnable(member, &[], &[]) {
-                Ok((names, _)) => {
-                    universe.entry(member).or_default().extend(names);
-                }
-                Err(problem) => report
-                    .findings
-                    .push(format!("member `{member}` lib: {problem}")),
-            }
-        }
+        // enumerated under each FULL member step's own package selection
+        // — the exact artifact that step executes — plus a bare `-p`
+        // enumeration for any member no FULL step covers, so a dropped or
+        // excluding FULL step still fails closed instead of shrinking the
+        // demand.
         for step in &full_member_steps {
+            let selection = member_package_selection(step);
             let arguments = step.libtest(&step.filters, &step.skips);
             for member in members.keys().filter(|name| step_covers_member(step, name)) {
-                match discovery.member_lib_runnable(member, &step.features, &arguments) {
+                match discovery.member_lib_runnable(&selection, member, &step.features, &arguments)
+                {
                     Ok((names, _)) => {
                         full_covered.entry(member).or_default().extend(names);
                     }
@@ -1680,7 +1907,7 @@ fn check(
                         .findings
                         .push(format!("{} member `{member}` lib: {problem}", step.label())),
                 }
-                match discovery.member_lib_runnable(member, &step.features, &[]) {
+                match discovery.member_lib_runnable(&selection, member, &step.features, &[]) {
                     Ok((names, _)) => {
                         universe.entry(member).or_default().extend(names);
                     }
@@ -1688,6 +1915,24 @@ fn check(
                         .findings
                         .push(format!("{} member `{member}` lib: {problem}", step.label())),
                 }
+            }
+        }
+        for (member, kinds) in members {
+            if !kinds.contains(&Kind::Lib)
+                || full_member_steps
+                    .iter()
+                    .any(|step| step_covers_member(step, member))
+            {
+                continue;
+            }
+            let selection = vec!["-p".to_owned(), (*member).clone()];
+            match discovery.member_lib_runnable(&selection, member, &[], &[]) {
+                Ok((names, _)) => {
+                    universe.entry(member).or_default().extend(names);
+                }
+                Err(problem) => report
+                    .findings
+                    .push(format!("member `{member}` lib: {problem}")),
             }
         }
         // Runnable-name completeness is host-native discovery, so it runs
@@ -1705,6 +1950,7 @@ fn check(
             }
         }
         for step in &member_steps {
+            let selection = member_package_selection(step);
             let arguments = step.libtest(&step.filters, &step.skips);
             let step_members: Vec<&String> = members
                 .keys()
@@ -1713,7 +1959,8 @@ fn check(
             let mut runnable_total = 0usize;
             let mut scale = 0usize;
             for member in &step_members {
-                match discovery.member_lib_runnable(member, &step.features, &arguments) {
+                match discovery.member_lib_runnable(&selection, member, &step.features, &arguments)
+                {
                     Ok((names, ignored)) => {
                         report.summary.push(format!(
                             "{} member `{member}` lib: {} runnable, {ignored} ignored selected",
@@ -1750,12 +1997,14 @@ fn check(
                 let mut excluded = 0;
                 for member in &step_members {
                     let with = discovery.member_lib_list(
+                        &selection,
                         member,
                         &step.features,
                         &step.libtest(&step.filters, &step.skips),
                         false,
                     );
                     let without = discovery.member_lib_list(
+                        &selection,
                         member,
                         &step.features,
                         &step.libtest(&step.filters, &others),
@@ -1784,18 +2033,21 @@ fn check(
                 let mut listed_any = false;
                 for member in &step_members {
                     let selected_list = discovery.member_lib_list(
+                        &selection,
                         member,
                         &step.features,
                         &step.libtest(only, &step.skips),
                         false,
                     );
                     let unskipped_list = discovery.member_lib_list(
+                        &selection,
                         member,
                         &step.features,
                         &step.libtest(only, &[]),
                         false,
                     );
                     let ignored_list = discovery.member_lib_list(
+                        &selection,
                         member,
                         &step.features,
                         &step.libtest(only, &[]),
@@ -2076,6 +2328,7 @@ mod tests {
 
         fn member_lib_list(
             &self,
+            _selection: &[String],
             member: &str,
             _features: &[String],
             libtest: &[String],
