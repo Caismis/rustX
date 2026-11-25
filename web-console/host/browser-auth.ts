@@ -22,8 +22,15 @@ export function browserAuth(config: WebBootstrapConfig) {
     const authority = `127.0.0.1:${request.socket.localPort}`;
     const deny = (status = 401) => { response.writeHead(status, { 'Content-Type': 'text/plain' }).end('rustX browser authentication required. Reopen the startup URL.'); };
     if (request.headers.host !== authority || (request.headers.origin && request.headers.origin !== `http://${authority}`)) return deny(403);
-    const url = new URL(request.url ?? '/', `http://${authority}`);
     const origin = `http://${authority}`;
+    let url: URL;
+    try {
+      url = new URL(request.url ?? '/', origin);
+      if (url.origin !== origin) throw new Error('Invalid request origin');
+    } catch {
+      response.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid HTTP request target.');
+      return;
+    }
     if (url.searchParams.has('token')) {
       if (request.method !== 'GET' || url.pathname !== '/' || [...url.searchParams].length !== 1 || !matches(url.searchParams.get('token') ?? undefined, config.browserLaunchToken)) return deny();
       if (sessions.size >= 128) return deny(429);

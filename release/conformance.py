@@ -13,6 +13,7 @@ import re
 import selectors
 import shutil
 import signal
+import socket
 import struct
 import subprocess
 import tarfile
@@ -20,6 +21,8 @@ import tempfile
 import termios
 import time
 from urllib.parse import urlsplit
+
+from installed_provider import installed_provider
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -177,10 +180,11 @@ def tui_terminal(binary: Path, cwd: Path, environment: dict, bootstrap: dict, wo
                         if not selector.select(min(1, max(0, deadline - time.monotonic()))):
                             continue
                         screen.extend(os.read(master, 8192))
-                        if b"Resume session" in screen:
+                        if b"Resume session" in screen or b"Enter Send" in screen:
                             break
                         require(len(screen) <= 128 * 1024, "Installed TUI emitted excessive startup output")
-                require(b"Resume session" in screen, "Installed TUI did not render the real Session catalog")
+                require(b"Resume session" in screen or b"Enter Send" in screen,
+                        "Installed TUI did not connect to the running Server")
                 terminal.terminate()
                 require(terminal.wait(timeout=20) == 143, "Unexpected TUI owner shutdown status")
             finally:
@@ -192,22 +196,107 @@ def tui_terminal(binary: Path, cwd: Path, environment: dict, bootstrap: dict, wo
         os.close(master)
 
 
-def web(binary: Path, cwd: Path, environment: dict) -> None:
+def configure(binary: Path, cwd: Path, environment: dict, endpoint: str,
+              grant: Path | None = None) -> Path:
+    cli(binary, ["init", "--template", "openai-chat", "--provider", "local", "--model-id", "test",
+                 "--endpoint", endpoint, "--credential-env", "TEST_KEY",
+                 "--context-window", "128000", "--max-output", "4096",
+                 "--compat", 'chat_reasoning_replay = "omit"'], cwd, environment)
+    defaults = Path(environment["HOME"]) / "rustx/rustx.toml"
+    config = cwd / "config.toml"
+    authored = 'approval_mode = "full_access"\n' + defaults.read_text()
+    authored += '\n[agent.tools]\nbuiltin = ["read", "bash", "write"]\n'
+    if grant:
+        authored += f"\n[app_server]\nenvironment_roots = [{json.dumps(str(grant))}]\n"
+    config.write_text(authored)
+    return config
+
+
+def tui_create(binary: Path, cwd: Path, environment: dict, endpoint: str) -> None:
+    workspace = cwd / "workspace"
+    workspace.mkdir()
+    (workspace / "seed.txt").write_text("seed-terminal-session\n")
+    native = cwd / "native"
+    home = cwd / "home"
+    home.mkdir()
+    environment = {**environment, "HOME": str(home), "TERM": "xterm-256color"}
+    config = configure(binary, cwd, environment, endpoint)
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 132, 0, 0))
+        with subprocess.Popen([binary, "tui", "--workspace", workspace, "--config", config,
+                               "--runtime-root", native], cwd=cwd, env=environment, stdin=slave,
+                              stdout=slave, stderr=slave, start_new_session=True) as terminal:
+            def observe(expected: bytes) -> None:
+                screen = bytearray()
+                deadline = time.monotonic() + 30
+                with selectors.DefaultSelector() as selector:
+                    selector.register(master, selectors.EVENT_READ)
+                    while terminal.poll() is None and selector.select(max(0, deadline - time.monotonic())):
+                        screen.extend(os.read(master, 8192))
+                        if expected in screen:
+                            return
+                        require(len(screen) <= 256 * 1024, "Installed TUI emitted excessive output")
+                raise RuntimeError(f"Installed TUI did not render {expected!r}: {bytes(screen[-8192:])!r}")
+
+            def bindings():
+                return {state["session"]: state for path in (native / "execution-pending").glob("*.json")
+                        if (state := json.loads(path.read_text()))["workspace"] == str(workspace)}
+
+            try:
+                observe(b"Enter Send")
+                first = bindings()
+                require(len(first) == 1, "TUI startup has no exact Client")
+                os.write(master, b"/new\r")
+                observe(b"created session")
+                second = bindings()
+                require(len(second) == 2 and second.keys() > first.keys(), "TUI /new reused the startup binding")
+                require(len({state["instance"] for state in second.values()}) == 2,
+                        "TUI Sessions share an execution Client instance")
+                os.write(master, b"exercise terminal-session\r")
+                observe(b"Installed tools complete for terminal-session")
+                require((workspace / "written.txt").read_text() == "write-terminal-session\n" and
+                        (workspace / "bash-cwd.txt").read_text().strip() == str(workspace),
+                        "Installed TUI tools used the wrong Workspace")
+                terminal.terminate()
+                require(terminal.wait(timeout=30) == 143, "Unexpected TUI owner shutdown status")
+                require(not bindings(), "Installed TUI left Session execution unsettled")
+            finally:
+                if terminal.poll() is None:
+                    os.killpg(terminal.pid, signal.SIGTERM)
+                    try:
+                        terminal.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(terminal.pid, signal.SIGKILL)
+                        terminal.wait()
+    finally:
+        os.close(slave)
+        os.close(master)
+
+
+def web(binary: Path, cwd: Path, environment: dict, endpoint: str,
+        *, browser: bool, grants: bool = True) -> None:
     # Keep the Web owner separate so a failed assertion cannot leave processes behind.
     workspace = cwd / "workspace"
     workspace.mkdir()
+    (workspace / "project").mkdir()
+    (workspace / "seed.txt").write_text("seed-web-root\n")
+    (workspace / "project/seed.txt").write_text("seed-web-child\n")
     native = cwd / "native"
-    cli(binary, ["init", "--template", "openai-chat", "--provider", "local", "--model-id", "test",
-                 "--endpoint", "http://127.0.0.1:9/v1", "--credential-env", "TEST_KEY",
-                 "--context-window", "128000", "--max-output", "4096",
-                 "--compat", 'chat_reasoning_replay = "omit"'], cwd, environment)
-    config = Path(environment["HOME"]) / "rustx/rustx.toml"
-    with config.open("a") as source:
-        source.write(f"\n[app_server]\nenvironment_roots = [{json.dumps(str(workspace))}]\n")
+    home = cwd / "home"
+    home.mkdir()
+    environment = {**environment, "HOME": str(home)}
+    if key := os.environ.get("RUSTX_INSTALLED_BROWSER_EXECUTABLE"):
+        environment["RUSTX_INSTALLED_BROWSER_EXECUTABLE"] = key
+    if cache := os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = cache
+    else:
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = str(Path.home() / ("Library/Caches/ms-playwright" if os.uname().sysname == "Darwin" else ".cache/ms-playwright"))
+    config = configure(binary, cwd, environment, endpoint, workspace if grants else None)
     started = time.monotonic()
     with (cwd / "web.log").open("w+") as errors:
         launcher = subprocess.Popen([binary, "web", "--workspace", workspace, "--no-open",
-                                     "--runtime-root", native, "--local-execution-workspace", workspace],
+                                     "--runtime-root", native, "--config", config],
                                     cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=errors, start_new_session=True, bufsize=0)
         try:
@@ -238,6 +327,10 @@ def web(binary: Path, cwd: Path, environment: dict) -> None:
                 return response.read()
 
             try:
+                with socket.create_connection((url.hostname, url.port), timeout=5) as malformed:
+                    malformed.sendall(f"GET // HTTP/1.1\r\nHost: {url.netloc}\r\nConnection: close\r\n\r\n".encode())
+                    with malformed.makefile("rb") as raw:
+                        require(raw.readline().startswith(b"HTTP/1.1 400 "), "Installed carrier accepted an invalid request target")
                 get("/__rustx/bootstrap", 401)
                 landing = get(url.path + "?" + url.query, 200)
                 proof = re.search(rb'setItem\("rustx-browser-session","([A-Za-z0-9_-]{43})"\)', landing)
@@ -265,23 +358,34 @@ def web(binary: Path, cwd: Path, environment: dict) -> None:
                 [location] = catalog["picker"]["locations"]
                 scope = {key: catalog[key] for key in ("authorityId", "endpoint")}
                 coordinates = {"scope": scope, "location": location["id"]}
-                (workspace / "project").mkdir()
                 post("browse-workspace", {**coordinates, "path": "../"}, 400)
-                root = post("browse-workspace", {**coordinates, "path": ""})
-                require(root["folders"] == ["project"], "Installed picker lost the directory")
-                selected = post("browse-workspace", {**coordinates, "path": "project"})
-                require(selected["folders"] == [], "Empty selection returned extra entries")
-                identifier = post("register-workspace-folder", {**coordinates, "selection": {
-                    "path": "project", "revision": selected["revision"],
-                }})
-                registered = post("list", {})
-                require(any(row["id"] == identifier and Path(row["displayPath"]) == workspace / "project"
-                            for row in registered["workspaces"]), "Installed picker did not register the confirmed directory")
+                if grants:
+                    root = post("browse-workspace", {**coordinates, "path": ""})
+                    require(root["folders"] == ["project"], "Installed picker lost the directory")
+                    selected = post("browse-workspace", {**coordinates, "path": "project"})
+                    require(selected["folders"] == [], "Empty selection returned extra entries")
+                    if not browser:
+                        identifier = post("register-workspace-folder", {**coordinates, "selection": {
+                            "path": "project", "revision": selected["revision"],
+                        }})
+                        registered = post("list", {})
+                        require(any(row["id"] == identifier and Path(row["displayPath"]) == workspace / "project"
+                                    for row in registered["workspaces"]), "Installed picker did not register the confirmed directory")
+                else:
+                    post("browse-workspace", {**coordinates, "path": "project"}, 400)
             finally:
                 connection.close()
             print(f"Web bootstrap and static assets ready in {(time.monotonic() - started) * 1000:.1f} ms", flush=True)
+            if browser:
+                run = subprocess.run([shutil.which("node"), ROOT / "web-console/test/installed-composition.ts",
+                                      startup.decode(), native, workspace, "granted" if grants else "exact-only"],
+                                     cwd=cwd, env=environment, timeout=180)
+                require(run.returncode == 0, "Installed Web browser proof failed")
+                print("Installed Web browser and Workspace ownership verified", flush=True)
+            # Separate native connection proves that the invalid request did
+            # not terminate the Server owned by this still-running carrier.
             tui(binary, cwd, environment, bootstrap, workspace)
-            print("Installed TUI rendered the enrolled Session catalog and disconnected", flush=True)
+            print("Installed TUI rendered the Session catalog and disconnected", flush=True)
             require(launcher.poll() is None, "TUI disconnect shut down the Web owner")
             launcher.terminate()
             require(launcher.wait(timeout=30) == 143, "Unexpected Web owner shutdown status")
@@ -326,6 +430,7 @@ def main() -> None:
     parser.add_argument("--process-harness", type=Path)
     parser.add_argument("--client-harness", type=Path)
     parser.add_argument("--mount-proof", action="store_true")
+    parser.add_argument("--browser-proof", action="store_true", help="exercise the extracted Web in Chromium")
     options = parser.parse_args()
     if options.mount_proof and not options.process_harness:
         parser.error("--mount-proof requires --process-harness")
@@ -362,7 +467,20 @@ def main() -> None:
         environment["TEST_KEY"] = "fake-provider-unused"
         require("--local-execution-workspace" in cli(bundle, ["tui", "--help"], cwd, environment),
                 "Installed TUI help is incomplete")
-        web(bundle, cwd, environment)
+        with installed_provider() as provider:
+            for name in ("web", "terminal", "exact-root"):
+                (cwd / name).mkdir()
+            try:
+                web(bundle, cwd / "web", environment, provider.root, browser=options.browser_proof)
+                if options.browser_proof:
+                    web(bundle, cwd / "exact-root", environment, provider.root, browser=True, grants=False)
+                tui_create(bundle, cwd / "terminal", environment, provider.root)
+            finally:
+                require(not provider.errors, f"Installed tool results: {provider.errors}")
+            names = {"terminal-session"}
+            if options.browser_proof:
+                names.update(("web-root", "web-child"))
+            provider.assert_calls(names)
         if options.process_harness:
             process_proof(options.process_harness.resolve(), products, options.mount_proof)
         if options.client_harness:

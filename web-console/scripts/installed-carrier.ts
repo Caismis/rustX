@@ -29,23 +29,29 @@ const auth = browserAuth(JSON.parse(readFileSync(process.env.RUSTX_WEB_BOOTSTRAP
 const host = new LocalWorkspaceHost(JSON.parse(readFileSync(process.env.RUSTX_WORKSPACE_HOST_CONFIG!, 'utf8')));
 const workspaces = workspaceHandler(host);
 const server = createServer((request, response) => {
-  auth(request, response, () => {
-    void workspaces(request, response, () => {
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        response.writeHead(405, { Allow: 'GET, HEAD' }).end();
-        return;
-      }
-      const path = new URL(request.url ?? '/', `http://${portHost}`).pathname;
-      const asset = assets.get(path);
-      if (!asset) {
-        response.writeHead(404).end();
-        return;
-      }
-      response.writeHead(200, { 'Content-Type': asset.type, 'Content-Length': asset.length, 'X-Content-Type-Options': 'nosniff' });
-      if (request.method === 'HEAD') response.end();
-      else void pipeline(createReadStream(asset.path), response).catch(() => response.destroy());
-    }).catch(() => response.destroy());
-  });
+  const fail = () => {
+    if (response.headersSent) response.destroy();
+    else response.writeHead(500).end();
+  };
+  try {
+    auth(request, response, () => {
+      void workspaces(request, response, () => {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          response.writeHead(405, { Allow: 'GET, HEAD' }).end();
+          return;
+        }
+        const path = new URL(request.url ?? '/', `http://${portHost}`).pathname;
+        const asset = assets.get(path);
+        if (!asset) {
+          response.writeHead(404).end();
+          return;
+        }
+        response.writeHead(200, { 'Content-Type': asset.type, 'Content-Length': asset.length, 'X-Content-Type-Options': 'nosniff' });
+        if (request.method === 'HEAD') response.end();
+        else void pipeline(createReadStream(asset.path), response).catch(() => response.destroy());
+      }).catch(fail);
+    });
+  } catch { fail(); }
 });
 const controller = new AbortController();
 const stopped = new Promise<void>(resolve => controller.signal.addEventListener('abort', () => resolve(), { once: true }));

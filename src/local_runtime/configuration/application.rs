@@ -624,12 +624,13 @@ impl ApplicationState {
         endpoint: &std::sync::Arc<
             crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
         >,
+        persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
         let capture = configuration
             .capture_session_application(input, credentials, Some(endpoint))?
             .context?;
         Self::validate_default(&capture, credentials)?;
-        Self::admit_initial(capture, input, credentials, true)
+        Self::admit_initial(capture, input, credentials, persisted)
     }
 
     fn admit_initial(

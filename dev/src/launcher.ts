@@ -93,6 +93,7 @@ export class Launcher {
       if (args.mode === 'tui') {
         const forwardOnly = externalTui || args.forwarded.length === 1 && args.forwarded[0] === '--help';
         const binding = forwardOnly ? [] : ['--binary', args.binary];
+        if (this.#installed && !forwardOnly) binding.push('--local-session-execution');
         this.#child({ component: 'tui', command: process.execPath, args: [join(this.#root, 'tui/src/main.ts'), ...binding, ...args.forwarded], cwd: process.cwd(), terminal: true }, true);
         return;
       }
@@ -103,10 +104,12 @@ export class Launcher {
       let productHostToken: string;
       do { productHostToken = randomBytes(32).toString('base64url'); } while (productHostToken === transportToken);
       const productHostTokenFile = this.#write('product-host-token', productHostToken);
+      const registry = workspaceRegistry(args.workspaces, args.forwarded, this.#stateDirectory);
+      const roots = this.#installed ? registry.roots.flatMap(({ cwd }) => ['--local-session-root', cwd]) : [];
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
-        args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--local-workspace-picker', '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
+        args: ['app-server', ...args.forwarded, ...roots, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--local-workspace-picker', '--product-host-token-file', productHostTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
       const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(binaryDirectory, 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, browsePicker: true,
-        ...workspaceRegistry(args.workspaces, args.forwarded, this.#stateDirectory) };
+        ...registry };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;
       do { browserLaunchToken = randomBytes(32).toString('base64url'); } while ([transportToken, productHostToken].includes(browserLaunchToken));

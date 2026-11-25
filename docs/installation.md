@@ -13,7 +13,9 @@ python3 release/package.py rustx --out /absolute/path/to/packages
 ```
 
 `all` builds the three layouts in one command. The Server and Client use
-separate Cargo target directories. The bundle builds its Web and TUI assets
+separate Cargo target directories. Use paths outside the checkout or Git-ignored
+directories without tracked files for `--out`, `--server-target`, and
+`--client-target`. The bundle builds its Web and TUI assets
 in a temporary source tree, so it can run alongside a live checkout preview.
 Each archive has a sibling SHA-256 file
 and an internal `manifest.json` with its source commit, Execution Protocol
@@ -65,27 +67,28 @@ when recovering an enrolled Session.
 ## Single-machine bundle
 
 ```sh
-/path/to/rustx/bin/rustx web --workspace /absolute/workspace \
-  --local-execution-workspace /absolute/workspace
-/path/to/rustx/bin/rustx tui --session "$SESSION_ID" \
-  --local-execution-workspace /absolute/workspace
+/path/to/rustx/bin/rustx web --workspace /absolute/workspace
+/path/to/rustx/bin/rustx tui --workspace /absolute/workspace
 ```
 
-The explicit local Workspace option enrolls and launches a trusted sibling
-Client through the paired Unix protocol. It creates a durable minimal
-Session before dependent configuration is loaded. Configure the environment
-root first. The Web picker browses descendants of those configured roots over
-a private Product Host connection. A temporary Session binds the bundled
-Client before the first page and uses ordinary execution revocation and reaping
-on completion or cancellation. Choosing a folder revalidates the Client's
-directory revision before the Host registers it. The picker has no Agent or
-Conversation to initialize.
+Each new Session in the installed Web or self-hosted TUI starts a sibling
+Client over the same paired Unix Execution Protocol. The Server reserves a
+Session identity, authenticates the Client, and reads the bound configuration
+before admitting the Session. The launcher grants each exact Workspace passed
+at startup. Deleting the Session or draining its Server revokes execution and
+settles the owned Client. If all eight local Session Client slots are active,
+new Sessions receive an explicit capacity error. The standalone Server does
+not launch Clients for ordinary Session creation.
 
-The TUI example attaches to the specified enrolled Session. The Web launcher
-serves the built assets together with the local Workspace Host. Web
-and TUI need `node` on `PATH`. Run
-`rustx app-server --help` for direct, headless startup with these same
-installed binaries. On Linux, local recovery checks also require `bwrap`.
+Web can re-register a configured exact root after it is removed from the
+navigation. Browsing and registering descendants additionally require an
+`app_server.environment_roots` grant. The picker uses a private minimal
+binding, verifies the selected directory revision, and settles its temporary
+Client before returning. The picker starts no Agent or Conversation.
+
+Web and TUI need Node.js 24 on `PATH`. Run `rustx app-server --help` for
+headless startup with the installed binaries. On Linux, local recovery
+checks also require `bwrap`.
 
 The Server and single-machine archives include the existing third-party
 App Server example at `share/examples/app-server/connect.mjs`. With Node.js
@@ -105,11 +108,14 @@ any subsequent execution admission.
 Run `release/conformance.py` with Python 3.12 or later and one archive of
 each layout. It checks the archive checksums, file inventory, version agreement,
 standalone help with a restricted `PATH`, and installed Web and TUI entry points.
-The Web check starts an enrolled local Client and exercises the built assets and
-loopback browser authentication from a temporary directory outside the checkout.
-It runs the packaged third-party example and then starts the TUI in a PTY
-to check that it can render the Session catalog and disconnect independently
-of the Web owner.
+The verifier checks the built Web assets and loopback browser authentication
+from a temporary directory outside the checkout. It runs the packaged
+third-party example and exercises both the connected TUI and the self-hosted
+TUI's new Session and tools in a PTY. For the installed browser regression,
+install Chromium with `pnpm --dir web-console exec playwright install chromium`
+and pass `--browser-proof`. The Chromium run creates and deletes real Sessions,
+verifies the two Client processes settle, and checks root registration with
+and without native browse authorization.
 The local Fake Provider fixtures require no paid credentials.
 
 ```sh
@@ -132,7 +138,7 @@ _, harnesses = prepare(['prepare_native_tests.py', '--', 'cargo', 'test', '--loc
 print(harnesses[0])
 PYCODE
 python3 release/conformance.py /absolute/path/to/packages/*.tar.gz \
-  --process-harness /absolute/path/to/process-test-executable --mount-proof
+  --browser-proof --process-harness /absolute/path/to/process-test-executable --mount-proof
 ```
 
 See the [installed-product evidence](exec-04-evidence.md) for tested boundaries

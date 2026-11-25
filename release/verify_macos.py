@@ -44,8 +44,10 @@ def main() -> None:
     harness = native_harness("rustx", "process")
     client_harness = native_harness("rustx-execution-client", "bootstrap")
     run("python3", "release/package.py", "all", "--out", directory)
+    run("corepack", "pnpm@11.13.1", "--dir", "web-console", "install", "--frozen-lockfile")
+    run("corepack", "pnpm@11.13.1", "--dir", "web-console", "exec", "playwright", "install", "chromium")
     archives = sorted(directory.glob("*.tar.gz"))
-    run("python3", "release/conformance.py", *archives, "--process-harness", harness,
+    run("python3", "release/conformance.py", *archives, "--browser-proof", "--process-harness", harness,
         "--client-harness", client_harness)
     for archive in archives:
         with tarfile.open(archive, "r:gz") as package:

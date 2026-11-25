@@ -14,12 +14,16 @@
 //! exchange runs at a time and a concurrent dispatch is refused as busy,
 //! never queued.
 
+pub(super) mod local_sessions;
 mod mcp;
 mod output;
 mod sibling;
 pub(crate) use mcp::{ReceiveExchange, StdioMcpBinding};
 pub(crate) use output::OutputBinding;
-pub(crate) use sibling::{SiblingClient, launch_sibling};
+use sibling::SiblingClient;
+#[cfg(target_os = "linux")]
+pub(crate) use sibling::maintain as maintain_local_client;
+pub(crate) use sibling::{LocalClient, launch_sibling};
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -3135,7 +3139,10 @@ fn spawn_preparation(
 /// Session under retirement — never by endpoint status. Endpoint drop order
 /// guarantees teardown only outside locks.
 #[derive(Default)]
-pub(super) struct SessionExecutionRegistry(Mutex<HashMap<SessionId, Arc<Slot>>>);
+pub(super) struct SessionExecutionRegistry {
+    slots: Mutex<HashMap<SessionId, Arc<Slot>>>,
+    local: local_sessions::LocalSessions,
+}
 
 /// The explicitly local Agent entry owns a single Session and its sibling Client.
 pub(crate) struct StandaloneExecution {
@@ -3209,6 +3216,7 @@ impl StandaloneExecution {
                 &input,
                 &credentials,
                 &endpoint,
+                true,
             )
         })
         .await
@@ -3240,7 +3248,7 @@ impl StandaloneExecution {
 
 impl SessionExecutionRegistry {
     pub(super) fn reserves_workspace(&self, workspace: &Path) -> bool {
-        self.0
+        self.slots
             .lock()
             .expect("execution registry mutex")
             .values()
@@ -3248,7 +3256,7 @@ impl SessionExecutionRegistry {
     }
 
     pub(super) fn reserved_workspaces(&self) -> BTreeSet<PathBuf> {
-        self.0
+        self.slots
             .lock()
             .expect("execution registry mutex")
             .values()
@@ -3277,7 +3285,7 @@ impl SessionExecutionRegistry {
         transport: ExecutionTransport,
         replaces: Option<&Arc<LocalExecutionEndpoint>>,
     ) -> Result<Claim, RuntimeManagerError> {
-        let mut slots = self.0.lock().expect("execution registry mutex");
+        let mut slots = self.slots.lock().expect("execution registry mutex");
         if let Some(slot) = slots.get(session) {
             if slot.workspace.as_os_str() != workspace.as_os_str() {
                 return Err(error("Session workspace changed since the execution claim"));
@@ -3331,7 +3339,7 @@ impl SessionExecutionRegistry {
         &self,
         session: &SessionId,
     ) -> Result<Option<Arc<LocalExecutionEndpoint>>, RuntimeManagerError> {
-        let slots = self.0.lock().expect("execution registry mutex");
+        let slots = self.slots.lock().expect("execution registry mutex");
         let Some(slot) = slots.get(session) else {
             return Ok(None);
         };
@@ -3349,7 +3357,7 @@ impl SessionExecutionRegistry {
         &self,
         session: &SessionId,
     ) -> Option<Arc<LocalExecutionEndpoint>> {
-        self.0
+        self.slots
             .lock()
             .expect("execution registry mutex")
             .get(session)?
@@ -3357,7 +3365,7 @@ impl SessionExecutionRegistry {
     }
 
     pub(super) fn close_admission(&self, cutoff: Instant) -> Vec<Arc<LocalExecutionEndpoint>> {
-        self.0
+        self.slots
             .lock()
             .expect("execution registry mutex")
             .values()
@@ -3369,7 +3377,7 @@ impl SessionExecutionRegistry {
     /// failed revocation stays in the inventory for Host drain.
     pub(super) fn retire(&self, session: &SessionId) {
         let retired = {
-            let mut slots = self.0.lock().expect("execution registry mutex");
+            let mut slots = self.slots.lock().expect("execution registry mutex");
             if slots.get(session).is_some_and(|slot| {
                 let phase = slot.phase.lock().expect("execution slot phase");
                 match &*phase {
@@ -3681,7 +3689,11 @@ impl SessionRuntimeManager {
                 return Err(error("Session retirement has fenced runtime admission"));
             }
         }
-        let slots = self.execution.0.lock().expect("execution registry mutex");
+        let slots = self
+            .execution
+            .slots
+            .lock()
+            .expect("execution registry mutex");
         if let Some((session, slot)) = session.and_then(|id| slots.get(id).map(|slot| (id, slot))) {
             let phase = slot.phase.lock().expect("execution slot phase");
             if let Phase::Published(endpoint) = &*phase {
@@ -4257,7 +4269,7 @@ mod tests {
         assert!(
             manager
                 .execution
-                .0
+                .slots
                 .lock()
                 .expect("execution registry mutex")
                 .is_empty(),

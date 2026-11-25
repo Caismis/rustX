@@ -206,39 +206,75 @@ impl SessionRuntimeManager {
             .as_ref()
             .map(|_| CreationReservation::reserve(&self.registry))
             .transpose()?;
-        let configuration = self.configuration.clone();
-        let credentials = self.credentials.clone();
         let input = settings.input();
-        let applications = self.applications.clone();
-        let owner = self.clone();
-        let capture = tokio::task::spawn_blocking(move || {
-            owner.repair_session_sources(&input);
-            applications
-                .lock()
-                .initial_binding(&configuration, &input, &credentials, false)
-        })
-        .await
-        .map_err(|error| super::super::session::SessionError::Catalog {
-            detail: error.to_string(),
-        })?
-        .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
-        if let Some(claim) = &claim {
-            claim
-                .startup
-                .bind_policy(capture.config.mcp_startup_policy)
+        let (local, capture) =
+            if let Some((pending, capture)) = self.prepare_local_session(&input).await? {
+                (Some(pending), capture)
+            } else {
+                let owner = self.clone();
+                let capture = tokio::task::spawn_blocking(move || {
+                    owner.repair_session_sources(&input);
+                    owner.applications.lock().initial_binding(
+                        &owner.configuration,
+                        &input,
+                        &owner.credentials,
+                        false,
+                    )
+                })
+                .await
+                .map_err(|error| super::super::session::SessionError::Catalog {
+                    detail: error.to_string(),
+                })?
                 .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
-        }
+                (None, capture)
+            };
         settings.model = capture.input.model.clone();
-        let flight = claim.map(|claim| super::Flight::with_startup(claim.into_startup()));
-        let mut start = false;
-        let result = self
-            .sessions
-            .create_session_with_binding(settings, dynamic_tools, Some(capture.clone()), |result| {
-                if let (Some(flight), Some(reservation)) = (&flight, &mut reservation) {
-                    start = reservation.publish(result, flight);
+        let creation = async {
+            if let Some(claim) = &claim {
+                claim
+                    .startup
+                    .bind_policy(capture.config.mcp_startup_policy)
+                    .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
+            }
+            let flight = claim.map(|claim| super::Flight::with_startup(claim.into_startup()));
+            let mut start = false;
+            let result = self
+                .sessions
+                .create_session_for(
+                    settings,
+                    dynamic_tools,
+                    Some(capture.clone()),
+                    local.as_ref().map(|pending| pending.session.clone()),
+                    || {
+                        local.as_ref().map_or(
+                            Ok(()),
+                            super::execution::local_sessions::PendingClient::admit,
+                        )
+                    },
+                    |result| {
+                        if let (Some(flight), Some(reservation)) = (&flight, &mut reservation) {
+                            start = reservation.publish(result, flight);
+                        }
+                    },
+                )
+                .await?;
+            Ok((result, flight, start))
+        }
+        .await;
+        let (result, flight, start) = match creation {
+            Ok(created) => {
+                if let Some(pending) = local {
+                    self.keep_local_session(pending);
                 }
-            })
-            .await?;
+                created
+            }
+            Err(error) => {
+                if let Some(pending) = local {
+                    self.discard_local_session(pending).await;
+                }
+                return Err(error);
+            }
+        };
         if start {
             #[cfg(test)]
             self.configuration.test_hooks.reach("create_before_load");

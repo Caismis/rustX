@@ -128,7 +128,9 @@ export function WorkspaceNavigation({ pins, associations, host, client, state, t
     {toast && <Toast key={toast.sequence} anchor={null} tone={toast.copied ? 'success' : undefined} text={tx(toast.copied ? 'workspace:toast.sessionIdCopied' : 'workspace:toast.sessionIdCopyFailed')} icon={toast.copied ? <IconCheckOutline16/> : <IconWarningOutline16/>} onDone={() => setToast(undefined)}/>}
     {dialog?.kind === 'add' && dialog.catalog.picker.kind === 'browser' ? <WorkspaceFolderDialog host={host} scope={dialog.mutation.scope}
       locations={dialog.catalog.picker.locations} busy={busy} error={error} close={() => setDialog(undefined)}
-      add={(location, selection) => void mutate(() => host.registerWorkspaceFolder!(dialog.mutation.scope, location, selection), dialog.mutation)} />
+      add={(location, selection) => void mutate(() => selection
+        ? host.registerWorkspaceFolder!(dialog.mutation.scope, location, selection)
+        : host.adoptWorkspace(dialog.mutation.scope, location), dialog.mutation)} />
       : dialog && <Modal closeLabel={tx('workspace:workspace-navigation.close-dialog')} open title={dialog.kind === 'add' ? tx('workspace:workspace-navigation.add-workspace') : dialog.kind === 'remove' ? tx('workspace:workspace-navigation.unregister-value', { p0: dialog.name }) : tx('workspace:rename.workspace')} onClose={() => { if (!busy) setDialog(undefined); }}>
       {error && <p role="alert">{error}</p>}
       {dialog.kind === 'add' ? <><p>{tx('workspace:workspace-navigation.choose-a-location-authorized-by-this-product-host')}</p>{dialog.catalog.picker.kind === 'configured' && dialog.catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(dialog.mutation.scope, location.id), dialog.mutation)}>{location.displayName}</Button>)}</>

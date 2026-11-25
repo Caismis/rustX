@@ -1,5 +1,8 @@
 //! Launches one explicitly owned Session Client over its reserved Unix endpoint.
 
+use super::super::super::session::SessionId;
+#[cfg(target_os = "linux")]
+use super::super::SessionRuntimeManager;
 use super::{ExecutionListener, LocalExecutionEndpoint};
 use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 use std::io;
@@ -7,6 +10,8 @@ use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use tokio::process::{Child, Command};
+#[cfg(target_os = "linux")]
+use tokio_util::sync::CancellationToken;
 
 pub(crate) async fn launch_sibling(
     endpoint: Arc<LocalExecutionEndpoint>,
@@ -280,4 +285,152 @@ async fn admit(
 /// independent helper retains reap ownership even if this deadline expires.
 async fn reap_failed(child: &mut SiblingClient) {
     let _ = tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, child.terminate()).await;
+}
+
+pub(crate) struct LocalClient {
+    pub(crate) child: SiblingClient,
+    #[cfg(target_os = "linux")]
+    session: SessionId,
+    pub(super) endpoint: Arc<LocalExecutionEndpoint>,
+    #[cfg(target_os = "linux")]
+    admitted_at: tokio::time::Instant,
+}
+
+impl LocalClient {
+    pub(crate) async fn launch(
+        session: SessionId,
+        endpoint: Arc<LocalExecutionEndpoint>,
+    ) -> Result<Self, String> {
+        let child = launch_sibling(endpoint.clone()).await?;
+        #[cfg(not(target_os = "linux"))]
+        let _ = session;
+        Ok(Self {
+            child,
+            #[cfg(target_os = "linux")]
+            session,
+            endpoint,
+            #[cfg(target_os = "linux")]
+            admitted_at: tokio::time::Instant::now(),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct RestartBudget {
+    attempted: Vec<tokio::time::Instant>,
+    consecutive: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl RestartBudget {
+    fn next_delay(
+        &mut self,
+        now: tokio::time::Instant,
+        admitted_at: tokio::time::Instant,
+    ) -> Option<std::time::Duration> {
+        use std::time::Duration;
+        self.attempted
+            .retain(|start| now.saturating_duration_since(*start) < Duration::from_secs(60));
+        if now.duration_since(admitted_at) >= Duration::from_mins(5) {
+            self.consecutive = 0;
+        }
+        if self.attempted.len() == 3 {
+            return None;
+        }
+        let delay = Duration::from_secs([1, 2, 4][self.consecutive.min(2)]);
+        self.consecutive = (self.consecutive + 1).min(2);
+        Some(delay)
+    }
+}
+
+/// The process owner watches for actual termination independently of lane
+/// detachment. On drain it hands any remaining owned child to the Host.
+#[cfg(target_os = "linux")]
+pub(crate) async fn maintain(
+    manager: SessionRuntimeManager,
+    mut client: LocalClient,
+    stop: CancellationToken,
+) -> Option<LocalClient> {
+    let mut budget = RestartBudget::default();
+    loop {
+        let result = tokio::select! {
+            biased;
+            () = stop.cancelled() => return Some(client),
+            result = client.child.wait() => result,
+        };
+        if let Err(error) =
+            SessionRuntimeManager::retire_dead_local_execution(client.endpoint.clone()).await
+        {
+            eprintln!(
+                "rustx app-server: local Client {} remains unavailable after exit ({result:?}): {error}",
+                client.session
+            );
+            return None;
+        }
+        // Successful exit includes intentional Session closure. It does not
+        // authorize the process owner to synthesize a new foreground request.
+        if result.is_ok_and(|status| status.success()) {
+            return None;
+        }
+        let Some(delay) = budget.next_delay(tokio::time::Instant::now(), client.admitted_at) else {
+            eprintln!(
+                "rustx app-server: local Client {} exhausted the restart budget",
+                client.session
+            );
+            return None;
+        };
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => return None,
+            () = tokio::time::sleep(delay) => {}
+        }
+        budget.attempted.push(tokio::time::Instant::now());
+        let next = manager
+            .replace_dead_local_execution(&client.session, client.endpoint)
+            .await;
+        let replacement = match next {
+            Ok(endpoint) => LocalClient::launch(client.session, endpoint).await,
+            Err(error) => Err(error.to_string()),
+        };
+        // Failed authentication, configuration or version never loops.
+        match replacement {
+            Ok(next) => client = next,
+            Err(error) => {
+                eprintln!("rustx app-server: local Client replacement failed: {error}");
+                return None;
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::RestartBudget;
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    #[test]
+    fn local_restart_budget_honors_at_most_three_attempts_and_stable_reset() {
+        let base = Instant::now();
+        let mut budget = RestartBudget::default();
+        let mut now = base;
+        for delay in [1, 2, 4] {
+            assert_eq!(
+                budget.next_delay(now, now),
+                Some(Duration::from_secs(delay))
+            );
+            now += Duration::from_secs(delay);
+            budget.attempted.push(now);
+        }
+        assert_eq!(budget.next_delay(base + Duration::from_secs(60), now), None);
+        assert_eq!(
+            budget.next_delay(base + Duration::from_secs(61), now),
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(
+            budget.next_delay(now + Duration::from_mins(5), now),
+            Some(Duration::from_secs(1))
+        );
+    }
 }

@@ -36,6 +36,19 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def validate_output_directory(path: Path, flag: str, parser: argparse.ArgumentParser) -> None:
+    if path.exists() and not path.is_dir():
+        parser.error(f"{flag} must name a directory: {path}")
+    if not path.is_relative_to(ROOT):
+        return
+    if path == ROOT:
+        parser.error(f"{flag} must not name the source checkout: {path}")
+    relative = path.relative_to(ROOT).as_posix() + "/"
+    ignored = subprocess.run(("git", "check-ignore", "--quiet", "--", relative), cwd=ROOT).returncode == 0
+    if not ignored or output("git", "ls-files", "--", relative):
+        parser.error(f"{flag} must name a directory outside the checkout or an ignored directory without tracked files: {path}")
+
+
 def graph(package: str) -> set[str]:
     return set(output("cargo", "tree", "--locked", "-p", package, "-e", "normal,build",
                       "--prefix", "none", "--format", "{p}").splitlines())
@@ -224,6 +237,11 @@ def main() -> None:
     machine = f"{platform.system().lower()}-{platform.machine().lower()}"
     if platform.system() not in {"Linux", "Darwin"}:
         parser.error("Build natively on Linux or macOS (use WSL on Windows).")
+    target, server, client = args.out.resolve(), args.server_target.resolve(), args.client_target.resolve()
+    for flag, directory in (("--out", target), ("--server-target", server), ("--client-target", client)):
+        validate_output_directory(directory, flag, parser)
+    if server == client:
+        parser.error("Use separate Server and Client Cargo targets.")
     revision = output("git", "rev-parse", "HEAD")
     if output("git", "status", "--porcelain", "--untracked-files=normal"):
         parser.error("Use a clean source checkout before building a versioned archive.")
@@ -233,9 +251,6 @@ def main() -> None:
     if version != client_version:
         parser.error("The Server and Client must use the same release version.")
     products = PRODUCTS if args.product == "all" else (args.product,)
-    target, server, client = args.out.resolve(), args.server_target.resolve(), args.client_target.resolve()
-    if server == client:
-        parser.error("Use separate Server and Client Cargo targets.")
     target.mkdir(parents=True, exist_ok=True)
     if args.product != "rustx-client":
         build_server(server)

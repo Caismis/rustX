@@ -3306,7 +3306,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1f18ce435f99d1d7fc8fb3185e4e7b876b4dd3d633b996169883a269480765ba"
+      "local_sha256": "83bf6ba8e2ad72610436bd4728e2694510d14b477ecdf658299fc91896a317b8"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",

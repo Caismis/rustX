@@ -148,6 +148,8 @@ test('installed Web uses built assets and enables the private Workspace picker',
   const host = new LocalWorkspaceHost(config);
   const catalog = await host.listWorkspaces();
   assert.ok(h.calls[0].spec.args.includes('--local-workspace-picker'));
+  assert.deepEqual(h.calls[0].spec.args.flatMap((argument, index, argv) =>
+    argument === '--local-session-root' ? [argv[index + 1]] : []), [f.a, f.b]);
   assert.equal(catalog.picker.kind, 'browser');
   await host.close();
   web.ready.resolve('http://127.0.0.1:4243/'); await starting;

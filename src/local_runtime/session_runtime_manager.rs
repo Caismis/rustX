@@ -33,10 +33,12 @@ mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
 pub(crate) mod status;
+#[cfg(target_os = "linux")]
+pub(crate) use execution::maintain_local_client;
 pub(crate) use execution::{
-    ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, OutputBinding,
-    ReceiveExchange, SiblingClient, StandaloneExecution, StdioMcpBinding,
-    WorkspaceDocumentSnapshot, launch_sibling, workspace_entry,
+    ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, LocalClient, OutputBinding,
+    ReceiveExchange, StandaloneExecution, StdioMcpBinding, WorkspaceDocumentSnapshot,
+    workspace_entry,
 };
 pub use execution::{
     EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,

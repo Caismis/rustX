@@ -512,6 +512,7 @@ impl SessionRuntimeManager {
                     &input,
                     &self.credentials,
                     &endpoint,
+                    true,
                 );
                 #[cfg(test)]
                 self.configuration

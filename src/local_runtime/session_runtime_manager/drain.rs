@@ -41,6 +41,7 @@ impl SessionRuntimeManager {
             initializations
         };
         let endpoints = self.execution.close_admission(deadline);
+        self.stop_local_sessions();
         for initialization in &initializations {
             initialization.request_retirement();
         }

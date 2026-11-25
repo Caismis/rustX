@@ -2017,6 +2017,7 @@ mod case_insensitive_tests {
     /// documents; a renamed-away root invalidates the watches beneath the
     /// loaders' spelling.
     #[test]
+    #[allow(clippy::too_many_lines)] // The case aliases share one real volume and owner inventory.
     fn a_case_variant_the_loaders_read_routes_to_its_workspace() {
         let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
         let entry = volume.path().join("entry");

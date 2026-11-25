@@ -50,6 +50,7 @@ export interface AppServerLaunchOptions {
   runtimeRoot?: string | undefined;
   /** Explicit authorization to launch the sibling Execution Client. */
   localExecution?: { workspace: string; sessionId?: string };
+  localSessionRoot?: string;
 }
 
 export interface AppServerChildOptions {
@@ -91,6 +92,9 @@ export function appServerArguments(launch: AppServerLaunchOptions): string[] {
     if (launch.localExecution.sessionId !== undefined) {
       argv.push("--local-execution-session", launch.localExecution.sessionId);
     }
+  }
+  if (launch.localSessionRoot !== undefined) {
+    argv.push("--local-session-root", launch.localSessionRoot);
   }
   // This TUI spawned the child and owns its pipes, so it is the stdio owner
   // the native process may delegate committed-delivery access to. The grant
