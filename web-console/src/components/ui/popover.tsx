@@ -61,7 +61,7 @@ export function PopoverPopup({
         anchor={anchor}
         collisionPadding={collisionPadding}
         positionMethod={positionMethod}
-        className="z-50 h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none"
+        className="z-[1300] h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none"
         data-slot="popover-positioner"
         side={side}
         sideOffset={sideOffset}

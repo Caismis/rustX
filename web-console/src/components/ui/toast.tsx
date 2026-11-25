@@ -207,6 +207,7 @@ function AnchoredToasts({
             : null;
           const toastData = toast.data as ToastData | undefined;
           const tooltipStyle = toastData?.tooltipStyle ?? false;
+          const foreground = Boolean((toastData?.rootProps as Record<string, unknown> | undefined)?.["data-foreground"]);
           const positionerProps = toast.positionerProps;
 
           if (!positionerProps?.anchor) {
@@ -216,7 +217,10 @@ function AnchoredToasts({
           return (
             <Toast.Positioner
               key={toast.id}
-              className="z-60 max-w-[min(--spacing(64),var(--available-width))]"
+              className={cn(
+                "max-w-[min(--spacing(64),var(--available-width))]",
+                foreground ? "z-[1300]" : "z-[1100]",
+              )}
               data-slot="toast-positioner"
               sideOffset={positionerProps.sideOffset ?? 4}
               toast={toast}

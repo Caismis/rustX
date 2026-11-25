@@ -6712,11 +6712,12 @@
       "classification": "B",
       "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
       "upstream_sha256": "85ed92693c910decadb38f095764bbdb3a1c6992b60bf63dedabdbebccd309b6",
-      "local_sha256": "4ae86f9724698d6ae1b00687e5680e240f744259acdafdcb00e0fc15c56bcdc4",
+      "local_sha256": "41389a7278794f69909d3fd4de7f8b28fb4fedfc3563f1e46263b703b9cf525a",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "@/components/ui/toast",
-        "react"
+        "react",
+        "react-dom"
       ],
       "excluded_dependencies": [
         "Success tone and inline actions (unused by model-selection errors)"

@@ -109,7 +109,7 @@ export function AutocompletePopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-50 select-none"
+        className="z-[1300] select-none"
         data-slot="autocomplete-positioner"
         side={side}
         sideOffset={sideOffset}
