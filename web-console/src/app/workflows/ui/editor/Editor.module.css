@@ -86,13 +86,9 @@
 .canvas :global(.react-flow__node:focus-visible) { outline: none; }
 .canvas :global(.react-flow__node:focus-visible:not(.selected)) > .node, .canvas :global(.react-flow__node:focus-visible:not(.selected)) > .entryFrame > .node, .dots { --xy-background-pattern-dots-color-default: var(--dsw-alias-border-l3); }
 .rail {
-  composes: rail from '../../../../presentation/primitives/CanvasTools.module.css';
   top: 16px;
   left: 16px;
 }
-.railSeparator { composes: separator from '../../../../presentation/primitives/CanvasTools.module.css'; }
-.tool { composes: tool from '../../../../presentation/primitives/CanvasTools.module.css'; }
-.toolActive { composes: active from '../../../../presentation/primitives/CanvasTools.module.css'; }
 .minimap { --xy-minimap-background-color-default: var(--dsw-alias-bg-layer-1); --xy-minimap-mask-stroke-color-default: var(--dsw-alias-border-l4); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); margin: 0 16px 62px 0 !important; }
 .miniNode { fill: var(--dsw-alias-label-tertiary); opacity: 0.6; }
 .zoom {

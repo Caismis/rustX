@@ -181,7 +181,7 @@ it('toggles isolation, switches its target, and can restore after the selection 
   await act(async () => imports.pending[0].resolve(source.value));
   const pan = ui.getByRole('button', { name: 'Pan' }), outlines = ui.getByRole('button', { name: 'Model outlines' });
   fireEvent.click(pan);
-  const sharedActiveClass = [...outlines.classList].find(name => name.includes('controlActive'))!;
+  const sharedActiveClass = [...outlines.classList].find(name => name.includes('active'))!;
   expect(sharedActiveClass).toBeTruthy(); expect(outlines.getAttribute('aria-pressed')).toBe('true');
   expect(pan.classList.contains(sharedActiveClass)).toBe(true);
   const control = imports.mounts[0] as any;

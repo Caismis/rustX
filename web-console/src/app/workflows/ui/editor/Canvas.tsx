@@ -27,6 +27,7 @@ import { WorkflowEdge } from './WorkflowEdge';
 import { viewId, type Duplicate, type Selection } from './selection';
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from './shortcuts';
 import type { NodeRunOverlay } from '../../run-canvas/aggregation';
+import canvasTools from '../../../../presentation/primitives/CanvasTools.module.css';
 import css from './Editor.module.css';
 
 export type { Selection } from './selection';
@@ -403,16 +404,16 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         {minimap && <MiniMap className={css.minimap} pannable zoomable ariaLabel={tx('workflows:canvas.minimap')} nodeClassName={css.miniNode} maskColor="transparent" />}
       </ReactFlow>
       {/* As Dify's operator bar: add, then the pointer modes, then layout. */}
-      <div className={css.rail} role="toolbar" aria-label={tx('workflows:canvas.tools')} aria-orientation="vertical">
+      <div className={clsx(canvasTools.rail, css.rail)} role="toolbar" aria-label={tx('workflows:canvas.tools')} aria-orientation="vertical">
         {!readOnly && <>
           <Tool label={tx('workflows:canvas.add')} disabled={!effectiveEditable} onClick={addBelow}><IconAddCircle /></Tool>
           <Tool label={tx('workflows:canvas.add-note')} disabled={!effectiveEditable} onClick={addNote}><IconNoteAdd /></Tool>
-          <span className={css.railSeparator} aria-hidden />
+          <span className={clsx(canvasTools.separator, css.railSeparator)} aria-hidden />
         </>}
         <Tool label={tx('workflows:canvas.select')} active={mode === 'select'} onClick={() => setMode('select')}><IconCursor /></Tool>
         <Tool label={tx('workflows:canvas.pan')} active={mode === 'pan'} onClick={() => setMode('pan')}><IconHand /></Tool>
         {!readOnly && <>
-          <span className={css.railSeparator} aria-hidden />
+          <span className={clsx(canvasTools.separator, css.railSeparator)} aria-hidden />
           <Tool label={tx('workflows:canvas.organize')} disabled={!effectiveEditable || organizing} onClick={() => void organize()}><IconOrganize /></Tool>
         </>}
       </div>
@@ -451,7 +452,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
 
 import type { ReactNode } from 'react';
 function Tool({ label, active, disabled, onClick, children }: { label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" className={clsx(css.tool, active && css.toolActive)} aria-pressed={active} aria-label={label} title={label} disabled={disabled} onClick={onClick}>{children}</button>;
+  return <button type="button" className={clsx(canvasTools.tool, css.tool, active && canvasTools.active)} aria-pressed={active} aria-label={label} title={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 /** As Dify's zoom control: out, the zoom level and its menu, in. */
 function Zoom({ minimap, toggleMinimap }: { minimap: boolean; toggleMinimap: () => void }) {
