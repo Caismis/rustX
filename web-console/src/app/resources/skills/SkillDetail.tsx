@@ -41,6 +41,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
   const tx = useTranslation();
   const guard = useNavigationGuard();
   const page = usePageTransaction();
+  const setLocal = page?.setLocal;
   const [content, setContent] = useState<{ text: string; path: string; description: string; owner: SourceScope }>();
   const [error, setError] = useState('');
   useEffect(() => {
@@ -157,7 +158,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
   // batch done before this write answered.
   useEffect(() => {
     const editable = !!write && !!display?.revision && !!draftBase.current;
-    return page?.setLocal(editable && changed,
+    return setLocal?.(editable && changed,
       editable ? () => {
         if (saving) return Promise.resolve();
         setSaving(true);
@@ -172,7 +173,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
       editable ? () => { setDraft(authored ?? {}); setSelectedImage(undefined); setFailure(''); userEdited.current = false; draftBase.current = display?.revision; } : undefined);
     // `draft`/`selectedImage` must be deps: the save closure commits exactly
     // what they captured — a boolean `changed` alone would keep a stale clean.
-  }, [page, changed, draft, selectedImage, write, display?.revision, saving]);
+  }, [setLocal, changed, draft, selectedImage, write, display?.revision, saving]);
 
   const title = display?.authored.display_name ?? name;
   const editable = !!write && !!display?.revision;

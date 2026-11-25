@@ -19,6 +19,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
 }) {
   const tx = useTranslation();
   const page = usePageTransaction();
+  const setLocal = page?.setLocal;
   const restores = scope === 'workspace' && !!inherited;
   const unit = useUnitEditing<ProviderWrite>({
     authored: authored && { display_name: authored.display_name, hidden: authored.hidden, icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } },
@@ -74,11 +75,11 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     // and the attempt notice marks the failing field. Returning the
     // unregistration releases the veto when this editor unmounts — a dead
     // editor must not keep blocking the page's Save with no visible error.
-    return page?.setLocal(false, undefined, undefined, () => {
+    return setLocal?.(false, undefined, undefined, () => {
       if (endpointError || credentialError) { setAttempted(occurrence => occurrence + 1); return false; }
       return undefined;
     });
-  }, [page, endpointError, credentialError, unit.identity]);
+  }, [setLocal, endpointError, credentialError, unit.identity]);
   const changeCredential = (next: ProviderWrite['credential']) => edit({ ...value, credential: next });
   const actionsTrigger = () => form.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
   const finishRename = (input: string) => {

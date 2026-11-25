@@ -32,6 +32,8 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
 }) {
   const tx = useTranslation();
   const page = usePageTransaction();
+  const setLocal = page?.setLocal;
+  const setFooterLeading = page?.setFooterLeading;
   const [name, setName] = useState(focus.name ?? '');
   const [mode, setMode] = useState<'form' | 'json'>(focus.mode === 'json' ? 'json' : 'form');
   const [error, setError] = useState('');
@@ -161,9 +163,9 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
         onConfirm={() => submitRemovalRef.current?.()}/></span>
     : undefined, [focus.name, unit.authoredPresent, restoresInherited, removalLabel, identityTitle, canWrite, tx]);
   useEffect(() => {
-    page?.setFooterLeading(footerLeading);
-    return () => page?.setFooterLeading(undefined);
-  }, [page, footerLeading]);
+    setFooterLeading?.(footerLeading);
+    return () => setFooterLeading?.(undefined);
+  }, [setFooterLeading, footerLeading]);
   const resetBuffers = () => {
     setJsonEdit(undefined); setPendingImport(undefined); setImports({}); setError('');
     setInvalidFields({});
@@ -198,10 +200,10 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     // discard to, and the list is where an aborted creation returns. The
     // returned unregistration releases this editor's slot on unmount so a
     // dead buffer cannot keep vetoing the page's Save.
-    return page?.setLocal(localDirty, undefined,
+    return setLocal?.(localDirty, undefined,
       () => { discardRef.current(); if (!focus.name) close(); },
       () => commitJsonRef.current());
-  }, [page, localDirty, focus.name]);
+  }, [setLocal, localDirty, focus.name]);
   return <>
     <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
       <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>

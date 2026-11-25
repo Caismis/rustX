@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from '../../../locale/react';
 import { Modal } from '../../../presentation/primitives/Modal';
@@ -60,7 +60,8 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
 
-  return <GuardContext.Provider value={{ reportSurface, dirty, guard }}>
+  const value = useMemo(() => ({ reportSurface, dirty, guard }), [reportSurface, dirty, guard]);
+  return <GuardContext.Provider value={value}>
     {children}
     <Modal open={confirming} onClose={keepEditing} title={tx('settings:unsaved.title')}
       rootClassName={css.aboveDialogs}

@@ -57,6 +57,7 @@ export function AgentEditor({
   const form = useRef<HTMLFormElement>(null);
 
   const page = usePageTransaction();
+  const setLocal = page?.setLocal;
   const guard = useNavigationGuard();
   // No silent discard: closing through the breadcrumb asks first when the
   // page transaction reports a draft; abandoning there discards it.
@@ -85,12 +86,12 @@ export function AgentEditor({
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
-  useEffect(() => page?.setLocal(
+  useEffect(() => setLocal?.(
     false,
     undefined,
     creating ? () => { discardRef.current(); closeRef.current(); } : undefined,
     () => saveable,
-  ), [page, creating, saveable]);
+  ), [setLocal, creating, saveable]);
 
   const model = value.model ?? undefined;
   const modelChoices = [...new Set([...models, ...(model?.model ? [model.model] : [])])];
