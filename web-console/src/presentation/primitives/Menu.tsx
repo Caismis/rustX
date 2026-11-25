@@ -232,6 +232,35 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
     if (closeTimer.current !== null) clearTimeout(closeTimer.current)
   }, [])
 
+  // A menu must not remain interactive after its trigger scrolls out of its
+  // clipping owner or is otherwise hidden; Base UI only observes layout, not
+  // ownership-specific visibility, so the adapter closes that edge itself.
+  useEffect(() => {
+    if (!open) return
+    const target = rootRef.current?.querySelector<HTMLElement>('button, [role="button"]') ?? rootRef.current
+    if (!target) return
+    const hidden = () => {
+      if (getAnchorRect) return getAnchorRect() === null
+      return target.closest('[hidden], [inert]') !== null
+    }
+    if (hidden()) {
+      onClose()
+      return
+    }
+    const observer = typeof IntersectionObserver === 'undefined' || getAnchorRect ? undefined : new IntersectionObserver(entries => {
+      if (entries.some(entry => !entry.isIntersecting)) onClose()
+    }, { threshold: 0 })
+    if (observer && target instanceof Element) observer.observe(target)
+    const check = () => { if (hidden()) onClose() }
+    window.addEventListener('scroll', check, true)
+    window.addEventListener('resize', check)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('scroll', check, true)
+      window.removeEventListener('resize', check)
+    }
+  }, [open, getAnchorRect, onClose])
+
   const setPress = (next: HeldPress | null) => {
     heldPressRef.current = next
     setHeldPress(next)
