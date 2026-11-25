@@ -227,6 +227,13 @@ impl SessionRuntimeManager {
         self.execution.local.roots.get().is_some()
     }
 
+    #[cfg(test)]
+    pub(in crate::local_runtime::session_runtime_manager) fn available_local_client_slots(
+        &self,
+    ) -> usize {
+        self.execution.local.slots.available_permits()
+    }
+
     fn local_client_slot(&self) -> Result<OwnedSemaphorePermit, SessionError> {
         self.execution
             .local

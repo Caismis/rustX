@@ -48,9 +48,11 @@ authentication. Both requests observe the same failed admission, or the
 first load admits one Client and the other receives the existing
 single-resident refusal. A later branch failure leaves the admitted pair
 available to the root. Separate cases cut the provisional pair to check
-unconfirmed revocation and the surviving fence, and begin Host drain while
-the load is paused to check that the runtime never becomes resident and the
-Client settles.
+the reported admission failure, unconfirmed revocation and the surviving
+fence. The Host drain tests close admission before runtime preparation,
+after preparation, and after activation but before residency publication.
+They check that the runtime never becomes resident, revocation succeeds,
+the Client exits and the capacity permit returns.
 
 The four evidence ledgers cover all 73 test IDs by number. The release requires receipts for the same head from the independent native macOS job and the stacked PR's FULL and Merge verification. The measurement samples below identify their distinct baselines.
 

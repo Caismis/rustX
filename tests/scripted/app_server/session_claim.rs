@@ -662,20 +662,18 @@ async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
             .configure_local_sessions(f.workspaces.to_vec())
             .unwrap();
         let probe = f.manager.probe(&session.active_conversation_id);
-        probe.before_recovery_inspection.arm();
-        f.manager
-            .configuration
-            .test_hooks
-            .fail_once("after_initial_runtime_configuration");
+        probe.before_resident_publication.arm();
         let loading = f.load(0);
-        probe.before_recovery_inspection.entered().await;
+        probe.before_resident_publication.entered().await;
         let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
         assert!(endpoint.control().is_some());
         endpoint.cut_pair();
-        probe.before_recovery_inspection.release();
+        probe.before_resident_publication.release();
         let failure = loading.await.unwrap().unwrap_err();
         assert!(
-            failure.to_string().contains("injected composition failure"),
+            failure
+                .to_string()
+                .contains("the local Client or its Workspace grant is unavailable"),
             "{failure}"
         );
         assert!(pending_execution(&f, &session.id));
@@ -737,6 +735,78 @@ async fn installed_resume_pending_client_is_settled_when_host_drains() {
                 .unwrap()
                 .contains_key(&session.id)
         );
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_resume_late_drain_cancels_admission_and_settles_cleanly() {
+    Box::pin(bounded(async {
+        for activated in [false, true] {
+            let f = Fixture::with_session_count(None, 1).await;
+            f.manager
+                .configure_local_sessions(f.workspaces.to_vec())
+                .unwrap();
+            let session = &f.sessions[0];
+            let id = &session.active_conversation_id;
+            let probe = f.manager.probe(id);
+            let gate = if activated {
+                &probe.before_resident_publication
+            } else {
+                &probe.before_prepared_admission
+            };
+            let capacity = f.manager.available_local_client_slots();
+            gate.arm();
+            let loading = f.load(0);
+            gate.entered().await;
+            {
+                let registry = f.manager.registry.0.lock().unwrap();
+                let Entry::Loading(flight) = &registry.entries[id] else {
+                    panic!("the prepared runtime has not been published");
+                };
+                assert_eq!(
+                    flight
+                        .initialization
+                        .prepared_runtime()
+                        .unwrap()
+                        .is_activated(),
+                    activated
+                );
+            }
+            let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
+            assert!(endpoint.control().is_some());
+            assert!(pending_execution(&f, &session.id));
+            assert_eq!(f.manager.available_local_client_slots(), capacity - 1);
+            f.host.begin_drain();
+            let host = f.host.clone();
+            let draining = tokio::spawn(async move { host.drain().await });
+            probe
+                .unloads_joined
+                .subscribe()
+                .wait_for(|n| *n == 1)
+                .await
+                .unwrap();
+            gate.release();
+            assert_eq!(
+                loading.await.unwrap().unwrap_err(),
+                RuntimeManagerError::LoadingCancelled
+            );
+            assert_eq!(draining.await.unwrap(), Vec::<String>::new());
+            f.manager.join_local_sessions().await.unwrap();
+            assert_eq!(f.manager.residency(id), ResidencyState::Unloaded);
+            assert!(endpoint.control().is_none());
+            assert!(!pending_execution(&f, &session.id));
+            assert_eq!(f.manager.available_local_client_slots(), capacity);
+            assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+            assert!(
+                !f.manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()
+                    .contains_key(&session.id)
+            );
+        }
     }))
     .await;
 }

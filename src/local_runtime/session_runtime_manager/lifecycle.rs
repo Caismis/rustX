@@ -16,6 +16,7 @@ use super::LocalExecutionEndpoint;
 use super::ManagedRuntime;
 use super::NEXT_INCARNATION;
 use super::Outcome;
+use super::RegistryState;
 use super::ResidentRuntime;
 use super::RuntimeIncarnationId;
 use super::RuntimeManagerError;
@@ -1200,14 +1201,23 @@ impl TerminalGuard {
                 .flight
                 .initialization
                 .install_prepared(runtime.shutdown_runtime().expect("prepared composition"));
-            let fenced = self
-                .registry
-                .0
-                .lock()
-                .expect("registry mutex")
-                .fenced(&self.id);
-            let admission_error = self.check_local_admission().err();
-            if fenced || admission_error.is_some() {
+            #[cfg(test)]
+            self.owner
+                .probe(&self.id)
+                .before_prepared_admission
+                .park_first_blocking();
+            let admission_error = {
+                let registry = self.registry.0.lock().expect("registry mutex");
+                let control = self
+                    .flight
+                    .initialization
+                    .control
+                    .lock()
+                    .expect("initialization control");
+                self.check_runtime_admission(&registry, control.retirement_requested)
+                    .err()
+            };
+            if admission_error.is_some() {
                 self.flight.cancel_loading();
             }
             if can_activate && !self.flight.initialization.is_retiring() {
@@ -1244,6 +1254,11 @@ impl TerminalGuard {
             }
         }
         if let Ok(Some(runtime)) = &result {
+            #[cfg(test)]
+            self.owner
+                .probe(&self.id)
+                .before_resident_publication
+                .park_first_blocking();
             let pending = self
                 .flight
                 .local_admission
@@ -1267,10 +1282,8 @@ impl TerminalGuard {
                 .control
                 .lock()
                 .expect("initialization control");
-            let admission_error = self.check_local_admission().err();
-            if registry.fenced(&self.id)
-                || control.retirement_requested
-                || admission_error.is_some()
+            if let Err(admission_error) =
+                self.check_runtime_admission(&registry, control.retirement_requested)
             {
                 drop(control);
                 // Never publish a usable incarnation after deletion wins. The
@@ -1287,7 +1300,7 @@ impl TerminalGuard {
                     runtime.clone(),
                     self.flight.clone(),
                     None,
-                    admission_error,
+                    Some(admission_error),
                 );
                 self.finished = true;
                 return;
@@ -1371,7 +1384,16 @@ impl TerminalGuard {
             .take()
     }
 
-    fn check_local_admission(&self) -> Result<(), RuntimeManagerError> {
+    fn check_runtime_admission(
+        &self,
+        registry: &RegistryState,
+        retirement_requested: bool,
+    ) -> Result<(), RuntimeManagerError> {
+        // Retirement fences are published here before execution admission
+        // closes. A lane closed by that retirement is a cancelled load.
+        if registry.fenced(&self.id) || retirement_requested {
+            return Err(RuntimeManagerError::LoadingCancelled);
+        }
         if let Some(pending) = self
             .flight
             .local_admission
