@@ -2202,8 +2202,7 @@
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371",
       "retained_dependencies": [
-        "./Button.module.css",
-        "clsx",
+        "@/components/ui/button",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2214,7 +2213,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "d4ff83704542c2af808b9fdd074977487ea9440aaa98ed977f78e31e2d70e7f3",
+      "local_sha256": "49fc3d6ba300e200c87e049ddf4e27b4e4e650c814b3890c3873ee13f342221c",
       "classification": "A"
     },
     {
@@ -2354,8 +2353,8 @@
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "dcb73dad681f3f37975c08ed3aa97922a1f5337548b406806324877a5d398c51",
       "retained_dependencies": [
-        "./Input.module.css",
-        "clsx",
+        "@/components/ui/input",
+        "@/components/ui/input-group",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2366,7 +2365,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "7a1a4a888164a6a43eb9e7afdbee4582c74fa6342ab3302d08e44f5c18ed4ffd",
+      "local_sha256": "c3015049f9cdcecea2403e0c1d7b732dd7974ba283fa5260a2a228250e83f3bb",
       "classification": "A"
     },
     {
@@ -2538,8 +2537,8 @@
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "851727b4f745755f8553a92bc5881e54d0479ea680d1686533ba210cb943ca2f",
       "retained_dependencies": [
-        "./Pill.module.css",
-        "clsx",
+        "@/components/ui/badge",
+        "@/components/ui/button",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2550,7 +2549,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "cc059ffa398112f9b8b546f11d60c6ba2443e427998cd56bcaa8cbd5c83c593e",
+      "local_sha256": "bf48d68afdf50da0354ccc5e1321db935d24691d3b5c56a6387c6a54120782d6",
       "classification": "A"
     },
     {
@@ -2614,11 +2613,10 @@
       "treatment": "Direct controlled accessible Switch; caller owns only a local native CFG3 draft.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "9f0f6db0de338793711b4333e87dcd2b82d06d8ad43aa362eb67efc63573ccb1",
-      "local_sha256": "6dc107fb1867c0ee082aaf20eb5c23900f6d2568c73820c32816abc6d43f7c0f",
+      "local_sha256": "3630b0de9703931f7b0d30e46d680e98fad1c95a0eba37510874f25e17bf83b8",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./Switch.module.css",
-        "clsx"
+        "@/components/ui/switch"
       ],
       "excluded_dependencies": [
         "Host filesystem ownership",
@@ -2666,10 +2664,10 @@
       ],
       "retained_dependencies": [
         "./ShortcutKeys",
-        "./Tooltip.module.css",
+        "@/components/ui/tooltip",
         "react"
       ],
-      "local_sha256": "29400100c354cf70a62c6bed53eb11b57057ef52d1aac4139bee44ef4f1574fb",
+      "local_sha256": "e34ab50e6500455b41a46d1ceedc185a87e5fb0c2a10c049aa7b9e3cee421252",
       "classification": "A",
       "additional_sources": [
         {
@@ -7787,10 +7785,11 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./ShortcutKeys.module.css",
+        "@/components/ui/kbd",
         "clsx"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "8921fa2bf6aed4b2a9599cf5e98d8c3753db4aa7434a3a7582f4fc087939bd61"
+      "local_sha256": "01574b52b4f1d36938b96fb85f75ca78acdbe642e02e2bda7ccc60c0db1bbfcc"
     },
     {
       "upstream": "packages/client/ui-primitives/src/ShortcutKeys.module.css",

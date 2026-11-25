@@ -9,6 +9,7 @@ import './presentation/theme/shiki.css';
 import './presentation/theme/corner-shape.css';
 import './presentation/theme/scrollbar.css';
 import './presentation/theme/reset.css';
+import './components/ui/coss.css';
 import './app/console.css';
 // One connection per page, outside React component lifecycle.
 const client = new AppServerClient();

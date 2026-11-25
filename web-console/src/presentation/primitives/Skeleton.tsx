@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { Skeleton as CossSkeleton } from '@/components/ui/skeleton'
 import css from './Skeleton.module.css'
 
 const DOCUMENT_LINE_WIDTHS = ['54%', '96%', '88%', '76%', '94%', '62%', '84%', '46%'] as const
@@ -13,8 +14,8 @@ function SkeletonBar({
   shape?: 'bar' | 'pill' | 'control'
 }) {
   return (
-    <span
-      className={clsx(css.block, shape === 'pill' && css.pill, shape === 'control' && css.control)}
+    <CossSkeleton
+      className={clsx(shape === 'pill' && 'rounded-full', shape === 'control' && 'rounded-md')}
       style={{ width, height }}
       aria-hidden="true"
     />
@@ -107,7 +108,7 @@ export function CatalogListSkeleton({
     <div className={css.catalogList} role="status" aria-busy="true" aria-label={label}>
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className={css.catalogCard}>
-          <span className={clsx(css.block, css.tile)} aria-hidden="true" />
+          <CossSkeleton className={css.tile} aria-hidden="true" />
           <div className={css.catalogMain}>
             <div className={css.catalogTop}>
               <SkeletonBar width="46%" height={15} />

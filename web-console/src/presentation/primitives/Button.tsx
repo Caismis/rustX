@@ -1,29 +1,29 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-// Button: token-styled button atom. Variants map to the --dsw-alias-button-*
-// fill families; no framework imports, all behavior via props.
+// Button: coss ui button atom behind the rustX variant vocabulary. Keeping
+// the vocabulary here prevents the external component API from leaking through
+// the application while the visual implementation is coss-owned.
 
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
-import clsx from 'clsx'
-import css from './Button.module.css'
+import { Button as CossButton } from '@/components/ui/button'
 
-/** Visual variant, each backed by its --dsw-alias-button-* token family. */
+/** Visual variant, backed by the corresponding coss ui variant. */
 export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar' | 'danger' | 'danger-outline'
 
-const VARIANT_CLASS: Record<ButtonVariant, string> = {
-  primary: css.primary,
-  ghost: css.ghost,
-  outline: css.outline,
-  toolbar: css.toolbar,
-  danger: css.danger,
-  'danger-outline': css.dangerOutline,
-}
+const VARIANT_MAP = {
+  primary: 'default',
+  ghost: 'ghost',
+  outline: 'outline',
+  toolbar: 'secondary',
+  danger: 'destructive',
+  'danger-outline': 'destructive-outline',
+} as const
 
 /**
  * Render a button.
  * @param props.variant - visual family (default 'ghost'). 'danger' is a
  * destructive action (e.g. confirming a deletion).
- * @param props.size - 'md' 36px capsule (figma Button) or 'sm' 28px compact.
- * @param props.icon - optional leading 16px icon node.
+ * @param props.size - 'md' standard control or 'sm' compact control.
+ * @param props.icon - optional leading icon node.
  * @returns the button element; native button attributes pass through.
  */
 export function Button({ variant = 'ghost', size = 'md', icon, className, children, ...rest }: {
@@ -34,13 +34,14 @@ export function Button({ variant = 'ghost', size = 'md', icon, className, childr
   children?: ReactNode
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button
-      type="button"
-      className={clsx(css.button, VARIANT_CLASS[variant], css[size], className)}
+    <CossButton
+      variant={VARIANT_MAP[variant]}
+      size={size === 'sm' ? 'sm' : 'default'}
+      className={className}
       {...rest}
     >
-      {icon != null && <span className={css.icon}>{icon}</span>}
+      {icon}
       {children}
-    </button>
+    </CossButton>
   )
 }
