@@ -174,6 +174,10 @@ impl Drop for ClientStartupOwner<'_> {
 struct ExecutionTestHooks {
     expire_bash_capture_query: bool,
     local_startup: Option<super::super::configuration::ConfigurationHooks>,
+    before_settlement_cleanup: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
     delegated_open: Option<delegation::OpenCut>,
     preparation_cleanup: std::collections::BTreeMap<
         rustx_execution_protocol::DecimalU64,
@@ -1603,11 +1607,8 @@ impl LocalExecutionEndpoint {
             .map_err(io::Error::other)?
     }
 
-    fn expire_drain_settlement(
-        &self,
-        mut state: std::sync::MutexGuard<'_, SettlementState>,
-        attempt: io::Result<()>,
-    ) -> io::Result<()> {
+    fn expire_drain_settlement(&self, attempt: io::Error) -> io::Result<()> {
+        let mut state = self.settlement.lock().expect("execution settlement");
         if let Settlement::Finished(outcome) = &state.phase {
             return settlement_result(outcome);
         }
@@ -1620,14 +1621,24 @@ impl LocalExecutionEndpoint {
             ClientStartup::Owned | ClientStartup::Unconfirmed(_) => false,
         };
         if startup_settled && binding.revocation_confirmed() {
-            let result = Ok(());
-            let outcome = settlement_result(&result);
-            state.phase = Settlement::Finished(result);
-            self.settlement_changed.notify_all();
-            self.connection_released.notify_waiters();
-            return outcome;
+            // The receipt met the cutoff. Join any owner still closing
+            // the transport and releasing the durable recovery fence.
+            if matches!(state.phase, Settlement::Revoking) {
+                #[cfg(test)]
+                self.settlement_joined.notify_one();
+                state = self
+                    .settlement_changed
+                    .wait_while(state, |state| matches!(state.phase, Settlement::Revoking))
+                    .expect("execution settlement");
+            }
+            if let Settlement::Finished(outcome) = &state.phase {
+                return settlement_result(outcome);
+            }
+            state.phase = Settlement::Revoking;
+            drop(state);
+            return self.finish_revocation(Ok(()));
         }
-        let result = attempt.map_err(Arc::new);
+        let result = Err(Arc::new(attempt));
         let outcome = settlement_result(&result);
         self.close_transport();
         state.phase = Settlement::Finished(result);
@@ -1642,9 +1653,7 @@ impl LocalExecutionEndpoint {
         let attempt = tokio::task::spawn_blocking(move || endpoint.fence_connection_by(deadline))
             .await
             .map_err(io::Error::other)?;
-        if attempt.is_ok() {
-            return attempt;
-        }
+        let Err(attempt) = attempt else { return Ok(()) };
         loop {
             let changed = self.connection_released.notified();
             let cutoff = {
@@ -1655,17 +1664,19 @@ impl LocalExecutionEndpoint {
                 match self.reservation().binding.revocation_recovery_deadline() {
                     Some(window) => deadline.min(window),
                     None if matches!(state.phase, Settlement::Revoking) => deadline,
-                    None => return self.expire_drain_settlement(state, attempt),
+                    None => break,
                 }
             };
             if tokio::time::timeout_at(tokio::time::Instant::from_std(cutoff), changed)
                 .await
                 .is_err()
             {
-                let state = self.settlement.lock().expect("execution settlement");
-                return self.expire_drain_settlement(state, attempt);
+                break;
             }
         }
+        tokio::task::spawn_blocking(move || self.expire_drain_settlement(attempt))
+            .await
+            .map_err(io::Error::other)?
     }
 
     /// Own or join this incarnation's terminal settlement. The result
@@ -1743,7 +1754,15 @@ impl LocalExecutionEndpoint {
         let command_deadline =
             Instant::now() + rustx_execution_protocol::transport::CONTROL_COMMAND_TIMEOUT;
         let result = self
-            .revoke_and_close(deadline.min(command_deadline))
+            .reservation()
+            .binding
+            .settle_revocation_by(deadline.min(command_deadline));
+        self.finish_revocation(result)
+    }
+
+    fn finish_revocation(&self, result: io::Result<()>) -> io::Result<()> {
+        let result = result
+            .and_then(|()| self.close_settled_transport())
             .map_err(Arc::new);
         let outcome = settlement_result(&result);
         let mut state = self.settlement.lock().expect("execution settlement");
@@ -1796,12 +1815,23 @@ impl LocalExecutionEndpoint {
         }
     }
 
-    fn revoke_and_close(&self, deadline: Instant) -> io::Result<()> {
-        let binding = &self.reservation().binding;
-        binding.settle_revocation_by(deadline)?;
+    fn close_settled_transport(&self) -> io::Result<()> {
+        #[cfg(test)]
+        {
+            let gate = self
+                .test_hooks
+                .lock()
+                .unwrap()
+                .before_settlement_cleanup
+                .take();
+            if let Some((entered, resume)) = gate {
+                let _ = entered.send(());
+                let _ = resume.recv();
+            }
+        }
         self.close_transport();
         if let Some(fence) = &self.recovery_fence {
-            binding.release_recovery_fence(fence)?;
+            self.reservation().binding.release_recovery_fence(fence)?;
         }
         Ok(())
     }
@@ -4882,6 +4912,55 @@ mod tests {
         assert!(!endpoint.binding().awaiting_revocation_recovery());
         assert!(!endpoint.binding().revocation_confirmed());
         release.send(()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drain_at_cutoff_joins_confirmed_revocation_before_reporting_success() {
+        let (_root, workspace) = workspace();
+        let session = SessionId::generate();
+        let endpoint = Arc::new(
+            LocalExecutionEndpoint::new(&session, workspace.clone())
+                .unwrap()
+                .with_recovery_fence(&workspace)
+                .unwrap(),
+        );
+        let reservation = rustx_execution_protocol::SessionId::new(session.as_str());
+        let mut data = admit_scripted_peer(
+            &endpoint,
+            BTreeSet::from([Capability::Connection]),
+            control_peer_loop,
+        );
+        let (entered, confirmed) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        endpoint
+            .test_hooks
+            .lock()
+            .unwrap()
+            .before_settlement_cleanup = Some((entered, resume));
+        let settling = tokio::spawn(endpoint.clone().settle());
+        tokio::time::timeout(Duration::from_secs(10), confirmed)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(endpoint.binding().revocation_confirmed());
+        assert!(
+            rustx_execution_server::RecoveryFence::session_pending(&workspace, &reservation)
+                .unwrap()
+        );
+
+        let mut drain = tokio::spawn(endpoint.clone().settle_for_drain(Instant::now()));
+        tokio::select! {
+            result = &mut drain => panic!("drain returned {result:?} before cleanup"),
+            () = endpoint.settlement_joined.notified() => (),
+            () = tokio::time::sleep(Duration::from_secs(10)) => panic!("drain did not join settlement"),
+        }
+        release.send(()).unwrap();
+        drain.await.unwrap().unwrap();
+        settling.await.unwrap().unwrap();
+        assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
+        wire_is_closed(&mut data);
+        rustx_execution_server::RecoveryFence::require_session_settled(&workspace, &reservation)
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -523,8 +523,13 @@ reservation. With `--execution-public-url`, the Client validates the
 operator's public ingress using WebPKI and, optionally, `--tls-ca-file`.
 The operator must secure the trusted cleartext hop from that ingress to
 the loopback listener. The Server authenticates the Client Hello and
-ignores proxy headers. Both modes publish the bundle through the same
-`create_new`, `0600` discipline as Unix.
+ignores proxy headers. Restrict ingress access to provisioned Client
+hosts and enforce per-source connection limits before forwarding,
+including upgraded WebSockets. Initial pairing and same-instance
+recovery share the Server's handshake slots, which are allocated
+before Hello authentication. Unrestricted ingress can exhaust those
+slots and delay recovery past its deadline. Both modes publish the
+bundle through the same `create_new`, `0600` discipline as Unix.
 One Session holds exactly one endpoint mode — a `Unix` listener or a
 `WebSocket` listener, chosen at reservation — and a colliding Session
 claim reuses the existing reservation or is refused, never allocates a

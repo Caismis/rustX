@@ -1075,6 +1075,31 @@ fn pairing_commit_refuses_data_eof_before_the_watchdog_can_run() {
 }
 
 #[test]
+fn a_pending_watch_pipe_failure_discards_the_attempt() {
+    let (binding, hello) = reserved(required());
+    let (mut peer, stream) = UnixStream::pair().unwrap();
+    let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+    let (_, attempt, _, _) = binding
+        .allocate_pending(&hello, ConnectionId::new("pending"), deadline)
+        .unwrap()
+        .unwrap();
+    let channel = RecordChannel::unix(stream);
+    let shutdown = channel.shutdown_handle().unwrap();
+    let watch = channel.shutdown_handle().unwrap();
+    assert!(binding.store_pending_channel(attempt, channel, shutdown));
+
+    let error = binding
+        .watch_pending(attempt, watch, deadline, || Err(nix::errno::Errno::EMFILE))
+        .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(nix::errno::Errno::EMFILE as i32));
+    assert_eq!(binding.status().phase, BindingPhase::Reserved);
+    assert!(!binding.status().pending);
+    peer.set_nonblocking(true).unwrap();
+    assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+    let (_new, _data) = live(&binding, &hello);
+}
+
+#[test]
 fn a_closed_data_half_before_pairing_discards_the_attempt() {
     let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
     let (mut peer, stream) = UnixStream::pair().unwrap();

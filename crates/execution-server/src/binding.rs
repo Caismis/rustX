@@ -1382,7 +1382,7 @@ impl Binding {
                             // this peer's nonce is already dead.
                             return Ok(ChannelAccept::Pending);
                         }
-                        self.watch_pending(attempt, watch, deadline)?;
+                        self.watch_pending(attempt, watch, deadline, nix::unistd::pipe)?;
                         Ok(ChannelAccept::Pending)
                     }
                     Err(reject) => {
@@ -1463,13 +1463,19 @@ impl Binding {
     /// settled another way: commit, discard, or fence drops the
     /// `PendingPair` and the write end with it, so the thread exits at
     /// once instead of sleeping until data traffic or the deadline.
-    fn watch_pending(
+    pub(super) fn watch_pending(
         &self,
         attempt: u64,
         watch: ChannelShutdown,
         deadline: Instant,
+        cancel_pipe: impl FnOnce() -> nix::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)>,
     ) -> io::Result<()> {
-        let (cancel_read, cancel_write) = nix::unistd::pipe().map_err(io::Error::from)?;
+        // A pending channel must have a watchdog unless the attempt has
+        // already settled. Discard this attempt if setup fails at either step.
+        let discard = |_: &io::Error| self.inner.discard_pending(attempt);
+        let (cancel_read, cancel_write) = cancel_pipe()
+            .map_err(io::Error::from)
+            .inspect_err(discard)?;
         {
             let mut inner = self.inner();
             match inner.pending.as_mut() {
@@ -1481,7 +1487,6 @@ impl Binding {
             }
         }
         let owner = self.inner.clone();
-        let cleanup = self.inner.clone();
         std::thread::Builder::new()
             .name("execution-pair-watch".to_owned())
             .spawn(move || {
@@ -1517,11 +1522,7 @@ impl Binding {
                 }
                 owner.discard_pending(attempt);
             })
-            .inspect_err(|_| {
-                // A watchdog that cannot spawn leaves an unbounded
-                // pending channel: discard the attempt it was for.
-                cleanup.discard_pending(attempt);
-            })
+            .inspect_err(discard)
             .map(|_| ())
     }
 
