@@ -12,7 +12,7 @@ The installed-product branch starts at `6ca38dc3d3ffe87c9c476a15d10642abab8053ba
 | T12 | The installed TUI disconnects from the hosted Session catalog. The installed process harness covers observer disconnect during active work, stdio EOF with one canonical commit, WebSocket drain, and external Host loss with zero replay. `installed_ui_detach_cancels_the_client_with_both_lanes_occupied` parks a physical Client reply on each lane, submits four real watch stops on separate UI sockets and then drops the command owner. It proves that an unrelated settings request succeeds, that the matching cancellation physically stops the command before the data lane resumes, and that the Client releases its journal exactly once. The in-crate detach case separately establishes the exact full control queue by observing a fifth admission refusal. |
 | T23 | `standalone_server_commits_a_model_turn_without_a_client_or_helpers` submits one Fake Provider request, stops the standalone Server, moves the Workspace out of view, and reads the committed response on restart. `app_server_archive_stdio_download_works_without_web_or_runtime_attachment` reads a sealed canonical attachment in 32-byte ranges using `session/historyContentRead` and checks the complete archive bytes. The cold Server has no Workspace or Client, loads no Session runtime, and refuses the same read cut under a sibling Session. The separate live `artifact/read` path requires an attachment. |
 | T24 | The archive manifests and restricted-PATH smoke checks verify binary ownership, and the build audits production dependencies. The installed WSS test feeds a real Client an older bootstrap revision, requires an explicit refusal, then admits the matching Client on the original reservation. Server handshake refusal also has dedicated protocol tests in EXEC-01 and EXEC-02. |
-| T25 | Linux manifest, CLI, Web loopback/browser bootstrap, TUI PTY, owner termination, and missing-Sibling checks. Native macOS runs remain open. |
+| T25 | Linux manifest, CLI, Web loopback/browser bootstrap, TUI PTY, owner termination, and missing-sibling checks. The independent native macOS job verifies the same installation layouts and publishes the archive inventory and checksums for its tested commit. |
 | T41 | `websocket_and_unix_transports_serve_identical_seeded_operations` replays seeded operations through independent extraction paths. |
 | T42 | The independent Client range and grep probe measures the bounded wire responses below. The installed native file-tools scenario also measures both live processes while an Agent reads one line near the end of a 64 MiB source, searches it, and edits a separate file. The installed Bash scenario saves 4 MiB on the Client and reads a line missing from the Server preview through both Read and Grep. See the wire measurements below. |
 | T44 | `execution_enrollment_precedes_client_and_workspace_configuration_readiness` exercises minimal enrollment, denies browsing before authentication, lists a descendant despite invalid Workspace configuration, and refuses outside paths and directory symlinks. Cancelling through normal Session deletion removes the catalog entry, prevents further browsing, and reaps the Client while the selected directory and its original bytes survive. The installed Web carrier also exercises the private Product Host picker by browsing, confirming a revision and registering a descendant. `installed_workspace_picker_uses_a_private_client_and_reaps_before_registration` verifies the private lane rejects ordinary transport credentials, refuses outside paths and symlink traversal, succeeds despite malformed Workspace configuration, rejects a replaced directory, and clears its recovery fence before returning. The temporary binding creates no durable Session. |
@@ -27,7 +27,7 @@ The installed-product branch starts at `6ca38dc3d3ffe87c9c476a15d10642abab8053ba
 | T69 | `managed_python_prepares_and_runs_in_the_bound_client_mount` uses real Client-side uv and stdio MCP in a separate mount and verifies that the reusable store survives Session cleanup. |
 | T70 | `independent_stores_reuse_the_exclusive_winner_and_refuse_corruption` verifies an exclusive publication winner and identical inode for both owners. In the installed `doctor_probes_selected_managed_python_in_an_owned_client` test, a new process reopens the same published inode, performs a new stdio handshake and catalog discovery, invokes no tools, and runs neither `uv lock` nor `uv sync` again. |
 
-The four evidence ledgers cover all 73 test IDs by number. Open product cases in this table still require their named proof. Local and earlier-commit runs cannot serve as the integrated commit's FULL or Merge verification receipt.
+The four evidence ledgers cover all 73 test IDs by number. The release requires receipts for the same head from the independent native macOS job and the stacked PR's FULL and Merge verification. The measurement samples below identify their distinct baselines.
 
 ## Linux Client I/O baseline
 
@@ -222,6 +222,21 @@ the data lane carries 14–40 total exchanges. The tool exchanges send
 2,855–2,865 bytes and receive 35,324 bytes across the whole turn. The
 maximum pair reply stays at 33,298 bytes. Settlement under concurrent
 local validation was 154.2 ms P50 and 217.8 ms P95.
+
+The following Linux descriptor observations use twenty samples per path
+from the same installed pair. Each has one Server and one Client in the
+measured processes. The counts use `/proc/<pid>/fd` before submitting the
+turn and at its public settlement, including any concurrent observation
+descriptors. Supervisors and their descriptors are outside the counters.
+The fixture reaps the Server and requires the original proxy's two lanes
+to close after every sample. The independent strong-kill fixture separately
+requires the previous Client scratch directory to disappear before the
+replacement is usable.
+
+| Workload | Server descriptors before / settled | Client descriptors before / settled |
+| --- | ---: | ---: |
+| 64 MiB Read, Grep and separate Edit | 34 / 34 | 32–36 / 26–36 |
+| 4 MiB Bash Spill and selected readback | 34 / 34–37 | 32–34 / 31–41 |
 
 ## Installed Bash streaming baseline
 

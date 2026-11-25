@@ -2513,6 +2513,12 @@ async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
         });
         captured.wait_entered_async().await;
         endpoint.detach_live_pair_for_test();
+        assert!(endpoint.control().is_none());
+        // Accept the original Client's recovery while the stale capture is at
+        // its verification gate. Waiting on the stale request first can
+        // leave the recovery Hello unread for its full transport deadline.
+        Fixture::admit_execution_pair(&endpoint).await;
+        assert!(!endpoint.control().unwrap().same_pair(&lane));
         captured.release();
         let Response::Failure(failure) = stale.await.unwrap() else {
             panic!("lost pair accepted");
@@ -2523,8 +2529,6 @@ async fn bound_session_settings_settle_across_catalog_faults_and_drain() {
             (revision, original)
         );
         assert_eq!(observe(), before);
-        Fixture::admit_execution_pair(&endpoint).await;
-        assert!(!endpoint.control().unwrap().same_pair(&lane));
 
         let disk = Arc::new(Gate::default());
         let _release = disk.arm_scoped();

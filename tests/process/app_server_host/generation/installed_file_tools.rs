@@ -183,6 +183,10 @@ fn peak_rss(process: &Path) -> u64 {
         .unwrap()
 }
 
+fn open_descriptors(process: &Path) -> usize {
+    std::fs::read_dir(process.join("fd")).unwrap().count()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn installed_native_file_tools_keep_large_results_on_the_client() {
     installed_file_tools(false).await;
@@ -263,6 +267,8 @@ async fn installed_file_tools(spill: bool) {
         *wire.lock().unwrap() = Wire::default();
         let (server_before, server_writes) = counters(&server_proc);
         let (client_before, client_writes) = counters(&client_proc);
+        let server_descriptors_before = open_descriptors(&server_proc);
+        let client_descriptors_before = open_descriptors(&client_proc);
         let begin = Instant::now();
         let MethodResult::TurnInputAccepted { turn_id, .. } = peer.rpc(Method::TurnStart {
             input_id: uuid::Uuid::new_v4().to_string(),
@@ -311,6 +317,10 @@ async fn installed_file_tools(spill: bool) {
                     "client_write_bytes": client_written - client_writes,
                     "server_peak_rss_kib": peak_rss(&server_proc),
                     "client_peak_rss_kib": peak_rss(&client_proc),
+                    "server_descriptors_before": server_descriptors_before,
+                    "client_descriptors_before": client_descriptors_before,
+                    "server_descriptors_at_settlement": open_descriptors(&server_proc),
+                    "client_descriptors_at_settlement": open_descriptors(&client_proc),
                     "wire": *wire
                 }));
             }
