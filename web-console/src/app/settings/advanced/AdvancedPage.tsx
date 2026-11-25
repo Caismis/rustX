@@ -111,11 +111,15 @@ function SummaryTokenLimit({ context, value, change, restore }: {
   const [text, setText] = useState(String(value));
   const fallbackValue = useRef(value);
   const lastValue = useRef(value);
-  const skipResync = useRef(false);
+  const skipResync = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (lastValue.current === value) return;
     lastValue.current = value;
-    if (skipResync.current) { skipResync.current = false; return; }
+    if (skipResync.current !== undefined) {
+      const restored = skipResync.current;
+      skipResync.current = undefined;
+      if (value === restored) return;
+    }
     setText(current => Number(current) === value ? current : String(value));
   }, [value]);
   return (
@@ -132,14 +136,12 @@ function SummaryTokenLimit({ context, value, change, restore }: {
           const summary = { mode: 'limit' as const, tokens };
           if (raw.trim() !== '' && Number.isInteger(tokens) && tokens >= 1) change({ ...context, summary_output_cap: summary });
           else {
-            skipResync.current = true;
-            restore(clean => ({
-              ...context,
-              summary_output_cap: {
-                mode: 'limit',
-                tokens: clean.summary_output_cap?.mode === 'limit' ? clean.summary_output_cap.tokens : fallbackValue.current,
-              },
-            }));
+            let restoredTokens: number | undefined;
+            restore(clean => {
+              restoredTokens = clean.summary_output_cap?.mode === 'limit' ? clean.summary_output_cap.tokens : fallbackValue.current;
+              return { ...context, summary_output_cap: { mode: 'limit', tokens: restoredTokens } };
+            });
+            if (restoredTokens !== undefined && restoredTokens !== value) skipResync.current = restoredTokens;
           }
 
         }}

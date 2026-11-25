@@ -363,6 +363,22 @@ it('withdraws a pending summary token edit when the input becomes fractional', a
   }));
 });
 
+it('resynchronizes a cleared clean summary limit after reloading a new authoritative value', async () => {
+  const subject = cfg3Client();
+  subject.source.user.authored!.context = { summary_output_cap: { mode: 'limit', tokens: 2048 } };
+  await open(subject, 'Advanced', 'User');
+  const input = screen.getByLabelText('Summary token limit') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: '' } });
+  expect(input.value).toBe('');
+  subject.source.user.authored!.context.summary_output_cap = { mode: 'limit', tokens: 4096 };
+  subject.source.user.revision = 'user-reloaded';
+  act(() => settingsActor().send({ type: 'REFRESH' }));
+  await waitForSettingsRevision('user-reloaded');
+  expect(input.value).toBe('4096');
+  act(() => settingsActor().send({ type: 'REFRESH' }));
+  await waitFor(() => expect(input.value).toBe('4096'));
+});
+
 it('preserves unrelated context edits when withdrawing a fractional summary token edit', async () => {
   const subject = cfg3Client();
   subject.source.user.authored!.context = { reserve_tokens: '4096', summary_output_cap: { mode: 'limit', tokens: 2048 } };
