@@ -177,9 +177,9 @@ export async function openResourceModule(module:ResourceModule) {
 export async function openResourceRow(name: string) {
   const card = screen.queryByRole('listitem', { name });
   const provider = screen.queryByRole('button', { name: `${name} →` });
-  // A ResourceCard <li> opens through its head button; a Models <div> row opens
-  // on the row itself (its inner buttons are row actions).
-  fireEvent.click(card ? (card.tagName === 'LI' ? within(card).getAllByRole('button')[0] : card) : provider ?? await screen.findByRole('row', { name }));
+  // Resource rows expose their opening gesture as the row's first button;
+  // the row container itself is presentational so nested actions stay valid ARIA.
+  fireEvent.click(card ? within(card).getAllByRole('button')[0] : provider ?? await screen.findByRole('row', { name }));
   const modelDialog = screen.queryByRole('dialog', { name: /^Model / });
   if (modelDialog) fireEvent.click(within(modelDialog).getByRole('button', { name: 'Advanced configuration', expanded: false }));
   if (resourceModule==='mcp') openMcpContractEditor(name);
