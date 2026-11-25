@@ -45,9 +45,14 @@ test('all geometry formats render through actual delivery and Workspace entry po
   await page.goto(`${origin}/test/fixtures/geometry.html`);
   await page.getByRole('button', { name: 'Show all 8 delivered files', exact: true }).click();
   for (const entry of ['delivery', 'workspace']) for (const name of names) {
+    const operationStart = await page.evaluate(() => (window as any).geometryContract.operations.length);
     const start = performance.now();
     if (entry === 'delivery') await openDelivery(page, name);
     else { await page.getByRole('button', { name: `Workspace ${name}`, exact: true }).click(); await ready(page); }
+    const operation = await page.evaluate(start => (window as any).geometryContract.operations.slice(start) as { identity: string; name: string; kind: string; version: string }[], operationStart);
+    expect(operation[0]).toMatchObject({ name, kind: 'open' }); expect(operation.at(-1)).toMatchObject({ name, kind: 'close' });
+    expect(operation.filter(event => event.kind === 'read').length).toBeGreaterThan(0);
+    expect(new Set(operation.map(event => event.identity)).size).toBe(1); expect(new Set(operation.map(event => event.version)).size).toBe(1);
     const displayMs = elapsed(start), importMs = measuredDuration(await page.evaluate(name => (window as any).geometryContract.measureImport(name), name));
     timings.push({ entry, name, displayMs, importMs });
     if (entry === 'delivery') expect(await page.evaluate(name => (window as any).geometryContract.snapshot().find((item: any) => item.name === name).state.camera.up, name)).toEqual([0, 1, 0]);

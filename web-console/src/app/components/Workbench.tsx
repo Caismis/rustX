@@ -89,6 +89,14 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
       if (request.kind === 'office') { const demand = previewDemands(host, scope); return demand.documents.run(active, () => demand.privateReads.run(active, work)); }
       return request.kind === 'preview' ? previewDemands(host, scope).privateReads.run(active, work) : work();
     };
+    if (host.openWorkspacePreview && scope && target) call.openPreview = async (path, signal) => {
+      const demand = previewDemands(host, scope);
+      const operation = await demand.privateReads.run(signal, () => host.openWorkspacePreview!(scope, { target, request: { kind: 'preview', path, read: { kind: 'bytes', range: { offset: 0, length: 1 } } } }, signal));
+      return { ...operation,
+        read: (range, active = signal) => demand.privateReads.run(active, () => operation.read(range, active)),
+        close: () => signal.aborted ? operation.close() : demand.privateReads.run(signal, () => operation.close()),
+      };
+    };
     if (host.observeWorkspaceFile && scope && target) call.observe = (path, changed, signal) => previewDemands(host, scope).privateReads.run(signal, () => host.observeWorkspaceFile!(scope, { target, request: { kind: 'preview', path, read: { kind: 'bytes', range: { offset: 0, length: 1 } } } }, changed, signal));
     return call;
   },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace]);

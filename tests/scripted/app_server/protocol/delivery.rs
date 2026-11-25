@@ -371,6 +371,8 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             (1, 0),
             "file reads create no new attachment"
         );
+        phases.enter("persistent preview identity, multiplexing and final validation");
+        exercise_preview_operation(&f, &product_host, read(tool.id.clone()), &path, original).await;
         phases.enter("private observation authorization and idle capacity");
         assert!(product_host.observe(FILE_BROWSER_TOKEN).await.is_err());
         let mut observation = product_host.observe(FILE_HOST_TOKEN).await.unwrap();
@@ -1724,4 +1726,129 @@ pub(crate) async fn delivery_publication_revocation_scenario() {
         f.close().await;
     })
     .await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn exercise_preview_operation(
+    f: &Fixture,
+    product_host: &TrustedFileHost,
+    request: crate::app_server::product_host::FileRead,
+    path: &std::path::Path,
+    original: &[u8],
+) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let open = serde_json::json!({"operation":"open","request":request}).to_string();
+    let mut socket = product_host.open(FILE_HOST_TOKEN).await.unwrap();
+    socket
+        .send(Message::Text(open.clone().into()))
+        .await
+        .unwrap();
+    let opened: serde_json::Value =
+        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    let identity = opened["result"]["identity"].as_str().unwrap().to_string();
+    let version = opened["result"]["version"].as_str().unwrap();
+    assert_eq!(opened["result"]["bytes"], original.len());
+    assert_eq!(
+        f.host.file_reads().available_permits(),
+        2,
+        "idle preview owns no physical permit"
+    );
+    for id in [1, 2] {
+        socket.send(Message::Text(serde_json::json!({"operation":"read","identity":identity,"id":id,"range":{"offset":(id-1)*4,"length":4}}).to_string().into())).await.unwrap();
+    }
+    let mut received = std::collections::HashSet::new();
+    for _ in 0..2 {
+        let page: serde_json::Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let id = usize::try_from(page["id"].as_u64().unwrap()).unwrap();
+        received.insert(id);
+        assert_eq!(page["result"]["version"], version);
+        assert_eq!(page["result"]["bytes"], original.len());
+        let bytes = socket.next().await.unwrap().unwrap().into_data();
+        assert_eq!(&bytes[..], &original[(id - 1) * 4..id * 4]);
+    }
+    assert_eq!(received.len(), 2);
+    socket
+        .send(Message::Text(
+            serde_json::json!({"operation":"close","identity":identity})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let closed: serde_json::Value =
+        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(closed["result"]["closed"], true);
+    assert!(matches!(
+        socket.next().await.unwrap().unwrap(),
+        Message::Close(_)
+    ));
+
+    let mut socket = product_host.open(FILE_HOST_TOKEN).await.unwrap();
+    socket
+        .send(Message::Text(open.clone().into()))
+        .await
+        .unwrap();
+    let opened: serde_json::Value =
+        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    std::fs::write(path, b"changed source").unwrap();
+    socket
+        .send(Message::Text(
+            serde_json::json!({"operation":"close","identity":opened["result"]["identity"]})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let closed: serde_json::Value =
+        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(closed["error"]["data"]["reason"], "replaced");
+    assert!(matches!(
+        socket.next().await.unwrap().unwrap(),
+        Message::Close(_)
+    ));
+    std::fs::write(path, original).unwrap();
+
+    for validating in [false, true] {
+        let mut socket = product_host.open(FILE_HOST_TOKEN).await.unwrap();
+        socket
+            .send(Message::Text(open.clone().into()))
+            .await
+            .unwrap();
+        let opened: serde_json::Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let probe = f.host.file_read_probe();
+        let held = probe.before_bytes.arm_scoped();
+        if validating {
+            socket.send(Message::Text(serde_json::json!({"operation":"close","identity":opened["result"]["identity"]}).to_string().into())).await.unwrap();
+        } else {
+            for id in [1, 2] {
+                socket.send(Message::Text(serde_json::json!({"operation":"read","identity":opened["result"]["identity"],"id":id,"range":{"offset":(id-1)*4,"length":4}}).to_string().into())).await.unwrap();
+            }
+        }
+        probe.before_bytes.wait_entered_async().await;
+        let available = usize::from(validating);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while f.host.file_reads().available_permits() != available {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        socket.close(None).await.unwrap();
+        let authority = probe.authority.lock().unwrap().clone().unwrap();
+        authority.cancelled().await;
+        assert!(
+            futures_util::poll!(socket.next()).is_pending(),
+            "close acknowledgement cannot precede pending physical reads or final validation"
+        );
+        drop(held);
+        assert!(matches!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Close(_)
+        ));
+        let permits = f.host.file_reads().acquire_many_owned(2).await.unwrap();
+        drop(permits);
+    }
 }

@@ -2,3 +2,4 @@
 dist/* -text
 LICENSE.md -text -whitespace
 dist/license.*.txt -whitespace
+step-bulk-lexer.patch -whitespace

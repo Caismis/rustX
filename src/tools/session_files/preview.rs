@@ -103,21 +103,16 @@ pub(crate) fn read_authorized(
                 }
             };
             opened.file.seek(SeekFrom::Start(offset))?;
-            let mut data = Vec::new();
-            let mut buffer = vec![0; 64 * 1024];
-            let bound = capacity + usize::from(range.is_none());
-            while data.len() < bound {
-                authorized()?;
-                let remaining = (bound - data.len()).min(buffer.len());
-                let count = opened.file.read(&mut buffer[..remaining])?;
-                if count == 0 {
-                    break;
-                }
-                data.extend_from_slice(&buffer[..count]);
-            }
-            if data.len() > capacity {
-                return Err(too_large());
-            }
+            let available = metadata.len().saturating_sub(offset);
+            let allocation =
+                usize::try_from(available.min(capacity as u64)).map_err(|_| too_large())?;
+            let data = read_bytes(
+                &mut opened.file,
+                allocation,
+                capacity,
+                range.is_none(),
+                &authorized,
+            )?;
             let eof = offset.saturating_add(data.len() as u64) >= metadata.len();
             (data, offset, None, eof)
         }
@@ -151,6 +146,51 @@ pub(crate) fn read_authorized(
         lines,
         data,
     })
+}
+
+/// Fill the stat-sized destination directly. Bounded slices preserve authority
+/// polling even when a complete file needs many physical reads.
+fn read_bytes(
+    reader: &mut impl Read,
+    allocation: usize,
+    capacity: usize,
+    complete: bool,
+    authorized: &impl Fn() -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
+    let mut data = vec![0; allocation];
+    let mut filled = 0;
+    while filled < data.len() {
+        authorized()?;
+        let end = (filled + 64 * 1024).min(data.len());
+        match reader.read(&mut data[filled..end]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    data.truncate(filled);
+    // A single-byte fence preserves the complete-read max+1 check, including
+    // empty files that grow before their first physical read.
+    if complete || filled < capacity {
+        let mut fence = [0];
+        loop {
+            authorized()?;
+            match reader.read(&mut fence) {
+                Ok(0) => break,
+                Ok(_) if complete && filled == capacity => return Err(too_large()),
+                Ok(_) => {
+                    return Err(invalid(
+                        SessionFileReadFailure::Replaced,
+                        "File changed during preview read",
+                    ));
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(data)
 }
 
 fn page(
@@ -227,6 +267,52 @@ mod tests {
         );
         let reference = super::super::declare(&root, &conversation, "file.txt", None).unwrap();
         (dir, root, reference)
+    }
+    struct ShortReads {
+        source: std::io::Cursor<Vec<u8>>,
+        interrupted: bool,
+    }
+    impl Read for ShortReads {
+        fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let end = data.len().min(3);
+            self.source.read(&mut data[..end])
+        }
+    }
+    #[test]
+    fn direct_destination_handles_short_reads_interrupted_and_growth_fences() {
+        let mut reader = ShortReads {
+            source: io::Cursor::new(b"0123456789".to_vec()),
+            interrupted: false,
+        };
+        let data = read_bytes(&mut reader, 10, FILE_BYTES, true, &|| Ok(())).unwrap();
+        assert_eq!(data, b"0123456789");
+        assert_eq!(data.capacity(), 10);
+        let mut growing = io::Cursor::new(b"123456");
+        assert!(read_bytes(&mut growing, 5, 5, true, &|| Ok(())).is_err());
+        let mut empty_growing = io::Cursor::new(b"x");
+        assert!(read_bytes(&mut empty_growing, 0, FILE_BYTES, true, &|| Ok(())).is_err());
+    }
+    #[test]
+    fn direct_destination_rechecks_authority_between_short_reads() {
+        let calls = std::cell::Cell::new(0);
+        let mut reader = ShortReads {
+            source: io::Cursor::new(b"0123456789".to_vec()),
+            interrupted: false,
+        };
+        let result = read_bytes(&mut reader, 10, FILE_BYTES, true, &|| {
+            calls.set(calls.get() + 1);
+            if calls.get() > 2 {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(reader.source.position(), 3);
     }
     #[test]
     fn complete_bytes_and_ranges_are_independent_of_rpc_and_file_size() {

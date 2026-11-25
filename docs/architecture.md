@@ -69,7 +69,15 @@ uses one transient lease. Native file authority and document security remain wit
 their existing owners. The private native file-read carrier acknowledges clean
 close only after joining its exact canceled read; browser/Host admission cannot
 reuse that permit on an unproven transport outcome. No public protocol schema or
-server-side layout registry is introduced. See [preview workspaces](preview-workspace.md)
+server-side layout registry is introduced. Geometry source reads use a bounded
+private preview operation that binds source identity, version and size. The
+Session-file operation reuses one authenticated native connection; Workbench
+reuses one securely opened read-only descriptor with positional reads. Idle
+operations hold no physical read permit. Open, page reads and final validation
+share the existing two-read admission domain with Download. Final secure source
+validation precedes publication of the complete copy or a streamed STL model.
+STL decoding consumes acknowledged bounded chunks in a disposable Worker;
+provisional decoded data never becomes a displayed model. See [preview workspaces](preview-workspace.md)
 for identity, lifetime, finite budgets, focus and responsive restoration.
 
 ## Native conversation reading (#430)

@@ -140,7 +140,9 @@ Preview tabs are browser presentation metadata, never native file authority.
 An occurrence and its active lease must both be current before bytes or derived
 content can publish. Closing, hiding or replacing their scope retires the lease;
 reopening the same exact source cannot adopt the old occurrence's completion.
-At most two selected visible preview bodies own resources, and hidden tabs own
+At most two mounted geometry bodies, including parked bodies, own geometry
+resources. Parking retains the same admitted model and canvas; actual body
+retirement releases its Worker and renderer resources. Other inactive tabs own
 no workers or URLs. Versioned payloads may remain in the shared eight-entry /
 64 MiB inactive cache; reactivation reauthorizes and checks freshness before
 exposure. Close, scope/permission retirement, version change and eviction purge
@@ -153,7 +155,15 @@ Office derivation remains one active Host operation shared by both preview entry
 Cancellation removes waiting demand immediately but releases an admitted permit
 only on proven physical settlement. In particular, the private native file-read
 socket joins its canceled read before acknowledging clean close; unknown transport
-settlement keeps admission unavailable. The public authority/protocol contract is
+settlement keeps admission unavailable. A private geometry preview operation
+binds source identity, version and size, with at most two live source owners.
+An idle connection or descriptor holds no physical-read permit. Every actual
+open, page read and final validation shares the existing two-read bound. A
+reused descriptor does not freeze external writes: descriptor metadata checks
+and a final secure pathname check must succeed before complete source/model
+publication. Streamed STL chunks have bounded backpressure, and EOF is sent to
+the decoder only after final source validation. Cancellation retires all started
+physical reads before acknowledging the operation's close. The public authority/protocol contract is
 unchanged. See [preview workspace invariants](preview-workspace.md).
 
 A `present` delivery exists only in the typed `deliveries` of a successfully

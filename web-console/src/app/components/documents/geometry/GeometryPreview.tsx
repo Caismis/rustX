@@ -5,7 +5,8 @@ import { en, zh } from '../../../../locale/dictionaries/geometry';
 import type { PreviewViewState, PreviewViewStateProps } from '../../../../presentation/right-panel/preview-view-state';
 import { geometryFormat } from './format';
 import { importGlb } from './glb';
-import { parseGeometry } from './parse';
+import type { GeometrySource } from '../../../../../shared/geometry-source';
+import { parseGeometry, parseGeometryStream } from './parse';
 import { disposeScene } from './scene-resources';
 import { GeometryError, type GeometryFailure } from './limits';
 import type { GeometryImportStage } from './stages';
@@ -22,8 +23,8 @@ import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChecklistOutline14, IconCloseOutline16, IconLoadingOutline16, IconRefreshOutline16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
-export interface GeometryPreviewProps extends PreviewViewStateProps { visible?: boolean; bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
-export default function GeometryPreview({ bytes, name, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire, visible = true }: GeometryPreviewProps) {
+export interface GeometryPreviewProps extends PreviewViewStateProps { visible?: boolean; bytes?: Uint8Array<ArrayBuffer>; source?: GeometrySource; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
+export default function GeometryPreview({ bytes, source, name, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire, visible = true }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
   const latest = useRef({ viewState, onViewStateChange, t, visible }); latest.current = { viewState, onViewStateChange, t, visible };
@@ -33,7 +34,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     if (!visible) setMenu(false);
     if (visible && deferredOutlines.current !== undefined && pendingOutlines.current === undefined) requestOutlines(deferredOutlines.current);
   }, [visible]);
-  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
+  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; sourceFailed?: boolean; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -70,8 +71,9 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       let object: Object3D, bounds: Box3, displayStart: number, prepared = Promise.resolve(), startPreview: (() => void) | undefined;
       const graphicsLost = () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); };
       if (format === 'glb') stage('importing');
-      const pending = format === 'glb' ? importGlb(bytes, controller.signal)
-        : parseGeometry(bytes, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : lod => {
+      const streaming = source && format === 'stl';
+      const pending = streaming ? parseGeometryStream(source, controller.signal, stage) : format === 'glb' ? importGlb(bytes!, controller.signal)
+        : parseGeometry(bytes!, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : lod => {
           if (live() && progressive) progressive.add(lod); else lod.dispose();
         });
       void pending.catch(() => {});
@@ -85,7 +87,14 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
           displayed: () => { if (live()) setState(value => ({ ...value, preview: true })); }, failed,
         });
       }
-      const loaded = await pending; object = loaded.scene; bounds = loaded.bounds; release = loaded.dispose;
+      const loaded = await pending.catch(error => {
+        if (!streaming || error instanceof GeometryError) throw error;
+        // The content owner publishes the source error or refreshes the copy.
+        const publish = live(); retire();
+        if (publish) setState({ sourceFailed: true });
+      });
+      if (!loaded) return;
+      object = loaded.scene; bounds = loaded.bounds; release = loaded.dispose;
       if ('scenes' in loaded) { roots = loaded.scenes; displayStart = performance.now(); }
       else {
         roots = [object]; displayStart = loaded.prepareStart; prepared = loaded.ready;
@@ -121,7 +130,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
       void prepared.then(() => { if (!live() || !mounted) return; mounted.refreshPreview(); });
     })().catch(failed);
     return () => { signal.removeEventListener('abort', retire); retire(); };
-  }, [bytes, format, copyId, signal]);
+  }, [bytes, source, format, copyId, signal]);
   // Names/labels do not own the renderer lifetime.
   useEffect(() => { active.current?.relabel(t); }, [t]);
   const views: StandardView[] = ['isometric', 'front', 'back', 'left', 'right', 'top', 'bottom'];
@@ -153,7 +162,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     owner.setNavigationMode(mode);
     setState(value => value.navigationMode === owner.navigationMode ? value : { ...value, navigationMode: owner.navigationMode });
   }
-  return <section className={css.root} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
+  return <section className={css.root} style={state.sourceFailed ? { display: 'none' } : undefined} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
     if (!partsOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation(); closeParts();
   }}>
