@@ -163,7 +163,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
     const model = page.getByRole('dialog', { name: 'Add Model', exact: true });
-    await expect(model.getByRole('button', { name: /API format$/ })).toHaveCount(0);
+    await expect(model.getByRole('combobox', { name: 'API format', exact: true })).toHaveCount(0);
     await model.getByLabel('Model ID', { exact: true }).fill('first-model');
     await expect(model.getByLabel('Model ID', { exact: true })).toBeFocused();
     await model.getByLabel('Context window', { exact: true }).fill('1000');
@@ -183,7 +183,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await choose(provider, 'API format', 'OpenAI Chat Completions (/v1/chat/completions)');
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => readFileSync(fixture.settings, 'utf8').split('[models.')[0]).toContain('protocol = "openai_chat_completions"');
-    await expect(provider.getByRole('button', { name: /API format$/ })).toContainText('OpenAI Chat Completions');
+    await expect(provider.getByRole('combobox', { name: 'API format', exact: true })).toContainText('OpenAI Chat Completions');
 
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
@@ -207,6 +207,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(remove).toBeFocused();
     await remove.click();
     await confirmation.getByRole('button', { name: 'Remove Model custom/disposable-model', exact: true }).click();
+    await expect(settings.getByRole('region', { name: 'custom', exact: true })).toBeFocused();
     await expect(disposable).toHaveCount(0);
     await expect(settings.getByRole('listitem', { name: 'custom/first-model', exact: true })).toBeVisible();
     await settings.getByRole('button', { name: 'Model Settings', exact: true }).click();

@@ -109,10 +109,10 @@ export async function openSettingsPage(page: Page, name: string) {
   await tab.click();
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
-/** Pick a value from a React Aria Select. Its trigger is named by its current
- * value followed by its label, and its listbox opens in a popover. */
+/** Pick a value from a Base UI Select. Its trigger is a combobox whose
+ * listbox opens in a popover. */
 export async function choose(scope: Locator, label: string, option: string) {
-  await scope.getByRole('button', { name: new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).click();
+  await scope.getByRole('combobox', { name: label, exact: true }).click();
   await scope.page().getByRole('listbox').getByRole('option', { name: option, exact: true }).click();
 }
 /** Complete a removal through its confirmation dialog. Restoring inheritance

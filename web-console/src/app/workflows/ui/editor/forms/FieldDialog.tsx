@@ -98,7 +98,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
           </button>} />
       </div>}
 
-      {field('name', tx('workflows:fields.name'), controlId => <TextInput id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} autoFocus spellCheck={false}
+      {field('name', tx('workflows:fields.name'), controlId => <TextInput id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} data-modal-autofocus spellCheck={false}
         placeholder={tx('workflows:fields.name-placeholder')} {...invalid('name')} onChange={event => change({ name: event.target.value })} />)}
 
       {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <Textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}

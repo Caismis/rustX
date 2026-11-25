@@ -50,7 +50,7 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   const facts = (target: string) => <Facts scopeLabel={scopeLabel} target={target} directory={directory} />;
   const idField = <label className={css.field}>
     <span>{tx('workflows:dialog.id')}</span>
-    <TextInput value={id} autoFocus spellCheck={false} placeholder={tx('workflows:dialog.id-placeholder')} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
+    <TextInput value={id} data-modal-autofocus spellCheck={false} placeholder={tx('workflows:dialog.id-placeholder')} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
       onChange={event => { setId(event.target.value.trim()); setTouched(true); }} disabled={blocked} />
     <small id="workflow-id-hint" className={touched && problem ? css.error : undefined}>{touched && problem ? tx(problem) : tx('workflows:dialog.id-hint')}</small>
   </label>;
@@ -161,7 +161,7 @@ function InfoForm({ confirmation, scopeLabel, library, busy, title: heading, sou
             <IconPicker value={icon} onChange={setIcon} disabled={blocked} className={css.iconTile} />
             <label className={css.field}>
               <span>{tx('workflows:dialog.title')}</span>
-              <TextInput className={css.plain} value={title} autoFocus maxLength={128} disabled={blocked} placeholder={tx('workflows:dialog.title-placeholder')}
+              <TextInput className={css.plain} value={title} data-modal-autofocus maxLength={128} disabled={blocked} placeholder={tx('workflows:dialog.title-placeholder')}
                 onChange={event => { setTitle(event.target.value); setTouched(true); if (!source && !idEdited) setId(suggestedId(event.target.value)); }} />
               <small>{touched && !title.trim() ? tx('workflows:dialog.title-required') : tx('workflows:dialog.title-hint')}</small>
             </label>

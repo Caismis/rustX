@@ -97,7 +97,7 @@ export function TransferDialog({ intent, close, refresh }: { intent: TransferInt
       </Button></>}>
     <form className={css.settings} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label htmlFor={input}>{tx('resources:transfer.destination-name')}</label>
-      <TextInput id={input} value={name} autoFocus spellCheck={false} disabled={busy || reopen}
+      <TextInput id={input} value={name} data-modal-autofocus spellCheck={false} disabled={busy || reopen}
         aria-invalid={invalid || taken} aria-describedby={intent.family === 'skill' ? `${input}-hint` : undefined}
         onChange={event => { setName(event.target.value); setFailure(undefined); }} />
       {intent.family === 'skill' && <small id={`${input}-hint`}>{tx('resources:skills.transfer-name-hint')}</small>}

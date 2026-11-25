@@ -53,6 +53,16 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
     if (typeof contentRef === 'function') contentRef(node);
     else if (contentRef) contentRef.current = node;
   }, [contentRef]);
+  const exactFinalFocus = finalFocus ? () => {
+    const target = finalFocus();
+    if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) {
+      target.focus({ preventScroll: true });
+      setTimeout(() => {
+        if (target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')) target.focus({ preventScroll: true });
+      }, 0);
+    }
+    return false;
+  } : undefined;
   const Root = role === 'alertdialog' ? AlertDialog.Root : Dialog.Root;
   return <Root open={open && active} onOpenChange={(next, details) => {
     if (details.reason === 'escape-key' && (details.event.defaultPrevented || (details.event.target as Element)?.closest?.('[role="menu"], [role="listbox"]') || surfaceLayers.at(-1) !== layer)) {
@@ -65,7 +75,7 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
       <Dialog.Viewport className={overlayClassName}>
         <div className={panelClassName} style={panelClassName ? undefined : { display: 'contents' }}>
           <Dialog.Popup render={<section />} ref={attach} className={className} aria-label={title}
-            initialFocus={initialFocus} finalFocus={finalFocus}>
+            initialFocus={initialFocus} finalFocus={finalFocus ? exactFinalFocus : finalFocus}>
             <DialogPortalContext value={portal}>{children}</DialogPortalContext>
           </Dialog.Popup>
         </div>
