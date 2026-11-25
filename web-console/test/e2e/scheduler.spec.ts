@@ -58,6 +58,9 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await page.getByRole('navigation', { name: zh ? '主导航' : 'Primary navigation', exact: true }).getByRole('button', { name: zh ? '计划任务' : 'Scheduled Tasks', exact: true }).click();
     const title = zh ? '检查仓库最新变更' : 'Review repository changes';
     await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible();
+    // A pointer resting on the just-clicked rail button opens its tooltip once
+    // the hover delay elapses, which is load-dependent: park it before capture.
+    await page.mouse.move(0, 0);
     await expectStableScreenshot(page, prefix + '-list.png');
     await page.getByRole('button', { name: new RegExp(title) }).click();
     await expect(page.getByRole('textbox', { name: zh ? '自动化任务名称' : 'Automation task name' })).toHaveValue(title);
