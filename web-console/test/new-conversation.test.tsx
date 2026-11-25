@@ -267,7 +267,9 @@ it('an obsolete Workspace catalog read cannot replace the current Workspace cata
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
   await openModelMenu();
-  expect(modelChoices()).toEqual(['fixture/current-workspace']);
+  // Choosing the Workspace starts an asynchronous Host-owned catalog read;
+  // wait for that read rather than assuming the click itself yielded it.
+  await waitFor(() => expect(modelChoices()).toEqual(['fixture/current-workspace']));
   expect(screen.getAllByRole('status').some(row => row.textContent?.includes('fixture/native is unavailable'))).toBe(true);
   await act(async () => obsolete.resolve({ kind: 'read', projection: workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/obsolete-workspace')] } }) }));
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
