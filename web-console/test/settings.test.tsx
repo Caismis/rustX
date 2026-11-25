@@ -1,4 +1,5 @@
 import { providerAction } from './settings-harness';
+import { chooseCossOption } from './coss-select';
 import { waitForSettingsSave } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { settingsContext } from './settings-harness';
@@ -131,8 +132,7 @@ it('General owns the persisted busy Enter selector', async () => {
   act(() => composerPreferences().setBusyEnter('queue'));
   const subject = cfg3Client();
   render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
-  fireEvent.click(screen.getByRole('button', { name: /Send behavior while busy/ }));
-  fireEvent.click(await screen.findByRole('option', { name: 'Immediately' }));
+  await chooseCossOption(screen.getByRole('combobox', { name: /Send behavior while busy/ }), 'Immediately');
   expect(composerPreferences().getSnapshot()).toBe('steer');
   expect(localStorage.getItem(COMPOSER_PREFERENCE_KEY)).toBe('steer');
   act(() => composerPreferences().setBusyEnter('queue'));
@@ -248,15 +248,16 @@ it('edits an independent named-Agent whole resource with inherited model and ext
   const subject = cfg3Client(); await open(subject, 'Extensions');
   await openResourceModule('subagents');
   await newSubagent('researcher');
-  expect(screen.getByRole('button', { name: 'Inherit default Model' })).toBeTruthy();
+  expect(screen.getByRole('combobox', { name: 'Model' }).textContent).toContain('Inherit default');
   const todo = screen.getByRole('switch', { name: 'Todo' });
   expect(todo.getAttribute('aria-checked')).toBe('false');
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Research a topic' } });
   fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'Read and report findings.' } });
-  fireEvent.click(screen.getByLabelText('read'));
+  const availableTools = within(screen.getByRole('group', { name: 'Built-in tools' }));
+  fireEvent.click(availableTools.getByRole('checkbox', { name: 'read' }));
   fireEvent.click(screen.getByRole('button', { name: 'Clear tools' }));
-  expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false);
-  fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('read_image')); fireEvent.click(todo);
+  expect(availableTools.getByRole('checkbox', { name: 'read' }).getAttribute('aria-checked')).toBe('false');
+  fireEvent.click(availableTools.getByRole('checkbox', { name: 'read' })); fireEvent.click(availableTools.getByRole('checkbox', { name: 'read_image' })); fireEvent.click(todo);
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read', 'read_image'] }, plugins: { todo: { enabled: true } } } } } }));
 });
@@ -437,7 +438,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
   fireEvent.click(await screen.findByRole('button', { name: 'Advanced configuration' }));
   const nativeSchema = () => screen.getByRole('switch', { name: 'Structured output' }) as HTMLInputElement;
   expect(screen.getAllByRole('switch', { name: 'Structured output' })).toHaveLength(1);
-  expect(nativeSchema().checked).toBe(true);
+  expect(nativeSchema().getAttribute('aria-checked')).toBe('true');
   expect((screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
   for (const enabled of [false, true]) {
     fireEvent.click(nativeSchema());
@@ -449,7 +450,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
     await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(reads + 1));
     fireEvent.click(within(await screen.findByRole('listitem', { name: 'main' })).getByRole('button', { name: 'Edit Model' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Advanced configuration' }));
-    await waitFor(() => expect(nativeSchema().checked).toBe(enabled));
+    await waitFor(() => expect(nativeSchema().getAttribute('aria-checked')).toBe(String(enabled)));
     const lastWrite = subject.request.mock.calls.flatMap(([op]) => op.method === 'configuration/sourceWrite' ? [op] : []).at(-1);
     expect(lastWrite).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...inherited, capabilities: { ...inherited.capabilities, json_schema_output: enabled } } } } } });
     expect(subject.source.user.authored!.models!.main.capabilities.json_schema_output).toBe(true);

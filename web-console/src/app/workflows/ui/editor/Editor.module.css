@@ -204,6 +204,8 @@
 .nextAdd:focus-visible, .nextTarget:focus-visible, .nextRemove:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .nextAddIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-xs); background: var(--dsw-alias-bg-layer-1); }
 .nextPicker { z-index: 100; width: min(328px, calc(100vw - 24px)); max-height: min(560px, calc(100vh - 24px)); display: flex; flex-direction: column; box-sizing: border-box; padding: 4px; border: 0; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); color: var(--dsw-alias-label-primary); }
+.nextPicker > [data-slot=popover-viewport] { padding: 0; }
+
 .node {
   position: relative;
   width: 100%;
@@ -668,6 +670,7 @@ name. */
 .modelTriggerBadge { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 16px; text-transform: uppercase; }
 .modelTriggerSettings { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: auto; border-left: 0.5px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
 .modelPopup { z-index: 100; width: min(360px, calc(100vw - 24px)); max-height: min(640px, calc(100vh - 24px)); overflow: auto; box-sizing: border-box; padding: 14px 16px 6px; border: 0; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); color: var(--dsw-alias-label-primary); }
+.modelPopup > [data-slot=popover-viewport] { padding: 0; }
 .modelPopupTitle { margin: 0 0 12px; font-size: 13px; font-weight: 500; }
 .promptMessages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .promptCard { border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover-solid); }

@@ -43,7 +43,7 @@ function AnswerField({ variant, value, disabled, autoFocus, onChange, onKeyDown,
   // sizes an empty final line, so it never passes through the locale.
   return <div className={clsx(css.field, variant === 'inline' ? css.customInline : css.customBlock)}>
     <div aria-hidden className={css.fieldMirror}>{`${value}\n`}</div>
-    <Textarea className={css.fieldInput} value={value} disabled={disabled} rows={1} autoFocus={autoFocus} aria-label={placeholder} placeholder={placeholder} onChange={onChange} onKeyDown={onKeyDown} />
+    <Textarea unstyled className={css.fieldInput} value={value} disabled={disabled} rows={1} autoFocus={autoFocus} aria-label={placeholder} placeholder={placeholder} onChange={onChange} onKeyDown={onKeyDown} />
   </div>;
 }
 /** Composer takeover for one pending native questionnaire. `status` is shown

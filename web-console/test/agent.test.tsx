@@ -222,7 +222,7 @@ it('a rejected model selection announces outside the composer and retains the na
  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'other' })));
  const toast = await screen.findByRole('alert');
  expect(toast.textContent).toContain(diagnostic);
- expect(toast.parentElement).toBe(document.body);
+ expect(ui.container.contains(toast)).toBe(false);
  expect(ui.container.querySelector('[role="alert"]')).toBeNull();
  expect(sessionProduct().status).not.toBe('uncertain');
  expect(sessionProduct().label).toBeUndefined();

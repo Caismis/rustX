@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
+import { NestedPortalContainerContext } from "@/components/ui/popover";
+import { useContext } from "react";
 
 export const Select: typeof SelectPrimitive.Root = SelectPrimitive.Root;
 
@@ -124,8 +126,9 @@ export function SelectPopup({
   alignItemWithTrigger?: SelectPrimitive.Positioner.Props["alignItemWithTrigger"];
   anchor?: SelectPrimitive.Positioner.Props["anchor"];
 }): React.ReactElement {
+  const nestedPortalContainer = useContext(NestedPortalContainerContext);
   return (
-    <SelectPrimitive.Portal {...portalProps}>
+    <SelectPrimitive.Portal container={nestedPortalContainer ?? undefined} {...portalProps}>
       <SelectPrimitive.Positioner
         align={align}
         alignItemWithTrigger={alignItemWithTrigger}

@@ -312,7 +312,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "09718d2077c5c82ef842bbcfae5254204feac4f6b581bdf91ed98c4c6287b7ac",
+      "local_sha256": "27c9bc88447a9265956a47f5aeb2d81538b01b94ca54af62164c4eed78e9fdbb",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -1503,7 +1503,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e031491f3f06461b3cf09c02046191ebf9466983bad27539f1fc89dabd699d1b",
+      "local_sha256": "15cf051c285b8af306b88e164cca36deb2037d5800edca801e1c1d9c23efaed7",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1525,15 +1525,14 @@
         "../../locale/react",
         "../primitives/DialogSurface",
         "../primitives/MenuGroup",
-        "../primitives/MenuSurface",
         "../primitives/StateDot",
         "../primitives/icons",
         "../primitives/rank-by-name",
         "./ModelSelect.module.css",
+        "@/components/ui/popover",
         "@/presentation/primitives/Input",
         "clsx",
-        "react",
-        "react-dom"
+        "react"
       ],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1541,7 +1540,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "fd27738d5be5af066809f8a943760a50ff985b548e5444c47cf30bfab855418f",
+      "local_sha256": "bd6fbb064726933bae8c3f654404d9a10c37dbc8bbb67e5f5186987d48eacf7c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",

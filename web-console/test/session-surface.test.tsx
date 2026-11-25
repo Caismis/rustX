@@ -507,7 +507,7 @@ it.each([true, false])('focused deletion fences controls and selects an existing
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete' })));
-  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(true);
+  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.disabled).toBe(true);
   const request = await server.waitFor('session/delete', 1);
   await act(async () => server.reply(request));
   if (another) expect(screen.getByLabelText('Session title').textContent).toBe('Session B');

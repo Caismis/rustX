@@ -2,12 +2,15 @@
 
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import type React from "react";
+import { createContext, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 export const PopoverCreateHandle: typeof PopoverPrimitive.createHandle =
   PopoverPrimitive.createHandle;
 
 export const Popover: typeof PopoverPrimitive.Root = PopoverPrimitive.Root;
+
+export const NestedPortalContainerContext = createContext<React.RefObject<HTMLElement | null> | null>(null);
 
 export function PopoverTrigger({
   className,
@@ -49,6 +52,7 @@ export function PopoverPopup({
   positionMethod?: PopoverPrimitive.Positioner.Props["positionMethod"];
   collisionPadding?: PopoverPrimitive.Positioner.Props["collisionPadding"];
 }): React.ReactElement {
+  const popupRef = useRef<HTMLDivElement | null>(null);
   return (
     <PopoverPrimitive.Portal {...portalProps}>
       <PopoverPrimitive.Positioner
@@ -63,6 +67,7 @@ export function PopoverPopup({
         sideOffset={sideOffset}
       >
         <PopoverPrimitive.Popup
+          ref={popupRef}
           className={cn(
             "relative flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) rounded-lg border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 outline-none transition-[width,height,scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] has-data-[slot=calendar]:rounded-xl has-data-[slot=calendar]:before:rounded-[calc(var(--radius-xl)-1px)] data-starting-style:scale-98 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             tooltipStyle &&
@@ -81,7 +86,9 @@ export function PopoverPopup({
             )}
             data-slot="popover-viewport"
           >
-            {children}
+            <NestedPortalContainerContext.Provider value={popupRef}>
+              {children}
+            </NestedPortalContainerContext.Provider>
           </PopoverPrimitive.Viewport>
         </PopoverPrimitive.Popup>
       </PopoverPrimitive.Positioner>

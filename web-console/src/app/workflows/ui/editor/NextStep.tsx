@@ -1,7 +1,5 @@
 import { branchPortLabel } from '../../document/branch';
-import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import type { WorkflowToolChoice } from '../../../../../../protocol/app-server/v80';
@@ -16,6 +14,7 @@ import { viewId, type Selection } from './selection';
 import { chosenNode, NodeChooser, type Choice } from './NodeChooser';
 import type { Edit } from './panels/shared';
 import css from './Editor.module.css';
+import { Popover, PopoverPopup } from '@/components/ui/popover';
 
 type Port = ControlPort;
 /** The vertical middle of the 34px source tile. */
@@ -49,10 +48,6 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
   const ports: readonly Port[] = sourceNode ? portsOf(sourceNode) : [];
   const [openPort, setOpenPort] = useState<Port>();
   const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null);
-  const { refs, floatingStyles, isPositioned } = useFloating({
-    open: !!openPort, placement: 'left-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
-    middleware: [offset(8), flip({ fallbackPlacements: ['right-start'], crossAxis: false }), shift({ padding: 12, crossAxis: true })],
-  });
   // As Dify's next-step Line: one SVG connector from the source tile to each
   // port, meeting a labelled port at its label, as Dify's branch rows do.
   const portList = useRef<HTMLDivElement>(null), [anchors, setAnchors] = useState<number[]>([]);
@@ -76,11 +71,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
   useEffect(() => {
     if (!openPort) return;
     const frame = requestAnimationFrame(() => input.current?.focus());
-    const outside = (event: PointerEvent) => {
-      if (!panel.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpenPort(undefined);
-    };
-    window.document.addEventListener('pointerdown', outside);
-    return () => { cancelAnimationFrame(frame); window.document.removeEventListener('pointerdown', outside); };
+    return () => cancelAnimationFrame(frame);
   }, [openPort]);
   if (!ports.length) return null;
 
@@ -96,7 +87,6 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
   function open(port: Port, element: HTMLButtonElement) {
     if (openPort === port) { close(true); return; }
     trigger.current = element;
-    refs.setReference(element);
     setOpenPort(port);
   }
   function remove(port: Port, target: string) {
@@ -133,7 +123,7 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
     if (added) onSelect({ kind: 'node', id: added, path: block });
   }
 
-  return <section className={css.nextSection} aria-label={tx('workflows:inspector.next-step')}>
+  return <Popover open={!!openPort} onOpenChange={(next, details) => { if (!next) close(details.reason === 'escape-key'); }}><section className={css.nextSection} aria-label={tx('workflows:inspector.next-step')}>
     <h3 className={css.nextHeading}>{tx('workflows:inspector.next-step')}</h3>
     <p className={css.nextHint}>{tx('workflows:next-step.hint')}</p>
     <div className={clsx(css.nextFlow, sourceNode?.type === 'branch' && css.branchNextFlow)}>
@@ -164,11 +154,11 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
         })}
       </div>
     </div>
-    {openPort && createPortal(<div ref={element => { panel.current = element; refs.setFloating(element); }} className={css.nextPicker}
-      style={{ ...floatingStyles, visibility: isPositioned ? 'visible' : 'hidden' }} role="dialog" aria-label={tx('workflows:next-step.picker')}
-      onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); close(true); } }}>
+    {openPort && <PopoverPopup ref={panel} className={css.nextPicker} role="dialog" aria-label={tx('workflows:next-step.picker')}
+      anchor={trigger} positionMethod="fixed" side="left" align="start" sideOffset={8} collisionPadding={12}
+      initialFocus={false} finalFocus={() => false}>
       <NodeChooser tools={tools} input={input} preview="left" omit={unavailableKinds(document, block)} onChoose={choose}
         existing={Object.keys(owner.nodes).filter(id => id !== sourceId && owner.nodes[id].type !== 'start' && (!openPort || !targetsFor(openPort).includes(id))).map(id => ({ id, title: nodeTitle(id), kind: owner.nodes[id].type as NodeKind }))} />
-    </div>, window.document.body)}
-  </section>;
+    </PopoverPopup>}
+  </section></Popover>;
 }

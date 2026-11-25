@@ -1,6 +1,4 @@
-import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { WorkflowModelPolicy, WorkflowModelChoices, WorkflowModelChoicesQuery } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
 import { encodeField, type FieldAddress, type FieldStep } from '../../../document/fields';
@@ -9,6 +7,7 @@ import { IconSettingsOutline14 } from '../../../../../presentation/primitives/ic
 import { KindIcon } from '../../icons';
 import { JsonField, NumberField, SelectField } from './fields';
 import css from '../Editor.module.css';
+import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
 
 type Query = { type: 'models' } | { type: 'profiles'; model: string };
 interface ChoiceOwner { readonly port: WorkflowScopePort; readonly key: string; active: boolean; request: number }
@@ -58,33 +57,24 @@ export function ModelSelection(props: {
   onChange: (value: WorkflowModelPolicy, field: readonly FieldStep[]) => void;
 }) {
   const tx = useTranslation(), { policy } = props, [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
-  const { refs, floatingStyles } = useFloating({
-    open, placement: 'left-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
-    middleware: [offset(12), flip({ fallbackPlacements: ['bottom-end'], crossAxis: false }), shift({ padding: 12 })],
-  });
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => { if (!popup.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpen(false); };
-    window.document.addEventListener('pointerdown', outside);
-    return () => window.document.removeEventListener('pointerdown', outside);
-  }, [open]);
+  const trigger = useRef<HTMLButtonElement>(null);
   const selected = policy.mode === 'explicit' ? policy : undefined;
   return <section className={css.group}>
     <h3 className={css.groupHeading}>{tx('workflows:card.model')}<span className={css.required} aria-hidden>*</span></h3>
-    <button ref={element => { trigger.current = element; refs.setReference(element); }} type="button" className={css.modelTrigger} aria-haspopup="dialog" aria-expanded={open}
-      aria-invalid={selected && !selected.model || undefined} aria-label={tx('workflows:prompt.model-parameters')} onClick={() => setOpen(value => !value)}>
-      <span className={`${css.modelTriggerIcon} ${css.kind_model}`}><KindIcon kind="model" size={14} /></span>
-      <span className={css.modelTriggerName}>{selected ? selected.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session')}</span>
-      {selected?.profile && <span className={css.modelTriggerBadge}>{selected.profile}</span>}
-      <span className={css.modelTriggerSettings} aria-hidden><IconSettingsOutline14 /></span>
-    </button>
-    {open && createPortal(<div ref={element => { popup.current = element; refs.setFloating(element); }} className={css.modelPopup} role="dialog" aria-label={tx('workflows:prompt.model-parameters')}
-      style={floatingStyles}
-      onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); } }}>
-      <h4 className={css.modelPopupTitle}>{tx('workflows:prompt.model-parameters')}</h4>
-      <ModelParameters {...props} />
-    </div>, window.document.body)}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger ref={trigger} className={css.modelTrigger}
+        aria-invalid={selected && !selected.model || undefined} aria-label={tx('workflows:prompt.model-parameters')}>
+        <span className={`${css.modelTriggerIcon} ${css.kind_model}`}><KindIcon kind="model" size={14} /></span>
+        <span className={css.modelTriggerName}>{selected ? selected.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session')}</span>
+        {selected?.profile && <span className={css.modelTriggerBadge}>{selected.profile}</span>}
+        <span className={css.modelTriggerSettings} aria-hidden><IconSettingsOutline14 /></span>
+      </PopoverTrigger>
+      <PopoverPopup className={css.modelPopup} positionMethod="fixed" side="left" align="start" sideOffset={12} collisionPadding={12}
+        role="dialog" aria-label={tx('workflows:prompt.model-parameters')} finalFocus={() => trigger.current ?? false}>
+        <h4 className={css.modelPopupTitle}>{tx('workflows:prompt.model-parameters')}</h4>
+        <ModelParameters {...props} />
+      </PopoverPopup>
+    </Popover>
   </section>;
 }
 

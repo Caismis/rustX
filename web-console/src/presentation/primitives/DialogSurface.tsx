@@ -20,18 +20,6 @@ export const useOverlayActive = () => useContext(OverlayActiveContext);
  * pages keep editing state without activating a modal or restoring its focus. */
 export function OverlayScope({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
   const [portal, setPortal] = useState<HTMLDivElement | null>(null);
-  const [layer] = useState(() => Symbol('dialog-surface'));
-  useEffect(() => {
-    if (!open || !active) return;
-    if (!surfaceLayers.length) rootWasInert = document.getElementById('root')?.inert ?? false;
-    surfaceLayers.push(layer);
-    isolateRoot();
-    return () => {
-      const index = surfaceLayers.indexOf(layer);
-      if (index >= 0) surfaceLayers.splice(index, 1);
-      isolateRoot();
-    };
-  }, [open, active, layer]);
   return <OverlayActiveContext value={active}><DialogPortalContext value={portal}>
     <div className={className} hidden={!active} inert={!active}>{portal && children}</div>
     {createPortal(<div ref={setPortal} hidden={!active} inert={!active}/>, document.body)}

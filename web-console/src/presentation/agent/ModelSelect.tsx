@@ -1,16 +1,15 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-model-selection/ModelSelect; see PROVENANCE.md. */
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../locale/react';
 import { useDialogPortal } from '../primitives/DialogSurface';
-import { MenuSurface } from '../primitives/MenuSurface';
 import { MenuGroup, observeStickyMenuGroups } from '../primitives/MenuGroup';
 import { rankByName } from '../primitives/rank-by-name';
 import { StateDot } from '../primitives/StateDot';
 import { IconCheckOutline16, IconCloseFill14, IconDataOutline16, IconChevronDownOutline14, IconChevronRightOutline14 } from '../primitives/icons';
 import css from './ModelSelect.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Popover, PopoverPopup } from '@/components/ui/popover';
 
 export interface ModelChoice { id: string; profiles: { id: string; label: string }[]; defaultProfile?: string }
 /** Exact native configuration intent. Choosing the current Model keeps its
@@ -44,7 +43,6 @@ export function modelEffortChoices(tx: Translate, choice: ModelChoice, current?:
  ];
 }
 type Pane = 'root' | 'model' | 'effort';
-const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 };
 
 /** DSH's single-card Model / Thinking effort panes over rustX's native catalog.
  * Pending selections keep their pane, rows and confirmed trigger label until
@@ -65,7 +63,6 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
  }
  const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
  const groups = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null);
- const [position, setPosition] = useState<CSSProperties | null>(null);
  const lastAction = useRef<'load' | 'select'>('load');
  const focusPane = useRef<'drill' | 'model' | 'effort' | undefined>(undefined);
  const inFlight = useRef<{ owner: object } | undefined>(undefined);
@@ -104,35 +101,15 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
    if (ownership.current === at) setPending(undefined);
   }
  };
- useEffect(() => {
-  if (!open) return;
-  const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !menu.current?.contains(event.target as Node)) close(); };
-  document.addEventListener('pointerdown', outside);
-  return () => document.removeEventListener('pointerdown', outside);
- }, [open]);
- useLayoutEffect(() => {
-  if (!open) { setPosition(null); return; }
-  const place = () => {
-   const rect = trigger.current?.getBoundingClientRect(), card = menu.current;
-   if (!rect || !card) return;
-   const left = Math.max(12, Math.min(rect.right - card.offsetWidth, innerWidth - card.offsetWidth - 12));
-   const top = Math.max(12, Math.min(rect.top - 8 - card.offsetHeight, innerHeight - card.offsetHeight - 12));
-   setPosition(previous => previous?.left === left && previous?.top === top ? previous : { left, top });
-  };
-  place(); window.addEventListener('scroll', place, true); window.addEventListener('resize', place);
-  const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(place);
-  if (menu.current) observer?.observe(menu.current);
-  return () => { observer?.disconnect(); window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
- }, [open, pane, choices, loading, error, query]);
  useLayoutEffect(() => {
   const intent = focusPane.current ?? (previousSearch.current !== showSearch && pane === 'model' ? 'drill' : undefined);
-  if (!open || !position || !intent) return;
+  if (!open || !intent) return;
   previousSearch.current = showSearch; focusPane.current = undefined;
   const target = intent !== 'drill' ? menu.current?.querySelector<HTMLElement>(`[data-pane="${intent}"]`)
    : pane === 'model' && showSearch ? search.current
    : menu.current?.querySelector<HTMLElement>('[aria-checked="true"]:not(:disabled)') ?? menu.current?.querySelector<HTMLElement>('[role="menuitemradio"]:not(:disabled)');
   (target ?? trigger.current)?.focus();
- }, [open, pane, showSearch, position !== null]);
+ }, [open, pane, showSearch]);
  useEffect(() => { if (groups.current) return observeStickyMenuGroups(groups.current); }, [open, pane, modelGroups]);
  useLayoutEffect(() => {
   if (open && pane === 'model') document.getElementById(`${id}-model-${activeIndex}`)?.scrollIntoView?.({ block: 'nearest' });
@@ -170,7 +147,7 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
   {current && !loading && !selected && <div className={css.warning} role="status">{current} {tx('agent:model-select.is-unavailable-in-this-workspace')}</div>}
   {selected && !loading && profileUnavailable(selected, profile) && <div className={css.warning} role="status">{tx('agent:model-select.effort')} {profile} {tx('agent:model-select.is-unavailable-for')} {current} {tx('agent:model-select.in-this-workspace')}</div>}
  </>;
- return <div ref={root} className={css.root} onKeyDown={onKeyDown}
+ return <Popover open={open} onOpenChange={(next, details) => { if (!next && !(details.reason === 'escape-key' && pane !== 'root')) close(details.reason === 'escape-key'); }}><div ref={root} className={css.root} onKeyDown={onKeyDown}
   onBlur={event => { if (!(event.relatedTarget instanceof Node && (root.current?.contains(event.relatedTarget) || menu.current?.contains(event.relatedTarget)))) close(); }}
   onMouseDown={event => { if (event.target instanceof Element && event.target.closest('button')) event.preventDefault(); }}>
   <button ref={trigger} data-model-select="" type="button" className={css.trigger} aria-label={tx('agent:model-select.model-and-effort')} title={[current ?? tx('agent:model-select.choose-model'), effortLabel].filter(Boolean).join(' · ')}
@@ -182,7 +159,9 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
    {effortLabel && <span className={css.triggerEffort}>{effortLabel}</span>}
    <span className={css.triggerIndicator}>{busy ? <StateDot state="ongoing"/> : <IconChevronDownOutline14 className={clsx(css.chevron, open && css.chevronOpen)}/>}</span>
   </button>
-  {open && createPortal(<MenuSurface ref={menu} id={`${id}-menu`} data-model-menu="" data-pane={pane} className={css.menu} style={position ?? MEASURE_STYLE} role="menu" aria-label={tx('agent:model-select.model-and-effort')} aria-busy={loading || busy}>
+  {open && <PopoverPopup ref={menu} id={`${id}-menu`} data-model-menu="" data-pane={pane} className={css.menu} role="menu" aria-label={tx('agent:model-select.model-and-effort')} aria-busy={loading || busy}
+   anchor={trigger} positionMethod="fixed" side="top" align="end" sideOffset={8} collisionPadding={12} initialFocus={false} finalFocus={() => false} portalProps={{ container: portal }}
+   onKeyDownCapture={event => { if (event.key === 'Escape' && pane !== 'root' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); back(); } }}>
    {pane === 'root' && <>
     <button type="button" role="menuitem" aria-label={tx('agent:model-select.model')} data-pane="model" className={css.cell} onClick={() => drill('model')}><span className={css.cellLabel}>{tx('agent:model-select.model')}</span><span className={css.cellValue}>{current}</span><IconChevronRightOutline14 className={css.cellChevron}/></button>
     {!!efforts.length && <button type="button" role="menuitem" aria-label={tx('agent:model-select.effort')} data-pane="effort" className={css.cell} onClick={() => drill('effort')}><span className={css.cellLabel}>{tx('agent:model-select.effort')}</span><span className={css.cellValue}>{effortLabel ?? modelDefaultLabel(tx, selected!)}</span><IconChevronRightOutline14 className={css.cellChevron}/></button>}
@@ -205,6 +184,6 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
    {pane === 'effort' && efforts.map(row => <button type="button" role="menuitemradio" aria-checked={effortChecked(row)} key={row.key} className={css.option} disabled={disabled || loading || busy} onClick={() => void submit(row.intent)}><span className={css.optionCopy}><span className={css.modelName}>{row.label}</span></span><span className={css.check}>{pendingRow(row.intent) ? <StateDot state="ongoing"/> : effortChecked(row) && <IconCheckOutline16/>}</span></button>)}
    {status}
    {error && lastAction.current === 'select' && !busy && <button type="button" className={css.option} disabled={disabled} onClick={() => { lastAction.current = 'load'; load(true); }}>{tx('agent:agent-controls.reread-models')}</button>}
-  </MenuSurface>, portal)}
- </div>;
+  </PopoverPopup>}
+ </div></Popover>;
 }
