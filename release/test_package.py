@@ -1,4 +1,4 @@
-"""Exercise package path preflight without compiling a release."""
+"""Exercise package preflight and build commands without compiling a release."""
 
 from contextlib import redirect_stderr
 import io
@@ -12,6 +12,25 @@ import package
 
 
 class PackagePaths(unittest.TestCase):
+    def test_native_server_targets_use_their_release_codegen(self):
+        target = Path("/tmp/isolated-server-build")
+        for system, extra in (
+            ("Linux", ()),
+            ("Darwin", ("--config", "profile.release.package.rustx.codegen-units=16")),
+        ):
+            with (
+                self.subTest(system=system),
+                patch.object(package.platform, "system", return_value=system),
+                patch.object(package, "audit") as audit,
+                patch.object(package, "run") as build,
+            ):
+                package.build_server(target)
+                audit.assert_called_once_with("rustx", {"rustx-execution-client"}, target / "dependency-audit")
+                build.assert_called_once_with(
+                    "cargo", "build", "--locked", "--release", *extra, "--target-dir", str(target),
+                    "-p", "rustx", "--bin", "rustx", "--bin", "workflow-renderer",
+                )
+
     def test_each_unignored_path_fails_before_build_or_output_creation(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory).resolve()

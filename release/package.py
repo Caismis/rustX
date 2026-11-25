@@ -65,7 +65,10 @@ def audit(package: str, forbidden: set[str], directory: Path) -> None:
 
 def build_server(target: Path) -> None:
     audit("rustx", {"rustx-execution-client"}, target / "dependency-audit")
-    run("cargo", "build", "--locked", "--release", "--target-dir", str(target),
+    # The native macOS runner spent the remainder of its three-hour gate in
+    # the single rustx LLVM unit. Use Cargo's normal release partitioning there.
+    codegen = ("--config", "profile.release.package.rustx.codegen-units=16") if platform.system() == "Darwin" else ()
+    run("cargo", "build", "--locked", "--release", *codegen, "--target-dir", str(target),
         "-p", "rustx", "--bin", "rustx", "--bin", "workflow-renderer")
 
 

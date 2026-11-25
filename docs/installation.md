@@ -166,6 +166,10 @@ python3 test-support/measure_execution_reads.py /path/to/rustx-client/bin/rustx-
 ```
 
 
+The macOS packager builds the optimized Server with 16 Cargo codegen units
+for the `rustx` package. The partitioning bounds the native runner's single
+LLVM-unit workload during the release build.
+
 For the native macOS release check, run the same packager and verifier through
 `python3 release/verify_macos.py --out /absolute/path/to/packages`. The
 local run needs the Fake Provider fixture initialized with
