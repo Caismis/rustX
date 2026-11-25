@@ -5,8 +5,8 @@ import type { ConnectionController } from '../../connection/controller';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { Input } from '../../presentation/primitives/Input';
+import { EnumSelect } from '../../presentation/primitives/EnumSelect';
 import { StateDot } from '../../presentation/primitives/StateDot';
-import { IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import { SettingsGroup, SettingsRow } from '../../presentation/settings/SettingsPageShell';
 import { SettingsNotice } from './SettingsFeedback';
 import css from './ConnectionSettings.module.css';
@@ -51,19 +51,17 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
           vertical
           label={<label htmlFor={modeId} className={css.fieldLabel}>{tx('settings:connection-settings.mode')}</label>}
         >
-          <div className={css.selectWrap}>
-            <select
-              id={modeId}
-              className={css.select}
-              aria-label={tx('settings:connection-settings.connection-mode')}
-              value={selection.selectedMode}
-              onChange={event => { setToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}
-            >
-              <option value="local">{tx('settings:connection-settings.local-managed-connection')}</option>
-              <option value="remote">{tx('settings:connection-settings.remote-app-server')}</option>
-            </select>
-            <span className={css.selectChevron} aria-hidden="true"><IconChevronDownOutline14 /></span>
-          </div>
+          <EnumSelect
+            id={modeId}
+            className={css.select}
+            label={tx('settings:connection-settings.connection-mode')}
+            value={selection.selectedMode}
+            onChange={value => { setToken(''); void connection.select(value); }}
+            options={[
+              { value: 'local', label: tx('settings:connection-settings.local-managed-connection') },
+              { value: 'remote', label: tx('settings:connection-settings.remote-app-server') },
+            ]}
+          />
         </SettingsRow>
         {selection.selectedMode === 'remote' ? (
           <>

@@ -7,6 +7,7 @@ import { languageForPath } from '../../presentation/primitives/file-language';
 import { grammarLoadCount, highlightLines, subscribeGrammarLoaded } from '../../presentation/markdown/highlight';
 import { useCopyFeedback } from '../../presentation/primitives/use-copy-feedback';
 import { Button } from '../../presentation/primitives/Button';
+import { EnumSelect } from '../../presentation/primitives/EnumSelect';
 import css from './ChangesReview.module.css';
 
 function PreviewCopy({text}: {text: string}) {
@@ -87,7 +88,7 @@ export function ChangesReview({request,visible}: {request:ChangesReviewRequest;v
   const tx=useTranslation(), [index,setIndex]=useState(request.index);
   useLayoutEffect(()=>setIndex(request.index),[request]);
   return <section className={css.root} aria-label={tx('artifacts:changes.open-review')} data-changes-review>
-    <label className={css.selector}>{tx('artifacts:changes.select-file')}<select value={index} onChange={event=>setIndex(Number(event.currentTarget.value))}>{request.summary.files.map((file,i)=><option key={i} value={i}>{file.display} (+{file.added} -{file.deleted})</option>)}</select></label>
+    <label className={css.selector}>{tx('artifacts:changes.select-file')}<EnumSelect label={tx('artifacts:changes.select-file')} value={String(index)} onChange={value=>setIndex(Number(value))} options={request.summary.files.map((file,i)=>({value:String(i),label:`${file.display} (+${file.added} -${file.deleted})`}))}/></label>
     <div className={css.body}><ChangeComparison request={request} index={index} visible={visible}/></div>
   </section>;
 }

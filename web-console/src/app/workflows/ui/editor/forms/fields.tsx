@@ -9,6 +9,7 @@ import { IconQuestionOutline14 } from '../../../../../presentation/primitives/ic
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
 import css from '../Editor.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
+import { EnumSelect } from '@/presentation/primitives/EnumSelect';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {
   const id = useId(), hintId = `${id}-hint`;
@@ -161,9 +162,7 @@ export function KeyField({ label, hint, value, address, rename, onRenamed, error
 }
 
 export function SelectField<T extends string>({ label, value, options, onChange, hint, disabled, field }: { field?: string; label: string; value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void; hint?: ReactNode; disabled?: boolean }) {
-  return <Field label={label} hint={hint}>{(id, describedBy) => <select id={id} data-workflow-field={field} aria-describedby={describedBy} className={css.input} disabled={disabled} value={value} onChange={event => onChange(event.target.value as T)}>
-    {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-  </select>}</Field>;
+  return <Field label={label} hint={hint}>{(id, describedBy) => <EnumSelect id={id} data-workflow-field={field} aria-describedby={describedBy} className={css.input} disabled={disabled} label={label} value={value} options={options} onChange={onChange} />}</Field>;
 }
 
 /** A panel group. As Dify, `help` explains it in a "?" tooltip. */
