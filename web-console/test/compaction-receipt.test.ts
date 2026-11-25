@@ -65,9 +65,10 @@ it('keeps a failure first seen when reconnect reveals a checkpoint of unknown re
   expect(view.container.querySelector('[data-compaction-operation="unseen"]')).toBeTruthy();
 });
 
-it('retains dismissal across a replaced attachment and seat remount while showing a first-seen failure', async () => {
+it('retains dismissal across a seat remount and branch round trip while showing a first-seen failure', async () => {
   server = new Server();
   await server.attached('A');
+  const originalNode = server.client.getSnapshot().views.A.nodeId!;
   const seat = () => createElement(ContextSeat, { client: server.client, sessionId: 'A' });
   const earlier = operation('earlier', '1', 'failed');
   const context = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [earlier] };
@@ -80,9 +81,19 @@ it('retains dismissal across a replaced attachment and seat remount while showin
   view.unmount();
 
   const unknown = operation('unknown-order', '2', 'failed');
+  const branch = { ...snapshot('branch-B'), context };
+  server.nodeSnapshots.set('branch-B-node', branch);
+  await server.client.switchNode('A', 'branch-B-node');
+  await server.client.attach('A', 'branch-B-node');
+  await server.client.waitForAttachment('A', () => true);
+  expect(server.client.getSnapshot().views.A.snapshot?.conversation_id).toBe(branch.conversation_id);
+  const other = render(seat());
+  expect(other.container.querySelector('[data-compaction-operation="earlier"]')).toBeTruthy();
+  other.unmount();
+  await server.client.switchNode('A', originalNode);
   await server.client.release('A');
   server.snapshots.set('A', { ...snapshot(), context: { ...checkpoint, compaction_operations: [earlier, unknown] } });
-  await server.client.attach('A');
+  await server.client.attach('A', originalNode);
   await server.client.waitForAttachment('A', () => true);
   const reopened = render(seat());
   expect(reopened.container.querySelector('[data-compaction-operation="earlier"]')).toBeNull();

@@ -324,6 +324,47 @@ async fn idle_install_defers_when_rearmed_user_reminder_exceeds_fit_boundary() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_idle_inbox_probe_publishes_a_terminal_failure_without_activating() {
+    let fixture = ready_fixture().await;
+    set_input_limit(&fixture, fixture.with_reminder);
+    let mailbox = &fixture.runtime.inner.mailbox;
+    assert!(mailbox.select_pending_batch().unwrap().is_none());
+    mailbox.arm_pending_probe_failures(1);
+    install_at_idle(&fixture).await;
+    assert!(
+        fixture
+            .runtime
+            .inner
+            .store
+            .projection_head()
+            .unwrap()
+            .is_none()
+    );
+    {
+        let state = fixture.work.state.lock().unwrap();
+        assert_eq!(state.status.phase, CompactionOperationPhase::Failed);
+        assert_eq!(state.published.as_ref(), Some(&state.status));
+        assert!(
+            state
+                .status
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .contains("injected pending-inbox probe failure")
+        );
+    }
+    fixture.runtime.inner.reap_async_compaction(true).await;
+    assert!(
+        fixture
+            .runtime
+            .inner
+            .async_work(&fixture.admission)
+            .is_none()
+    );
+    fixture.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_install_prices_rearmed_user_reminder_and_commits_only_checkpoint() {
     let fixture = ready_fixture().await;
     set_input_limit(&fixture, fixture.with_reminder);

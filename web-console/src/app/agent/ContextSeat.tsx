@@ -28,7 +28,7 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
   const facts = useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { context: view?.snapshot?.context, request: view?.compactionRequest,
-      dismissed: view?.compactionNotices?.dismissed,
+      dismissed: view?.snapshot && view.compactionNotices?.get(view.snapshot.conversation_id)?.dismissed,
       current: state.connection === 'connected' && view?.attachment === 'attached' };
   }, sameValue);
   const context = facts.current ? facts.context : undefined;

@@ -590,13 +590,26 @@ impl RuntimeInner {
             let Ok(sections) = resources.context_assembly().system_sections(&native) else {
                 return;
             };
-            let Some(delivery) = RuntimeCompactionCoordinator::take_selected(self, None, true)
+            let Some(selection) = RuntimeCompactionCoordinator::take_selected(self, None, true)
             else {
                 return;
             };
-            let ready = match delivery {
-                CompactionDelivery::Ready(ready) => ready,
-                CompactionDelivery::Failed(_) => return,
+            let ready = match selection {
+                Ok(CompactionDelivery::Ready(ready)) => ready,
+                Ok(CompactionDelivery::Failed(_)) => return,
+                Err((operation, diagnostic)) => {
+                    // Keep shutdown behind this terminal publication even
+                    // though no foreground installation was started.
+                    let admission = self.lifecycle.try_enter_running();
+                    drop(state);
+                    let disposition = if admission.is_ok() {
+                        CompactionDisposition::Failed(diagnostic)
+                    } else {
+                        CompactionDisposition::Cancelled
+                    };
+                    let _ = coordinator.settle(&operation, disposition);
+                    return;
+                }
             };
             let Ok(admission) = self.lifecycle.try_enter_running() else {
                 drop(state);
@@ -793,7 +806,7 @@ impl RuntimeCompactionCoordinator {
         inner: &RuntimeInner,
         admission: Option<&CompactionAdmission>,
         idle: bool,
-    ) -> Option<CompactionDelivery> {
+    ) -> Option<Result<CompactionDelivery, (CompactionAdmission, String)>> {
         let work = inner
             .async_compaction
             .lock()
@@ -820,8 +833,16 @@ impl RuntimeCompactionCoordinator {
                     // Serialize the empty-inbox check and the idle claim with
                     // acceptance, including producers outside the coordinator.
                     let pending = inner.mailbox.pending_publication();
-                    if !matches!(inner.mailbox.has_pending(), Ok(false)) {
-                        return None;
+                    match inner.mailbox.has_pending() {
+                        Ok(true) => return None,
+                        Err(error) => {
+                            state.phase = Phase::Installing(generated.clone());
+                            return Some(Err((
+                                work.admission.clone(),
+                                format!("idle compaction could not check pending input: {error}"),
+                            )));
+                        }
+                        Ok(false) => {}
                     }
                     Some(pending)
                 } else {
@@ -829,16 +850,16 @@ impl RuntimeCompactionCoordinator {
                 };
                 let generated = generated.clone();
                 state.phase = Phase::Installing(generated.clone());
-                Some(CompactionDelivery::Ready(ReadyCompaction {
+                Some(Ok(CompactionDelivery::Ready(ReadyCompaction {
                     admission: work.admission.clone(),
                     generated,
-                }))
+                })))
             }
             Phase::Failed(error) if state.status.phase == CompactionOperationPhase::Failed => {
                 let error = error.clone();
                 state.phase = Phase::Terminal;
                 inner.wake.notify.notify_one();
-                Some(CompactionDelivery::Failed(error))
+                Some(Ok(CompactionDelivery::Failed(error)))
             }
             _ => None,
         }
@@ -1198,7 +1219,10 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
 
     fn take_ready(&self) -> Option<CompactionDelivery> {
         let inner = self.0.upgrade()?;
-        Self::take_selected(&inner, None, false)
+        Self::take_selected(&inner, None, false).map(|selection| {
+            selection
+                .unwrap_or_else(|_| unreachable!("foreground selection does not read the inbox"))
+        })
     }
 
     fn active(&self) -> Option<CompactionAdmission> {
@@ -1352,7 +1376,9 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
                 tokio::pin!(changed);
                 changed.as_mut().enable();
                 if let Some(delivery) = Self::take_selected(&inner, Some(admission), false) {
-                    return Some(delivery);
+                    return Some(delivery.unwrap_or_else(|_| {
+                        unreachable!("foreground selection does not read the inbox")
+                    }));
                 }
                 let terminal = matches!(
                     work.state
