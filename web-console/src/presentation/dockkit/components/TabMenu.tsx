@@ -85,7 +85,13 @@ export function TabMenu({ labels, anchor, onClose, onDismiss, extras }: TabMenuP
         sideOffset={MENU_GAP}
         collisionPadding={MENU_GAP}
         initialFocus={false}
-        finalFocus={() => false}
+        // Base UI treats the returned element as a focus container rather than the
+        // target itself, so restoration focuses the chip here and opts out.
+        finalFocus={() => {
+          const target = anchorRef.current
+          if (target?.isConnected) focusWithoutRing(target)
+          return false
+        }}
         // React bubbles a portal's events to its tab chip, so both halves of a
         // press must stop here: the press would otherwise start a tab drag and
         // capture the pointer, which retargets the release and swallows this

@@ -553,6 +553,9 @@
   min-width: 96px;
   padding: 4px;
   border: 0.5px solid var(--dsw-alias-border-l2);
+  /* The coss popup surface defaults to its own smaller radius; the dockkit
+     menu keeps the Harness surface radius the pre-migration MenuSurface drew. */
+  border-radius: var(--dsw-radius-lg);
 }
 
 .menu > [data-slot=popover-viewport] { padding: 0; }
