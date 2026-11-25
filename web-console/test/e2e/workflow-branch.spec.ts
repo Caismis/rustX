@@ -144,7 +144,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
     await expect(page).toHaveTitle(/rustX$/);
     const settings = inspector(page).getByRole('region', { name: 'Settings', exact: true });
-    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toContainText('contains');
+    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toHaveAttribute('data-value', 'contains');
     const operand = () => settings.getByRole('group', { name: 'Right', exact: true })
       .getByRole('group', { name: 'id', exact: true }).getByLabel('Literal JSON', { exact: true });
     await expect(operand()).toHaveValue('"x"');
@@ -163,7 +163,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
     await expect(operand()).toHaveValue('"y"');
-    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toContainText('contains');
+    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toHaveAttribute('data-value', 'contains');
     expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);

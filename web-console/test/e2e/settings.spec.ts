@@ -28,7 +28,7 @@ test('Workspace settings save permissions and features, and keep configuration r
     await openSettingsPage(page, 'Tools & Permissions');
     await enableWorkspaceCustomization(page);
     const tools = settings.getByRole('form', { name: 'Built-in tools', exact: true });
-    await tools.getByLabel('read', { exact: true }).uncheck();
+    await tools.getByRole('switch', { name: 'read', exact: true }).uncheck();
     await settledSetting(tools);
     await expect(settings.getByRole('form',{name:'Available skills',exact:true})).toHaveCount(0);
     await expect(settings.getByRole('note', { name: 'Agent controls' })).toHaveCount(0);
@@ -37,7 +37,8 @@ test('Workspace settings save permissions and features, and keep configuration r
     await settings.getByRole('tab', { name: 'Built-in', exact: true }).click();
     await enableWorkspaceCustomization(page);
     const todo = settings.getByRole('switch', { name: 'Enable Todo', exact: true });
-    await todo.locator('xpath=ancestor::label').click();
+    // The settings row itself is the click target that actuates the toggle.
+    await todo.locator('xpath=..').click();
     await settledSetting(todo.locator('xpath=ancestor::form'));
     await expect(todo).toBeEnabled();
     await expect(todo).toBeChecked();

@@ -62,7 +62,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     // Scalar units commit on change; the form settles when the write lands.
     await settledSetting(settings.getByRole('form', { name: 'Global instructions', exact: true }));
     await openSettingsPage(page, 'Tools & Permissions');
-    await settings.getByLabel('read', { exact: true }).uncheck();
+    await settings.getByRole('switch', { name: 'read', exact: true }).uncheck();
     await settledSetting(settings.getByRole('form', { name: 'Built-in tools', exact: true }));
     const source = await readSource(remote,{kind:'user'});
     expect(source.global_guidance?.authored).toBe('TRACE_NEW_INSTRUCTIONS');

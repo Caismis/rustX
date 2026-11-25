@@ -59,10 +59,13 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await expect(form.getByLabel('Command',{exact:true})).toHaveCSS('font-size','13px');
   await expect(form.getByRole('button',{name:'Add Arguments'})).toHaveCount(0);
   await expect(form.getByText(/New User definition|Empty list/)).toHaveCount(0);
-  const type=await form.getByRole('button',{name:'stdio (local command) Type',exact:true}).boundingBox();
+  const type=await form.getByRole('combobox',{name:'Type',exact:true}).boundingBox();
   expect(type!.width).toBeLessThanOrEqual(240);
   if (width===1440) {
-    expect((await form.getByLabel('Name',{exact:true}).boundingBox())!.width).toBe(240);
+    // coss inputs paint their border on the control wrapper: the visual field
+    // width the compact form contracts is the wrapper's, the text entry inside
+    // is inset by that border.
+    expect((await form.getByLabel('Name',{exact:true}).locator('xpath=ancestor::*[@data-slot="input-control"]').boundingBox())!.width).toBe(240);
     expect((await form.boundingBox())!.height).toBeLessThan(480);
   }
   await expect(form.getByLabel('Environment variables (JSON)',{exact:true})).toBeHidden();

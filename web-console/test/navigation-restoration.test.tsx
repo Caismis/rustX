@@ -155,7 +155,7 @@ it('reload retries the unresolved startup selection after a transient failure an
   await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
   await click(ui, 'View options');
   const closeView = ui.getByRole('menuitem', {name:'Close view'});
-  fireEvent.mouseEnter(closeView);
+  fireEvent.pointerEnter(closeView);
   const sessionA = ui.getByRole('menuitem', {name:'Session A'});
   await act(async () => fireEvent.click(sessionA));
   expect(hints()).toEqual({endpoint,openViews:['B'],route:{kind:'session',sessionId:'B'}});

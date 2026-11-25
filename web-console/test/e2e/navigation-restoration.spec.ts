@@ -46,7 +46,7 @@ test('a real page reload restores the last selected Session on the same native a
     await page.reload();
     await expect.poll(async () => (await native!.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     await openConnectionSettings(page);
-    await expect(page.getByLabel('Connection mode', { exact: true })).toHaveValue('local');
+    await expect(page.getByLabel('Connection mode', { exact: true })).toHaveAttribute('data-value', 'local');
     await selectCossOption(page.getByLabel('Connection mode', { exact: true }), 'remote');
     await expect(page.getByLabel('Access token', { exact: true })).toHaveValue('');
     await connectRemote(page, fixture.endpoint, fixture.token);

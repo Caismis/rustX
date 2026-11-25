@@ -99,7 +99,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(settings.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
     await expect(settings.getByRole('switch', { name: 'Todo', exact: true })).not.toBeChecked();
     await settings.getByLabel('System prompt', { exact: true }).fill('Review the requested change and report concrete findings.');
-    await settings.getByLabel('read', { exact: true }).check();
+    await settings.getByRole('checkbox', { name: 'read', exact: true }).check();
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     // A committed save closes the editor; the catalog entry opens it again.
     await settings.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();

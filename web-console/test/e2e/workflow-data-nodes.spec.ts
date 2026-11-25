@@ -83,7 +83,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await chooser.getByRole('option',{name:'Code Execution',exact:true}).click();
     await expect(panel(page)).toContainText('Code runs in the Session workspace');
     const command=panel(page).getByRole('textbox',{name:'Code',exact:true});
-    await expect(panel(page).getByRole('combobox',{name:'Language',exact:true})).toContainText('python3');
+    await expect(panel(page).getByRole('combobox',{name:'Language',exact:true})).toHaveAttribute('data-value', 'python3');
     await expect(command).toContainText('def main(arg1: str, arg2: str)');
     await expect(panel(page).getByRole('textbox',{name:'Variable name',exact:true})).toHaveCount(2);
     for(const index of [0,1]){await panel(page).getByRole('button',{name:'Choose a variable',exact:true}).nth(index).click();await page.getByRole('dialog',{name:'Choose a variable',exact:true}).getByRole('button',{name:/^args \/ query /}).click();}

@@ -27,13 +27,13 @@ for(const width of [1440,390])for(const language of ['python3','javascript'] as 
       await card.focus();await card.press('Enter');
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});
       await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);await expect(panel.getByRole('button',{name:/AI|生成代码|生成提示词/})).toHaveCount(0);
-      const languageSelector=panel.getByRole('combobox',{name:'语言',exact:true});await expect(languageSelector).toContainText(language);
+      const languageSelector=panel.getByRole('combobox',{name:'语言',exact:true});await expect(languageSelector).toHaveAttribute('data-value', language);
       const other=language==='python3'?'javascript':'python3';await selectCossOption(languageSelector, other);
       await expect(panel.getByRole('textbox',{name:'变量名',exact:true})).toHaveCount(2);
       await expect(panel.getByRole('textbox',{name:'代码',exact:true}).locator('.cm-line')).toHaveText(codeDefaults(other).code.split('\n'));
       await panel.screenshot({path:`/tmp/rustx-code-default-${other}-${width}.png`});
-      await expect(panel.getByRole('combobox',{name:'result的类型',exact:true})).toContainText('string');
-      await page.getByRole('button',{name:'撤销',exact:true}).click();await expect(languageSelector).toContainText(language);
+      await expect(panel.getByRole('combobox',{name:'result的类型',exact:true})).toHaveAttribute('data-value', 'string');
+      await page.getByRole('button',{name:'撤销',exact:true}).click();await expect(languageSelector).toHaveAttribute('data-value', language);
       await expect(panel.getByRole('textbox',{name:'变量名',exact:true})).toHaveCount(1);
       await panel.getByRole('button',{name:'添加输入变量',exact:true}).click();
       const names=panel.getByRole('textbox',{name:'变量名',exact:true});await expect(names).toHaveCount(2);
