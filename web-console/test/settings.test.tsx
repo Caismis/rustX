@@ -401,7 +401,11 @@ it('does not rearm a refused context autosave when invalid summary token input o
   subject.source.user.authored!.context = { reserve_tokens: '4096', summary_output_cap: { mode: 'limit', tokens: 2048 } };
   await open(subject, 'Advanced', 'User');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '8192' } });
+  fireEvent.change(screen.getByLabelText('Summary token limit'), { target: { value: '3000' } });
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
+  expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({
+    params: { mutation: { mutation: { authored: { reserve_tokens: '8192', summary_output_cap: { mode: 'limit', tokens: 3000 } } } } },
+  });
   await screen.findByText(/was not saved/);
   const input = screen.getByLabelText('Summary token limit') as HTMLInputElement;
   fireEvent.change(input, { target: { value: '1.5' } });
