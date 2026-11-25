@@ -88,6 +88,33 @@ rust-contracts-post (parallel): doctests + member libs + lane check
 
 ## Measurements
 
-Filled in from FULL runs on this branch — see the PR description and the
-final report; baseline run 45356995562 for comparison (FULL 78m43s,
-contracts 70m20s, coverage check 8m26s).
+Baseline run 45356995562 (PR #570 head `1e0dda4c2`): FULL 78m43s,
+contracts lane 70m20s serial, coverage check 8m26s, macOS boundary lane
+57m26s serial.
+
+### Sharded lanes — run 45536081914 (all green)
+
+| Lane | Build job | Shards (3) | Coverage job | Lane path | Baseline |
+| --- | --- | --- | --- | --- | --- |
+| Deterministic contracts (Linux) | 18m21s | 11m37s / 14m41s / 10m15s | 11s | ~34m | 70m20s |
+| Boundary suites (Linux) | 17m52s | 4m35s / 9m00s / 5m53s | 11s | ~28m | serial inside ~40m lane |
+| Contracts doctests + members (parallel job) | — | — | — | 25m57s | — |
+| Browser acceptance (3 shards) | — | 23–28m | ~30s | — | — |
+| Platform-sensitive boundaries (macOS, serial) | — | — | — | 57m26s | 57m26s |
+| FULL run wall clock | | | | **58m47s** | 78m43s |
+
+### Negative experiments (measured, reverted)
+
+- **macOS boundary sharding (run 45544685426, green):** build job 60m20s
+  (compile alone 51m28s, execution only ~6m) + shard 0 queued 12m on the
+  free tier's two concurrent macos-15 slots → lane ~82m, worse than the
+  57m26s serial lane. Reverted in `daaf6ed94`.
+- **Member-test split job (run 45555289930, green):** a parallel
+  `rust-platform-members` macOS job ran in 11m52s but held a slot and
+  delayed the serial lane's start ~40m → FULL wall ~107m. Reverted in
+  `daaf6ed94`.
+
+Takeaway: sharding pays where execution >> compile per runner (Linux
+lanes: ~50m of tests after ~18m of compile). On macOS the single-job
+compile is 51m28s while execution is ~6m, and only two macos-15 slots
+exist, so the serial lane is the optimum on free runners.
