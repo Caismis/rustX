@@ -80,7 +80,9 @@ pub(super) async fn launch(
         .reserve_local_execution_for(&session, Some(workspace))
         .await
         .map_err(|error| format!("local execution: {error}"))?;
-    LocalClient::launch(session, endpoint).await
+    LocalClient::launch(session, endpoint)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Reserves the Session's WebSocket execution binding — publishing the

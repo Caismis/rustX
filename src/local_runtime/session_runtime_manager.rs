@@ -241,6 +241,39 @@ impl Flight {
             result: watch::channel(None).0,
         })
     }
+    fn check_admission(
+        &self,
+        registry: &RegistryState,
+        retirement_requested: bool,
+    ) -> Result<(), RuntimeManagerError> {
+        let target = self.target.get().expect("registered runtime preparation");
+        if registry.draining
+            || registry.retiring_sessions.contains(&target.0)
+            || retirement_requested
+        {
+            return Err(RuntimeManagerError::LoadingCancelled);
+        }
+        Ok(())
+    }
+
+    /// Linearizes short preparation decisions with retirement. Physical I/O
+    /// stays outside both locks; its owners still finish before the terminal
+    /// cancellation or failure is published.
+    fn with_admission<T>(
+        &self,
+        owner: &SessionRuntimeManager,
+        decide: impl FnOnce() -> Result<T, RuntimeManagerError>,
+    ) -> Result<T, RuntimeManagerError> {
+        let registry = owner.registry.0.lock().expect("registry mutex");
+        let control = self
+            .initialization
+            .control
+            .lock()
+            .expect("initialization control");
+        self.check_admission(&registry, control.retirement_requested)?;
+        decide()
+    }
+
     fn cancel_loading(&self) {
         self.initialization.retire();
     }

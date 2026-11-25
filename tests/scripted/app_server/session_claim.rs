@@ -698,51 +698,25 @@ async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
     .await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn installed_resume_pending_client_is_settled_when_host_drains() {
-    Box::pin(bounded(async {
-        let f = Fixture::with_session_count(None, 1).await;
-        let session = &f.sessions[0];
-        f.manager
-            .configure_local_sessions(f.workspaces.to_vec())
-            .unwrap();
-        let probe = f.manager.probe(&session.active_conversation_id);
-        probe.before_recovery_inspection.arm();
-        let loading = f.load(0);
-        probe.before_recovery_inspection.entered().await;
-        let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
-        assert!(endpoint.control().is_some());
-        assert!(pending_execution(&f, &session.id));
-        f.host.begin_drain();
-        let host = f.host.clone();
-        let draining = tokio::spawn(async move { host.drain().await });
-        probe.before_recovery_inspection.release();
-        assert_eq!(
-            loading.await.unwrap().unwrap_err(),
-            RuntimeManagerError::Draining
-        );
-        assert_eq!(draining.await.unwrap(), Vec::<String>::new());
-        f.manager.join_local_sessions().await.unwrap();
-        assert!(endpoint.control().is_none());
-        assert!(!pending_execution(&f, &session.id));
-        assert!(f.manager.is_empty());
-        assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
-        assert!(
-            !f.manager
-                .sessions
-                .configuration_bindings
-                .lock()
-                .unwrap()
-                .contains_key(&session.id)
-        );
-    }))
-    .await;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResumeCut {
+    Reservation,
+    CapturedConfiguration,
+    BeforeComposition,
+    Prepared,
+    Activated,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn installed_resume_late_drain_cancels_admission_and_settles_cleanly() {
+async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanly() {
     Box::pin(bounded(async {
-        for activated in [false, true] {
+        for cut in [
+            ResumeCut::Reservation,
+            ResumeCut::CapturedConfiguration,
+            ResumeCut::BeforeComposition,
+            ResumeCut::Prepared,
+            ResumeCut::Activated,
+        ] {
             let f = Fixture::with_session_count(None, 1).await;
             f.manager
                 .configure_local_sessions(f.workspaces.to_vec())
@@ -750,33 +724,77 @@ async fn installed_resume_late_drain_cancels_admission_and_settles_cleanly() {
             let session = &f.sessions[0];
             let id = &session.active_conversation_id;
             let probe = f.manager.probe(id);
-            let gate = if activated {
-                &probe.before_resident_publication
-            } else {
-                &probe.before_prepared_admission
+            let gate = match cut {
+                ResumeCut::Reservation | ResumeCut::CapturedConfiguration => None,
+                ResumeCut::BeforeComposition => Some(&probe.before_recovery_inspection),
+                ResumeCut::Prepared => Some(&probe.before_prepared_admission),
+                ResumeCut::Activated => Some(&probe.before_resident_publication),
             };
+            let hook = match cut {
+                ResumeCut::Reservation => Some("before_resumed_client_preparation"),
+                ResumeCut::CapturedConfiguration => Some("before_bound_initial_publication"),
+                _ => None,
+            };
+            let capture_pause = hook.map(|hook| {
+                let (entered, waiting) = tokio::sync::oneshot::channel();
+                let (release, released) = std::sync::mpsc::channel();
+                f.manager.configuration.test_hooks.insert(hook, move || {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                });
+                (waiting, release)
+            });
             let capacity = f.manager.available_local_client_slots();
-            gate.arm();
+            if let Some(gate) = gate {
+                gate.arm();
+            }
             let loading = f.load(0);
-            gate.entered().await;
+            let release = if let Some((waiting, release)) = capture_pause {
+                waiting.await.unwrap();
+                Some(release)
+            } else {
+                gate.expect("runtime gate").entered().await;
+                None
+            };
             {
                 let registry = f.manager.registry.0.lock().unwrap();
                 let Entry::Loading(flight) = &registry.entries[id] else {
-                    panic!("the prepared runtime has not been published");
+                    panic!("runtime has not been published at {cut:?}");
                 };
                 assert_eq!(
                     flight
                         .initialization
                         .prepared_runtime()
-                        .unwrap()
-                        .is_activated(),
-                    activated
+                        .map(|runtime| runtime.is_activated()),
+                    match cut {
+                        ResumeCut::Prepared => Some(false),
+                        ResumeCut::Activated => Some(true),
+                        _ => None,
+                    },
+                    "{cut:?}"
                 );
             }
-            let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
-            assert!(endpoint.control().is_some());
-            assert!(pending_execution(&f, &session.id));
-            assert_eq!(f.manager.available_local_client_slots(), capacity - 1);
+            let endpoint = if cut == ResumeCut::Reservation {
+                assert!(
+                    f.manager
+                        .execution_endpoint(&session.id)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("preparation in progress")
+                );
+                assert!(!pending_execution(&f, &session.id));
+                None
+            } else {
+                let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
+                assert!(endpoint.control().is_some(), "{cut:?}");
+                assert!(pending_execution(&f, &session.id), "{cut:?}");
+                Some(endpoint)
+            };
+            assert_eq!(
+                f.manager.available_local_client_slots(),
+                capacity - 1,
+                "{cut:?}"
+            );
             f.host.begin_drain();
             let host = f.host.clone();
             let draining = tokio::spawn(async move { host.drain().await });
@@ -786,25 +804,38 @@ async fn installed_resume_late_drain_cancels_admission_and_settles_cleanly() {
                 .wait_for(|n| *n == 1)
                 .await
                 .unwrap();
-            gate.release();
+            if let Some(release) = release {
+                release.send(()).unwrap();
+            } else {
+                gate.expect("runtime gate").release();
+            }
             assert_eq!(
                 loading.await.unwrap().unwrap_err(),
-                RuntimeManagerError::LoadingCancelled
+                RuntimeManagerError::LoadingCancelled,
+                "{cut:?}"
             );
-            assert_eq!(draining.await.unwrap(), Vec::<String>::new());
+            assert_eq!(draining.await.unwrap(), Vec::<String>::new(), "{cut:?}");
             f.manager.join_local_sessions().await.unwrap();
-            assert_eq!(f.manager.residency(id), ResidencyState::Unloaded);
-            assert!(endpoint.control().is_none());
-            assert!(!pending_execution(&f, &session.id));
-            assert_eq!(f.manager.available_local_client_slots(), capacity);
-            assert_eq!(f.provider.request_bodies(), Vec::<String>::new());
+            assert_eq!(f.manager.residency(id), ResidencyState::Unloaded, "{cut:?}");
+            assert!(
+                endpoint.is_none_or(|endpoint| endpoint.control().is_none()),
+                "{cut:?}"
+            );
+            assert!(!pending_execution(&f, &session.id), "{cut:?}");
+            assert_eq!(
+                f.manager.available_local_client_slots(),
+                capacity,
+                "{cut:?}"
+            );
+            assert_eq!(f.provider.request_bodies(), Vec::<String>::new(), "{cut:?}");
             assert!(
                 !f.manager
                     .sessions
                     .configuration_bindings
                     .lock()
                     .unwrap()
-                    .contains_key(&session.id)
+                    .contains_key(&session.id),
+                "{cut:?}"
             );
         }
     }))

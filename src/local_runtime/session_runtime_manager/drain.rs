@@ -17,7 +17,6 @@ impl SessionRuntimeManager {
         Vec<Arc<super::Initialization>>,
         Vec<Arc<LocalExecutionEndpoint>>,
     ) {
-        self.configuration.resource_io.cancel();
         let initializations = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             registry.draining = true;
@@ -40,6 +39,7 @@ impl SessionRuntimeManager {
             }
             initializations
         };
+        self.configuration.resource_io.cancel();
         let endpoints = self.execution.close_admission(deadline);
         self.stop_local_sessions();
         for initialization in &initializations {

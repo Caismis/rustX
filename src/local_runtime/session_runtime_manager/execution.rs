@@ -3126,7 +3126,7 @@ fn spawn_preparation(
             endpoint
                 .fence_connection_by(Instant::now())
                 .map_err(error)?;
-            return Err(error("execution binding fenced before publication"));
+            return Err(RuntimeManagerError::LoadingCancelled);
         }
         guard.0 = None;
         Ok(endpoint)
@@ -3185,7 +3185,9 @@ impl StandaloneExecution {
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-        let child = launch_sibling(endpoint).await?;
+        let child = launch_sibling(endpoint)
+            .await
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
             registry,
@@ -3588,7 +3590,7 @@ impl SessionRuntimeManager {
             return Err(RuntimeManagerError::Draining);
         }
         if registry.retiring_sessions.contains(session) {
-            return Err(error("Session retirement has fenced runtime admission"));
+            return Err(RuntimeManagerError::LoadingCancelled);
         }
         self.execution
             .claim_with_replacement(session, settings.cwd.clone(), transport, replaces)
@@ -3664,7 +3666,10 @@ impl SessionRuntimeManager {
         Ok(endpoint)
     }
 
-    fn require_unclaimed_workspace(&self, session: &SessionId) -> Result<(), RuntimeManagerError> {
+    pub(super) fn require_unclaimed_workspace(
+        &self,
+        session: &SessionId,
+    ) -> Result<(), RuntimeManagerError> {
         if rustx_execution_server::RecoveryFence::session_pending(
             self.configuration.runtime_root(),
             &rustx_execution_protocol::SessionId::new(session.as_str()),

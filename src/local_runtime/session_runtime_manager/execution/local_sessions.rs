@@ -141,8 +141,9 @@ impl SessionRuntimeManager {
             unreachable!("fresh local Session identity already claimed");
         };
         let pending = self
-            .start_claimed_local_client(session, claim, grant, slot)
-            .await?;
+            .start_claimed_local_client(session, claim, grant, slot, None)
+            .await
+            .map_err(creation_error)?;
         let configuration = self.configuration.clone();
         let credentials = self.credentials.clone();
         let input = input.clone();
@@ -182,7 +183,9 @@ impl SessionRuntimeManager {
             .roots
             .get()
             .is_some_and(|roots| roots.iter().any(|root| cwd.starts_with(root)))
-            || self.execution.configuration_endpoint(session)?.is_some()
+            || flight
+                .with_admission(self, || self.execution.configuration_endpoint(session))?
+                .is_some()
         {
             return Ok(());
         }
@@ -206,9 +209,8 @@ impl SessionRuntimeManager {
             tokio::task::block_in_place(move || hooks.reach("before_resumed_client_preparation"));
         }
         let pending = self
-            .start_claimed_local_client(session.clone(), claim, grant, slot)
-            .await
-            .map_err(error)?;
+            .start_claimed_local_client(session.clone(), claim, grant, slot, Some(flight))
+            .await?;
         let mut owned = flight
             .local_admission
             .pending
@@ -249,7 +251,8 @@ impl SessionRuntimeManager {
         claim: Arc<Slot>,
         grant: CancellationSignal,
         slot: OwnedSemaphorePermit,
-    ) -> Result<PendingClient, SessionError> {
+        flight: Option<&super::super::Flight>,
+    ) -> Result<PendingClient, RuntimeManagerError> {
         let runtime_root = self.configuration.runtime_root().to_path_buf();
         let id = session.clone();
         let reserved = spawn_preparation(claim, move |workspace| {
@@ -260,8 +263,8 @@ impl SessionRuntimeManager {
             LocalExecutionEndpoint::new(&id, workspace)?.with_recovery_fence(&runtime_root)
         })
         .await
-        .map_err(creation_error)
-        .and_then(|result| result.map_err(creation_error));
+        .map_err(error)
+        .and_then(std::convert::identity);
         let endpoint = match reserved {
             Ok(endpoint) => endpoint,
             Err(error) => {
@@ -275,14 +278,24 @@ impl SessionRuntimeManager {
             Err(error) => {
                 self.execution.close_session_admission(&session);
                 self.execution.retire(&session);
-                return Err(creation_error(error));
+                return Err(error);
             }
         };
-        let Some(lane) = endpoint.control() else {
-            self.execution.close_session_admission(&session);
-            self.reap_local_client(client, &session).await;
-            self.execution.retire(&session);
-            return Err(creation_error("the admitted Client disconnected"));
+        let admitted_lane = || {
+            endpoint
+                .control()
+                .ok_or_else(|| error("the admitted Client disconnected"))
+        };
+        let lane = match flight.map_or_else(admitted_lane, |flight| {
+            flight.with_admission(self, admitted_lane)
+        }) {
+            Ok(lane) => lane,
+            Err(failure) => {
+                self.execution.close_session_admission(&session);
+                self.reap_local_client(client, &session).await;
+                self.execution.retire(&session);
+                return Err(failure);
+            }
         };
         Ok(PendingClient {
             session,

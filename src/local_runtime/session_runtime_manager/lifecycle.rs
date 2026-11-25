@@ -493,7 +493,7 @@ impl SessionRuntimeManager {
         id: &ConversationId,
         session: &SessionId,
         node: &SessionNodeId,
-        flight: &Flight,
+        flight: &Arc<Flight>,
     ) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
         if self.registry.0.lock().expect("registry mutex").draining {
             return Err(RuntimeManagerError::Draining);
@@ -520,14 +520,29 @@ impl SessionRuntimeManager {
         self.compose(access, flight).await
     }
 
+    fn configuration_endpoint_for_admission(
+        &self,
+        flight: &Flight,
+        session: &SessionId,
+    ) -> Result<Option<Arc<LocalExecutionEndpoint>>, RuntimeManagerError> {
+        let endpoint =
+            flight.with_admission(self, || self.execution.configuration_endpoint(session))?;
+        if endpoint.is_none() {
+            self.require_unclaimed_workspace(session)?;
+        }
+        Ok(endpoint)
+    }
+
     fn initial_session_configuration(
         &self,
         access: &SessionAccess,
+        flight: &Flight,
         provisional: Option<&Arc<LocalExecutionEndpoint>>,
     ) -> Result<AdmittedSessionConfig, RuntimeManagerError> {
         use super::super::configuration::application::ApplicationState;
         let session = &access.session.id;
         let bindings = &self.sessions.configuration_bindings;
+        flight.with_admission(self, || Ok(()))?;
         if provisional.is_none()
             && let Some(paths) = bindings
                 .lock()
@@ -548,7 +563,7 @@ impl SessionRuntimeManager {
             let endpoint = if let Some(endpoint) = provisional {
                 Some(endpoint.clone())
             } else {
-                self.configuration_endpoint(session)?
+                self.configuration_endpoint_for_admission(flight, session)?
             };
             if endpoint.is_none() {
                 self.repair_session_sources(&input);
@@ -572,23 +587,32 @@ impl SessionRuntimeManager {
                 if application.source_cut(&input.cwd) != source_cut {
                     continue;
                 }
-                if !self
-                    .execution
-                    .configuration_endpoint(session)?
-                    .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
-                {
-                    return Err(error(
-                        "Workspace configuration binding changed during capture",
-                    ));
-                }
-                capture.map_err(error)?
+                flight.with_admission(self, || {
+                    if !self
+                        .execution
+                        .configuration_endpoint(session)?
+                        .is_some_and(|current| Arc::ptr_eq(&current, &endpoint))
+                    {
+                        return Err(error(
+                            "Workspace configuration binding changed during capture",
+                        ));
+                    }
+                    capture.map_err(error)
+                })?
             } else {
-                if self.configuration_endpoint(session)?.is_some() {
+                if self
+                    .configuration_endpoint_for_admission(flight, session)?
+                    .is_some()
+                {
                     continue;
                 }
-                application
-                    .initial_binding(&self.configuration, &input, &self.credentials, true)
-                    .map_err(error)?
+                let capture = application.initial_binding(
+                    &self.configuration,
+                    &input,
+                    &self.credentials,
+                    true,
+                );
+                flight.with_admission(self, || capture.map_err(error))?
             };
             // Session authoring can commit while a Client is reading the
             // Workspace. Publication shares its fence with source ingestion.
@@ -609,16 +633,18 @@ impl SessionRuntimeManager {
             drop(application);
             return Ok(paths);
         }
-        Err(error(
-            "configuration sources changed during Session admission; retry the load",
-        ))
+        flight.with_admission(self, || {
+            Err(error(
+                "configuration sources changed during Session admission; retry the load",
+            ))
+        })
     }
 
     #[allow(clippy::too_many_lines)] // one ordered ownership transaction
     async fn compose(
         &self,
         access: SessionAccess,
-        flight: &Flight,
+        flight: &Arc<Flight>,
     ) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
         // Every caller owns a registered Loading flight before acquiring this
         // fresh node. Archive cannot commit across that reservation; an earlier
@@ -656,8 +682,10 @@ impl SessionRuntimeManager {
             .as_ref()
             .map(|pending| pending.client.endpoint().clone());
         let owner = self.clone();
+        let preparation = flight.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
-            let paths = owner.initial_session_configuration(&access, provisional.as_ref())?;
+            let paths =
+                owner.initial_session_configuration(&access, &preparation, provisional.as_ref())?;
             Ok::<_, RuntimeManagerError>((access, paths))
         })
         .await
@@ -685,12 +713,11 @@ impl SessionRuntimeManager {
         {
             return Err(error("injected composition failure after configuration"));
         }
+        flight.with_admission(self, || Ok(()))?;
         let identity = paths.identity().to_owned();
         let registry = super::super::composition::load_model_registry(&paths, &self.dependencies)
             .map_err(error)?;
-        if self.registry.0.lock().expect("registry mutex").draining {
-            return Err(RuntimeManagerError::Draining);
-        }
+        flight.with_admission(self, || Ok(()))?;
         let core = LocalConversationCore::compose_with_access(
             &paths,
             &self.dependencies,
@@ -1389,11 +1416,8 @@ impl TerminalGuard {
         registry: &RegistryState,
         retirement_requested: bool,
     ) -> Result<(), RuntimeManagerError> {
-        // Retirement fences are published here before execution admission
-        // closes. A lane closed by that retirement is a cancelled load.
-        if registry.fenced(&self.id) || retirement_requested {
-            return Err(RuntimeManagerError::LoadingCancelled);
-        }
+        self.flight
+            .check_admission(registry, retirement_requested)?;
         if let Some(pending) = self
             .flight
             .local_admission
