@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose, selectedSessionId } from './shell-actions';
+import { selectCossOption } from './coss-select';
 
 for (const locale of ['en', 'zh'] as const) test(`native workflow review and node lifecycle ${locale}`, async ({ page }) => {
   page.setDefaultTimeout(15_000);
@@ -75,7 +76,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
       await section.click(); await page.getByRole('menuitem', { name: copy('Advanced', '高级'), exact: true }).click();
     } else await settings.getByRole('tab', { name: copy('Advanced', '高级'), exact: true }).click();
     await settings.getByRole('button', { name: copy('Connection', '连接'), exact: true }).click();
-    await page.getByLabel(copy('Connection mode', '连接模式')).selectOption('remote');
+    await selectCossOption(page.getByLabel(copy('Connection mode', '连接模式')), 'remote');
     await page.getByLabel(copy('WebSocket endpoint', 'WebSocket 地址')).fill(fixture.endpoint);
     await page.getByLabel(copy('Access token', '访问令牌')).fill(fixture.token);
     await settings.getByRole('button', { name: copy('Connect', '连接'), exact: true }).click();

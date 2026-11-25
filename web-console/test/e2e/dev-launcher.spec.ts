@@ -8,6 +8,7 @@ import { Launcher } from '../../../dev/src/launcher.ts';
 import { parseArguments } from '../../../dev/src/arguments.ts';
 import { spawnOwned } from '../../../dev/src/process.ts';
 import { BROWSER_SESSION_HEADER, BROWSER_SESSION_STORAGE } from '../../browser-session';
+import { selectCossOption } from './coss-select';
 
 /** Normal local composition: no dogfood helper, provider process, or Host proxy. */
 test('development launcher serves the real Web carrier, native App Server and exact-root Host', { tag: '@smoke' }, async ({ page }) => {
@@ -81,7 +82,7 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name: 'General', exact: true })).toHaveAttribute('aria-selected', 'true');
     await openConnectionSettings(page);
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
-    await page.getByLabel('Connection mode').selectOption('remote');
+    await selectCossOption(page.getByLabel('Connection mode'), 'remote');
     await expect(page.getByText('Active mode: Local', { exact: true })).toBeVisible();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await page.getByLabel('WebSocket endpoint').fill('ws://user:password@127.0.0.1:1/');
@@ -99,14 +100,14 @@ compat = { chat_reasoning_replay = "omit" }
     await page.screenshot({ path: test.info().outputPath('remote-settings.png') });
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     await page.route('**/__rustx/bootstrap', route => route.fulfill({ status: 503, body: 'Unavailable' }));
-    await page.getByLabel('Connection mode').selectOption('local');
+    await selectCossOption(page.getByLabel('Connection mode'), 'local');
     await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'No local managed connection' })).toBeVisible();
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await expect(page.getByText('Active mode: Remote server', { exact: true })).toBeVisible();
     await page.unroute('**/__rustx/bootstrap');
     await page.route('**/__rustx/bootstrap', route => route.fulfill({ json: { connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: launchToken } }));
-    await page.getByLabel('Connection mode').selectOption('local');
+    await selectCossOption(page.getByLabel('Connection mode'), 'local');
     await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'WebSocket' })).toBeVisible();
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await expect(page.getByText('Active mode: Local', { exact: true })).toHaveCount(0);

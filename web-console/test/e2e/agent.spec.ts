@@ -353,7 +353,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'turn/steer', 'inbound/queue']);
     await page.getByRole('button', { name: locale === 'en' ? 'Settings' : '设置', exact: true }).click();
     const settings = page.getByRole('region', { name: locale === 'en' ? 'Settings' : '设置', exact: true });
-    await settings.getByRole('button', { name: locale === 'en' ? /Send behavior while busy/ : /繁忙时的发送行为/ }).click();
+    await settings.getByRole('combobox', { name: locale === 'en' ? /Send behavior while busy/ : /繁忙时的发送行为/ }).click();
     await page.getByRole('option', { name: locale === 'en' ? 'Immediately' : '立即', exact: true }).click();
     await page.getByRole('button', { name: locale === 'en' ? 'Home' : '主页', exact: true }).click();
     expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');

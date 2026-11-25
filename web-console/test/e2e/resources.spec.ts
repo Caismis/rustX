@@ -431,7 +431,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(globalSkill.getByRole('switch')).toBeChecked();
 
   const chooseSkillAccess = async (option: string) => {
-    const policy = skills.getByRole('button', { name: /Skill access$/ });
+    const policy = skills.getByRole('combobox', { name: /Skill access$/ });
     await expect(policy).toBeEnabled();
     await policy.click();
     await page.getByRole('option', { name: option, exact: true }).click();
@@ -445,7 +445,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await chooseSkillAccess('None');
   await expect.poll(() => readFileSync(f.settings, 'utf8')).toContain('skills = []');
   await skills.getByRole('tab', { name: 'Workspace', exact: true }).click();
-  await expect(skills.getByRole('button', { name: /Skill access$/ })).toContainText('Use global settings');
+  await expect(skills.getByRole('combobox', { name: /Skill access$/ })).toContainText('Use global settings');
   await expect(inheritedSkill.getByRole('switch')).not.toBeChecked();
   await chooseSkillAccess('None');
   await expect.poll(workspaceDocument).toContain('skills = []');

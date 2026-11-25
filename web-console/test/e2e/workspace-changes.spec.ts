@@ -1,5 +1,6 @@
 import { test,expect } from '@playwright/test';
 import { captureEvidence, expectStableScreenshot } from './screenshot';
+import { selectCossOption } from './coss-select';
 const origin=`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}`;
 for(const width of [1440,390])test(`completed turn changes and sampled back-to-bottom at ${width}px`,async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
@@ -28,19 +29,19 @@ for(const width of [1440,390])test(`completed turn changes and sampled back-to-b
   await card.getByRole('button',{name:'View changes to src/file-2.ts',exact:true}).click();
   const review=page.locator('[data-changes-review]');
   await expect(review).toBeVisible();
-  await expect(review.getByRole('combobox')).toHaveValue('1');
+  await expect(review.getByRole('combobox')).toContainText('1');
   await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
   await expectStableScreenshot(review,`turn-changes-review-${width}.png`);
-  await review.getByRole('combobox').selectOption('4');
+  await selectCossOption(review.getByRole('combobox'), '4');
   await expect(review.locator('[data-change-comparison]')).toContainText('src/file-5.ts');
   if(width===1440) {
     await page.getByRole('tab',{name:'Trajectory',exact:true}).click();
     await expect(page.getByRole('tab',{name:'Trajectory',exact:true})).toHaveAttribute('aria-selected','true');
-    await review.getByRole('combobox').selectOption('2');
+    await selectCossOption(review.getByRole('combobox'), '2');
     await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
     await page.getByRole('tab',{name:'Chat',exact:true}).click();
     await expect(page.getByLabel('Canonical conversation')).toBeVisible();
-    await review.getByRole('combobox').selectOption('0');
+    await selectCossOption(review.getByRole('combobox'), '0');
     await expect(review.locator('[data-change-comparison]')).toContainText('src/file-1.ts');
     await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
   }

@@ -10,6 +10,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { openResourceModule, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu, settledSetting } from './shell-actions';
+import { selectCossOption } from './coss-select';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
@@ -894,7 +895,7 @@ test('scalar pages have no footer; the structured provider editor keeps one flus
   await expect(settings.getByRole('region', { name: 'Connection Settings', exact: true })).toBeVisible();
   const mode = settings.getByLabel('Connection mode', { exact: true });
   await expect(mode).toBeVisible();
-  await mode.selectOption('remote');
+  await selectCossOption(mode, 'remote');
   await expect(settings.getByLabel('WebSocket endpoint', { exact: true })).toBeVisible();
   await expect(settings.getByLabel('Access token', { exact: true })).toBeVisible();
   // Single clean border comes from the Input primitive wrapper; inner input has border 0.

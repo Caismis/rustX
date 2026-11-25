@@ -10,6 +10,7 @@ import { rootBlock } from '../workflow-root';
 import type { WorkflowCheckReport } from '../../../protocol/app-server/v80';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
+import { selectCossOption } from './coss-select';
 
 const inspector = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
@@ -143,7 +144,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
     await expect(page).toHaveTitle(/rustX$/);
     const settings = inspector(page).getByRole('region', { name: 'Settings', exact: true });
-    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toHaveValue('contains');
+    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toContainText('contains');
     const operand = () => settings.getByRole('group', { name: 'Right', exact: true })
       .getByRole('group', { name: 'id', exact: true }).getByLabel('Literal JSON', { exact: true });
     await expect(operand()).toHaveValue('"x"');
@@ -162,7 +163,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
     await expect(operand()).toHaveValue('"y"');
-    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toHaveValue('contains');
+    await expect(settings.getByRole('combobox', { name: 'Predicate', exact: true })).toContainText('contains');
     expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
@@ -230,7 +231,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     const second = settings.getByRole('region', { name: 'ELIF CASE 2', exact: true });
     await second.getByRole('button', { name: 'Add condition', exact: true }).click();
     await picker.getByRole('button', { name: /^args \/ flag ·/ }).click();
-    await second.getByLabel('Value', { exact: true }).selectOption('false');
+    await selectCossOption(second.getByLabel('Value', { exact: true }), 'false');
     await expect(card.getByText('or', { exact: true })).toBeVisible();
     await expect(card).toContainText('CASE 1'); await expect(card).toContainText('CASE 2'); await expect(card).toContainText('ELIF');
     await expect(card.locator('[data-handleid="case_2"]')).toHaveCount(1);
