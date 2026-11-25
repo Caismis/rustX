@@ -6683,6 +6683,7 @@ os.execv({client:?}, [{client:?}, *sys.argv[1:]])
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One original physical domain across both admission paths.
 async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
     use rustx::app_server::protocol::{ErrorData, Method, MethodResult, Response};
     use rustx::local_runtime::session_inputs::{SessionConfigContent, SessionInputChange};
@@ -6693,7 +6694,7 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
     use rustx::message::{content::TextBlock, types::UserContentBlock};
     use sha2::{Digest as _, Sha256};
     use std::os::unix::fs::DirBuilderExt as _;
-    bounded(async {
+    Box::pin(bounded(async {
         let fixture = Fixture::new().await;
         let (_bin, executable) = isolated_server_pair();
         let session = &fixture.sessions[0];
@@ -6824,6 +6825,50 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
             diagnostic.contains("previous Session execution domain requires physical settlement"),
             "{diagnostic}"
         );
+
+        let mut composed = Command::new(&executable)
+            .current_dir(fixture.root.path())
+            .env_clear()
+            .env("HOME", fixture.root.path().join("home"))
+            .env("PATH", "/usr/bin:/bin")
+            .env("TEST_KEY", "fixture")
+            .args(["app-server", "--listen", "stdio", "--runtime-root"])
+            .arg(fixture.root.path().join("runtime"))
+            .arg("--local-session-root")
+            .arg(&workspace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let composed_driver = driver::jsonl(
+            composed.stdout.take().unwrap(),
+            composed.stdin.take().unwrap(),
+        );
+        initialize_client(&composed_driver).await;
+        assert_eq!(
+            serde_json::to_value(result(&composed_driver, history()).await).unwrap(),
+            history_before
+        );
+        let thread_id = app_server_conformance::thread_id(&composed_driver, session.clone()).await;
+        let Response::Failure(refused) =
+            rpc(&composed_driver, 71, Method::SessionAttach { thread_id }).await
+        else {
+            panic!("installed live composition replaced an unsettled Client");
+        };
+        assert!(
+            refused
+                .error
+                .message
+                .contains("requires physical settlement"),
+            "{refused:?}"
+        );
+        assert!(execution.0.try_wait().unwrap().is_none());
+        assert_eq!(provider.request_bodies(), [] as [String; 0]);
+        composed_driver.close().await;
+        detach_then_shutdown(&mut composed).await;
+        assert!(composed.wait().await.unwrap().success());
 
         // Physical Client death without a settlement grant is still insufficient.
         execution.0.kill().unwrap();
@@ -6960,7 +7005,7 @@ async fn server_sigkill_keeps_prior_client_binding_unavailable_after_restart() {
         driver.close().await;
         detach_then_shutdown(&mut replacement).await;
         assert!(replacement.wait().await.unwrap().success());
-    })
+    }))
     .await;
 }
 

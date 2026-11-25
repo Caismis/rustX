@@ -6,6 +6,7 @@ import type { LocalHostConfig } from '../../web-console/host/workspaces.ts';
 import type { Arguments } from './arguments.ts';
 import { spawnOwned, type Spawn, type OwnedChild, type ChildSpec } from './process.ts';
 import { handoff, openBrowser } from './browser.ts';
+import { isNativeConfigurationCommand } from '../../tui/src/configuration-command.ts';
 import { workspaceRegistry } from './workspace-registry.ts';
 
 export interface WebReady { url: string; endpoint: string; tokenFile: string; hostConfigFile: string; workspaces: string[] }
@@ -75,13 +76,15 @@ export class Launcher {
         this.#child({ component: 'app-server', command: args.binary, args: ['app-server', ...native], cwd: process.cwd(), protocolStdio: true, ownerStdin }, true);
         return;
       }
-      const externalTui = args.mode === 'tui' && args.forwarded.includes('--connect');
+      const nativeTui = args.mode === 'tui' && isNativeConfigurationCommand(args.forwarded[0]);
+      const externalTui = args.mode === 'tui' && !nativeTui && args.forwarded.includes('--connect');
+      const tuiHelp = args.mode === 'tui' && args.forwarded.length === 1 && args.forwarded[0] === '--help';
       // Match Rust's current_exe(): helpers belong beside the resolved
       // executable. Only the combined Web/TUI compositions need them.
       const binaryDirectory = dirname(realpathSync(args.binary));
       const helpers = ['bash-supervisor', 'interactive-supervisor', 'workflow-renderer'];
       if (this.#installed) helpers.push('rustx-execution-client');
-      for (const name of externalTui ? [] : helpers) {
+      for (const name of externalTui || nativeTui || tuiHelp ? [] : helpers) {
         const helper = join(binaryDirectory, name);
         try {
           accessSync(helper, constants.X_OK);
@@ -91,9 +94,8 @@ export class Launcher {
         }
       }
       if (args.mode === 'tui') {
-        const forwardOnly = externalTui || args.forwarded.length === 1 && args.forwarded[0] === '--help';
-        const binding = forwardOnly ? [] : ['--binary', args.binary];
-        if (this.#installed && !forwardOnly) binding.push('--local-session-execution');
+        const binding = externalTui || tuiHelp ? [] : ['--binary', args.binary];
+        if (this.#installed && !externalTui && !nativeTui && !tuiHelp) binding.push('--local-session-execution');
         this.#child({ component: 'tui', command: process.execPath, args: [join(this.#root, 'tui/src/main.ts'), ...binding, ...args.forwarded], cwd: process.cwd(), terminal: true }, true);
         return;
       }

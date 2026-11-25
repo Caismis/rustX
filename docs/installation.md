@@ -74,7 +74,10 @@ when recovering an enrolled Session.
 Each new Session in the installed Web or self-hosted TUI starts a sibling
 Client over the same paired Unix Execution Protocol. The Server reserves a
 Session identity, authenticates the Client, and reads the bound configuration
-before admitting the Session. The launcher grants each exact Workspace passed
+before admitting the Session. A clean restart or a fork uses the same
+admission when requested as a live Session. Cold history and Session
+management reads do not start a Client. A durable physical fence must settle
+before the same Session identity can be admitted again. The launcher grants each exact Workspace passed
 at startup. Deleting the Session or draining its Server revokes execution and
 settles the owned Client. If all eight local Session Client slots are active,
 new Sessions receive an explicit capacity error. The standalone Server does
@@ -84,7 +87,10 @@ Web can re-register a configured exact root after it is removed from the
 navigation. Browsing and registering descendants additionally require an
 `app_server.environment_roots` grant. The picker uses a private minimal
 binding, verifies the selected directory revision, and settles its temporary
-Client before returning. The picker starts no Agent or Conversation.
+Client before returning. The picker starts no Agent or Conversation. Home
+Skills on an already claimed Workspace uses this private Client capacity for
+read-only catalog and instruction requests. It reports Client authority. An
+explicitly selected Session continues to use only that Session's binding.
 
 Web and TUI need Node.js 24 on `PATH`. Run `rustx app-server --help` for
 headless startup with the installed binaries. On Linux, local recovery

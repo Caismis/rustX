@@ -103,7 +103,9 @@ async fn browse(
     if cancelled.is_cancelled() || grant.is_cancelled() || stop.is_cancelled() {
         return Err("Folder selection cancelled".into());
     }
-    let owner = manager.start_workspace_picker(request.root.clone()).await?;
+    let owner = manager
+        .start_local_workspace_probe(request.root.clone())
+        .await?;
     let endpoint = owner.scope().endpoint();
     let result = match endpoint {
         Ok(endpoint)

@@ -593,6 +593,8 @@ impl SessionRuntimeManager {
                 "injected composition task panic"
             );
         }
+        self.ensure_local_session(&access.session.id, &access.settings.cwd)
+            .await?;
         let owner = self.clone();
         let (access, paths) = tokio::task::spawn_blocking(move || {
             let paths = owner.initial_session_configuration(&access)?;

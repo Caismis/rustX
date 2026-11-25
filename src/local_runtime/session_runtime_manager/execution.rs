@@ -3399,9 +3399,9 @@ impl SessionExecutionRegistry {
 }
 
 impl SessionRuntimeManager {
-    /// A private Session binding for the trusted local folder chooser. The
-    /// caller owns it through shutdown. It has no catalog or Agent identity.
-    pub(crate) async fn start_workspace_picker(
+    /// A private binding for a trusted local Workspace observation. The caller
+    /// owns it through shutdown. It has no durable Session or Agent identity.
+    pub(crate) async fn start_local_workspace_probe(
         &self,
         root: PathBuf,
     ) -> Result<StandaloneExecution, String> {
@@ -3550,30 +3550,10 @@ impl SessionRuntimeManager {
         expected_workspace: Option<&Path>,
         prepare: impl FnOnce(&SessionId, PathBuf) -> io::Result<LocalExecutionEndpoint> + Send + 'static,
     ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
-        let claim = {
-            let catalog = self.sessions.catalog.lock().await;
-            let (_, settings) = catalog.lineage(session, None).map_err(error)?;
-            if expected_workspace.is_some_and(|path| path.as_os_str() != settings.cwd.as_os_str()) {
-                return Err(error("workspace is not the Session's reserved workspace"));
-            }
-            // Under the same catalog visibility cut: residency admission is
-            // the only authority that may fence a claim.
-            let registry = self.registry.0.lock().expect("registry mutex");
-            if registry.draining {
-                return Err(RuntimeManagerError::Draining);
-            }
-            if registry.retiring_sessions.contains(session) {
-                return Err(error("Session retirement has fenced runtime admission"));
-            }
-            self.execution.claim_with_replacement(
-                session,
-                settings.cwd.clone(),
-                transport,
-                replaces,
-            )
-            // Both guards release here, before any I/O or await.
-        };
-        match claim? {
+        let claim = self
+            .claim_persisted_execution(session, transport, replaces, expected_workspace)
+            .await?;
+        match claim {
             Claim::Existing(endpoint) => Ok(endpoint),
             Claim::Create(slot) => {
                 // The spawned preparation owns publication: a dropped
@@ -3587,6 +3567,32 @@ impl SessionRuntimeManager {
                 .map_err(error)?
             }
         }
+    }
+
+    async fn claim_persisted_execution(
+        &self,
+        session: &SessionId,
+        transport: ExecutionTransport,
+        replaces: Option<&Arc<LocalExecutionEndpoint>>,
+        expected_workspace: Option<&Path>,
+    ) -> Result<Claim, RuntimeManagerError> {
+        let catalog = self.sessions.catalog.lock().await;
+        let (_, settings) = catalog.lineage(session, None).map_err(error)?;
+        if expected_workspace.is_some_and(|path| path.as_os_str() != settings.cwd.as_os_str()) {
+            return Err(error("workspace is not the Session's reserved workspace"));
+        }
+        // Under the same catalog visibility cut: residency admission is
+        // the only authority that may fence a claim.
+        let registry = self.registry.0.lock().expect("registry mutex");
+        if registry.draining {
+            return Err(RuntimeManagerError::Draining);
+        }
+        if registry.retiring_sessions.contains(session) {
+            return Err(error("Session retirement has fenced runtime admission"));
+        }
+        self.execution
+            .claim_with_replacement(session, settings.cwd.clone(), transport, replaces)
+        // Both guards release here, before any I/O or await.
     }
 
     /// Returns the Session's already-published local execution endpoint

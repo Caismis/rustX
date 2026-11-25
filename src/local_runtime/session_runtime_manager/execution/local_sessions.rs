@@ -1,10 +1,10 @@
 //! Creates and reaps the sibling Clients owned by an installed local composition.
 
-use super::{Claim, ExecutionTransport, LocalExecutionEndpoint, sibling, spawn_preparation};
+use super::{Claim, ExecutionTransport, LocalExecutionEndpoint, Slot, sibling, spawn_preparation};
 use crate::local_runtime::{
     configuration::{AdmittedSessionConfig, SessionConfigInput, application::ApplicationState},
     session::{SessionError, SessionId},
-    session_runtime_manager::SessionRuntimeManager,
+    session_runtime_manager::{RuntimeManagerError, SessionRuntimeManager, error},
 };
 use crate::runtime::CancellationSignal;
 use std::{
@@ -114,13 +114,7 @@ impl SessionRuntimeManager {
         let Some(grant) = self.local_workspace_grant(&input.cwd)? else {
             return Ok(None);
         };
-        let slot = self
-            .execution
-            .local
-            .slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| creation_error("the local Session Client limit is reached"))?;
+        let slot = self.local_client_slot()?;
         let session = SessionId::generate();
         let claim = {
             let registry = self.registry.0.lock().expect("registry mutex");
@@ -134,9 +128,97 @@ impl SessionRuntimeManager {
         let Claim::Create(claim) = claim else {
             unreachable!("fresh local Session identity already claimed");
         };
+        let pending = self
+            .start_claimed_local_client(session, claim, grant, slot)
+            .await?;
+        let configuration = self.configuration.clone();
+        let credentials = self.credentials.clone();
+        let input = input.clone();
+        let endpoint = pending.client.endpoint.clone();
+        let captured = tokio::task::spawn_blocking(move || {
+            ApplicationState::initial_bound_session(
+                &configuration,
+                &input,
+                &credentials,
+                &endpoint,
+                false,
+            )
+        })
+        .await
+        .map_err(creation_error)
+        .and_then(|result| result.map_err(creation_error));
+        match captured {
+            Ok(capture) => Ok(Some((pending, capture))),
+            Err(error) => {
+                self.discard_local_session(pending).await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Live runtime composition is the first execution demand for a resumed
+    /// or copied Session. Cold catalog and committed history reads do not call
+    /// this path. A loaded branch shares the existing Session reservation.
+    pub(in crate::local_runtime::session_runtime_manager) async fn ensure_local_session(
+        &self,
+        session: &SessionId,
+        cwd: &Path,
+    ) -> Result<(), RuntimeManagerError> {
+        if !self
+            .execution
+            .local
+            .roots
+            .get()
+            .is_some_and(|roots| roots.iter().any(|root| cwd.starts_with(root)))
+            || self.execution.configuration_endpoint(session)?.is_some()
+        {
+            return Ok(());
+        }
+        let Some(grant) = self.local_workspace_grant(cwd).map_err(error)? else {
+            return Ok(());
+        };
+        let slot = self.local_client_slot().map_err(error)?;
+        let claim = self
+            .claim_persisted_execution(session, ExecutionTransport::Unix, None, Some(cwd))
+            .await?;
+        let Claim::Create(claim) = claim else {
+            return Ok(());
+        };
+        let pending = self
+            .start_claimed_local_client(session.clone(), claim, grant, slot)
+            .await
+            .map_err(error)?;
+        if let Err(refused) = pending.admit() {
+            self.discard_local_session(pending).await;
+            return Err(error(refused));
+        }
+        self.keep_local_session(pending);
+        Ok(())
+    }
+
+    fn local_client_slot(&self) -> Result<OwnedSemaphorePermit, SessionError> {
+        self.execution
+            .local
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| creation_error("the local Session Client limit is reached"))
+    }
+
+    async fn start_claimed_local_client(
+        &self,
+        session: SessionId,
+        claim: Arc<Slot>,
+        grant: CancellationSignal,
+        slot: OwnedSemaphorePermit,
+    ) -> Result<PendingClient, SessionError> {
         let runtime_root = self.configuration.runtime_root().to_path_buf();
         let id = session.clone();
         let reserved = spawn_preparation(claim, move |workspace| {
+            rustx_execution_server::RecoveryFence::require_session_settled(
+                &runtime_root,
+                &rustx_execution_protocol::SessionId::new(id.as_str()),
+            )?;
             LocalExecutionEndpoint::new(&id, workspace)?.with_recovery_fence(&runtime_root)
         })
         .await
@@ -164,36 +246,23 @@ impl SessionRuntimeManager {
             self.execution.retire(&session);
             return Err(creation_error("the admitted Client disconnected"));
         };
-        let pending = PendingClient {
+        Ok(PendingClient {
             session,
             lane,
             client,
             grant,
             slot,
-        };
-        let configuration = self.configuration.clone();
-        let credentials = self.credentials.clone();
-        let input = input.clone();
-        let endpoint = pending.client.endpoint.clone();
-        let captured = tokio::task::spawn_blocking(move || {
-            ApplicationState::initial_bound_session(
-                &configuration,
-                &input,
-                &credentials,
-                &endpoint,
-                false,
-            )
         })
-        .await
-        .map_err(creation_error)
-        .and_then(|result| result.map_err(creation_error));
-        match captured {
-            Ok(capture) => Ok(Some((pending, capture))),
-            Err(error) => {
-                self.discard_local_session(pending).await;
-                Err(error)
-            }
-        }
+    }
+
+    pub(crate) fn local_workspace_skill_grant(
+        &self,
+        workspace: &Path,
+    ) -> Option<CancellationSignal> {
+        self.execution
+            .reserves_workspace(workspace)
+            .then(|| self.local_workspace_grant(workspace).ok().flatten())
+            .flatten()
     }
 
     pub(in crate::local_runtime::session_runtime_manager) async fn discard_local_session(

@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { appServerEndpoint } from '../src/app-server-readiness.ts';
 import { Launcher } from '../src/launcher.ts';
 import type { Spawn, ChildSpec } from '../src/process.ts';
 import { LocalWorkspaceHost } from '../../web-console/host/workspaces.ts';
+import { configurationCommand } from '../../tui/src/configuration-command.ts';
 import { parseArguments as parseTui } from '../../tui/src/cli.ts';
 import { handoff } from '../src/browser.ts';
 import { workspaceRegistry } from '../src/workspace-registry.ts';
@@ -77,6 +78,31 @@ test('TUI delegates unchanged arguments to the existing composition root and nat
   assert.throws(() => parseTui(['--binary', nativeBinary, '--unknown']), /unknown/);
   assert.throws(() => parseTui(['--binary', nativeBinary, '--cwd', '/obsolete']), /unknown/);
   const stopping = launcher.settle(0); child.reap.resolve(); await stopping;
+});
+
+test('installed TUI forwards native configuration commands and their exit codes', async () => {
+  for (const forwarded of [['config', 'show', '--sources'], ['init', '--help'], ['doctor', '--help'], ['workflow', '--help']]) {
+    const h = harness(), launcher = new Launcher(root, h.spawn, undefined, true);
+    await launcher.start(parseArguments(['tui', '--binary', nativeBinary, ...forwarded], root));
+    const child = h.calls[0];
+    assert.deepEqual(configurationCommand(child.spec.args.slice(1)), { binary: nativeBinary, arguments: forwarded });
+    child.exit(27);
+    child.reap.resolve();
+    assert.equal(await launcher.done, 27);
+  }
+});
+
+test('installed interactive TUI starts the local Session composition', async t => {
+  const f = fixture(); t.after(f.remove);
+  const h = harness(), launcher = new Launcher(root, h.spawn, undefined, true);
+  await launcher.start(parseArguments(['tui', '--binary', nativeBinary, '--workspace', f.a], root));
+  const child = h.calls[0];
+  assert.ok(child.spec.args.includes('--local-session-execution'));
+  const parsed = parseTui(child.spec.args.slice(1));
+  assert.equal(parsed.mode.kind === 'local' && parsed.mode.launch.localSessionRoot, realpathSync(f.a));
+  child.exit(0);
+  child.reap.resolve();
+  assert.equal(await launcher.done, 0);
 });
 
 test('Web creates one token/config, passes the bound endpoint, and cleanup waits for BOTH owned children', async t => {

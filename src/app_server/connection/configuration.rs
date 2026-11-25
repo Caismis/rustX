@@ -1,10 +1,19 @@
 //! Configuration requests outside any attachment: User/Workspace sources,
 //! Session settings, MCP probes and reconciliation. Mutations
 //! commit through the manager; reads materialize off the async executor.
+use std::sync::Arc;
+
 use super::AppServerConnection;
-use crate::app_server::protocol::{ErrorData, Method, MethodResult, RpcError};
+use crate::app_server::protocol::{
+    ErrorData, Method, MethodResult, RpcError, WorkspaceCatalogAuthority,
+};
 use crate::app_server::rpc_error::{
     domain, session_error, source_error, source_read_error, source_settings_error,
+};
+use crate::local_runtime::{
+    configuration::settings::{SettingsError, SourceTarget},
+    session::SessionId,
+    session_runtime_manager::{LocalExecutionEndpoint, SessionRuntimeManager},
 };
 
 impl AppServerConnection {
@@ -76,6 +85,85 @@ impl AppServerConnection {
         Ok(Some(endpoint))
     }
 
+    async fn read_skill_catalog<T, F, R>(
+        &self,
+        target: SourceTarget,
+        session: Option<SessionId>,
+        owner: crate::app_server::host::ServerOperation,
+        read: F,
+    ) -> Result<(T, WorkspaceCatalogAuthority), RpcError>
+    where
+        T: Send + 'static,
+        F: FnOnce(SessionRuntimeManager, SourceTarget, Option<Arc<LocalExecutionEndpoint>>) -> R
+            + Send
+            + 'static,
+        R: Future<Output = Result<T, SettingsError>> + Send + 'static,
+    {
+        let (endpoint, probe) = match self.catalog_endpoint(&target, session.as_ref()).await {
+            Ok(endpoint) => (endpoint, None),
+            Err(failure) => {
+                let Some(workspace) = target.workspace().filter(|_| session.is_none()) else {
+                    return Err(failure);
+                };
+                let Some(grant) = self.host.manager().local_workspace_skill_grant(workspace) else {
+                    return Err(failure);
+                };
+                (None, Some((workspace.to_path_buf(), grant)))
+            }
+        };
+        let host = self.host.clone();
+        // The request lease covers the Client's entire lifetime, including
+        // reaping after a detached observer or a failed catalog read.
+        tokio::spawn(async move {
+            let _owner = owner;
+            let manager = host.manager().clone();
+            let Some((workspace, grant)) = probe else {
+                let authority = if endpoint.is_some() {
+                    WorkspaceCatalogAuthority::Client
+                } else {
+                    WorkspaceCatalogAuthority::Authoring
+                };
+                return read(manager, target, endpoint)
+                    .await
+                    .map(|result| (result, authority))
+                    .map_err(source_error);
+            };
+            let unavailable = || domain(ErrorData::ExecutionUnavailable);
+            let stop = host.environment_stop();
+            let capacity = host.workspace_picker().ok_or_else(unavailable)?;
+            let _slot = tokio::select! {
+                () = grant.cancelled() => return Err(unavailable()),
+                () = stop.cancelled() => return Err(unavailable()),
+                slot = tokio::time::timeout(
+                    rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT,
+                    capacity.acquire(),
+                ) => slot.map_err(|_| unavailable())?.map_err(|_| unavailable())?,
+            };
+            if grant.is_cancelled() || stop.is_cancelled() {
+                return Err(unavailable());
+            }
+            let private = manager
+                .start_local_workspace_probe(workspace)
+                .await
+                .map_err(|_| unavailable())?;
+            let result = match private.scope().endpoint() {
+                Ok(endpoint) if !grant.is_cancelled() && !stop.is_cancelled() => {
+                    read(manager, target, Some(endpoint))
+                        .await
+                        .map_err(source_error)
+                }
+                _ => Err(unavailable()),
+            };
+            private.shutdown().await.map_err(|_| unavailable())?;
+            if grant.is_cancelled() || stop.is_cancelled() {
+                return Err(unavailable());
+            }
+            result.map(|result| (result, WorkspaceCatalogAuthority::Client))
+        })
+        .await
+        .map_err(|_| domain(ErrorData::OperationFailed))?
+    }
+
     /// Serve one admitted configuration request.
     #[allow(clippy::too_many_lines)] // One arm per configuration method.
     pub(super) async fn configuration(
@@ -115,27 +203,18 @@ impl AppServerConnection {
                 limit,
                 expected_revision,
             } => {
-                let endpoint = self
-                    .catalog_endpoint(&target, execution_session.as_ref())
-                    .await?;
-                let authority = if endpoint.is_some() {
-                    crate::app_server::protocol::WorkspaceCatalogAuthority::Client
-                } else {
-                    crate::app_server::protocol::WorkspaceCatalogAuthority::Authoring
-                };
-                let page = self
-                    .host
-                    .manager()
-                    .skill_page(
+                let (page, authority) = self
+                    .read_skill_catalog(
                         target,
-                        endpoint,
-                        offset,
-                        limit,
-                        expected_revision,
+                        execution_session,
                         request_owner,
+                        move |manager, target, endpoint| async move {
+                            manager
+                                .skill_page(target, endpoint, offset, limit, expected_revision, ())
+                                .await
+                        },
                     )
-                    .await
-                    .map_err(source_error)?;
+                    .await?;
                 Ok(MethodResult::Skills { page, authority })
             }
             Method::SkillsRead {
@@ -147,24 +226,27 @@ impl AppServerConnection {
                 max_bytes,
                 expected_revision,
             } => {
-                let endpoint = self
-                    .catalog_endpoint(&target, execution_session.as_ref())
-                    .await?;
-                let content = self
-                    .host
-                    .manager()
-                    .skill_read(
+                let (content, _) = self
+                    .read_skill_catalog(
                         target,
-                        endpoint,
-                        name,
-                        kind,
-                        offset,
-                        max_bytes,
-                        expected_revision,
+                        execution_session,
                         request_owner,
+                        move |manager, target, endpoint| async move {
+                            manager
+                                .skill_read(
+                                    target,
+                                    endpoint,
+                                    name,
+                                    kind,
+                                    offset,
+                                    max_bytes,
+                                    expected_revision,
+                                    (),
+                                )
+                                .await
+                        },
                     )
-                    .await
-                    .map_err(source_error)?;
+                    .await?;
                 Ok(MethodResult::SkillContent { content })
             }
             Method::ConfigurationReconcile { target } => {

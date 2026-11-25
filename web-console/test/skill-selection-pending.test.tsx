@@ -54,7 +54,7 @@ function gatedClient(held: 'user' | 'workspace' = 'user') {
 }
 
 function browser(client: ReturnType<typeof cfg3Client>['client'], source: SourceSettings, revision: string, scope: 'user' | 'workspace' = 'user') {
-  return <ResourceBrowser client={client} source={source} target={source.target} scope={scope} revision={revision} query="" view="cards" refresh={0} onRefresh={() => {}}
+  return <ResourceBrowser active client={client} source={source} target={source.target} scope={scope} revision={revision} query="" view="cards" refresh={0} onRefresh={() => {}}
     bindDisplayWrite={() => undefined} bindDelete={() => undefined} transferDisabled />;
 }
 

@@ -221,6 +221,21 @@ def tui_create(binary: Path, cwd: Path, environment: dict, endpoint: str) -> Non
     home.mkdir()
     environment = {**environment, "HOME": str(home), "TERM": "xterm-256color"}
     config = configure(binary, cwd, environment, endpoint)
+    inspection = ["config", "show", "--sources", "--json", "--config", str(config), "--workspace", str(workspace)]
+    for arguments in (inspection, ["workflow", "--help"]):
+        native_command = subprocess.run([binary, *arguments], cwd=cwd, env=environment,
+                                        capture_output=True, timeout=30)
+        if arguments == inspection:
+            report = json.loads(native_command.stdout)
+            require(report["operation"] == "config_show" and report["validity"] == "valid",
+                    "Native config inspection did not produce the expected report")
+        else:
+            require(native_command.returncode == 0, "Native Workflow help failed")
+        forwarded = subprocess.run([binary, "tui", *arguments], cwd=cwd, env=environment,
+                                   capture_output=True, timeout=30)
+        require((forwarded.returncode, forwarded.stdout, forwarded.stderr)
+                == (native_command.returncode, native_command.stdout, native_command.stderr),
+                "Installed TUI changed the native command output or exit code")
     master, slave = pty.openpty()
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 132, 0, 0))
@@ -275,24 +290,28 @@ def tui_create(binary: Path, cwd: Path, environment: dict, endpoint: str) -> Non
 
 
 def web(binary: Path, cwd: Path, environment: dict, endpoint: str,
-        *, browser: bool, grants: bool = True) -> None:
+        *, browser: bool, grants: bool = True, resume: bool = False) -> None:
     # Keep the Web owner separate so a failed assertion cannot leave processes behind.
     workspace = cwd / "workspace"
-    workspace.mkdir()
-    (workspace / "project").mkdir()
-    (workspace / "seed.txt").write_text("seed-web-root\n")
-    (workspace / "project/seed.txt").write_text("seed-web-child\n")
-    native = cwd / "native"
     home = cwd / "home"
-    home.mkdir()
-    environment = {**environment, "HOME": str(home)}
+    if not resume:
+        workspace.mkdir()
+        (workspace / "project").mkdir()
+        (workspace / "seed.txt").write_text("seed-web-root\n")
+        (workspace / "project/seed.txt").write_text("seed-web-child\n")
+        skill = workspace / ".agents/skills/installed-guide"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: installed-guide\ndescription: Installed Workspace guide.\n---\nPrivate Client catalog marker.\n")
+        home.mkdir()
+    native = cwd / "native"
+    environment = {**environment, "HOME": str(home),
+                   "PLAYWRIGHT_BROWSERS_PATH": os.environ.get(
+                       "PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ("Library/Caches/ms-playwright"
+                       if os.uname().sysname == "Darwin" else ".cache/ms-playwright")))}
     if key := os.environ.get("RUSTX_INSTALLED_BROWSER_EXECUTABLE"):
         environment["RUSTX_INSTALLED_BROWSER_EXECUTABLE"] = key
-    if cache := os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        environment["PLAYWRIGHT_BROWSERS_PATH"] = cache
-    else:
-        environment["PLAYWRIGHT_BROWSERS_PATH"] = str(Path.home() / ("Library/Caches/ms-playwright" if os.uname().sysname == "Darwin" else ".cache/ms-playwright"))
-    config = configure(binary, cwd, environment, endpoint, workspace if grants else None)
+    config = cwd / "config.toml" if resume else configure(binary, cwd, environment, endpoint, workspace if grants else None)
     started = time.monotonic()
     with (cwd / "web.log").open("w+") as errors:
         launcher = subprocess.Popen([binary, "web", "--workspace", workspace, "--no-open",
@@ -361,9 +380,10 @@ def web(binary: Path, cwd: Path, environment: dict, endpoint: str,
                 post("browse-workspace", {**coordinates, "path": "../"}, 400)
                 if grants:
                     root = post("browse-workspace", {**coordinates, "path": ""})
-                    require(root["folders"] == ["project"], "Installed picker lost the directory")
+                    require("project" in root["folders"], "Installed picker lost the directory")
                     selected = post("browse-workspace", {**coordinates, "path": "project"})
-                    require(selected["folders"] == [], "Empty selection returned extra entries")
+                    if not resume:
+                        require(selected["folders"] == [], "Empty selection returned extra entries")
                     if not browser:
                         identifier = post("register-workspace-folder", {**coordinates, "selection": {
                             "path": "project", "revision": selected["revision"],
@@ -378,7 +398,8 @@ def web(binary: Path, cwd: Path, environment: dict, endpoint: str,
             print(f"Web bootstrap and static assets ready in {(time.monotonic() - started) * 1000:.1f} ms", flush=True)
             if browser:
                 run = subprocess.run([shutil.which("node"), ROOT / "web-console/test/installed-composition.ts",
-                                      startup.decode(), native, workspace, "granted" if grants else "exact-only"],
+                                      startup.decode(), native, workspace,
+                                      "resumed" if resume else "granted" if grants else "exact-only"],
                                      cwd=cwd, env=environment, timeout=180)
                 require(run.returncode == 0, "Installed Web browser proof failed")
                 print("Installed Web browser and Workspace ownership verified", flush=True)
@@ -473,13 +494,14 @@ def main() -> None:
             try:
                 web(bundle, cwd / "web", environment, provider.root, browser=options.browser_proof)
                 if options.browser_proof:
+                    web(bundle, cwd / "web", environment, provider.root, browser=True, resume=True)
                     web(bundle, cwd / "exact-root", environment, provider.root, browser=True, grants=False)
                 tui_create(bundle, cwd / "terminal", environment, provider.root)
             finally:
                 require(not provider.errors, f"Installed tool results: {provider.errors}")
             names = {"terminal-session"}
             if options.browser_proof:
-                names.update(("web-root", "web-child"))
+                names.update(("web-root", "web-child", "web-fork", "web-resume"))
             provider.assert_calls(names)
         if options.process_harness:
             process_proof(options.process_harness.resolve(), products, options.mount_proof)

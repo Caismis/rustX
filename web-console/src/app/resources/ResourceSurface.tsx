@@ -96,7 +96,11 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [boundObservation, setBoundObservation] = useState<{ key: string; authority?: WorkspaceCatalogAuthority; source?: SourceSettings['user_mcp']; error?: string }>();
   const [boundSkillObservation, setBoundSkillObservation] = useState<{ key: string; status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }>();
   const boundSource = sessionCandidate && module === 'mcp' && boundObservation?.key === boundKey ? boundObservation : undefined;
-  const boundSkillState = sessionCandidate && module === 'skills' && boundSkillObservation?.key === boundKey ? boundSkillObservation : undefined;
+  const workspaceSkills = showingWorkspace && module === 'skills';
+  const boundSkillState = workspaceSkills && boundSkillObservation?.key === boundKey ? boundSkillObservation : undefined;
+  const observeSkills = (state: { status: 'loading' | 'ready' | 'failed'; authority?: WorkspaceCatalogAuthority }) =>
+    setBoundSkillObservation(prev => prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority
+      ? prev : { key: boundKey, ...state });
   const authoringConfirmed = !!sessionCandidate && (module === 'mcp' ? boundSource?.authority === 'authoring' : boundSkillState?.authority === 'authoring');
   const bound = sessionCandidate && (module === 'mcp' ? boundSource?.authority === 'client' && !!boundSource.source : boundSkillState?.authority === 'client')
     ? sessionCandidate : undefined;
@@ -172,7 +176,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const revision = config.state === 'structured' ? config.revision : undefined;
   const editable = available && !bound && !awaitingAssociation && (!sessionCandidate || authoringConfirmed) && !!observation && !readError && transport.connection === 'connected';
   const skillTransferScope = module === 'skills' && visible && showingWorkspace && editable && directory
-    && (!sessionCandidate || boundSkillState?.status === 'ready') ? JSON.stringify([lifetime, boundKey, directory]) : undefined;
+    && boundSkillState?.status === 'ready' && boundSkillState.authority === 'authoring' ? JSON.stringify([lifetime, boundKey, directory]) : undefined;
   const activeTransfer = pendingTransfer && (pendingTransfer.intent.family !== 'skill' || (
     !!skillTransferScope && pendingTransfer.skillScope === skillTransferScope
   )) ? pendingTransfer : undefined;
@@ -347,14 +351,14 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   };
 
   const lifecycle = awaitingAssociation ? 'loading'
-    : sessionCandidate && module === 'skills' && (!authoringConfirmed || boundSkillState?.status !== 'ready')
-      ? (boundSkillState?.status ?? 'loading')
+    : workspaceSkills && (!authoringConfirmed || boundSkillState?.status !== 'ready')
+      ? (boundSkillState?.status ?? (readError ? 'failed' : 'loading'))
     : sessionCandidate && !authoringConfirmed
       ? (boundSource?.authority === 'client' && boundSource.source ? 'ready' : boundSource?.error ? 'failed' : 'loading')
       : (available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading');
 
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}
-    data-lifecycle={lifecycle} hidden={!visible} inert={!visible}>
+    data-lifecycle={lifecycle} data-catalog-authority={visible ? boundSkillState?.authority : undefined} hidden={!visible} inert={!visible}>
     {agentEditor ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}><SettingsFeedback active={visible}>
       {[editorError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
       {editorAvailable && editorSource ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
@@ -416,12 +420,10 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             <SourceContext value={authoringConfirmed ? source : undefined}>
               {authoringConfirmed && [readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
               <fieldset className={css.editor} disabled={authoringConfirmed && !!source && !editable}>
-                <ResourceBrowser key={boundKey} client={client} source={source} target={{ kind: 'workspace', directory: sessionCandidate.cwd }} scope="workspace" revision={revision}
+                <ResourceBrowser key={visible ? boundKey : undefined} active={visible} client={client} source={source} target={{ kind: 'workspace', directory: sessionCandidate.cwd }} scope="workspace" revision={revision}
                   query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName} executionSession={sessionCandidate.id}
                   bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled}
-                  onCatalogState={state => setBoundSkillObservation(prev =>
-                    prev && prev.key === boundKey && prev.status === state.status && prev.authority === state.authority
-                      ? prev : { key: boundKey, ...state })} />
+                  onCatalogState={observeSkills} />
               </fieldset>
             </SourceContext>
           </SettingsActorContext> : sessionCandidate && !authoringConfirmed && module === 'mcp' ? (
@@ -432,10 +434,12 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
           ) : !available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>
             {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
-              <fieldset className={css.editor} disabled={!editable} key={lifetime}>
-                {module === 'skills' ? <ResourceBrowser client={client} source={source} target={source.target} scope={scope} revision={revision}
+              <fieldset className={css.editor} disabled={!editable && boundSkillState?.authority !== 'client'} key={lifetime}>
+                {module === 'skills' ? <ResourceBrowser key={workspaceSkills && visible ? boundKey : undefined} active={visible} client={client}
+                  source={source} target={source.target} scope={scope} revision={revision}
                   query={query} view={view} refresh={catalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
-                  bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
+                  bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled}
+                  onCatalogState={workspaceSkills ? observeSkills : undefined} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}
           </>}

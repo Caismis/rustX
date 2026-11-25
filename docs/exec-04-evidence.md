@@ -31,7 +31,13 @@ The installed Web verifier also sends the invalid request target on a raw
 TCP connection, then uses the same carrier and App Server. In the
 configuration with no native environment grant, it removes and re-adds the
 launcher root through the rendered picker and verifies that browsing a
-descendant remains unavailable. The normal and negative picker cases use
+descendant remains unavailable. It then reads the Home Skills catalog with no
+selected Session while the original Workspace Client remains live. The
+same bundle forks an existing Session, checks its independent execution
+identity, and starts a fresh owner on a clean restart of the original
+Session. The installed strong-kill case confirms that cold history stays
+readable and live composition refuses an unresolved physical domain. The
+normal and negative picker cases use
 the same extracted Web distribution.
 
 The four evidence ledgers cover all 73 test IDs by number. The release requires receipts for the same head from the independent native macOS job and the stacked PR's FULL and Merge verification. The measurement samples below identify their distinct baselines.

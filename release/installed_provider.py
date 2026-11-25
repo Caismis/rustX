@@ -16,21 +16,22 @@ class InstalledProvider:
     def reply(self, body: dict) -> bytes:
         messages = body["messages"]
         # Chat completions may send content as an array and add runtime notices.
-        prompt = " ".join(str(message["content"]) for message in messages if message["role"] == "user")
-        names = [name for name in ("web-root", "web-child", "terminal-session")
-                 if f"exercise {name}" in prompt]
-        if len(names) != 1:
-            raise ValueError(f"Unexpected installed fixture input: {prompt[:400]!r}")
-        name = names[0]
+        names = ("web-root", "web-child", "web-fork", "web-resume", "terminal-session")
+        submission, name = next(
+            (index, name) for index, message in reversed(list(enumerate(messages)))
+            if message["role"] == "user" for name in names
+            if f"exercise {name}" in str(message["content"])
+        )
         if any("Write a concise title for the task" in str(message["content"])
                for message in messages if message["role"] == "system"):
             return self.chunk({"role": "assistant", "content": f"Test {name}"}, "stop")
-        results = {message["tool_call_id"]: message["content"] for message in messages
+        results = {message["tool_call_id"]: message["content"] for message in messages[submission + 1:]
                    if message["role"] == "tool"}
         with self.lock:
             self.requests.setdefault(name, []).append("results" if results else "start")
         if results:
-            expected = {"installed_read": f"seed-{name}", "installed_bash": f"bash-{name}",
+            seed = "web-root" if name in ("web-fork", "web-resume") else name
+            expected = {"installed_read": f"seed-{seed}", "installed_bash": f"bash-{name}",
                         "installed_write": "written.txt"}
             for call, marker in expected.items():
                 if marker not in results.get(call, ""):
