@@ -230,7 +230,7 @@ export async function waitForSettingsRevision(expected?: string) {
   await waitFor(() => expect(observedRevision(expected)).toBeTruthy());
 }
 
-/** Pick a value from a React Aria Select.
+/** Pick a value from a coss/Base UI Select.
  *
  * The trigger's accessible name is its current value followed by its label, and
  * the listbox opens in a portal outside the form, so the trigger is found in
@@ -241,11 +241,13 @@ export async function providerAction(name: string, scope: { getByRole: typeof sc
 }
 
 export async function chooseOption(label: string, option: string, scope: { getByRole: typeof screen.getByRole } = screen) {
-  fireEvent.click(scope.getByRole('button', { name: (accessible: string) => accessible.endsWith(label) }));
-  fireEvent.click(await screen.findByRole('option', { name: option }));
+  fireEvent.click(scope.getByRole('combobox', { name: (accessible: string) => accessible.endsWith(label) }));
+  const item = await screen.findByRole('option', { name: option });
+  fireEvent.pointerDown(item);
+  fireEvent.click(item);
 }
 
-/** Complete a removal through its React Aria confirmation: the
+/** Complete a removal through its confirmation dialog: the
  * trigger opens the dialog, and only the dialog's own button submits. */
 export async function confirmAction(label: string, scope: { getByRole: typeof screen.getByRole } = screen) {
   fireEvent.click(scope.getByRole('button', { name: label }));

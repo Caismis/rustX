@@ -117,7 +117,7 @@ export function Advanced({ title, children, expanded }: { title: string; childre
     <Heading level={4} style={{ margin: 0 }}>
       <CollapsibleTrigger className={css.disclosureButton}><span className={css.disclosureMarker} aria-hidden="true">▸</span>{title}</CollapsibleTrigger>
     </Heading>
-    <CollapsiblePanel className={css.disclosurePanel}>{children}</CollapsiblePanel>
+    <CollapsiblePanel keepMounted className={css.disclosurePanel}>{children}</CollapsiblePanel>
   </Collapsible>;
 }
 

@@ -1079,11 +1079,8 @@ it('S2-12 no global state framework, router, second design system or form devtoo
 
 it('S2-12 React Aria and TanStack Form stay bounded to their declared interaction owners', () => {
   expect(importers('react-aria-components')).toEqual([
-    'src/app/scheduler/TimingEditor.tsx',
-    'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/models/ProviderIcon.tsx',
     'src/app/settings/primitives/aria.tsx',
-    'src/presentation/settings/SettingsRoot.tsx',
   ]);
   expect(importers('@base-ui/react/dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
   expect(importers('@base-ui/react/alert-dialog')).toEqual(['src/presentation/primitives/DialogSurface.tsx']);
