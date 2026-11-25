@@ -323,9 +323,10 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Bound compiler parallelism on this heavy all-feature lane.
-      # libtest concurrency, targets, assertions, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "1"
+      # Phase-2 experiment: the hosted runner has 4 vCPU; compile-phase
+      # parallelism previously serialized at 1. libtest concurrency,
+      # targets, assertions, and the 90-minute ceiling stay unchanged.
+      CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -421,9 +422,9 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Same compiler serialization as rust-contracts. Targets, assertions,
-      # libtest concurrency, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "1"
+      # Same Phase-2 compiler-parallelism experiment as rust-contracts.
+      # Targets, assertions, libtest concurrency, and the 90-minute ceiling stay.
+      CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
