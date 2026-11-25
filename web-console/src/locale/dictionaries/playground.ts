@@ -1,7 +1,5 @@
 export const en = {
-  commandPalette: "Command Palette",
-  searchCommands: "Search for a command to run...",
-  close: "Close",
+  loading: "Loading",
   noData: "No data yet",
   waitingForData: "Waiting for complete data",
   total: "Total",
@@ -85,9 +83,7 @@ export const en = {
 } as const;
 
 export const zh = {
-  commandPalette: "命令面板",
-  searchCommands: "搜索可用命令…",
-  close: "关闭",
+  loading: "正在加载",
   noData: "暂无数据",
   waitingForData: "等待数据加载完成",
   total: "合计",

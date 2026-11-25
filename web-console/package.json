@@ -26,7 +26,7 @@
   "dependencies": {
     "@a2ui/agent": "0.1.0",
     "@a2ui/web_core": "0.15.0",
-    "@base-ui/react": "1.8.0",
+    "@base-ui/react": "1.9.0",
     "@codemirror/lang-javascript": "6.2.5",
     "@codemirror/lang-jinja": "6.0.1",
     "@codemirror/lang-json": "6.0.2",
@@ -66,7 +66,6 @@
     "antlr4ng": "3.0.16",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "cmdk": "1.1.1",
     "crc-32": "1.2.2",
     "date-fns": "4.4.0",
     "diff": "9.0.0",
@@ -97,7 +96,6 @@
     "occt-import-js": "file:vendor/occt-import-js",
     "papaparse": "5.5.3",
     "pdfjs-dist": "6.4.299",
-    "radix-ui": "1.8.1",
     "react": "19.3.0",
     "react-aria-components": "1.21.1",
     "react-day-picker": "10.0.2",
@@ -131,7 +129,6 @@
     "micromark-util-types": "2.0.2",
     "pngjs": "7.0.0",
     "tailwindcss": "4.3.3",
-    "tw-animate-css": "1.4.0",
     "typescript": "5.9.3",
     "vite": "8.3.0",
     "vitest": "5.0.0"

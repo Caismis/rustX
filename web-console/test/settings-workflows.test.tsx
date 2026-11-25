@@ -1017,10 +1017,10 @@ const importers = (module: string) => sourceImports
 it('S2-12 no global state framework, router, second design system or form devtools is a dependency', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
   const names = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-  const forbidden = /^(zustand|redux|@reduxjs\/.*|mobx.*|@tanstack\/react-query|@tanstack\/.*devtools.*|@radix-ui\/.*|react-router.*|@tanstack\/react-router|@mui\/.*|antd|valibot|@react-spectrum\/.*|@adobe\/react-spectrum)$/;
+  const forbidden = /^(zustand|redux|@reduxjs\/.*|mobx.*|@tanstack\/react-query|@tanstack\/.*devtools.*|@radix-ui\/.*|radix-ui|cmdk|react-router.*|@tanstack\/react-router|@mui\/.*|antd|valibot|@react-spectrum\/.*|@adobe\/react-spectrum)$/;
   expect(names.filter(name => forbidden.test(name))).toEqual([]);
-  // The inline Playground owns its shadcn primitives and catalog validators.
-  for (const module of ['radix-ui', 'cmdk', 'zod']) {
+  // The inline Playground owns its catalog validators.
+  for (const module of ['zod']) {
     expect(importers(module).filter(path => !path.startsWith('src/presentation/markdown/vendor/playground/'))).toEqual([]);
   }
   expect(pkg.dependencies['react-aria-components']).toBeDefined();

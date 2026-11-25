@@ -8,7 +8,7 @@ import { MarkdownText } from './MarkdownText';
 import { playgroundParser } from './playground-parser';
 import catalog from './vendor/playground/catalog.json';
 import { playgroundUI } from './vendor/playground/ui';
-import { shadcnTheme } from './vendor/playground/design-systems/theme';
+import { cossTheme } from './vendor/playground/design-systems/theme';
 import { httpsUrl } from './vendor/playground/a2ui/catalog/renderers/format';
 import css from './ExpressCard.module.css';
 
@@ -65,7 +65,7 @@ export default function PlaygroundExpress({ source, fallback, tree, streaming }:
     ui: playgroundUI,
     config: { ui: playgroundUI },
     transport: 'tool',
-    theme: shadcnTheme,
+    theme: cossTheme,
     forwardEvent: async ({ name, userMessage, context }) => {
       if (activation.current?.isTrusted && !streaming) {
         if (name === openLink) {
@@ -91,7 +91,7 @@ export default function PlaygroundExpress({ source, fallback, tree, streaming }:
     activation.current = nativeEvent;
     setTimeout(() => { if (activation.current === nativeEvent) activation.current = undefined; }, 0);
   }
-  return <div className={`${css.surface} rustx-playground`} data-a2ui-express="" data-a2ui-catalog="playground" data-ds="shadcn"
+  return <div className={`${css.surface} rustx-playground`} data-a2ui-express="" data-a2ui-catalog="playground" data-ds="coss"
     onClickCapture={({ nativeEvent }) => activate(nativeEvent)}
     onKeyDownCapture={({ nativeEvent, key, repeat, target }) => {
       if (!repeat && (key === 'Enter' || key === ' ') && target instanceof Element &&

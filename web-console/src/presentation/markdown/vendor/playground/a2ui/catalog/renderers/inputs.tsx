@@ -4,21 +4,22 @@ import { useTranslation } from "../../../../../../../locale/react";
 import { useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { format as formatDate, isValid, parseISO } from "date-fns";
-import { CalendarDays, Check, ChevronsUpDown } from "lucide-react";
+import { CalendarDays, Check, ChevronsUpDown, Search } from "lucide-react";
 import { Button } from "../../../components/ui/button";
 import { Calendar } from "../../../components/ui/calendar";
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "../../../components/ui/command";
+  Combobox,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxTrigger,
+} from "../../../components/ui/combobox";
 import { Label } from "../../../components/ui/label";
 import {
   Popover,
-  PopoverContent,
+  PopoverPopup,
   PopoverTrigger,
 } from "../../../components/ui/popover";
 import { Switch } from "../../../components/ui/switch";
@@ -77,8 +78,7 @@ function Field({
   );
 }
 
-const control =
-  "h-8.5 text-[13px] bg-transparent dark:bg-white/[0.025] border-input dark:border-white/[0.09] shadow-none";
+const control = "h-8.5 text-[13px] sm:h-8.5";
 
 type InputKeys =
   | "Combobox"
@@ -91,62 +91,57 @@ export const inputRenderers: RendererMap<InputKeys> = {
   Combobox: ({ props }) => {
     const tx = useTranslation();
     const id = useId();
-    const [open, setOpen] = useState(false);
     const [value, setValue] = useBound<string>(props.value, props.setValue, "");
     const options = cleanOptions(props.options);
-    const selected = options.find((o) => o.value === value);
+    const selected = options.find((o) => o.value === value) ?? null;
     return (
       <Field id={id} label={props.label}>
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              id={id}
-              variant="outline"
-              role="combobox"
-              aria-expanded={open}
-              className={cn(
-                control,
-                "w-full min-w-0 justify-between px-2.5 font-normal",
-              )}
-            >
-              <span
-                className={cn("truncate", !selected && "text-muted-foreground")}
-              >
-                {selected?.label ?? props.placeholder ?? tx("playground:searchOptions")}
-              </span>
-              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="start"
-            className="w-(--radix-popover-trigger-width) min-w-52 p-0"
+        <Combobox
+          items={options}
+          value={selected}
+          onValueChange={(o: Opt | null) => {
+            if (o) setValue(o.value);
+          }}
+          isItemEqualToValue={(a: Opt, b: Opt) => a.value === b.value}
+        >
+          <ComboboxTrigger
+            id={id}
+            render={
+              <Button
+                variant="outline"
+                className={cn(
+                  control,
+                  "w-full min-w-0 justify-between font-normal",
+                )}
+              />
+            }
           >
-            <Command>
-              <CommandInput placeholder={tx("playground:search")} className="text-[13px]" />
-              <CommandList>
-                <CommandEmpty className="py-5 text-[12.5px] text-muted-foreground">
-                  {tx("playground:noOptions")}
-                </CommandEmpty>
-                <CommandGroup>
-                  {options.map((o) => (
-                    <CommandItem
-                      key={o.value}
-                      value={`${o.label} ${o.value}`}
-                      data-checked={o.value === value}
-                      onSelect={() => {
-                        setValue(o.value);
-                        setOpen(false);
-                      }}
-                      className="text-[13px]"
-                    >
-                      {o.label}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+            <span
+              className={cn("truncate", !selected && "text-muted-foreground")}
+            >
+              {selected?.label ?? props.placeholder ?? tx("playground:searchOptions")}
+            </span>
+            <ChevronsUpDown className="-me-1! text-muted-foreground" />
+          </ComboboxTrigger>
+          <ComboboxPopup aria-label={props.label ?? tx("playground:searchOptions")}>
+            <div className="border-b p-2">
+              <ComboboxInput
+                className="rounded-md before:rounded-[calc(var(--radius-md)-1px)]"
+                placeholder={tx("playground:search")}
+                showTrigger={false}
+                startAddon={<Search />}
+              />
+            </div>
+            <ComboboxEmpty>{tx("playground:noOptions")}</ComboboxEmpty>
+            <ComboboxList>
+              {(o: Opt) => (
+                <ComboboxItem key={o.value} value={o} className="text-[13px]">
+                  {o.label}
+                </ComboboxItem>
+              )}
+            </ComboboxList>
+          </ComboboxPopup>
+        </Combobox>
       </Field>
     );
   },
@@ -191,16 +186,19 @@ export const inputRenderers: RendererMap<InputKeys> = {
     return (
       <Field id={id} label={props.label}>
         <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              id={id}
-              variant="outline"
-              className={cn(
-                control,
-                "w-full min-w-0 justify-start gap-2 px-2.5 font-normal",
-              )}
-            >
-              <CalendarDays className="size-3.5 shrink-0 text-muted-foreground" />
+          <PopoverTrigger
+            id={id}
+            render={
+              <Button
+                variant="outline"
+                className={cn(
+                  control,
+                  "w-full min-w-0 justify-start font-normal",
+                )}
+              />
+            }
+          >
+            <CalendarDays className="text-muted-foreground" />
               <span
                 className={cn("truncate", !date && "text-muted-foreground")}
               >
@@ -208,9 +206,8 @@ export const inputRenderers: RendererMap<InputKeys> = {
                   ? formatDate(date, "EEE, MMM d, yyyy")
                   : (props.placeholder ?? tx("playground:pickDate"))}
               </span>
-            </Button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-auto p-0">
+          <PopoverPopup align="start">
             <Calendar
               mode="single"
               selected={date}
@@ -220,7 +217,7 @@ export const inputRenderers: RendererMap<InputKeys> = {
                 setOpen(false);
               }}
             />
-          </PopoverContent>
+          </PopoverPopup>
         </Popover>
       </Field>
     );
@@ -234,17 +231,19 @@ export const inputRenderers: RendererMap<InputKeys> = {
       <Field id={id} label={props.label}>
         <ToggleGroup
           id={id}
-          type="single"
-          spacing={0}
-          value={value}
-          onValueChange={(v: string) => v && setValue(v)}
-          className="w-fit max-w-full overflow-x-auto rounded-lg border border-black/[0.09] dark:border-white/[0.09] bg-black/[0.025] dark:bg-white/[0.025] p-0.5"
+          variant="outline"
+          size="sm"
+          value={value ? [value] : []}
+          onValueChange={(v: string[]) => {
+            if (v[0]) setValue(v[0]);
+          }}
+          className="max-w-full overflow-x-auto"
         >
           {options.map((o) => (
             <ToggleGroupItem
               key={o.value}
               value={o.value}
-              className="h-7 rounded-md! px-3 text-[12.5px] font-medium text-muted-foreground data-[state=on]:bg-[#fff] dark:data-[state=on]:bg-white/[0.09] data-[state=on]:text-foreground data-[state=on]:shadow-[0_1px_2px_oklch(0.21_0.012_285/16%)] dark:data-[state=on]:shadow-[0_1px_2px_oklch(0_0_0/35%)]"
+              className="px-3 text-[12.5px]"
             >
               {o.label}
             </ToggleGroupItem>
@@ -278,11 +277,11 @@ export const inputRenderers: RendererMap<InputKeys> = {
       >
         <ToggleGroup
           id={id}
-          type="multiple"
-          spacing={1.5}
+          multiple
+          size="sm"
           value={selected}
           onValueChange={(v: string[]) => setValue(v)}
-          className="flex-wrap justify-start"
+          className="flex-wrap justify-start gap-1.5"
         >
           {options.map((o) => {
             const on = selected.includes(o.value);
@@ -291,10 +290,8 @@ export const inputRenderers: RendererMap<InputKeys> = {
                 key={o.value}
                 value={o.value}
                 className={cn(
-                  "h-7 gap-1 rounded-full! border px-3 text-[12.5px] font-medium transition-colors",
-                  on
-                    ? "border-[color-mix(in_oklch,var(--a2-accent)_50%,transparent)] bg-[color-mix(in_oklch,var(--a2-accent)_14%,transparent)]! text-(--a2-accent)"
-                    : "border-black/[0.1] dark:border-white/[0.1] bg-black/[0.02] dark:bg-white/[0.02] text-foreground/80 hover:bg-black/[0.05] dark:hover:bg-white/[0.05]",
+                  "gap-1 rounded-full border-input px-3 text-[12.5px] before:rounded-full dark:bg-input/32",
+                  on && "border-primary/40",
                 )}
               >
                 {on ? <Check className="size-3" strokeWidth={2.75} /> : null}

@@ -38,7 +38,6 @@ import {
 import type { LucideIcon } from "lucide-react";
 import {
   Avatar,
-  AvatarBadge,
   AvatarFallback,
   AvatarGroup,
   AvatarGroupCount,
@@ -511,13 +510,14 @@ function DataTableView({
           </div>
           {searchable ? (
             <div className="relative w-full max-w-56 min-w-0">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 z-10 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={String(table.state.globalFilter ?? "")}
                 onChange={(e) => table.setGlobalFilter(e.target.value)}
                 placeholder={tx("playground:searchRows")}
                 aria-label={tx("playground:searchRows")}
-                className="h-7.5 rounded-lg pl-8 text-[12.5px]"
+                size="sm"
+                className="text-[12.5px] *:data-[slot=input]:ps-8"
               />
             </div>
           ) : null}
@@ -816,8 +816,10 @@ export const dataRenderers: RendererMap<DataKeys> = {
     return (
       <div className="a2-enter flex min-w-0 items-center gap-2.5">
         <Avatar
-          size={size === "md" ? "default" : size}
-          className={cn(size === "lg" && "size-11")}
+          className={cn(
+            "overflow-visible",
+            size === "lg" ? "size-11" : size === "sm" ? "size-6" : "size-8",
+          )}
         >
           {image ? <AvatarImage src={image} alt={name} /> : null}
           <AvatarFallback
@@ -834,9 +836,11 @@ export const dataRenderers: RendererMap<DataKeys> = {
             {initials(name)}
           </AvatarFallback>
           {props.status ? (
-            <AvatarBadge
+            <span
               aria-label={props.status}
+              role="img"
               className={cn(
+                "absolute right-0 bottom-0 z-20 size-2.5 rounded-full ring-2 ring-background",
                 props.status === "online"
                   ? "bg-(--a2-positive)"
                   : props.status === "away"
@@ -875,17 +879,18 @@ export const dataRenderers: RendererMap<DataKeys> = {
     const shown = people.slice(0, max);
     const extra = people.length - shown.length;
     return (
-      <TooltipProvider delayDuration={120}>
+      <TooltipProvider delay={120}>
         <div className="a2-enter flex min-w-0 items-center gap-3">
-          <AvatarGroup className="*:data-[slot=avatar]:ring-(--a2-surface) -space-x-1.5">
+          <AvatarGroup>
             {shown.map((p, i) => {
               const name = str(p.name) || "Guest";
               const hue = hueOf(name);
               const image = httpsUrl(p.image);
               return (
                 <Tooltip key={`${name}-${i}`}>
-                  <TooltipTrigger asChild>
-                    <Avatar className="size-8 ring-2 transition-transform hover:z-10 hover:-translate-y-0.5">
+                  <TooltipTrigger
+                    render={<Avatar className="size-8" />}
+                  >
                       {image ? (
                         <AvatarImage src={image} alt={name} />
                       ) : null}
@@ -895,14 +900,13 @@ export const dataRenderers: RendererMap<DataKeys> = {
                       >
                         {initials(name)}
                       </AvatarFallback>
-                    </Avatar>
                   </TooltipTrigger>
                   <TooltipContent sideOffset={6}>{name}</TooltipContent>
                 </Tooltip>
               );
             })}
             {extra > 0 ? (
-              <AvatarGroupCount className="size-8 text-[11px] font-medium tabular-nums ring-(--a2-surface)">
+              <AvatarGroupCount className="size-8 text-[11px] font-medium tabular-nums">
                 +{extra}
               </AvatarGroupCount>
             ) : null}
@@ -1088,13 +1092,7 @@ export const dataRenderers: RendererMap<DataKeys> = {
             {Math.round(v)}%
           </span>
         </div>
-        <Progress
-          value={v}
-          className={cn(
-            "h-1.5 bg-black/[0.07] dark:bg-white/[0.07]",
-            TONE[tone].bar,
-          )}
-        />
+        <Progress value={v} className={TONE[tone].bar} />
         {props.caption ? (
           <span className="text-[11px] text-muted-foreground/80">
             {props.caption}

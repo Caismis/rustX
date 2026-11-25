@@ -41,17 +41,24 @@ server. An omitted object inherits that server's rules. A `default` entry in an
 explicit object delegates to the corresponding built-in mode. No VS Code or
 Cursor source is included.
 
-The Express message renderer adapts CopilotKit A2UI Playground's shadcn/ui
-design system from `CopilotKit/CopilotKit` at
+The Express message renderer adapts CopilotKit A2UI Playground's catalog
+renderers from `CopilotKit/CopilotKit` at
 `535978c0ff44d7ee4132f69cca4e96f2ad16e968`, under
-`examples/showcases/a2ui-playground/src/`. The sources are
-`design-systems/design-systems.css` (neutral light/dark and chart tokens),
-`design-systems/shadcn.tsx` (component styling and Button variant mapping), and
-`components/ui/` (shadcn/ui control and table treatments). RustX scopes these
-styles to supported Express surfaces and retains its own parser and local
-bindings. CopilotKit runtime, provider, and unrelated catalog components are not
-included. The MIT notice is in `licenses/copilotkit-a2ui-playground.txt` and in
-the shipped third-party notices.
+`examples/showcases/a2ui-playground/src/`. Its controls and card styling come
+from coss ui (`cosscom/ui` at `11f4620946e5fb0e2c12a815388ccdf5b3120dd0`,
+MIT). `components/ui/` holds unmodified copies of coss ui's Base UI primitives
+from `packages/ui/src/components/`, with only import paths rewritten, the
+Spinner label translated and the portal positioners scoped to
+`.rustx-playground`. `surface.css` reproduces coss ui's neutral light/dark
+palette from `packages/ui/src/styles/globals.css`, and
+`design-systems/coss.tsx` maps the standard Badge, Button, Divider, Alert,
+Callout, Stat and Progress components onto those primitives. RustX scopes
+these styles to supported Express surfaces and retains its own parser and
+local bindings. CopilotKit runtime, provider, and unrelated catalog components
+are not included. The MIT notices are in
+`licenses/copilotkit-a2ui-playground.txt`, in
+`src/presentation/markdown/vendor/playground/components/ui/LICENSE` and in the
+shipped third-party notices.
 
 ## Settings information density (2026-11-08)
 
@@ -1475,7 +1482,7 @@ Pinned dependencies adopted for demonstrated #393 requirements:
   rendered test pages, are never bundled, never modified and never
   redistributed with the Web Console, so they add no production notice.
 
-- `@base-ui/react` 1.8.0 (MIT), production, with `@base-ui/utils` 0.4.0
+- `@base-ui/react` 1.9.0 (MIT), production, with `@base-ui/utils` 0.5.0
   and `reselect` 5.3.0 added transitively. Its closure also makes the existing
   `@babel/runtime` 7.29.7 a production dependency. The normal notice generator
   reproduces the complete closure in `public/THIRD-PARTY-NOTICES.txt`; no

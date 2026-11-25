@@ -51,15 +51,10 @@ export const layoutRenderers: RendererMap<"Section" | "Accordion"> = {
         </AccordionContent>
       </AccordionItem>
     ));
-    return props.multiple ? (
-      <UIAccordion type="multiple" className="a2-card a2-enter w-full min-w-0">
-        {body}
-      </UIAccordion>
-    ) : (
+    return (
       <UIAccordion
-        type="single"
-        collapsible
-        defaultValue="0"
+        multiple={Boolean(props.multiple)}
+        defaultValue={props.multiple ? [] : ["0"]}
         className="a2-card a2-enter w-full min-w-0"
       >
         {body}

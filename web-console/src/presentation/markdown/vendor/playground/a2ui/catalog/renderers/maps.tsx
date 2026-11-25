@@ -323,28 +323,32 @@ export const mapRenderers: RendererMap<
           ) : null}
           {ok ? (
             <div className="mt-1 flex gap-2">
-              <Button asChild size="sm" className="h-8 flex-1 text-[12.5px]">
-                <a
-                  href={directionsUrl(props.lat, props.lon)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <Navigation /> {tx("playground:directions")}
-                </a>
+              <Button
+                size="sm"
+                className="h-8 flex-1 text-[12.5px]"
+                render={
+                  <a
+                    href={directionsUrl(props.lat, props.lon)}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                }
+              >
+                <Navigation /> {tx("playground:directions")}
               </Button>
               <Button
-                asChild
                 size="sm"
                 variant="outline"
                 className="h-8 flex-1 text-[12.5px]"
+                render={
+                  <a
+                    href={`https://www.openstreetmap.org/?mlat=${props.lat}&mlon=${props.lon}#map=17/${props.lat}/${props.lon}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                }
               >
-                <a
-                  href={`https://www.openstreetmap.org/?mlat=${props.lat}&mlon=${props.lon}#map=17/${props.lat}/${props.lon}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <MapIcon /> {tx("playground:openMap")}
-                </a>
+                <MapIcon /> {tx("playground:openMap")}
               </Button>
             </div>
           ) : null}

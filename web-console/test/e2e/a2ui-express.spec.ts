@@ -148,7 +148,7 @@ test('Express inputs update only their own card and never submit another turn', 
     const cards = chat.locator('[data-a2ui-express]');
     await expect(cards).toHaveCount(2);
     const card = cards.first();
-    await expect(card).toHaveAttribute('data-ds', 'shadcn');
+    await expect(card).toHaveAttribute('data-ds', 'coss');
     const slider = card.getByRole('slider', { name: '评分' });
     await slider.focus();
     await slider.press('End');
@@ -224,7 +224,7 @@ test('updating a bound row redraws both charts and the table', async ({ page }, 
     await page.setViewportSize({ width: 1440, height: 1800 });
     await card.screenshot({ path: info.outputPath('linked-charts.png') });
     await page.emulateMedia({ colorScheme: 'dark' });
-    await expect(firstSeries).toHaveCSS('fill', 'oklch(0.623 0.214 259.815)');
+    await expect(firstSeries).toHaveCSS('fill', 'oklch(0.488 0.243 264.376)');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');

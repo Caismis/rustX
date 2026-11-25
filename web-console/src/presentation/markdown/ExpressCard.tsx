@@ -125,5 +125,5 @@ export function ExpressCard({ surface, streaming }: { surface: ExpressSurface; s
     }
   }
 
-  return <div className={css.surface} data-a2ui-express="" data-ds="shadcn">{renderNode(root, 0)}</div>;
+  return <div className={css.surface} data-a2ui-express="" data-ds="coss">{renderNode(root, 0)}</div>;
 }

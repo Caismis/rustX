@@ -12,13 +12,13 @@ import { layoutRenderers } from './a2ui/catalog/renderers/layout';
 import { mapRenderers } from './a2ui/catalog/renderers/maps';
 import { httpsUrl } from './a2ui/catalog/renderers/format';
 import type { ComponentName } from './a2ui/catalog/definitions';
-import { shadcnOwn, shadcnStandard } from './design-systems/shadcn';
+import { cossOwn, cossStandard } from './design-systems/coss';
 import type { StandardProps } from './design-systems/shared';
 import './surface.css';
 
 const renderers = {
   ...chartRenderers, ...contentRenderers, ...dataRenderers, ...domainRenderers,
-  ...feedbackRenderers, ...inputRenderers, ...layoutRenderers, ...mapRenderers, ...shadcnOwn,
+  ...feedbackRenderers, ...inputRenderers, ...layoutRenderers, ...mapRenderers, ...cossOwn,
 };
 
 type Renderer = ComponentType<{ props: Record<string, unknown> }>;
@@ -32,7 +32,7 @@ function own(name: ComponentName) {
 }
 
 function standard(name: string, Base: ComponentType<StandardProps>) {
-  const Render = shadcnStandard[name] ?? Base;
+  const Render = cossStandard[name] ?? Base;
   const csp = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; form-action 'none'; base-uri 'none'">`;
   return (props: StandardProps) => {
     // The standard HtmlView owns an opaque, scriptless sandbox. Restrict
