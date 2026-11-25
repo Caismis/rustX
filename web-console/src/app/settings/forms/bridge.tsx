@@ -994,7 +994,7 @@ function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
   const latest = useRef(unit);
   latest.current = unit;
   useEffect(() => {
-    if (!enabled || !unit.draft || unit.busy || unit.awaitingObservation) return;
+    if (!enabled || !unit.draft || !unit.admitted || unit.busy || unit.awaitingObservation) return;
     // A draft pending review (external divergence or a failed commit) waits
     // for the explicit review gesture — auto-save never retries into it.
     if (unit.reviewNeeded) return;
@@ -1007,7 +1007,7 @@ function useImmediateCommit<T>(unit: UnitEditing<T>, enabled: boolean) {
     if (unit.attempted) return;
     const timer = setTimeout(() => latest.current.commit(latest.current.displayed), 400);
     return () => clearTimeout(timer);
-  }, [enabled, unit.draft, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.attempted, unit.displayed]);
+  }, [enabled, unit.draft, unit.admitted, unit.busy, unit.awaitingObservation, unit.reviewNeeded, unit.attempted, unit.displayed]);
 }
 
 /** One native semantic unit's editing surface, with a plain value contract.
