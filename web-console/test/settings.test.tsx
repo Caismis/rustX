@@ -332,6 +332,21 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
 
+it('keeps an empty explicit summary limit local until a valid replacement is typed', async () => {
+  const subject = cfg3Client();
+  subject.source.user.authored!.context = { summary_output_cap: { mode: 'limit', tokens: 2048 } };
+  await open(subject, 'Advanced', 'User');
+  const input = screen.getByLabelText('Summary token limit') as HTMLInputElement;
+  expect(input.value).toBe('2048');
+  fireEvent.change(input, { target: { value: '' } });
+  expect(input.value).toBe('');
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
+  fireEvent.change(input, { target: { value: '4096' } });
+  await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({
+    params: { mutation: { kind: 'config', mutation: { unit: 'context', authored: { summary_output_cap: { mode: 'limit', tokens: 4096 } } } } },
+  }));
+});
+
 it('process state comes from native classification, outside the Session commit', async () => {
  const subject = cfg3Client(); subject.source.application = cfg3Application(); subject.source.application.units.process_bindings = { status: 'process_restart' };
  await open(subject, 'Advanced', 'User');
@@ -680,7 +695,7 @@ it('WorkspaceFollowGlobal hides clean module controls, reveals without writes on
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(0);
 });
 
-it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially after explicit Save', async () => {
+it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially after confirmation', async () => {
   let rev = 1;
   const subject = cfg3Client(async (op, source) => {
     if (op.method !== 'configuration/sourceWrite' || op.params.mutation.kind !== 'config') return;
@@ -701,7 +716,7 @@ it('WorkspaceFollowGlobal commits clearing multiple overrides sequentially after
   expect(screen.getByRole('form', { name: 'Approval mode' })).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Built-in tools' })).toBeTruthy();
 
-  // Flipping ON stages both removals; explicit Save commits them sequentially via exact CAS and settles ON.
+  // Flipping ON asks first; confirming commits both removals sequentially via exact CAS and settles ON.
   followGlobalSettings();
   fireEvent.click(screen.getByRole('button', { name: 'Clear workspace overrides' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));

@@ -1,5 +1,5 @@
 import { useTranslation } from '../../../locale/react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   ContextLayer, RuntimeLayer, SourceMutation, SourceScope, SourceSettings, SubagentsLayer,
   TimeoutLayer, ToolDeadlineLayer,
@@ -99,6 +99,37 @@ export function AdvancedPage({
   );
 }
 
+
+/** Explicit token cap editing keeps the empty intermediate string local:
+ * an incomplete edit authors nothing, while a valid positive integer commits
+ * through the surrounding immediate unit. */
+function SummaryTokenLimit({ value, onChange }: { value: number; onChange: (tokens: number) => void }) {
+  const tx = useTranslation();
+  const [text, setText] = useState(String(value));
+  const lastValue = useRef(value);
+  useEffect(() => {
+    if (lastValue.current === value) return;
+    lastValue.current = value;
+    setText(current => Number(current) === value ? current : String(value));
+  }, [value]);
+  return (
+    <label>
+      {tx('settings:advanced-page.summary-token-limit')}
+      <TextInput
+        type="number"
+        min="1"
+        value={text}
+        onChange={event => {
+          const raw = event.target.value;
+          setText(raw);
+          const tokens = Number(raw);
+          if (raw.trim() !== '' && Number.isInteger(tokens) && tokens >= 1) onChange(tokens);
+        }}
+      />
+    </label>
+  );
+}
+
 /** The semantic-unit editors of this scope's parsed `rustx.toml`. */
 function AdvancedEditors({ source, scope, document, revision }: {
   source: SourceSettings; scope: SourceScope; document: RuntimeLayer; revision: string;
@@ -151,15 +182,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
                 onChange={mode => change({ ...value, summary_output_cap: mode === 'limit' ? { mode: 'limit', tokens: 2048 } : mode === 'model_limit' ? { mode: 'model_limit' } : null })}
               />
               {value.summary_output_cap?.mode === 'limit' && (
-                <label>
-                  {tx('settings:advanced-page.summary-token-limit')}
-                  <TextInput
-                    type="number"
-                    min="1"
-                    value={value.summary_output_cap.tokens}
-                    onChange={event => change({ ...value, summary_output_cap: { mode: 'limit', tokens: event.target.value ? Number(event.target.value) : (value.summary_output_cap as { tokens: number }).tokens } })}
-                  />
-                </label>
+                <SummaryTokenLimit value={value.summary_output_cap.tokens} onChange={tokens => change({ ...value, summary_output_cap: { mode: 'limit', tokens } })} />
               )}
             </div>
           )}

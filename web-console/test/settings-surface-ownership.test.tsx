@@ -156,8 +156,8 @@ it('S1-04 Follow global settings removes a real Workspace override through exact
   followGlobalSettings();
   fireEvent.click(screen.getByRole('button', { name: 'Clear workspace overrides' }));
   expect(screen.queryByRole('form', { name: 'Built-in tools' })).toBeNull();
-  // The toggle stages the removal; the explicit footer Save commits it as
-  // the exact revision-fenced removal of this unit.
+  // The toggle asks first; confirming commits the exact revision-fenced
+  // removal of this unit.
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: null } } } }));
   await waitForSettingsRevision('saved-2');
   // The authoritative reread settles back to Follow global settings ON cleanly.
