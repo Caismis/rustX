@@ -1046,12 +1046,21 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      # Kept in this job on purpose: macos-15 concurrency is limited to two
+      # slots on the free tier, and a separate member job was measured to
+      # delay this lane's start by ~40 minutes (run 45555289930).
+      - name: Run extracted workspace crate tests
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+
+
       # Native macOS discovery: both --skip selectors must still exclude
       # tests, and `boundary_suites::` and every external target (see
-      # REQUIREMENTS in the checker) must execute here entirely. Member
-      # crate tests execute in the parallel rust-platform-members job.
+      # REQUIREMENTS in the checker) must execute here entirely.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries --job rust-platform-members
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries
 
       - name: Native Cargo timing reports
         if: always()
@@ -1061,45 +1070,6 @@ jobs:
           path: target/cargo-timings/*.html
           retention-days: 7
           if-no-files-found: warn
-
-  # Extracted workspace crate unit tests on macOS, in parallel with the
-  # boundary lane: the boundary lane's ~51m native compile dominates its
-  # critical path, so the member crates — which compile in seconds and
-  # never link rustX — run on their own runner instead of behind it.
-  rust-platform-members:
-    name: Extracted workspace crate tests (macOS)
-    needs: plan
-    if: fromJSON(needs.plan.outputs.run)['rust-platform-members']
-    runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      VERIFICATION_PROFILE: full
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.100.0"
-      - name: Install SQLite binding build dependency
-        uses: ./.github/actions/libclang
-      - name: Normalize preinstalled rustup toolchains
-        shell: bash
-        run: |
-          while read -r line; do
-            tc="${line%% *}"
-            case "$tc" in
-              1.100.0-*) ;;
-              *) rustup toolchain uninstall "$tc" || true ;;
-            esac
-          done < <(rustup toolchain list)
-          rustc --version --verbose
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-platform-members
-          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devin/1794960987-macos-ci-build-speed')) }}
-      - name: Run extracted workspace crate tests
-        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.
@@ -1602,7 +1572,6 @@ jobs:
       - rust-boundaries-report
       - rust-platform-core
       - rust-platform-boundaries
-      - rust-platform-members
       - tui
       - app-server-protocol
       - desktop-macos
