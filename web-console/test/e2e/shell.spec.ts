@@ -222,20 +222,26 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.getByRole('button', { name: 'Clear search' }).click();
   // The initial Settings target is General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  // A pointer resting on the just-clicked rail button opens its tooltip once
+  // the hover delay elapses, which is load-dependent: park it before capture.
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'settings-shell-light.png');
   await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-dark.png');
   // Appearance is a webui-local preference: it applies the moment it is
   // picked, so navigation needs no save.
   await page.getByRole('button', { name: 'Home' }).click();
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
   expect((await page.locator('main').boundingBox())!.x).toBe(56);
   await expectStableScreenshot(page, 'mobile-rail-dark.png');
   await page.getByRole('button', { name: 'Home' }).click();
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'mobile-expanded-dark.png');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'mobile-settings-dark.png');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

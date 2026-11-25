@@ -16,7 +16,7 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     const repeat = dialog.getByRole('button', { name: zh ? '重复' : 'Repeat', exact: true });
     const workspace = dialog.getByRole('button', { name: zh ? '工作区' : 'Workspace', exact: true });
     const create = dialog.getByRole('button', { name: zh ? '创建' : 'Create', exact: true });
-    const geometry = await Promise.all([instruction, repeat.locator('xpath=ancestor::section'), workspace.locator('xpath=../..'), create].map(locator => locator.boundingBox()));
+    const geometry = await Promise.all([instruction, repeat.locator('xpath=ancestor::section[1]'), workspace.locator('xpath=../..'), create].map(locator => locator.boundingBox()));
     const [instructionBox, timingBox, workspaceRowBox, createBox] = geometry;
     const dialogBox = await dialog.boundingBox();
     expect(instructionBox).not.toBeNull(); expect(timingBox).not.toBeNull(); expect(workspaceRowBox).not.toBeNull(); expect(createBox).not.toBeNull();
