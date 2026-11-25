@@ -7,6 +7,8 @@
   z-index: 1100;
 }
 
+.panel > [data-slot=popover-viewport] { padding: 0; }
+
 .panel {
   box-sizing: border-box;
   /* Size to the widest row so the model stays on one line, within a cap. */

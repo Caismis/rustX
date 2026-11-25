@@ -1,4 +1,4 @@
-import { Popover } from '@base-ui/react/popover';
+import { Popover, PopoverClose, PopoverDescription, PopoverPopup, PopoverTitle, PopoverTrigger } from '@/components/ui/popover';
 import clsx from 'clsx';
 import { useRef, useState } from 'react';
 import { useTranslation } from '../../../../locale/react';
@@ -22,17 +22,17 @@ export function Checklist({ items, onGo }: { items: readonly ChecklistItem[]; on
     : text.kind === 'unconnected' ? tx('workflows:checklist.unconnected') : text.kind === 'dependency' ? dependency(tx, text.failure) : text.reason;
   const title = (item: ChecklistItem) => item.node === undefined ? tx('workflows:checklist.workflow')
     : item.type === 'start' ? item.title || tx(item.block.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : item.title || item.node;
-  return <Popover.Root open={open} onOpenChange={next => { if (next) going.current = false; setOpen(next); }}>
-    <Popover.Trigger className={css.checklistButton} aria-label={items.length ? `${label} (${items.length})` : label} title={label}>
+  return <Popover open={open} onOpenChange={next => { if (next) going.current = false; setOpen(next); }}>
+    <PopoverTrigger className={css.checklistButton} aria-label={items.length ? `${label} (${items.length})` : label} title={label}>
       <IconChecklistOutline14 />{!!items.length && <span className={css.checklistCount} aria-hidden>{items.length}</span>}
-    </Popover.Trigger>
-    <Popover.Portal><Popover.Positioner side="bottom" align="end" sideOffset={10} className={css.checklistPositioner}><Popover.Popup className={css.checklist} finalFocus={() => !going.current}>
+    </PopoverTrigger>
+    <PopoverPopup side="bottom" align="end" sideOffset={10} className={css.checklist} finalFocus={() => !going.current}>
       <div className={css.checklistHead}>
-        <Popover.Title className={css.checklistTitle}>{label}{!!items.length && `(${items.length})`}</Popover.Title>
-        <Popover.Close className={css.iconButton} aria-label={tx('workflows:dialog.close')}><IconCloseOutline16 /></Popover.Close>
+        <PopoverTitle className={css.checklistTitle}>{label}{!!items.length && `(${items.length})`}</PopoverTitle>
+        <PopoverClose className={css.iconButton} aria-label={tx('workflows:dialog.close')}><IconCloseOutline16 /></PopoverClose>
       </div>
       {items.length ? <>
-        <Popover.Description className={css.checklistDescription}>{tx('workflows:checklist.description')}</Popover.Description>
+        <PopoverDescription className={css.checklistDescription}>{tx('workflows:checklist.description')}</PopoverDescription>
         <ul className={css.checklistItems}>{items.map(item => <li key={`${JSON.stringify(item.block)}:${item.node ?? ''}`} className={css.checklistNode}>
           <div className={css.checklistNodeHead}>
             <span className={clsx(css.checklistIcon, item.type && item.type !== 'start' ? css[`kind_${item.type}`] : css.startIcon)}>
@@ -46,8 +46,8 @@ export function Checklist({ items, onGo }: { items: readonly ChecklistItem[]; on
           </button>)}
         </li>)}</ul>
       </> : <p className={css.checklistResolved}><IconChecklistOutline14 />{tx('workflows:checklist.resolved')}</p>}
-    </Popover.Popup></Popover.Positioner></Popover.Portal>
-  </Popover.Root>;
+    </PopoverPopup>
+  </Popover>;
 }
 
 /** Why the native admission blocks a node, in the author's words. */
