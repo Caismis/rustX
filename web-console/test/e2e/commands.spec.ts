@@ -40,11 +40,13 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(popup).toHaveCount(0); await expect(message).toHaveValue('');
     await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
     popup = await command('tools');
+    // The modal dialog inerts the composer behind it, so the cleared draft
+    // cannot be queried by role while the dialog is open; the textarea is
+    // still in the document. The wait itself is load-bearing: consuming the
+    // command input completes only once the panel's read settles.
     await expect(popup).toBeVisible();
-    // The modal dialog inerts the composer behind it: the cleared draft is
-    // verified once the dialog closes and the composer rejoins the tree.
+    await expect(page.locator('[data-composer-card] textarea')).toHaveValue('');
     await popup.getByRole('button', { name: 'Close dialog' }).click();
-    await expect(message).toHaveValue('');
     await message.fill('/model'); popup = page.locator('[data-model-picker]'); await popup.getByRole('combobox', { name: 'Search models…' }).press('Escape');
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
