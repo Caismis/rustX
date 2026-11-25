@@ -38,6 +38,7 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
     return [...names].map(id => { const label = zoneLabel(id, locale) + ' · ' + id; return { id, label, search: label }; });
   }, [value.zone, locale]);
   const [zoneQuery, setZoneQuery] = useState<string | undefined>();
+  const zoneLabels = useMemo(() => zones.map(zone => zone.label), [zones]);
   const zoneByLabel = useMemo(() => new Map(zones.map(zone => [zone.label, zone])), [zones]);
   return <section className={css.ruleCard} aria-label={t('timing.title')}>
     <div className={css.ruleRows}>
@@ -65,8 +66,8 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
           <p className={parsed ? css.ruleHint : css.ruleHintError}>{parsed ? cronPreview(parsed, t, locale) : t('timing.invalid-cron')}</p>
         </div></div>}
         <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.zone')}</span>
-          <div className={custom.zoneCombo}><Autocomplete items={zones.map(zone => zone.label)} value={zoneQuery ?? zoneLabel(value.zone, locale)}
-            onValueChange={setZoneQuery} openOnInputClick disabled={disabled}>
+          <div className={custom.zoneCombo}><Autocomplete items={zoneLabels} filteredItems={zoneQuery === undefined ? zoneLabels : undefined}
+            value={zoneQuery ?? zoneLabel(value.zone, locale)} onValueChange={setZoneQuery} openOnInputClick disabled={disabled}>
             <AutocompleteInput aria-label={t('timing.zone')} placeholder={t('timing.zone-search')} showTrigger onBlur={() => setZoneQuery(undefined)} />
             <AutocompletePopup className={custom.zonePopup} align="end"><AutocompleteList className={custom.zoneList} aria-label={t('timing.zone')}>
               {(label: string, index: number) => {

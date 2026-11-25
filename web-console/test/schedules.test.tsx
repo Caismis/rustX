@@ -550,6 +550,12 @@ function renderTimingZoneEditor() {
   render(<Harness/>);
   return state;
 }
+it('shows other time zones when the picker opens without a typed query', async () => {
+  renderTimingZoneEditor();
+  fireEvent.click(document.querySelector('[data-slot="autocomplete-trigger"]')!);
+  expect(await screen.findByText(/America\/New_York/)).toBeTruthy();
+});
+
 it.each([
   { query: 'America/New_York', zone: 'America/New_York' },
   { query: 'America/New_York ', zone: 'America/New_York' },
