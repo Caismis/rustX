@@ -54,6 +54,26 @@ pub use client::ManagedRuntimeClient;
 pub use configuration::SourceSettingsError;
 pub(crate) use model_selection::ModelSelectionError;
 
+/// Execution authority for a source catalog read. A private probe has no
+/// durable Session and its owner remains alive for the entire read.
+pub(crate) enum SourceCatalogExecution {
+    Session(Option<SessionId>),
+    Private(SessionExecutionScope),
+}
+
+impl SourceCatalogExecution {
+    pub(crate) fn scope(
+        &self,
+        manager: &SessionRuntimeManager,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<Option<SessionExecutionScope>, RuntimeManagerError> {
+        match self {
+            Self::Session(session) => manager.source_catalog_scope(session.as_ref(), workspace),
+            Self::Private(scope) => Ok(Some(scope.clone())),
+        }
+    }
+}
+
 pub(super) type NativeOperationReply = Result<
     crate::runtime_client::types::RuntimeClientResult,
     crate::runtime_client::types::RuntimeClientError,

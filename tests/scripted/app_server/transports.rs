@@ -191,7 +191,8 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario(uv: std::path::Pat
         )).await.unwrap().unwrap();
         let (_, package) = frozen.packages().iter().next().unwrap();
         package.as_ref().unwrap().prepare_on_client(&crate::runtime::CancellationSignal::new()).await.unwrap().unwrap();
-        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some(session.clone()), Some("python:demo".into()), None, None).await.unwrap();
+        let catalog_execution = crate::local_runtime::session_runtime_manager::SourceCatalogExecution::Session(Some(session.clone()));
+        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), catalog_execution, Some("python:demo".into()), None, None).await.unwrap();
         assert_eq!(catalog.sources[0].tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["hello"]);
         let installed = sandbox.path().join(".local/share/rustx/environments/python-tools/packages");
         assert_eq!(std::fs::read_dir(&installed).unwrap().count(), 1);

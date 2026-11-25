@@ -3487,6 +3487,175 @@ async fn installed_workspace_picker_uses_a_private_client_and_reaps_before_regis
     }).await;
 }
 
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Check all catalog requests and cleanup against one installed Server.
+async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creating_a_session() {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+    use rustx::app_server::protocol::{Method, MethodResult};
+    use rustx::local_runtime::{
+        configuration::settings::SourceTarget, mcp_probe::McpProbeOutcome,
+        workflow_tools::WorkflowToolSourceState,
+    };
+    use rustx::runtime::{identity::McpServerId, resources::SourceScope};
+    use rustx::tools::mcp::{catalog::CatalogKind, fixture::FixtureServer as McpFixture};
+    use rustx_execution_server::RecoveryFence;
+    use sha2::{Digest as _, Sha256};
+    use std::sync::atomic::Ordering;
+
+    bounded(Box::pin(async {
+        let fixture = Fixture::new().await;
+        let root = fixture.root.path().join("a");
+        let workspace = root.join("project");
+        let resources = workspace.join(".agents");
+        std::fs::create_dir_all(&resources).unwrap();
+        grant_environment_roots(&fixture, std::slice::from_ref(&root));
+        let runtime = fixture.root.path().join("runtime");
+        let pending = || RecoveryFence::workspace_pending(&runtime, &workspace).unwrap();
+        let mcp = McpFixture::default();
+        let list_calls = mcp.list_tools_calls.clone();
+        let catalog_reads = || list_calls.load(Ordering::Relaxed);
+        let (mcp_runtime, mcp_workspace) = (runtime.clone(), workspace.clone());
+        let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
+            move || {
+                assert!(
+                    RecoveryFence::workspace_pending(&mcp_runtime, &mcp_workspace).unwrap(),
+                    "the granted Workspace's private Client owns each MCP connection"
+                );
+                Ok(mcp.clone())
+            },
+            std::sync::Arc::default(),
+            StreamableHttpServerConfig::default().with_json_response(true),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _peer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+                .await
+                .unwrap();
+        }));
+        let document = format!("[mcp_servers.inventory]\nurl = \"http://{address}/mcp\"\n");
+        std::fs::write(resources.join("mcp.toml"), &document).unwrap();
+        let revision = format!("sha256:{:x}", Sha256::digest(document.as_bytes()));
+        let target = SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let (_bin, executable) = isolated_server_pair();
+        let mut server = fixture
+            .command_with_program(executable, "ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(fixture.root.path().join("token"))
+            .arg("--local-session-root")
+            .arg(&root)
+            .spawn()
+            .unwrap();
+        let (endpoint, _stderr) = websocket_startup(&mut server).await;
+        let client = driver::websocket(&endpoint).await;
+        initialize_client(&client).await;
+        assert!(!pending());
+
+        let id = McpServerId::new("inventory");
+        let MethodResult::McpProbe { result: probe } = result(
+            &client,
+            Method::McpProbe {
+                target: target.clone(),
+                execution_session: None,
+                id: id.clone(),
+                expected_revision: revision.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("MCP probe result")
+        };
+        assert_eq!(probe.outcome, McpProbeOutcome::Reachable);
+        assert!(
+            !pending(),
+            "the Client settles before Test Connection replies"
+        );
+
+        let MethodResult::McpProbe { result: catalog } = result(
+            &client,
+            Method::McpCatalog {
+                target: target.clone(),
+                execution_session: None,
+                id,
+                expected_revision: revision,
+                kind: CatalogKind::Tools,
+            },
+        )
+        .await
+        else {
+            panic!("MCP tools catalog")
+        };
+        assert_eq!(catalog.outcome, McpProbeOutcome::Reachable);
+        assert!(
+            catalog
+                .page
+                .unwrap()
+                .tools
+                .iter()
+                .any(|tool| tool.name == "echo")
+        );
+        assert_eq!(catalog_reads(), 2);
+        assert!(!pending());
+
+        let workflow_tools = |source, expected_scope| Method::WorkflowToolCatalog {
+            target: target.clone(),
+            execution_session: None,
+            source,
+            cursor: None,
+            expected_scope,
+        };
+        let MethodResult::WorkflowToolCatalog { catalog } =
+            result(&client, workflow_tools(None, None)).await
+        else {
+            panic!("Workflow sources")
+        };
+        let [source] = catalog.sources.as_slice() else {
+            panic!("one source: {catalog:?}")
+        };
+        assert_eq!(source.source_id, "inventory");
+        assert_eq!(source.scope, SourceScope::Workspace);
+        assert_eq!(source.state, WorkflowToolSourceState::Pending);
+        assert_eq!(catalog_reads(), 2, "source discovery does not connect");
+        assert!(!pending());
+
+        let MethodResult::WorkflowToolCatalog { catalog } = result(
+            &client,
+            workflow_tools(Some(source.source_id.clone()), Some(source.scope)),
+        )
+        .await
+        else {
+            panic!("Workflow tools for the discovered source")
+        };
+        let [source] = catalog.sources.as_slice() else {
+            panic!("one listed source: {catalog:?}")
+        };
+        assert_eq!(source.state, WorkflowToolSourceState::Listed);
+        assert_eq!(source.scope, SourceScope::Workspace);
+        assert!(source.tools.iter().any(|tool| tool.name == "echo"));
+        assert_eq!(catalog_reads(), 3);
+        assert!(!pending());
+
+        client.close().await;
+        terminate(&server);
+        assert!(server.wait().await.unwrap().success());
+        let sessions = SessionController::open(&runtime).unwrap();
+        let catalog = sessions.list_sessions(None, 0, 16).await.unwrap();
+        assert_eq!(catalog.sessions.len(), fixture.sessions.len());
+        assert!(
+            catalog
+                .sessions
+                .iter()
+                .all(|session| session.cwd != workspace)
+        );
+    }))
+    .await;
+}
+
 #[tokio::test]
 async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {

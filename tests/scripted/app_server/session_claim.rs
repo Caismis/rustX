@@ -749,11 +749,20 @@ async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
         let list = |execution_session| Method::SkillsList {
             target: target.clone(), execution_session, offset: 0, limit: 32, expected_revision: None,
         };
+        let mcp = |execution_session| Method::McpProbe {
+            target: target.clone(), execution_session,
+            id: McpServerId::new("inventory"), expected_revision: "prior revision".into(),
+        };
+        let workflow = |execution_session| Method::WorkflowToolCatalog {
+            target: target.clone(), execution_session, source: None, cursor: None, expected_scope: None,
+        };
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         for method in [
             list(Some(session.clone())),
             list(None),
+            mcp(None),
+            workflow(None),
             Method::SkillsRead {
                 target: target.clone(), execution_session: Some(session.clone()), name: "retired-guide".into(),
                 kind: SkillContentKind::Instructions, offset: 0, max_bytes: 1024, expected_revision: None,
@@ -773,6 +782,12 @@ async fn installed_grant_retirement_removes_the_settled_local_client_claim() {
         }
         f.manager.environment.configure(std::slice::from_ref(workspace));
         assert!(route().is_err(), "restoring a grant does not bind a Session");
+        for method in [mcp(Some(session.clone())), workflow(Some(session.clone()))] {
+            let Response::Failure(failure) = connection.handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(62), call: method,
+            }).await else { panic!("a grant cannot substitute for the exact Session's Client"); };
+            assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+        }
         let MethodResult::Skills { page, authority } = super::protocol::call(&connection, 61, list(None)).await else {
             panic!("an unscoped catalog with a valid grant can use a private Client");
         };

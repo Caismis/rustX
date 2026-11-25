@@ -47,6 +47,7 @@ PROCESS_CASES = (
     "execution_enrollment_precedes_client_and_workspace_configuration_readiness",
     "installed_workspace_picker_uses_a_private_client_and_reaps_before_registration",
     "installed_stdio_lists_local_workspace_skills_without_the_web_picker",
+    "installed_web_discovers_workspace_mcp_and_workflow_tools_before_creating_a_session",
     "local_execution_fails_exactly_when_the_sibling_client_is_absent",
     "remote_execution_serves_session_reads_over_websocket",
     "explicit_composition_launches_and_reaps_the_sibling_client",

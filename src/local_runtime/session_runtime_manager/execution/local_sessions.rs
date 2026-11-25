@@ -316,7 +316,7 @@ impl SessionRuntimeManager {
             .is_some_and(|roots| roots.iter().any(|root| workspace.starts_with(root)))
     }
 
-    pub(crate) fn local_workspace_skill_grant(
+    pub(crate) fn local_workspace_catalog_grant(
         &self,
         workspace: &Path,
     ) -> Option<CancellationSignal> {

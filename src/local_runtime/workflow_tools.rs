@@ -9,8 +9,9 @@ use super::configuration::{
     settings::{SettingsError, SourceTarget},
 };
 use super::probes::{PROBE_TIMEOUT, ProbeState, await_owned};
-use super::session::SessionId;
-use super::session_runtime_manager::{SessionExecutionScope, SessionRuntimeManager};
+use super::session_runtime_manager::{
+    SessionExecutionScope, SessionRuntimeManager, SourceCatalogExecution,
+};
 use crate::runtime::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::runtime::resources::SourceScope;
@@ -185,7 +186,7 @@ impl SessionRuntimeManager {
     pub(crate) async fn workflow_tool_catalog(
         &self,
         target: SourceTarget,
-        execution_session: Option<SessionId>,
+        execution: SourceCatalogExecution,
         source: Option<String>,
         cursor: Option<WorkflowToolCatalogCursor>,
         expected_scope: Option<SourceScope>,
@@ -195,8 +196,8 @@ impl SessionRuntimeManager {
         }
         let manager = self.clone();
         let (plans, workspace) = tokio::task::spawn_blocking(move || {
-            let scope = manager
-                .source_catalog_scope(execution_session.as_ref(), target.workspace())
+            let scope = execution
+                .scope(&manager, target.workspace())
                 .map_err(|_| SettingsError::ExecutionUnavailable)?;
             capture(&manager.configuration, &target, scope)
         })
