@@ -48,7 +48,7 @@ it('edits with exact decimal CAS without resetting interval timing on a title-on
   const value = task(); value.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
   const f = await fixture([value]); detail(f.server, value);
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Readable task title' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const request = await f.server.waitFor('schedule/command', 1);
   if (request.method !== 'schedule/command') throw Error('command');
   expect(request.params).toMatchObject({ session_id: 'A', node_id: nodeA, command: { mutation: { type: 'update', expected_revision: '9007199254740993', id: value.id, title: 'Readable task title' } } });
@@ -61,8 +61,8 @@ it('preserves dirty text on refresh and requires an explicit choice before rebas
   const newer = { ...task(), revision: '9007199254740994', title: 'Changed elsewhere' }; f.rows.set(newer.id.ordinal, newer);
   await act(async () => f.notify()); await screen.findByText('Changed elsewhere');
   expect((input as HTMLInputElement).value).toBe('My pending edit');
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' })); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' })); fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const request = await f.server.waitFor('schedule/command', 1);
   if (request.method !== 'schedule/command' || !('expected_revision' in request.params.command.mutation)) throw Error('CAS');
   expect(request.params.command.mutation.expected_revision).toBe(newer.revision);
@@ -73,7 +73,7 @@ it('converges on an authoritative version identical to the draft before acceptin
   fireEvent.change(input, { target: { value: 'Confirmed intent' } });
   const newer = { ...task(), title: 'Confirmed intent', revision: String(BigInt(task().revision) + 1n) }; f.rows.set(newer.id.ordinal, newer);
   await act(async () => f.notify()); await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
-  fireEvent.change(input, { target: { value: 'Next intentional edit' } }); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.change(input, { target: { value: 'Next intentional edit' } }); fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   expect(command.params).toMatchObject({ command: { mutation: { expected_revision: newer.revision, title: 'Next intentional edit' } } });
 });
@@ -91,11 +91,11 @@ it('validates and saves Workflow inputs after the same open task changes from Me
   expect(model.editor(converted)).toBe(editor);
   expect(JSON.parse(input.value)).toEqual({ n: 1 });
   fireEvent.change(input, { target: { value: '{ invalid' } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText('Enter valid JSON for the workflow inputs.')).toBeTruthy();
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
   fireEvent.change(input, { target: { value: '{"n":42}' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 2);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', expected_revision: converted.revision, workflow_id: 'review', arguments: { n: 42 } });
@@ -123,12 +123,12 @@ it.each(['title', 'content'] as const)('keeps a Message %s edit when the task ch
     expect(JSON.parse(workflowInput.value)).toEqual({ n: 1 });
   } else {
     expect(workflowInput.value).toBe('My edited instruction');
-    expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Enter valid JSON for the workflow inputs.')).toBeTruthy();
     expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
     fireEvent.change(workflowInput, { target: { value: '{"n":42}' } });
   }
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 2);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject(edited === 'title'
@@ -142,7 +142,7 @@ it('keeps a dirty draft disabled during disconnect and verifies it after reconne
   const f = await fixture(); detail(f.server);
   const input = await screen.findByRole('textbox', { name: 'Automation task name' }); fireEvent.change(input, { target: { value: 'Draft survives reconnect' } });
   await act(async () => f.server.socket.close()); expect((input as HTMLInputElement).value).toBe('Draft survives reconnect');
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   await act(async () => f.server.connect());
   await waitFor(() => expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false));
   expect((screen.getByRole('textbox', { name: 'Automation task name' }) as HTMLInputElement).value).toBe('Draft survives reconnect');
@@ -180,10 +180,10 @@ it.each([false, true])('preserves unsaved fields through App Workbench reconnect
   expect(server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
   if (changedElsewhere) {
     await screen.findByText('Changed while offline', { selector: 'p' });
-    expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
   }
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await server.waitFor('schedule/command', 1);
   expect(command.params).toMatchObject({ command: { mutation: { expected_revision: revision, title: 'Keep my Workbench draft', text: 'Unsaved instruction', timing: { type: 'interval', every_seconds: 7200 } } } });
   await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
@@ -195,7 +195,7 @@ it.each(['a'.repeat(16376), 'é'.repeat(8188)])('allows a name-only Workflow edi
   expect(new TextEncoder().encode(JSON.stringify(args, null, 2)).byteLength).toBe(16389);
   const f = await fixture([value]); detail(f.server, value);
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Boundary-sized Workflow' } });
-  const save = screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+  const save = (await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement;
   expect(save.disabled).toBe(false); fireEvent.click(save);
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
@@ -208,22 +208,22 @@ it('rejects oversized serialized Workflow inputs and malformed JSON while ignori
   const value = workflowFixture().task, f = await fixture([value]); detail(f.server, value);
   const input = await screen.findByLabelText('Workflow inputs');
   fireEvent.change(input, { target: { value: JSON.stringify({ x: 'é'.repeat(8189) }) } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText('Keep the task content within 16 KiB.')).toBeTruthy();
   fireEvent.change(input, { target: { value: '{ invalid' } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText('Enter valid JSON for the workflow inputs.')).toBeTruthy();
   fireEvent.change(input, { target: { value: ' '.repeat(16384) + '{"branch":"main"}' } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(false);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
 });
 it.each(['9007199254740992', '-9007199254740993', '{"nested":[1,9007199254740993]}', '{"number":1.0}'])('refuses lossy authored Workflow arguments before dispatch: %s', async text => {
   const value = workflowFixture().task, f = await fixture([value]); detail(f.server, value);
   fireEvent.change(await screen.findByLabelText('Workflow inputs'), { target: { value: text } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
   fireEvent.change(screen.getByLabelText('Workflow inputs'), { target: { value: '{"n":9007199254740991}' } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(false);
 });
 it('keeps native Workflow arguments with unrepresentable numbers read-only while allowing metadata edits', async () => {
   const value = workflowFixture().task;
@@ -236,11 +236,11 @@ it('keeps native Workflow arguments with unrepresentable numbers read-only while
   expect(input.disabled).toBe(true);
   expect(input.value).not.toContain('9007199254740992');
   fireEvent.change(input, { target: { value: '{"nested":[9007199254740992],"enabled":false}' } });
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Metadata only' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', title: 'Metadata only' });
@@ -273,7 +273,7 @@ it.each([
   const input = screen.getByLabelText('Workflow inputs') as HTMLTextAreaElement;
   expect(input.disabled).toBe(incoming !== '2');
   if (incoming === '2') expect(JSON.parse(input.value)).toEqual({ n: 2, enabled: true });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', expected_revision: newer.revision, title: 'My metadata edit' });
@@ -316,7 +316,7 @@ it.each(['discard', 'matching safe revision'] as const)('clears Workflow input i
   }
   expect(editor.dirty).toBe(false);
   fireEvent.change(screen.getByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Metadata after reset' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', expected_revision: expectedRevision, title: 'Metadata after reset' });
@@ -331,7 +331,7 @@ it('retains intentionally edited safe Workflow inputs when rebasing onto another
   await screen.findByText('Changed elsewhere', { selector: 'p' });
   fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
   expect((input as HTMLTextAreaElement).value).toBe('{"branch":"local"}');
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', expected_revision: newer.revision, arguments: { branch: 'local' } });
@@ -348,7 +348,7 @@ it('does not overwrite a newly unsafe Workflow pin with an earlier authored argu
   await screen.findByText('Changed elsewhere', { selector: 'p' });
   fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
   expect((input as HTMLTextAreaElement).disabled).toBe(true);
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   expect(schedulerModel(f.server.client).editor(value).getSnapshot().draft.content).toBe('{"branch":"local"}');
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
 });
@@ -374,7 +374,7 @@ it.each([
   f.server.held.delete('schedule/get');
   fireEvent.click(await screen.findByRole('button', { name: 'Keep my edits' }));
   expect(input.disabled).toBe(true);
-  expect((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
   const editor = schedulerModel(f.server.client).editor(value);
   expect(editor.dirty).toBe(true);
   expect(editor.getSnapshot().draft.content).toBe(authoredContent);
@@ -385,7 +385,7 @@ it.each([
   fireEvent.click(screen.getByRole('button', { name: 'Keep my edits' }));
   expect(input.disabled).toBe(false);
   expect(input.value).toBe(authoredContent);
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_workflow', expected_revision: safeRevision.revision, arguments: { n: authored }, ...(editTitle ? { title: 'My title' } : {}) });
@@ -396,7 +396,7 @@ it.each(['name', 'timing'] as const)('edits Workflow %s without replacing its sa
   const name = await screen.findByRole('textbox', { name: 'Automation task name' });
   if (field === 'name') fireEvent.change(name, { target: { value: 'Keep the saved Workflow version' } });
   else fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '2' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1);
   if (command.method !== 'schedule/command') throw Error('command');
   expect(command.params.command.mutation).toMatchObject({ type: 'update_metadata', expected_revision: value.revision });
@@ -418,7 +418,7 @@ it.each([{ workflow: false, newer: false }, { workflow: true, newer: false }, { 
   const name = await screen.findByRole('textbox', { name: 'Automation task name' });
   fireEvent.change(name, { target: { value: ' Recovered intent ' } });
   if (workflow) fireEvent.change(screen.getByLabelText('Workflow inputs'), { target: { value: '{"branch":"release"}' } });
-  f.server.held.add('schedule/command'); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  f.server.held.add('schedule/command'); fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const first = await f.server.waitFor('schedule/command', 1);
   await act(async () => { f.server.socket.close(); await f.server.connect(); });
   const model = schedulerModel(f.server.client), editor = model.editor(value);
@@ -441,7 +441,7 @@ it.each([{ workflow: false, newer: false }, { workflow: true, newer: false }, { 
 it('records an acknowledged edit after its task view has unmounted', async () => {
   const f = await fixture(), ui = detail(f.server); f.server.held.add('schedule/command');
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Saved after closing the view' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const command = await f.server.waitFor('schedule/command', 1); ui.unmount();
   await act(async () => f.server.reply(command));
   await waitFor(() => expect(schedulerModel(f.server.client).getSnapshot().notice).toBe('updated'));
@@ -452,7 +452,7 @@ it('records an acknowledged edit after its task view has unmounted', async () =>
 it('retains an uncertain edit through remount and retries only on explicit recovery with the original command ID', async () => {
   const f = await fixture(), ui = detail(f.server); f.server.held.add('schedule/command');
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Retry this exact intent' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const first = await f.server.waitFor('schedule/command', 1); ui.unmount();
   await act(async () => { f.server.socket.close(); await f.server.connect(); });
   detail(f.server); await screen.findByDisplayValue('Retry this exact intent');
@@ -467,7 +467,7 @@ it('retains an uncertain edit through remount and retries only on explicit recov
 it('can recover an uncertain original command after Cancel and remount, then admit a different edit', async () => {
   const f = await fixture(), ui = detail(f.server); f.server.held.add('schedule/command');
   fireEvent.change(await screen.findByRole('textbox', { name: 'Automation task name' }), { target: { value: 'Original uncertain intent' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const first = await f.server.waitFor('schedule/command', 1);
   await act(async () => { f.server.socket.close(); await f.server.connect(); });
   await waitFor(() => expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(false));
@@ -483,7 +483,7 @@ it('can recover an uncertain original command after Cancel and remount, then adm
   await waitFor(() => expect((input as HTMLInputElement).disabled).toBe(false));
   expect((input as HTMLInputElement).value).toBe('Original uncertain intent');
   fireEvent.change(input, { target: { value: 'A different edit after recovery' } });
-  f.server.held.delete('schedule/command'); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  f.server.held.delete('schedule/command'); fireEvent.click((await screen.findByRole('button', { name: 'Save changes' })));
   const next = await f.server.waitFor('schedule/command', 3);
   if (first.method !== 'schedule/command' || next.method !== 'schedule/command') throw Error('command');
   expect(next.params.command.command_id).not.toBe(first.params.command.command_id);
