@@ -701,6 +701,9 @@ async fn installed_resume_failed_physical_settlement_retains_execution_fence() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResumeCut {
     Reservation,
+    BeforePhysicalStartup,
+    #[cfg(target_os = "linux")]
+    SupervisorReady,
     CapturedConfiguration,
     BeforeComposition,
     Prepared,
@@ -712,6 +715,9 @@ async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanl
     Box::pin(bounded(async {
         for cut in [
             ResumeCut::Reservation,
+            ResumeCut::BeforePhysicalStartup,
+            #[cfg(target_os = "linux")]
+            ResumeCut::SupervisorReady,
             ResumeCut::CapturedConfiguration,
             ResumeCut::BeforeComposition,
             ResumeCut::Prepared,
@@ -725,13 +731,20 @@ async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanl
             let id = &session.active_conversation_id;
             let probe = f.manager.probe(id);
             let gate = match cut {
-                ResumeCut::Reservation | ResumeCut::CapturedConfiguration => None,
+                ResumeCut::Reservation
+                | ResumeCut::BeforePhysicalStartup
+                | ResumeCut::CapturedConfiguration => None,
+                #[cfg(target_os = "linux")]
+                ResumeCut::SupervisorReady => None,
                 ResumeCut::BeforeComposition => Some(&probe.before_recovery_inspection),
                 ResumeCut::Prepared => Some(&probe.before_prepared_admission),
                 ResumeCut::Activated => Some(&probe.before_resident_publication),
             };
             let hook = match cut {
                 ResumeCut::Reservation => Some("before_resumed_client_preparation"),
+                ResumeCut::BeforePhysicalStartup => Some("before_local_client_startup"),
+                #[cfg(target_os = "linux")]
+                ResumeCut::SupervisorReady => Some("after_local_supervisor_ready"),
                 ResumeCut::CapturedConfiguration => Some("before_bound_initial_publication"),
                 _ => None,
             };
@@ -786,7 +799,13 @@ async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanl
                 None
             } else {
                 let endpoint = f.manager.execution_endpoint(&session.id).unwrap();
-                assert!(endpoint.control().is_some(), "{cut:?}");
+                let authenticated = match cut {
+                    ResumeCut::BeforePhysicalStartup => false,
+                    #[cfg(target_os = "linux")]
+                    ResumeCut::SupervisorReady => false,
+                    _ => true,
+                };
+                assert_eq!(endpoint.control().is_some(), authenticated, "{cut:?}");
                 assert!(pending_execution(&f, &session.id), "{cut:?}");
                 Some(endpoint)
             };
@@ -795,7 +814,27 @@ async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanl
                 capacity - 1,
                 "{cut:?}"
             );
+            let authorities = || {
+                std::fs::read_dir(f.archive_root.join("execution-pending"))
+                    .into_iter()
+                    .flatten()
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| {
+                        path.extension()
+                            .is_some_and(|extension| extension == "authority")
+                    })
+                    .count()
+            };
             f.host.begin_drain();
+            if cut == ResumeCut::BeforePhysicalStartup {
+                assert_eq!(
+                    f.host.settle_execution().await,
+                    Vec::<String>::new(),
+                    "{cut:?}"
+                );
+                assert!(!pending_execution(&f, &session.id));
+                assert_eq!(authorities(), 0);
+            }
             let host = f.host.clone();
             let draining = tokio::spawn(async move { host.drain().await });
             probe
@@ -804,6 +843,18 @@ async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanl
                 .wait_for(|n| *n == 1)
                 .await
                 .unwrap();
+            #[cfg(target_os = "linux")]
+            if cut == ResumeCut::SupervisorReady {
+                let endpoint = endpoint.as_ref().expect("setup has an endpoint");
+                // The guardian has reported ready, while the Client has yet
+                // to receive G. The Host joined the startup owner and cannot
+                // forget the marker or independent authority in this window.
+                endpoint.settlement_joined.notified().await;
+                assert!(!draining.is_finished());
+                assert!(pending_execution(&f, &session.id));
+                assert_eq!(authorities(), 1);
+                assert!(endpoint.control().is_none());
+            }
             if let Some(release) = release {
                 release.send(()).unwrap();
             } else {
@@ -822,6 +873,7 @@ async fn installed_resume_drain_cancels_every_admission_phase_and_settles_cleanl
                 "{cut:?}"
             );
             assert!(!pending_execution(&f, &session.id), "{cut:?}");
+            assert_eq!(authorities(), 0, "{cut:?}");
             assert_eq!(
                 f.manager.available_local_client_slots(),
                 capacity,

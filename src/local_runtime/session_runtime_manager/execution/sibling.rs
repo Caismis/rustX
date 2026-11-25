@@ -17,7 +17,13 @@ use tokio_util::sync::CancellationToken;
 pub(crate) async fn launch_sibling(
     endpoint: Arc<LocalExecutionEndpoint>,
 ) -> Result<SiblingClient, RuntimeManagerError> {
-    match start_sibling(endpoint.clone()).await {
+    #[cfg(test)]
+    endpoint.reach_startup_hook("before_local_client_startup");
+    let startup = endpoint.begin_client_startup()?;
+    let mut unconfirmed = None;
+    let result = start_sibling(endpoint.clone(), &mut unconfirmed).await;
+    startup.finish(unconfirmed);
+    match result {
         Ok(child) => Ok(child),
         Err(failure) => match endpoint.settle().await {
             Ok(()) => Err(failure),
@@ -115,8 +121,10 @@ fn client_arguments(command: &mut Command, endpoint: &LocalExecutionEndpoint) {
 }
 
 #[cfg(target_os = "linux")]
-async fn spawn(sibling: &Path, endpoint: &LocalExecutionEndpoint) -> io::Result<SiblingClient> {
-    use tokio::io::AsyncWriteExt as _;
+fn spawn(
+    sibling: &Path,
+    endpoint: &LocalExecutionEndpoint,
+) -> io::Result<(SiblingClient, rustx_execution_server::LocalDomainGrant)> {
     let guardian = rustx_process_supervisor::invocation::companion_binary("interactive-supervisor");
     let grant = endpoint.arm_local_domain()?;
     let mut command = Command::new(guardian);
@@ -130,25 +138,46 @@ async fn spawn(sibling: &Path, endpoint: &LocalExecutionEndpoint) -> io::Result<
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
-    let mut lease = child.stdin.take().expect("piped domain lease");
-    let mut reports = tokio::io::BufReader::new(child.stdout.take().expect("piped domain reports"));
-    lease.write_all(grant.token()).await?;
-    if report(&mut reports, "ready ", &mut Vec::new()).await? == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid Client namespace init",
-        ));
-    }
-    lease.write_all(b"G").await?;
+    let lease = child.stdin.take().expect("piped domain lease");
+    let stdout = child.stdout.take().expect("piped domain reports");
     // The lease stays outside Child so polling wait during authentication
     // cannot close it. It is the only long-lived Server-owned writer.
-    Ok(SiblingClient {
-        child,
-        lease: Some(lease),
-        reports,
-        final_report: Vec::new(),
-        exit: None,
-    })
+    Ok((
+        SiblingClient {
+            child,
+            lease: Some(lease),
+            reports: tokio::io::BufReader::new(stdout),
+            final_report: Vec::new(),
+            exit: None,
+        },
+        grant,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+async fn start_supervisor(
+    endpoint: &LocalExecutionEndpoint,
+    child: &mut SiblingClient,
+    grant: &rustx_execution_server::LocalDomainGrant,
+) -> Result<(), RuntimeManagerError> {
+    use tokio::io::AsyncWriteExt as _;
+    let lease = child.lease.as_mut().expect("local startup lease");
+    lease.write_all(grant.token()).await.map_err(error)?;
+    if report(&mut child.reports, "ready ", &mut Vec::new())
+        .await
+        .map_err(error)?
+        == 0
+    {
+        return Err(error("invalid Client namespace init"));
+    }
+    #[cfg(test)]
+    endpoint.reach_startup_hook("after_local_supervisor_ready");
+    // The startup owner prevents settlement from removing the domain proof
+    // before the supervisor has reaped, even if retirement wins here.
+    if !endpoint.dispatch_open() {
+        return Err(RuntimeManagerError::LoadingCancelled);
+    }
+    lease.write_all(b"G").await.map_err(error)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -166,10 +195,8 @@ fn spawn(sibling: &Path, endpoint: &LocalExecutionEndpoint) -> io::Result<Siblin
 
 async fn start_sibling(
     endpoint: Arc<LocalExecutionEndpoint>,
+    unconfirmed: &mut Option<Arc<io::Error>>,
 ) -> Result<SiblingClient, RuntimeManagerError> {
-    if !endpoint.dispatch_open() {
-        return Err(RuntimeManagerError::LoadingCancelled);
-    }
     // Trusted resolution only: the executable shipped beside this Server.
     let sibling = rustx_process_supervisor::invocation::companion_binary("rustx-execution-client");
     if !sibling.is_file() {
@@ -193,77 +220,87 @@ async fn start_sibling(
     // Namespace setup and both authenticated lanes share a finite startup cut.
     let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
     #[cfg(target_os = "linux")]
-    let child = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(deadline),
-        spawn(&sibling, &endpoint),
-    )
-    .await
-    .map_err(|_| error("local execution: Client supervisor did not report setup"))?;
-    #[cfg(not(target_os = "linux"))]
-    let child = spawn(&sibling, &endpoint);
-    let mut child = child
+    let (mut child, grant) = spawn(&sibling, &endpoint)
         .map_err(|failure| error(format!("local execution: client spawn failed: {failure}")))?;
+    #[cfg(not(target_os = "linux"))]
+    let mut child = spawn(&sibling, &endpoint)
+        .map_err(|failure| error(format!("local execution: client spawn failed: {failure}")))?;
+    #[cfg(target_os = "linux")]
+    {
+        let setup = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            start_supervisor(&endpoint, &mut child, &grant),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(error(
+                "local execution: Client supervisor did not report setup",
+            ))
+        });
+        if let Err(failure) = setup {
+            return Err(reap_failed(&mut child, failure, unconfirmed).await);
+        }
+    }
+    if let Err(failure) = authenticate_sibling(&endpoint, &listener, &mut child, deadline).await {
+        return Err(reap_failed(&mut child, failure, unconfirmed).await);
+    }
+    let stop = endpoint.accept_stop.clone();
+    let binding = Arc::downgrade(&endpoint);
+    tokio::spawn(async move {
+        loop {
+            let accepted = tokio::select! {
+                biased;
+                () = stop.cancelled() => break,
+                accepted = listener.accept() => accepted,
+            };
+            let Ok((stream, _)) = accepted else { break };
+            let Some(endpoint) = binding.upgrade() else {
+                break;
+            };
+            let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
+            let _ = admit(endpoint, stream, deadline).await;
+        }
+    });
+    Ok(child)
+}
+
+async fn authenticate_sibling(
+    endpoint: &Arc<LocalExecutionEndpoint>,
+    listener: &tokio::net::UnixListener,
+    child: &mut SiblingClient,
+    deadline: std::time::Instant,
+) -> Result<(), RuntimeManagerError> {
     loop {
+        if !endpoint.dispatch_open() {
+            return Err(RuntimeManagerError::LoadingCancelled);
+        }
         let accept =
             tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), listener.accept());
-        let stream = match tokio::select! {
+        let stream = tokio::select! {
             status = child.wait() => Err(format!(
                 "local execution: client exited before admission ({status:?})"
             )),
-            accepted = accept => {
-                match accepted {
-                    Ok(Ok((stream, _))) => Ok(stream),
-                    Ok(Err(error)) => {
-                        Err(format!("local execution: client accept failed: {error}"))
-                    }
-                    Err(_) => Err(
-                        "local execution: client did not connect within the handshake deadline"
-                            .into(),
-                    ),
-                }
+            accepted = accept => match accepted {
+                Ok(Ok((stream, _))) => Ok(stream),
+                Ok(Err(error)) => Err(format!("local execution: client accept failed: {error}")),
+                Err(_) => Err("local execution: client did not connect within the handshake deadline".into()),
             }
-        } {
-            Ok(stream) => stream,
-            Err(error) => {
-                return Err(reap_failed(&mut child, handshake_failure(&endpoint, error)).await);
-            }
-        };
+        }.map_err(|failure| handshake_failure(endpoint, failure))?;
         match admit(endpoint.clone(), stream, deadline).await {
             Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Live) => {
-                let stop = endpoint.accept_stop.clone();
-                let binding = Arc::downgrade(&endpoint);
-                tokio::spawn(async move {
-                    loop {
-                        let accepted = tokio::select! {
-                            biased;
-                            () = stop.cancelled() => break,
-                            accepted = listener.accept() => accepted,
-                        };
-                        let Ok((stream, _)) = accepted else { break };
-                        let Some(endpoint) = binding.upgrade() else {
-                            break;
-                        };
-                        let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-                        let _ = admit(endpoint, stream, deadline).await;
-                    }
-                });
-                return Ok(child);
+                return Ok(());
             }
-            // Data half held — the pairing control lane is still to come
-            // inside the same budget.
+            // The data half is held while control pairs inside the same budget.
             Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Pending) => {}
             Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
                 reject,
             )) => {
-                let failure = handshake_failure(
-                    &endpoint,
+                return Err(handshake_failure(
+                    endpoint,
                     format!("local execution: admission rejected: {reject}"),
-                );
-                return Err(reap_failed(&mut child, failure).await);
+                ));
             }
-            Err(error) => {
-                return Err(reap_failed(&mut child, handshake_failure(&endpoint, error)).await);
-            }
+            Err(failure) => return Err(handshake_failure(endpoint, failure)),
         }
     }
 }
@@ -303,12 +340,22 @@ fn handshake_failure(endpoint: &LocalExecutionEndpoint, failure: String) -> Runt
 
 /// Release the exact owned Client after a failed admission. On Linux the
 /// independent helper retains reap ownership even if this deadline expires.
-async fn reap_failed(child: &mut SiblingClient, cause: RuntimeManagerError) -> RuntimeManagerError {
-    match tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, child.terminate()).await {
-        Ok(Ok(_)) => cause,
-        Ok(Err(failure)) => error(format!("{cause}; local Client reap failed: {failure}")),
-        Err(_) => error(format!("{cause}; local Client reap timed out")),
-    }
+async fn reap_failed(
+    child: &mut SiblingClient,
+    cause: RuntimeManagerError,
+    unconfirmed: &mut Option<Arc<io::Error>>,
+) -> RuntimeManagerError {
+    let failure = match tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, child.terminate()).await {
+        #[cfg(target_os = "linux")]
+        Ok(Ok(status)) if child.exit.is_none() => {
+            format!("local Client supervisor exited without settlement ({status})")
+        }
+        Ok(Ok(_)) => return cause,
+        Ok(Err(failure)) => format!("local Client reap failed: {failure}"),
+        Err(_) => "local Client reap timed out".into(),
+    };
+    *unconfirmed = Some(Arc::new(io::Error::other(failure.clone())));
+    error(format!("{cause}; {failure}"))
 }
 
 pub(crate) struct LocalClient {

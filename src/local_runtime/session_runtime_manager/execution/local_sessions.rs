@@ -273,6 +273,8 @@ impl SessionRuntimeManager {
                 return Err(error);
             }
         };
+        #[cfg(test)]
+        endpoint.install_startup_hooks(self.configuration.test_hooks.clone());
         let client = match sibling::LocalClient::launch(session.clone(), endpoint.clone()).await {
             Ok(client) => client,
             Err(error) => {
