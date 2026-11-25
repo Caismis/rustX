@@ -20,7 +20,7 @@ use std::{
     io,
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
@@ -82,9 +82,18 @@ impl CrashCut {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct SaveTraffic {
+    requests: usize,
+    request_bytes: usize,
+    reply_bytes: usize,
+    max_record_bytes: usize,
+}
+
 struct ObservedSave {
     receipt: SaveReply,
     length: u64,
+    traffic: SaveTraffic,
     late_delivery: Option<LateDelivery>,
 }
 
@@ -94,11 +103,18 @@ struct LateDelivery {
 }
 
 async fn read<T: serde::de::DeserializeOwned>(lane: &mut UnixStream) -> io::Result<T> {
+    read_frame(lane).await.map(|(value, _)| value)
+}
+
+async fn read_frame<T: serde::de::DeserializeOwned>(
+    lane: &mut UnixStream,
+) -> io::Result<(T, usize)> {
     let length = lane.read_u32().await? as usize;
     assert!((1..=MAX_RECORD_BYTES).contains(&length));
     let mut bytes = vec![0; length];
     lane.read_exact(&mut bytes).await?;
-    serde_json::from_slice(&bytes).map_err(io::Error::other)
+    let value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    Ok((value, length + size_of::<u32>()))
 }
 
 async fn write(lane: &mut UnixStream, record: &impl serde::Serialize) -> io::Result<()> {
@@ -365,17 +381,22 @@ async fn observe_save_cut(
     observed: oneshot::Sender<ObservedSave>,
 ) {
     let mut observed = Some(observed);
-    while let Ok(request) = read::<ClientRequest>(&mut server).await {
+    let mut traffic = SaveTraffic::default();
+    while let Ok((request, request_bytes)) = read_frame::<ClientRequest>(&mut server).await {
         if write(&mut client, &request).await.is_err() {
             break;
         }
-        let Ok(reply) = read::<ClientReply>(&mut client).await else {
+        let Ok((reply, reply_bytes)) = read_frame::<ClientReply>(&mut client).await else {
             break;
         };
         let ClientReply::Save(receipt) = &reply else {
             write(&mut server, &reply).await.unwrap();
             continue;
         };
+        traffic.requests += 1;
+        traffic.request_bytes += request_bytes;
+        traffic.reply_bytes += reply_bytes;
+        traffic.max_record_bytes = traffic.max_record_bytes.max(request_bytes.max(reply_bytes));
         if let SaveReply::Chunked {
             next_offset,
             duplicate,
@@ -393,6 +414,7 @@ async fn observe_save_cut(
                     .send(ObservedSave {
                         receipt: receipt.clone(),
                         length,
+                        traffic,
                         late_delivery: None,
                     })
                     .ok()
@@ -405,6 +427,7 @@ async fn observe_save_cut(
                 .send(ObservedSave {
                     receipt: receipt.clone(),
                     length,
+                    traffic,
                     late_delivery: Some(LateDelivery {
                         resume,
                         observed: late_receipt,
@@ -458,21 +481,22 @@ async fn shutdown(mut process: Child, diagnostics: tokio::task::JoinHandle<()>) 
     diagnostics.await.unwrap();
 }
 
-async fn upload(peer: &mut Peer, verb: &str, params: Value) {
-    let response = peer
-        .raw_request(json!({
-            "jsonrpc": "2.0", "method": format!("item/tool/result/{verb}"), "params": params
-        }))
-        .await;
+async fn upload(peer: &mut Peer, verb: &str, params: Value) -> usize {
+    let value = json!({
+        "jsonrpc": "2.0", "method": format!("item/tool/result/{verb}"), "params": params
+    });
+    let bytes = peer.next_request_bytes(value.clone());
+    let response = peer.raw_request(value).await;
     assert!(matches!(response, Response::Success(success)
         if matches!(success.result, MethodResult::HostUploadAccepted { duplicate: false })));
+    bytes
 }
 
 async fn upload_result(
     peer: &mut Peer,
     request: &ServerRequest,
     mut progress: Option<watch::Receiver<u64>>,
-) -> usize {
+) -> (usize, usize, usize) {
     let ServerRequestMethod::ToolCall(call) = &request.call else {
         panic!("Host callback");
     };
@@ -484,7 +508,7 @@ async fn upload_result(
     candidate["uploadId"] = json!(uuid::Uuid::new_v4().to_string());
     let body = format!("{START}{}{END}", "x".repeat(FILL));
     let items = json!([{"typeTag": 1, "length": body.len().to_string()}]);
-    upload(
+    let mut host_request_bytes = upload(
         peer,
         "begin",
         json!({"candidate": candidate, "success": true, "items": items}),
@@ -492,7 +516,7 @@ async fn upload_result(
     .await;
     let mut offset = 0;
     for (index, chunk) in body.as_bytes().chunks(MAX_CHUNK_BYTES).enumerate() {
-        upload(
+        host_request_bytes += upload(
             peer,
             "chunk",
             json!({
@@ -513,7 +537,7 @@ async fn upload_result(
         }
     }
     let digest = sha2::digest::Output::<Sha256>::from(canonical_digest(&[(1, body.as_bytes())]));
-    upload(
+    host_request_bytes += upload(
         peer,
         "end",
         json!({
@@ -522,7 +546,11 @@ async fn upload_result(
         }),
     )
     .await;
-    body.len()
+    (
+        body.len(),
+        body.len().div_ceil(MAX_CHUNK_BYTES) + 2,
+        host_request_bytes,
+    )
 }
 
 async fn create_host_session(
@@ -684,7 +712,8 @@ async fn crash_during_output(cut: CrashCut) {
             panic!("Host callback");
         };
         let progress = (cut != CrashCut::Allocated).then_some(progress);
-        let bytes = upload_result(&mut peer, &request, progress).await;
+        let upload_started = Instant::now();
+        let (bytes, host_requests, host_request_bytes) = upload_result(&mut peer, &request, progress).await;
         assert_eq!(bytes as u64, LENGTH);
         let held = reached_cut.await.unwrap();
         let key = match &held.receipt {
@@ -726,6 +755,21 @@ async fn crash_during_output(cut: CrashCut) {
         assert_eq!(file.metadata().unwrap().len(), held.length);
         if cut == CrashCut::Canonical {
             peer.settled(&turn_id).await;
+            assert!(held.traffic.requests > 3);
+            assert!(held.traffic.request_bytes > bytes);
+            assert!(held.traffic.max_record_bytes <= MAX_RECORD_BYTES + size_of::<u32>());
+            if std::env::var_os("RUSTX_HOST_SAVE_MEASUREMENT").is_some() {
+                println!("HOST_SAVE_MEASUREMENT {}", json!({
+                    "body_bytes": bytes,
+                    "host_requests": host_requests,
+                    "host_request_bytes": host_request_bytes,
+                    "save_exchanges": held.traffic.requests,
+                    "save_request_bytes": held.traffic.request_bytes,
+                    "save_reply_bytes": held.traffic.reply_bytes,
+                    "max_save_record_bytes": held.traffic.max_record_bytes,
+                    "upload_through_settlement_ms": upload_started.elapsed().as_secs_f64() * 1000.0,
+                }));
+            }
             let SaveReply::Published { locator, key, .. } = &held.receipt else {
                 panic!("expected the committed locator");
             };

@@ -645,17 +645,14 @@ for line in sys.stdin:
     })).await;
 }
 
-#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[cfg(feature = "mcp-fixture")]
 async fn seed_managed_python_wheel_cache(
     bin: &std::path::Path,
     uv: &std::path::Path,
+    interpreter: &std::path::Path,
 ) -> std::path::PathBuf {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     let fixture = tempfile::tempdir().unwrap();
-    let interpreter = ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
-        .into_iter()
-        .find(|path| std::path::Path::new(path).is_file())
-        .expect("Client Python");
     let minor = std::process::Command::new(interpreter)
         .args([
             "-c",
@@ -689,7 +686,7 @@ dependencies = ["fastmcp==4.0.3"]
     if let Some(warmed) = std::env::var_os("RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE") {
         let source = std::path::PathBuf::from(warmed).join(".");
         let copied = tokio::process::Command::new("/bin/cp")
-            .args(["-a", "--reflink=auto"])
+            .arg("-pPR")
             .arg(source)
             .arg(&cache)
             .kill_on_drop(true)
@@ -737,7 +734,7 @@ dependencies = ["fastmcp==4.0.3"]
     directory
 }
 
-#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn doctor_probes_selected_managed_python_in_an_owned_client() {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -745,8 +742,12 @@ async fn doctor_probes_selected_managed_python_in_an_owned_client() {
         .map(|directory| directory.join("uv"))
         .find(|candidate| candidate.is_file())
         .expect("Managed Python acceptance requires uv");
+    let interpreter = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("python3"))
+        .find(|candidate| candidate.is_file())
+        .expect("Managed Python acceptance requires python3");
     let (bin, executable) = isolated_server_pair();
-    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv, &interpreter).await;
     std::fs::write(
         uv_path.join("uv"),
         format!(
@@ -797,7 +798,7 @@ exec '{}' --offline "$@"
         let scratch = fixture.root.path().join("diagnostic-scratch");
         std::fs::create_dir(&scratch).unwrap();
         let store = bin.path().join("client-home/.local/share");
-        let paths = [uv_path, PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        let paths = [uv_path, interpreter.parent().unwrap().to_path_buf(), PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
         let path = std::env::join_paths(paths).unwrap();
         let store_root = store.join("rustx/environments/python-tools");
         let builds = store_root.join("uv-cache/installed-builds");
@@ -888,7 +889,12 @@ async fn managed_python_store_for_client(isolated_mount: bool) {
     let (bin, rustx) = isolated_server_pair();
     // Set up only wheels. The authenticated Client still creates the first
     // fingerprint, resolves its lock offline, and installs the venv itself.
-    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv).await;
+    let interpreter = ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
+        .into_iter()
+        .map(std::path::Path::new)
+        .find(|path| path.is_file())
+        .expect("Client Python");
+    let uv_path = seed_managed_python_wheel_cache(bin.path(), &uv, interpreter).await;
     bounded(Box::pin(async {
         use rustx::app_server::{protocol::{Method, MethodResult}, session_deletion::SessionDeletionResult};
         use std::os::unix::fs::PermissionsExt as _;
@@ -4341,8 +4347,10 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         let [a, b]: [AttachmentTarget; 2] = targets.try_into().unwrap();
         start_turn(&client, &a, "tui multi-session: session A long task").await;
         provider.await_gate("session-a-holding").await;
+        let b_started = std::time::Instant::now();
         start_turn(&client, &b, "tui multi-session: session B quick task").await;
         let b_done = settled(&client, &b).await;
+        let b_elapsed = b_started.elapsed();
         assert_eq!(provider.requests().await.len(), 2);
         assert!(b_done["effective_plugins"]["todo"].is_null());
         // Drain through B's authoritative settlement publication. Every event
@@ -4431,6 +4439,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         while diagnostics(&observer).await.external_attachments != 0 {
             tokio::task::yield_now().await;
         }
+        let a_released = std::time::Instant::now();
         provider.release_gate("session-a-holding").await;
         while diagnostics(&observer).await.active_roots != 0 {
             tokio::task::yield_now().await;
@@ -4443,6 +4452,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         assert_eq!(resumed.conversation_id, a.conversation_id);
         assert_ne!(resumed.attachment_id, a.attachment_id);
         let a_done = settled(&reconnected, &resumed).await;
+        let a_elapsed = a_released.elapsed();
         assert_eq!(a_done["attempt"]["phase"]["outcome"]["type"], "completed");
         assert!(!a_done["effective_plugins"]["todo"].is_null());
         let history = a_done["messages"].to_string();
@@ -4457,6 +4467,17 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         );
         assert!(!a_done["transcript"].to_string().contains("cancelled"));
         assert_eq!(provider.requests().await.len(), 2, "no transport retry");
+        if std::env::var_os("RUSTX_PARALLEL_SESSION_MEASUREMENT").is_some() {
+            println!(
+                "PARALLEL_SESSION_MEASUREMENT {}",
+                serde_json::json!({
+                    "sessions": 2,
+                    "model_requests": 2,
+                    "foreground_settlement_ms": b_elapsed.as_secs_f64() * 1000.0,
+                    "detached_release_through_readback_ms": a_elapsed.as_secs_f64() * 1000.0,
+                })
+            );
+        }
         for (target, cwd) in [(&resumed, "a"), (&b, "b")] {
             let MethodResult::Settings { projection, .. } = result(
                 &reconnected,

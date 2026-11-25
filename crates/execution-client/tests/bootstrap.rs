@@ -77,7 +77,9 @@ fn rig_with(required_capabilities: BTreeSet<Capability>) -> Rig {
 }
 
 fn client(bundle: &Path, workspace: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rustx-execution-client"));
+    let binary = std::env::var_os("RUSTX_INSTALLED_CLIENT_BINARY")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_rustx-execution-client").into());
+    let mut command = Command::new(binary);
     command
         .arg("--binding-file")
         .arg(bundle)

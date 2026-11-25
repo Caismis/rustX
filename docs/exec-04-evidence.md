@@ -17,10 +17,10 @@ The installed-product branch starts at `6ca38dc3d3ffe87c9c476a15d10642abab8053ba
 | T42 | The independent Client range and grep probe measures the bounded wire responses below. The installed native file-tools scenario also measures both live processes while an Agent reads one line near the end of a 64 MiB source, searches it, and edits a separate file. The installed Bash scenario saves 4 MiB on the Client and reads a line missing from the Server preview through both Read and Grep. See the wire measurements below. |
 | T44 | `execution_enrollment_precedes_client_and_workspace_configuration_readiness` exercises minimal enrollment, denies browsing before authentication, lists a descendant despite invalid Workspace configuration, and refuses outside paths and directory symlinks. Cancelling through normal Session deletion removes the catalog entry, prevents further browsing, and reaps the Client while the selected directory and its original bytes survive. The installed Web carrier also exercises the private Product Host picker by browsing, confirming a revision and registering a descendant. `installed_workspace_picker_uses_a_private_client_and_reaps_before_registration` verifies the private lane rejects ordinary transport credentials, refuses outside paths and symlink traversal, succeeds despite malformed Workspace configuration, rejects a replaced directory, and clears its recovery fence before returning. The temporary binding creates no durable Session. |
 | T45 | `client_death_after_canonical_host_result_cannot_rewrite_saved_history` keeps a sealed canonical attachment and a published Client Spill in one Conversation. After a real Linux SIGKILL, it verifies removal of the old storage, `NotFound` for the exact locator on the replacement, no Save replay, and the original canonical result. A cold standalone Server then exports the exact attachment bytes with the Workspace absent, with no Spill entry. The sealed image is seeded via the durable fixture API. |
-| T46 | Installed Hosted tests include bounded frames, full digest validation, one canonical commit, and an empty Server scratch directory. The Linux baseline below measures Host-to-Server traffic and compares settlement time, Server CPU, peak memory, and physical writes with the real HTTP MCP transport. Concurrent candidates and queue high-water measurements remain open. |
+| T46 | Installed Hosted tests include bounded frames, full digest validation, one canonical commit, and an empty Server scratch directory. The Linux baseline below measures Host-to-Server traffic and compares settlement time, Server CPU, peak memory, and physical writes with the real HTTP MCP transport. The second baseline covers concurrent candidates without a Client at two sizes. Bound Client loser cleanup is verified by distinct allocation receipts and physical deletion. |
 | T49 | `deleted_session_recovers_only_for_cleanup_in_the_original_client` holds a real same-instance reattach until deletion reports cleanup pending. The original Client sends one Revoke receipt. The data lane accepts no requests, the Session stays absent from the catalog, and the original Workspace bytes remain unchanged. The remote SIGKILL fixture covers pending deletion when no authorized receipt is available. |
 | T52 | `standalone_server_validates_large_host_stream_without_a_client` uses a real external WebSocket Host against the standalone Server. It verifies individual frame bounds, wrong-digest refusal, one canonical result, and bounded continuation with truthful unavailable output. |
-| T65 | Installed Linux tests cover strong Server/Client kills and restart fences. macOS death and settlement evidence remains open. |
+| T65 | Installed Linux tests cover strong Server/Client kills and restart fences. The shared installed process test checks remote refusal after a real Server SIGKILL and then a Client SIGKILL. The installed Client harness tests ordinary half-close, exact input/output and process identity across recovery, and cleanup-only reattachment after a lost Revoke receipt. Native macOS execution requires its independent release run. |
 | T66 | `exact_store_identity_ignores_origin_and_permissions_but_keeps_runtime_and_source` covers source identity, interpreter and uv path/version, and the FastMCP pin in the Client Store. |
 | T67 | `same_store_joins_one_owner_and_waiter_drop_cannot_release_its_stage` holds the physical build, verifies that a second caller joins it, and observes one build plus physical cleanup when the owner cancels. |
 | T68 | `independent_stores_reuse_the_exclusive_winner_and_refuse_corruption` verifies unchanged corrupt manifest, source, and interpreter entries. `client_package_watch_refreshes_permissions_and_nested_source_from_the_same_binding` verifies that a permission edit leaves the source digest unchanged and a new Attempt observes the adopted snapshot. |
@@ -48,11 +48,15 @@ Twenty Linux x86-64 runs used the Server and Client extracted from
 requests and commits one Read, one Grep and one Edit in the same Attempt.
 Read and Grep return only the selected marker from a 67,108,884-byte source.
 Edit publishes its separate small file. The test checks exact resulting bytes
-and bounds the full tool-turn traffic to 16 data exchanges and 16 KiB.
-Every sample used nine exchanges, with 1,812 bytes sent and 1,008–1,178 bytes
-received, including length prefixes. The largest Client reply was 275 bytes.
-Each exchange carries one request and one response. Continuous control polls
-and the model HTTP connection are outside this counter.
+and bounds the native tool data path to 16 exchanges and 16 KiB. It also
+records the full pair traffic and enforces its 8 KiB single-reply ceiling.
+After Edit publishes, Workspace observation can run on the same data lane.
+The tool counter includes all requests for the selected files and catches
+extra range reads or attempts to transfer the result through another tool
+route. Every sample in the initial run used nine pair exchanges, with 1,812
+bytes sent and 1,008–1,178 bytes received, including length prefixes. The
+largest Client reply was 275 bytes. These counters exclude control polling
+and model HTTP.
 
 | Metric | P50 | P95 | Maximum |
 | --- | ---: | ---: | ---: |
@@ -75,6 +79,14 @@ RUSTX_FILE_TOOL_MEASUREMENT=1 /absolute/process-harness --exact \
 
 Repeat for twenty samples and collect the `FILE_TOOL_MEASUREMENT` records.
 
+Twenty additional runs on the installed
+`b9f262283fb3a90752ced10550e94c417a3db060` pair exercise the split counters.
+The full data lane sees 9–36 exchanges while the tool work takes exactly
+four exchanges, sending 440 bytes and receiving 823 bytes in every run.
+The largest reply on the pair is 275 bytes. This run includes concurrent
+compilation and conformance work. Settlement was 204.9 ms P50 and 1,553.1 ms
+P95, including the time spent waiting for the shared lane.
+
 ## Linux standalone Hosted and HTTP MCP baseline
 
 The two real transports were measured against the standalone Linux x86-64 Server extracted from `94a8ca4b6a6e893b045ec3af3bf4145997e4576d`. The Client was absent, and each Attempt used the Fake Provider and produced one canonical tool result. Twenty fresh Server processes ran per transport and size. Samples alternate transports and sizes. Settlement latency runs from submitting the turn to observing its settlement. CPU and physical write deltas use the same window, and peak RSS covers process lifetime. CPU resolution is 10 ms on the measured system. P95 uses the nearest rank.
@@ -96,6 +108,20 @@ For Hosted, the fixtures sent 35, 67, and 259 requests carrying 2,819,196 B, 5,6
 | 16 MiB | 1,435.4 ms | 1,497.9 ms | 81,912 KiB | 83,308 KiB |
 
 Run `app_server_host::standalone_server_arbitrates_two_streaming_host_candidates_without_a_client` with the same `RUSTX_HOST_MEASUREMENT_MIB` option. Capture `HOST_MEASUREMENT` and `HOST_JOURNAL_MEASUREMENT`. Bound Client candidate cleanup is covered by the real Save receipt and Client file assertions in the EXEC-03 evidence.
+
+### Bound Hosted publication
+
+Twenty samples of the installed `b9f262283fb3a90752ced10550e94c417a3db060`
+pair complete one 240,038-byte Host result. Every sample sends six Host
+requests with 323,913 bytes of JSON before WebSocket framing. The distinct
+Save lane sends 323,398 bytes and receives 3,146 bytes across seven exchanges,
+with one exchange in flight and an 87,886-byte maximum record including the
+frame prefix. Upload through canonical settlement took 78.3 ms P50 and
+316.8 ms P95 under concurrent test load. The fixture checks the real Client
+file at publication, the exact locator and generation, and no replay after
+Client SIGKILL. Run `RUSTX_HOST_SAVE_MEASUREMENT=1` with the exact
+`app_server_host::generation::client_death_after_canonical_host_result_cannot_rewrite_saved_history`
+process case to collect `HOST_SAVE_MEASUREMENT`.
 
 To reproduce, prepare the `process` harness and set `RUSTX_INSTALLED_PRODUCTS` to a directory containing the three extracted products under `rustx-server`, `rustx-client`, and `rustx`. Repeat the two commands 20 times each for `mib=2`, `4`, and `16` and use the `HOST_MEASUREMENT` and `HTTP_MCP_MEASUREMENT` records. `getconf CLK_TCK` gives the CPU counter frequency.
 
@@ -128,6 +154,44 @@ RUSTX_MODEL_MEASUREMENT=1 /absolute/process-harness --exact \
 
 Repeat for twenty samples and collect the `MODEL_MEASUREMENT` records.
 
+## Concurrent Sessions and MCP generations
+
+Twenty samples of the installed `b9f262283fb3a90752ced10550e94c417a3db060`
+Server hold Session A in the Fake Provider while Session B completes. The
+same owner then completes A after the observer disconnects and serves its
+result on reattach. Each run verifies two model requests with no retry, two
+distinct Sessions, and unchanged runtime identity for A. The latency sample
+for A includes reconnect and readback. These samples ran with other local
+conformance processes on the same host.
+
+| Scenario | P50 | P95 | Maximum |
+| --- | ---: | ---: | ---: |
+| B submit through settlement while A is held | 49.1 ms | 395.4 ms | 450.5 ms |
+| A release through disconnected settlement and reattach | 31.3 ms | 236.0 ms | 240.0 ms |
+
+Set `RUSTX_PARALLEL_SESSION_MEASUREMENT=1` for the exact process test
+`app_server::app_server_concurrent_sessions_finish_across_external_disconnect`.
+
+An additional twenty runs drive the real installed Client from the native
+Server capability coordinator test harness. Each prepares eight stdio MCP
+sources, starts exactly eight replacements while old leases retain the old
+generation, rejects a ninth source before spawn, and drains all eight old
+workers after the leases release. Preparation includes launch, handshake and
+catalog discovery. Activation measures the coordinator's publication call.
+It excludes new process startup. The Server coordinator is a test build.
+
+| Generation phase | P50 | P95 | Maximum |
+| --- | ---: | ---: | ---: |
+| First preparation and discovery | 328.8 ms | 450.1 ms | 539.2 ms |
+| Replacement preparation and discovery | 313.6 ms | 503.5 ms | 584.3 ms |
+| Activate prepared generation | 0.226 ms | 0.300 ms | 0.350 ms |
+| Release leases through physical drain | 160.3 ms | 214.7 ms | 291.9 ms |
+
+Stage the installed `rustx-execution-client` and its two supervisors next to
+the native lib test harness. Run the exact test
+`capabilities::coordinator::mcp_capacity_tests::full_stdio_generation_rotates_without_revoking_admitted_leases`
+with `RUSTX_MCP_GENERATION_MEASUREMENT=1`.
+
 ## Installed Bash capture and continuation baseline
 
 Twenty Linux x86-64 samples drive native Agent Bash, Read and Grep through
@@ -152,6 +216,13 @@ with the same extracted products as the ordinary file-tool baseline. This
 measures Agent-native Bash. The streaming test below measures the public
 command endpoint instead.
 
+Twenty additional runs on `b9f262283fb3a90752ced10550e94c417a3db060` verify
+eight exchanges for the Bash operation and selected readback even when
+the data lane carries 14–40 total exchanges. The tool exchanges send
+2,855–2,865 bytes and receive 35,324 bytes across the whole turn. The
+maximum pair reply stays at 33,298 bytes. Settlement under concurrent
+local validation was 154.2 ms P50 and 217.8 ms P95.
+
 ## Installed Bash streaming baseline
 
 Twenty Linux x86-64 runs used the Server and Client from the `5320f6dc7b193b4405cd83c9f7ef8fcd3b38cf15` bundle. The command uses the public `command/exec` endpoint once in each already-bound Session. Bash produces the prefix, waits for the test to receive it and send a line using `command/exec/write`, then emits a 128 KiB body plus a suffix. Every run received exactly 131,081 bytes in 18 ordered output notifications, with no truncation and a successful terminal response. First byte means the first nonempty output notification at the App Server consumer. Settlement includes the gated input exchange. Measurements exclude initialization and do not include Agent-native Bash dispatch.
@@ -171,4 +242,55 @@ Repeat for twenty samples and collect the `BASH_MEASUREMENT` records. The output
 
 ## Installed Managed Python restart reuse
 
-The Linux diagnostic probe opens the Workspace through an owned Client. A successful cold run writes one `uv lock` and one `uv sync` record after the wheel cache has been populated. The reopened run uses the exact Store entry and writes no additional build record. Both real stdio launches verify the same tool catalog, clean up their diagnostic roots, and leave no Session or business tool call. The installed sample took 6.8 ms for the plan, 2,391.2 ms for cold preparation through discovery and shutdown, and 2,040.0 ms for a fresh process reopening the prepared Store through discovery and shutdown. These are single-fixture elapsed measurements after wheel-cache population. The owner-level race tests above measure build counts and independently fence publication.
+The Linux diagnostic probe opens the Workspace through an owned Client. A successful cold run writes one `uv lock` and one `uv sync` record after the wheel cache has been populated. The reopened run uses the exact Store entry and writes no additional build record. Both real stdio launches verify the same tool catalog, clean up their diagnostic roots, and leave no Session or business tool call. Twenty runs used the Linux products at `5320f6dc7b193b4405cd83c9f7ef8fcd3b38cf15`
+with native Python 3.12 and a populated wheel cache. The first probe starts
+with no prepared Store entry. The second starts a new Client with the same
+published Store. P95 uses the nearest rank. Timings include physical shutdown
+and differ from pure package installation times. The owner-level race tests
+check exact build counts and publication ownership.
+
+| Probe | P50 | P95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Plan through shutdown | 9.7 ms | 10.8 ms | 470.1 ms |
+| Prepare a new Store entry, discover and shut down | 2,371.3 ms | 5,134.5 ms | 7,084.2 ms |
+| Reopen the validated Store entry, discover and shut down | 2,435.7 ms | 3,918.7 ms | 7,351.8 ms |
+
+To repeat the measurement, set `RUSTX_MANAGED_PYTHON_TEST_WHEEL_CACHE`
+to a populated uv cache for the fixture requirements and run the exact
+`app_server::doctor_probes_selected_managed_python_in_an_owned_client`
+process case with `RUSTX_INSTALLED_PRODUCTS` pointing to the extracted products. Reuse avoids builds.
+The elapsed times include the new Python process and handshake on every
+reopen and do not establish a latency improvement.
+
+
+## Installed Client cancellation identity capacity
+
+Twenty native Linux Client processes from the
+`5320f6dc7b193b4405cd83c9f7ef8fcd3b38cf15` installation admit exactly 4,096
+distinct pre-START cancellations on the real control lane. The next identity
+returns `Unknown`; the oldest identity still returns `AlreadySettled`.
+A subsequent data-lane START for that identity returns a physically settled
+cancellation with zero stdout and stderr. Revocation receives its physical
+receipt and the Client exits successfully.
+
+| Metric | P50 | P95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Client startup and paired admission | 2.67 ms | 3.19 ms | 3.19 ms |
+| Cancellation fills, refusal, and identical START | 194.76 ms | 212.82 ms | 228.02 ms |
+| Physical Revoke and successful Client exit | 101.38 ms | 103.34 ms | 103.43 ms |
+| Client RSS high-water mark | 10,266 KiB | 10,392 KiB | 10,440 KiB |
+
+The measuring peer sends 4,098 controls. Actual control wire traffic is
+1,057,816–1,058,010 bytes out and 1,229,910–1,230,104 bytes in, including
+incidental idle polls. The single data RPC sends 200 bytes and receives
+408 bytes. Framing is included, and the startup and Revoke exchanges are
+excluded. The peer's memory is excluded from the Client figure. This probe
+measures the capacity of a full cancellation identity table, with no Agent,
+live Bash workers, or canonical writes.
+
+```sh
+for sample in $(seq 20); do
+  python3 test-support/measure_execution_reads.py /absolute/rustx-client/bin/rustx-client \
+    --one tombstones --size 4096
+done
+```

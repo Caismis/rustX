@@ -8,12 +8,31 @@ const BASH_MARKER: &str = "EXEC-04-bash-private-marker";
 const SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const LINE_BYTES: usize = 128;
 
-#[derive(Default, serde::Serialize)]
-struct Wire {
+#[derive(Debug, Default, serde::Serialize)]
+struct Traffic {
     exchanges: usize,
     to_client: usize,
     to_server: usize,
     largest_reply: usize,
+}
+
+impl Traffic {
+    fn record(&mut self, request: usize, reply: usize) {
+        self.exchanges += 1;
+        self.to_client += request;
+        self.to_server += reply;
+        self.largest_reply = self.largest_reply.max(reply);
+    }
+
+    fn total_bytes(&self) -> usize {
+        self.to_client + self.to_server
+    }
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+struct Wire {
+    pair: Traffic,
+    tools: Traffic,
     read: usize,
     grep: usize,
     edit: usize,
@@ -22,18 +41,46 @@ struct Wire {
     bash_grep: usize,
 }
 
+fn carries_tool_work(request: &ClientRequest) -> bool {
+    match request {
+        // Watching the Workspace can trigger ordinary source revalidation
+        // after Edit publishes. Count lookups of either tool file, regardless
+        // of how the tool chooses to obtain its content.
+        ClientRequest::GetMetadata { relative_path }
+        | ClientRequest::ReadRange { relative_path, .. }
+        | ClientRequest::ResolveResourceEntry { relative_path } => {
+            relative_path == Path::new("large.txt") || relative_path == Path::new("small.txt")
+        }
+        ClientRequest::Process(_)
+        | ClientRequest::Save(_)
+        | ClientRequest::ReadSavedOutput { .. }
+        | ClientRequest::ReadSavedOutputRange { .. }
+        | ClientRequest::SearchSavedOutput { .. }
+        | ClientRequest::ReadBashOutput { .. }
+        | ClientRequest::SearchBashOutput { .. }
+        | ClientRequest::Search { .. }
+        | ClientRequest::ReadLines { .. }
+        | ClientRequest::ReadDocument { .. }
+        | ClientRequest::PrepareEdit { .. }
+        | ClientRequest::PrepareWrite { .. }
+        | ClientRequest::BeginWrite { .. }
+        | ClientRequest::WriteChunk { .. }
+        | ClientRequest::CommitWrite { .. }
+        | ClientRequest::AbortWrite { .. } => true,
+        _ => false,
+    }
+}
+
 async fn count_wire(mut client: UnixStream, mut server: UnixStream, wire: Arc<Mutex<Wire>>) {
-    while let Ok(request) = read::<ClientRequest>(&mut server).await {
+    while let Ok((request, request_bytes)) = read_frame::<ClientRequest>(&mut server).await {
         write(&mut client, &request).await.unwrap();
-        let reply = read::<ClientReply>(&mut client).await.unwrap();
+        let (reply, reply_bytes) = read_frame::<ClientReply>(&mut client).await.unwrap();
         {
             let mut report = wire.lock().unwrap();
-            let request_bytes = serde_json::to_vec(&request).unwrap().len() + 4;
-            let reply_bytes = serde_json::to_vec(&reply).unwrap().len() + 4;
-            report.exchanges += 1;
-            report.to_client += request_bytes;
-            report.to_server += reply_bytes;
-            report.largest_reply = report.largest_reply.max(reply_bytes);
+            report.pair.record(request_bytes, reply_bytes);
+            if carries_tool_work(&request) {
+                report.tools.record(request_bytes, reply_bytes);
+            }
             report.read += usize::from(matches!(request, ClientRequest::ReadLines { .. }));
             report.grep += usize::from(matches!(
                 request,
@@ -243,16 +290,15 @@ async fn installed_file_tools(spill: bool) {
             if spill {
                 assert_eq!((wire.bash_read, wire.bash_grep), (1, 1));
                 assert_eq!((wire.read, wire.grep, wire.edit, wire.commit), (0, 0, 0, 0));
-                assert!(wire.to_server + wire.to_client <= 512 * 1024,
-                    "output capture and the selected readback stay bounded: {} bytes",
-                    wire.to_server + wire.to_client);
+                assert!(wire.tools.total_bytes() <= 512 * 1024,
+                    "output capture and the selected readback stay bounded: {wire:?}");
             } else {
                 assert!(final_request.len() < 64 * 1024);
                 assert_eq!(std::fs::read(workspace.join("small.txt")).unwrap(), b"new line\n");
                 assert_eq!((wire.read, wire.grep, wire.edit, wire.commit), (1, 1, 1, 1));
-                assert!(wire.exchanges <= 16);
-                assert!(wire.largest_reply <= 8192 && wire.to_server + wire.to_client <= 16 * 1024,
-                    "the wire carries only selected results and commit metadata");
+                assert!(wire.tools.exchanges <= 16, "native file work is bounded: {wire:?}");
+                assert!(wire.pair.largest_reply <= 8192 && wire.tools.total_bytes() <= 16 * 1024,
+                    "the wire carries only selected results and commit metadata: {wire:?}");
             }
             if std::env::var_os("RUSTX_FILE_TOOL_MEASUREMENT").is_some() {
                 println!("FILE_TOOL_MEASUREMENT {}", json!({

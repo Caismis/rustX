@@ -17,14 +17,17 @@ def run(*args: str | Path) -> None:
     subprocess.run(args, cwd=ROOT, check=True)
 
 
-def native_harness() -> Path:
-    args = ["cargo", "test", "--test", "process", "--all-features", "--locked",
-            "--no-run", "--message-format=json"]
-    build = subprocess.run(args, cwd=ROOT, text=True, stdout=subprocess.PIPE, check=True)
+def native_harness(package: str, target: str) -> Path:
+    args = ["cargo", "test", "--package", package, "--test", target, "--all-features",
+            "--locked", "--no-run", "--message-format=json"]
+    build = subprocess.run(args, cwd=ROOT, text=True, stdout=subprocess.PIPE)
+    if build.returncode:
+        print(build.stdout, flush=True)
+        build.check_returncode()
     artifacts = map(json.loads, build.stdout.splitlines())
     [harness] = [Path(record["executable"]) for record in artifacts
                  if record["reason"] == "compiler-artifact"
-                 and record["target"]["name"] == "process"
+                 and record["target"]["name"] == target
                  and record["profile"]["test"] and record["executable"]]
     return harness
 
@@ -38,10 +41,12 @@ def main() -> None:
     directory = args.out.resolve()
     run("cargo", "test", "--lib", "--all-features", "--locked", "--no-run")
     run("cargo", "clippy", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings")
-    harness = native_harness()
+    harness = native_harness("rustx", "process")
+    client_harness = native_harness("rustx-execution-client", "bootstrap")
     run("python3", "release/package.py", "all", "--out", directory)
     archives = sorted(directory.glob("*.tar.gz"))
-    run("python3", "release/conformance.py", *archives, "--process-harness", harness)
+    run("python3", "release/conformance.py", *archives, "--process-harness", harness,
+        "--client-harness", client_harness)
     for archive in archives:
         with tarfile.open(archive, "r:gz") as package:
             member = package.extractfile(f"{archive.name.removesuffix('.tar.gz')}/manifest.json")

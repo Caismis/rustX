@@ -118,7 +118,10 @@ python3 release/conformance.py /absolute/path/to/packages/*.tar.gz
 
 To replay the real-process checks against the extracted executables, prepare
 and pass the current `process` test harness. On Linux, add `--mount-proof` to
-include the Client-only filesystem and Managed Python cases. Use the native
+include the Client-only filesystem and Managed Python cases. Pass the
+`rustx-execution-client` package's `bootstrap` test executable with
+`--client-harness` to exercise same-instance reattachment against the
+installed Client. Use the native
 platform dependencies described in [the test index](../tests/README.md).
 
 ```sh
@@ -144,8 +147,11 @@ python3 test-support/measure_execution_reads.py /path/to/rustx-client/bin/rustx-
 
 For the native macOS release check, run the same packager and verifier through
 `python3 release/verify_macos.py --out /absolute/path/to/packages`. The
-script compiles the native lib test target, runs strict Clippy, builds the
-three archives, and runs the installed process cases. On GitHub, dispatch
+local run needs the Fake Provider fixture initialized with
+`uv sync --frozen` in `test-support/fake-provider`. The verifier
+compiles the native lib test target, runs strict Clippy, builds the
+three archives, and runs the installed process and Client reattachment
+cases. On GitHub, dispatch
 `CI` with `installed_macos=true` for the desired release branch. This job
 runs only by explicit dispatch and has its own result and installation
 manifests.

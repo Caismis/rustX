@@ -93,6 +93,9 @@ jobs:
           brew install llvm
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
           corepack enable
+      - name: Prepare the existing provider emulator
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
       - name: Verify the three native macOS products
         run: python3 release/verify_macos.py --out "$RUNNER_TEMP/products"
       - name: Save verified installation manifests and checksums

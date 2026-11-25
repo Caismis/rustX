@@ -46,6 +46,7 @@ PROCESS_CASES = (
     "explicit_composition_launches_and_reaps_the_sibling_client",
     "websocket_and_unix_transports_serve_identical_seeded_operations",
     "server_sigkill_keeps_prior_client_binding_unavailable_after_restart",
+    "doctor_probes_selected_managed_python_in_an_owned_client",
 )
 HOST_CASES = (
     "standalone_server_validates_large_host_stream_without_a_client",
@@ -62,6 +63,11 @@ LINUX_HOST_CASES = (
     "generation::installed_file_tools::installed_native_file_tools_keep_large_results_on_the_client",
     "generation::installed_file_tools::installed_bash_continuation_reads_only_the_selected_client_output",
 )
+CLIENT_CASES = (
+    "same_instance_recovery_preserves_the_process_and_output_cursor",
+    "real_client_recovers_after_losing_its_revoke_receipt",
+    "either_one_way_control_failure_recovers_the_same_authenticated_instance",
+)
 LINUX_CASES = (
     "local_restart_requires_namespace_settlement_after_server_sigkill",
     "client_sigkill_advances_only_the_original_session_generation",
@@ -70,7 +76,6 @@ LINUX_CASES = (
 MOUNT_CASES = (
     "explicit_composition_reads_from_client_mount_namespace",
     "managed_python_prepares_and_runs_in_the_bound_client_mount",
-    "doctor_probes_selected_managed_python_in_an_owned_client",
     "stdio_mcp_session_runs_and_publishes_from_the_client_mount_view",
 )
 
@@ -288,16 +293,21 @@ def process_proof(harness: Path, products: Path, mount: bool) -> None:
     host_cases = HOST_CASES + (LINUX_HOST_CASES if os.uname().sysname == "Linux" else ())
     tests.extend(f"app_server_host::{test}" for test in host_cases)
     for test in tests:
-        run = subprocess.run([harness, test, "--exact", "--include-ignored"], cwd=ROOT,
-                             env=environment, timeout=180, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        print(run.stdout, end="", flush=True)
-        require(run.returncode == 0 and "1 passed; 0 failed;" in run.stdout, f"Installed conformance case did not pass: {test}")
+        run_case(harness, test, environment)
+
+
+def run_case(harness: Path, name: str, environment: dict) -> None:
+    run = subprocess.run([harness, name, "--exact", "--include-ignored"], cwd=ROOT,
+                         env=environment, timeout=180, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(run.stdout, end="", flush=True)
+    require(run.returncode == 0 and "1 passed; 0 failed;" in run.stdout, f"Installed conformance case did not pass: {name}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archives", type=Path, nargs=3)
     parser.add_argument("--process-harness", type=Path)
+    parser.add_argument("--client-harness", type=Path)
     parser.add_argument("--mount-proof", action="store_true")
     options = parser.parse_args()
     if options.mount_proof and not options.process_harness:
@@ -336,6 +346,10 @@ def main() -> None:
         web(bundle, cwd, environment)
         if options.process_harness:
             process_proof(options.process_harness.resolve(), products, options.mount_proof)
+        if options.client_harness:
+            for name in CLIENT_CASES:
+                run_case(options.client_harness.resolve(), name,
+                         {**os.environ, "RUSTX_INSTALLED_CLIENT_BINARY": str(client)})
         print(f"Installed {manifests[0]['source']} ({manifests[0]['platform']}); manifest and launcher checks passed")
 
 
