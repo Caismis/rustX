@@ -17,7 +17,7 @@ TOOL = HERE / "rust_test_shards.py"
 
 FAKE_HARNESS = """#!/usr/bin/env python3
 import sys
-NAMES = ["alpha::one", "alpha::two", "beta::slow"]
+NAMES = ["alpha::one", "alpha::two", "beta::slow", "gamma::should_panic_test"]
 args = sys.argv[1:]
 names = []
 skip_next = False
@@ -44,7 +44,11 @@ if "--list" in args:
 selected = [n for n in NAMES if n in names] if exact else NAMES
 for n in selected:
     mark = "FAILED" if n == "beta::slow" and "FAIL_SLOW" in __import__("os").environ else "ok"
-    print(f"test {n} ... {mark}")
+    if n == "gamma::should_panic_test":
+        # libtest's real marker for #[should_panic] tests.
+        print(f"test {n} - should panic ... {mark}")
+    else:
+        print(f"test {n} ... {mark}")
 sys.exit(0)
 """
 
@@ -138,7 +142,7 @@ class ShardToolCase(unittest.TestCase):
             self.assertEqual(self.run_shard(shard, runs).returncode, 0)
         result = self.verify(runs)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("3 tests", result.stdout)
+        self.assertIn("4 tests", result.stdout)
 
     def test_wrong_artifact_identity_is_rejected(self) -> None:
         self.make_inventory()

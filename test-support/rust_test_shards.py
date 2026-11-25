@@ -34,7 +34,9 @@ import sys
 from pathlib import Path
 
 TEST_LINE = re.compile(
-    r"^test (\S+) \.\.\. (ok|FAILED|ignored|bench: .*)(?: in ([0-9.]+)s)?$"
+    # `#[should_panic]` tests print `test NAME - should panic ... ok`.
+    r"^test (\S+)(?: - should panic)? \.\.\. "
+    r"(ok|FAILED|ignored|bench: .*)(?: in ([0-9.]+)s)?$"
 )
 
 
