@@ -662,6 +662,8 @@ pub(super) fn stage_mutation(
     target.stage(write)
 }
 
+// The caller also settles the Linux domain owner's external staging claim.
+#[cfg_attr(not(target_os = "linux"), allow(clippy::unnecessary_wraps))]
 pub(super) fn release_staging() -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     return rustx_process_supervisor::client_domain::release_mutation_staging(
