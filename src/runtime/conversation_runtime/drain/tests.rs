@@ -1,4 +1,5 @@
 use crate::durable::JournalStore;
+use crate::runtime::conversation_runtime::ConversationRole;
 use crate::runtime::conversation_runtime::test_support::*;
 
 #[cfg(feature = "mcp-fixture")]
@@ -248,8 +249,9 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
     let (attempt_id, cancellation) = {
         let state = runtime.inner.state.lock().expect("runtime state lock");
         let current = state
-            .current_attempt
-            .as_ref()
+            .foreground
+            .slot
+            .as_attempt()
             .expect("pending interaction has an active attempt");
         (current.attempt_id.clone(), current.cancellation.clone())
     };
@@ -1343,7 +1345,7 @@ async fn shutdown_drains_after_settlement_control_plane_failure() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = ConversationRuntime::with_test_monotonic_clock(
         config,
@@ -2030,7 +2032,12 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
     );
     assert_eq!(subagents.unproven_settlements(), vec![admitted.subagent_id]);
     assert!(
-        runtime.settle_child_physical_lifetime(false).await.is_err(),
+        runtime
+            .shutdown_outcome()
+            .await
+            .expect("drain outcome")
+            .physical
+            .is_err(),
         "abandoning logical publication cannot invent a physical receipt for the containing child"
     );
     assert!(runtime.shutdown().await.is_err());
@@ -2198,7 +2205,12 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
         "{error:?}"
     );
     assert!(
-        runtime.settle_child_physical_lifetime(false).await.is_err(),
+        runtime
+            .shutdown_outcome()
+            .await
+            .expect("drain outcome")
+            .physical
+            .is_err(),
         "the explicit unresolved physical owner forbids a child recovery receipt",
     );
     assert!(!runtime.is_quiescent());

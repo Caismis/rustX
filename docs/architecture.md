@@ -5796,6 +5796,24 @@ transcript or execution-history authority.
   attempt task and holds no lock when it observes. Every client lock
   acquisition drains the pending queue first, so queued observations fold
   in the coordinator's commit order.
+- **Foreground execution ownership (Issue #606).** Every fact about which
+  operation owns the conversation's single mutable `ConversationState` lives
+  in `CoordinatorState.foreground`: the typed `ForegroundSlot`
+  (`Idle`/`Attempt`/`ManualCompaction`/`Scheduled`/`Poisoned`) plus the
+  `ManualTailState` physical-reclamation state. The slot is the only source
+  of truth for the lent conversation state; `Poisoned` is the absorbing
+  terminal a poison guard installs when a lending task dies without
+  returning it. Regrouping narrowed the ownership surface — it did not add a
+  second linearization domain, so all of it stays under the one coordinator
+  lock and the lock graph above is unchanged. Business logic that does not
+  own foreground execution moved out of `ConversationRuntime`/`RuntimeInner`:
+  classification/BTW/title auxiliary execution lives in `ExternalAuxiliary`
+  (one atomic `admit_auxiliary_work` bundle), scheduled workflow execution
+  in `ScheduledExecutor` (one atomic `claim_scheduled_start` bundle), and
+  session-title publication in `SessionTitle` at the local-runtime layer.
+  `ConversationRole` makes Root vs SubagentChild explicit at construction,
+  and child physical settlement is reachable only through
+  `runtime.child_control()` on child-role runtimes.
 - **Checkpoint/cursor invariant.** `checkpoint_get` returns a bounded checkpoint
   at cursor C with one native read cut, finite display heads, collection
   frontiers and deferred content evidence. A subscription after C observes

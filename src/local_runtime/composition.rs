@@ -115,7 +115,7 @@ use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
 use crate::runtime::RuntimeResourceRevision;
 use crate::runtime::conversation_runtime::{
-    ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
+    ConversationContextConfig, ConversationRole, ConversationRuntime, ConversationRuntimeError,
     RuntimeConversationConfig,
 };
 use crate::runtime::identity::ConversationId;
@@ -935,7 +935,7 @@ impl LocalConversationCore {
                     clock: Some(clock),
                     initial_messages,
                     subagents: Some(subagents),
-                    workflow_output: None,
+                    role: ConversationRole::Root,
                 })?;
                 runtime.install_initialization_cancellation(cancellation.clone());
                 let catalog_loader = resource_loader.clone();

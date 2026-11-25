@@ -1,8 +1,13 @@
-//! Scheduled workflow preparation machinery; persisted contracts live in
-//! `rustx_durable::workflow::scheduled`.
+//! Bounded scheduled-start contracts over native immutable resources;
+//! persisted contracts live in `rustx_durable::workflow::scheduled`.
+//!
+//! Preparation performs no graph effects and grants no execution authority.
+//! The Workflow owner must still retain/revalidate these resources through its
+//! configuration/lifecycle fence and durably claim the exact start before use.
+pub(crate) mod effects;
+pub(crate) mod executor;
 
 pub use rustx_durable::workflow::scheduled::*;
-pub(crate) mod effects;
 
 use super::{WorkflowBlockProgram, WorkflowId, WorkflowNodeProgram, WorkflowProgram};
 use crate::capabilities::ToolSourceId;

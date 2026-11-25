@@ -59,8 +59,8 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::conversation_runtime::{
-    ConversationContextConfig, ConversationRuntime, ConversationRuntimeError, CoordinatorProbe,
-    InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
+    ConversationContextConfig, ConversationRole, ConversationRuntime, ConversationRuntimeError,
+    CoordinatorProbe, InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
 };
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
@@ -567,7 +567,7 @@ async fn host_fixture_before_activation(
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match monotonic_clock {
         Some(clock) => ConversationRuntime::with_test_monotonic_clock(config, clock),
@@ -665,7 +665,7 @@ async fn host_fixture_with_runtime_probe(
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
-            workflow_output: None,
+            role: ConversationRole::Root,
         },
         probe,
     )
@@ -3559,7 +3559,7 @@ async fn finish_pending_fixture(
             pending_terminal_diagnostic(store.as_ref(), held_attempt)
         )
     });
-    let settled = fixture.runtime.child_attempt_settlement(0).await;
+    let settled = fixture.runtime.attempt_settlement(0).await;
     assert_eq!(&settled.attempt_id, held_attempt);
     assert!(matches!(
         settled.outcome,
@@ -4492,7 +4492,7 @@ async fn a_background_transition_and_checkpoint_capture_have_one_lock_order() {
     .await;
     // The terminal notice has its own root attempt; settle that finite
     // transition before asking for the final authoritative cut.
-    fixture.runtime.child_attempt_settlement(0).await;
+    fixture.runtime.attempt_settlement(0).await;
     let (snapshot, _) = fixture
         .host
         .checkpoint()
@@ -7556,7 +7556,7 @@ async fn host_fixture_probe_with_native_tools(
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect("conversation runtime");
     let host = RuntimeClientHost::with_probe(
@@ -7655,7 +7655,7 @@ async fn host_fixture_probe_with_runtime_gate(
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
-            workflow_output: None,
+            role: ConversationRole::Root,
         },
         runtime_probe,
     )
@@ -7776,7 +7776,7 @@ async fn runtime_only_fixture(
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match probe {
         Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -8193,7 +8193,7 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     }
 }
 

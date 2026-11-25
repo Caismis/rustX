@@ -943,6 +943,21 @@ async fn the_final_report_rule_is_runtime_owned_and_terminal_mode_aware() {
         ),
         "without a schema no workflow_output terminal is installed"
     );
+    let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        text.runtime()
+            .child_control()
+            .expect("child runtime")
+            .submit_parent_guidance(
+                crate::message::types::UserSource::Agent {
+                    agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                },
+                Vec::new(),
+            )
+    }));
+    assert!(
+        refusal.is_err(),
+        "a schema-free Workflow AgentRun is WorkflowAgentRun, never SubagentChild"
+    );
 }
 
 /// Issue #146: the execution binding is not project-instruction

@@ -2,10 +2,12 @@
 //! absorbing `DurabilityFailed` fact, and the background/subagent terminal
 //! publication failure sinks.
 
+use super::attempt::{NativeAttemptOutcome, NativeAttemptSettlement};
 use super::{
     ConversationObservation, ConversationRuntime, CoordinatorState, DurableOperation, RuntimeInner,
     Weak,
 };
+use crate::runtime::AttemptId;
 
 /// The semantic durable operations of the coordinator's durability-health
 /// contract (Issue #63).
@@ -87,7 +89,7 @@ pub(super) struct PendingDurabilityRetry {
 /// `DurabilityGate::commit_failure` — the one mutation API of the failure
 /// authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct AdmissionDurabilityCycle {
+pub(crate) struct AdmissionDurabilityCycle {
     /// The independent select/adopt retry allowances for this cycle.
     pub(super) budget: AdmissionRetryBudget,
     /// The latest transient failure whose re-kick is armed.
@@ -236,7 +238,7 @@ impl RuntimeInner {
             return;
         }
         let retry_armed = {
-            let cycle = &mut state.admission_durability_cycle;
+            let cycle = &mut state.foreground.admission_durability_cycle;
             if cycle.budget.try_consume(operation) {
                 cycle.pending_retry = Some(PendingDurabilityRetry {
                     operation,
@@ -255,6 +257,52 @@ impl RuntimeInner {
         } else {
             self.commit_failure_and_observe(operation, diagnostic);
         }
+    }
+
+    /// Poisons the foreground when the attempt task identified by
+    /// `attempt_id` unwound before returning the conversation state: the
+    /// slot becomes `Poisoned` (blocking all future admission, publication,
+    /// and `claim_idle`), the absorbing `DurabilityFailed` fact is recorded,
+    /// and every waiter is notified so drain can finish instead of hanging
+    /// on a phantom owner (Issue #606).
+    pub(super) fn poison_foreground_for_task(&self, attempt_id: &AttemptId) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let owns = matches!(
+            state.foreground.slot.as_attempt(),
+            Some(current) if current.attempt_id == *attempt_id
+        );
+        if !owns {
+            return;
+        }
+        if state.foreground.slot.poison() {
+            // The poisoned attempt WAS admitted, so every settlement waiter
+            // — a child driver's terminal wait — needs a recognizable
+            // failure handoff to exit through its failure-reporting and
+            // physical-drain paths instead of hanging on a settlement that
+            // can never arrive. `RuntimeFailed` reports the real failure;
+            // it fabricates no Attempt terminal outcome and overwrites no
+            // committed history (Issue #606).
+            state.foreground.latest_settlement = Some(NativeAttemptSettlement {
+                ordinal: state.foreground.admitted_attempts,
+                attempt_id: attempt_id.clone(),
+                outcome: NativeAttemptOutcome::RuntimeFailed,
+            });
+            if let Some(fanout) = self.pending.get() {
+                fanout.child_settled();
+            }
+            self.commit_failure_and_observe(
+                DurableOperation::CanonicalCommit,
+                format!(
+                    "the attempt task {attempt_id} exited without returning the conversation state"
+                ),
+            );
+        }
+        drop(state);
+        self.settlement.notify_waiters();
+        self.wake.notify.notify_one();
     }
 
     /// Commits the absorbing `DurabilityFailed` fact through the one
@@ -279,10 +327,10 @@ impl RuntimeInner {
         state: &mut CoordinatorState,
         operation: DurableOperation,
     ) {
-        if let Some(pending_retry) = &mut state.admission_durability_cycle.pending_retry
+        if let Some(pending_retry) = &mut state.foreground.admission_durability_cycle.pending_retry
             && pending_retry.operation == operation
         {
-            state.admission_durability_cycle.pending_retry = None;
+            state.foreground.admission_durability_cycle.pending_retry = None;
         }
     }
 
@@ -292,8 +340,8 @@ impl RuntimeInner {
     /// pending work or after the selected batch is durably adopted. Success
     /// of an intermediate select/adopt stage must retain the consumed bits.
     pub(super) fn complete_admission_cycle(state: &mut CoordinatorState) {
-        state.admission_durability_cycle.budget = AdmissionRetryBudget::default();
-        state.admission_durability_cycle.pending_retry = None;
+        state.foreground.admission_durability_cycle.budget = AdmissionRetryBudget::default();
+        state.foreground.admission_durability_cycle.pending_retry = None;
     }
 }
 

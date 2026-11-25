@@ -648,7 +648,7 @@ impl SessionRuntimeManager {
         if access.node.parent.is_none() {
             super::super::session_title::arm(
                 self.sessions.downgrade_catalog(),
-                session_id.clone(),
+                &session_id,
                 composition.runtime(),
             );
         }
