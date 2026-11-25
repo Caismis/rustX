@@ -112,7 +112,7 @@ class ShardToolCase(unittest.TestCase):
             "--manifest", str(self.manifest),
             "--prepared", str(self.prepared),
             "--inventory", str(self.inventory_dir / "inventory.json"),
-            "--root", str(self.root),
+            "--spec", str(self.spec), "--root", str(self.root),
             "--shard", str(shard),
             "--report", str(runs / f"shard-{shard}" / "report.json"),
         )
@@ -198,7 +198,7 @@ class ShardToolCase(unittest.TestCase):
              "--manifest", str(self.manifest),
              "--prepared", str(self.prepared),
              "--inventory", str(self.inventory_dir / "inventory.json"),
-             "--root", str(self.root),
+             "--spec", str(self.spec), "--root", str(self.root),
              "--shard", "0",
              "--report", str(runs / "shard-0" / "report.json")],
             capture_output=True, text=True, env=env,
@@ -230,7 +230,7 @@ class ShardToolCase(unittest.TestCase):
             "--manifest", str(self.manifest),
             "--prepared", str(self.prepared),
             "--inventory", str(self.inventory_dir / "inventory.json"),
-            "--root", str(self.root),
+            "--spec", str(self.spec), "--root", str(self.root),
             "--shard", "0",
             "--report", str(report_path),
         )

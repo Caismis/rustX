@@ -355,6 +355,8 @@ jobs:
           nproc
           awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the contracts harnesses and stage the real executables
+        env:
+          RUSTX_PREPARED_JSON_OUT: ${{ runner.temp }}/contracts-artifacts.json
         run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
       # Build-once/test-many: the compiled harnesses plus the staged real
@@ -367,9 +369,7 @@ jobs:
       - name: Bind the prepared artifacts to this checkout
         run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/contracts-manifest/manifest.json"
       - name: Pack the harnesses and staged executables
-        run: |
-          cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider --message-format json > "$RUNNER_TEMP/contracts-artifacts.json"
-          python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/contracts-artifacts.json" --out "$RUNNER_TEMP/contracts-prepared"
+        run: python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/contracts-artifacts.json" --out "$RUNNER_TEMP/contracts-prepared"
       - name: Discover the contracts inventory and assign the shards
         run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/contracts-manifest/manifest.json" --prepared "$RUNNER_TEMP/contracts-prepared" --spec test-support/rust-lanes/contracts.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/contracts-inventory"
       - name: Package the prepared artifacts
@@ -451,6 +451,8 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-contracts-shard']
     runs-on: ubuntu-26.04
     timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
     strategy:
       fail-fast: false
       matrix:
@@ -473,11 +475,11 @@ jobs:
           name: rust-contracts-inventory
           path: ${{ runner.temp }}/inventory
       - name: Restore the packed artifacts at their compile-time paths
-        run: tar -C . -xf "$RUNNER_TEMP/rust-contracts-prepared.tar.zst"
+        run: tar -C . -xf "$RUNNER_TEMP/contracts-prepared.tar.zst"
       - name: Execute shard ${{ matrix.shard }}
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --spec test-support/rust-lanes/contracts.json --root . --shard ${{ matrix.shard }} --report shard-report/report.json
       - name: Shard report
         if: always()
         uses: actions/upload-artifact@v7

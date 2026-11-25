@@ -254,7 +254,7 @@ def pack(root: Path, target_dir: Path, cargo_json: Path, out: Path) -> int:
             print(f"artifact executable missing: {source}", file=sys.stderr)
             return 1
         key = f"{kinds[0]}:{name}"
-        rel = source.relative_to(root)
+        rel = Path(os.path.relpath(source.resolve(), root.resolve()))
         if key in harness_index:
             print(f"two harnesses for target {key}", file=sys.stderr)
             return 1
@@ -270,7 +270,7 @@ def pack(root: Path, target_dir: Path, cargo_json: Path, out: Path) -> int:
     for candidate in sorted(target_dir.rglob("*")):
         if not candidate.is_file():
             continue
-        rel = candidate.relative_to(root)
+        rel = Path(os.path.relpath(candidate.resolve(), root.resolve()))
         if (out / rel).exists():
             continue
         executable = os.access(candidate, os.X_OK)
@@ -315,6 +315,9 @@ def main() -> int:
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--prepared", type=Path, required=True)
     p.add_argument("--inventory", type=Path, required=True)
+    p.add_argument("--spec", type=Path, required=True,
+                   help="the lane spec this run declares; the lane check "
+                        "reads it to know which targets this step executes")
     p.add_argument("--root", type=Path, default=Path("."))
     p.add_argument("--shard", type=int, required=True)
     p.add_argument("--report", type=Path, required=True)
@@ -410,6 +413,9 @@ def main() -> int:
         for problem in problems:
             print(f"artifact identity mismatch: {problem}", file=sys.stderr)
         if problems:
+            return 1
+        if not args.spec.is_file():
+            print(f"missing shard spec {args.spec}", file=sys.stderr)
             return 1
         inventory = json.loads(args.inventory.read_text())
         if args.shard < 0 or args.shard >= len(inventory["shards"]):

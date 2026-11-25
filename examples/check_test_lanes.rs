@@ -617,7 +617,8 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                 .as_str()
                 .map_or_else(|| format!("#{}", index + 1), str::to_owned);
             let located = |problem: String| format!("job `{id}` step `{name}`: {problem}");
-            if !mentions_cargo_test(run) {
+            let shard = run.contains("rust_test_shards.py run");
+            if !mentions_cargo_test(run) && !shard {
                 continue;
             }
             let platform = match platform_of(job) {
@@ -641,6 +642,9 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                     continue;
                 }
             };
+            // A shard job fans its spec out over a matrix; every leg runs the
+            // same step with its own slice, so `strategy` is the mechanism,
+            // not a coverage hazard. Everything else stays rejected.
             for (key, value) in [
                 ("strategy", &job["strategy"]),
                 ("continue-on-error", &job["continue-on-error"]),
@@ -649,12 +653,28 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                 ("working-directory", &step["working-directory"]),
                 ("shell", &step["shell"]),
             ] {
-                if !value.is_null() {
+                if !value.is_null() && !(shard && key == "strategy") {
                     errors.push(located(format!(
                         "`{key}` makes the cargo test step conditional or relocated; \
                          the lane check cannot interpret it"
                     )));
                 }
+            }
+            if shard {
+                match shard_steps(run, targets) {
+                    Ok(shard_commands) => steps.extend(shard_commands.iter().flat_map(|command| {
+                        profiles.iter().map(|profile| Step {
+                            job: id.into(),
+                            name: name.clone(),
+                            platform,
+                            profile: *profile,
+                            affected,
+                            ..command.clone()
+                        })
+                    })),
+                    Err(problem) => errors.push(located(problem)),
+                }
+                continue;
             }
             match parse_command(run, targets) {
                 // A job in both profiles contributes its steps to each.
@@ -675,6 +695,111 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
     } else {
         Err(errors)
     }
+}
+
+/// The Steps one `rust_test_shards.py run --spec <path>` step executes:
+/// one per spec entry, with the entry's harness selector resolved to the
+/// root package's targets and its `libtest_args` parsed like the `--` tail
+/// of a `cargo test` command. Every shard leg declares the same spec, and
+/// the report job proves their union covers it exactly once.
+fn shard_steps(run: &str, targets: &[Target]) -> Result<Vec<Step>, String> {
+    let lines: Vec<&str> = run.lines().filter(|line| !line.trim().is_empty()).collect();
+    let [line] = lines.as_slice() else {
+        return Err("a rust_test_shards run step must be a single command line".into());
+    };
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let spec_path = tokens
+        .iter()
+        .position(|token| *token == "--spec")
+        .and_then(|index| tokens.get(index + 1))
+        .ok_or("a rust_test_shards run step must name its --spec file")?;
+    let spec_file = Path::new(env!("CARGO_MANIFEST_DIR")).join(spec_path);
+    let spec: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&spec_file)
+            .map_err(|error| format!("cannot read shard spec `{spec_path}`: {error}"))?,
+    )
+    .map_err(|error| format!("malformed shard spec `{spec_path}`: {error}"))?;
+    let entries = spec
+        .as_array()
+        .ok_or_else(|| format!("shard spec `{spec_path}` is not a JSON array"))?;
+    let mut shard_steps = Vec::new();
+    for entry in entries {
+        let selector = entry["harness"]
+            .as_str()
+            .ok_or_else(|| format!("shard spec entry in `{spec_path}` has no harness"))?;
+        let (kind, name) = selector
+            .split_once(':')
+            .ok_or_else(|| format!("shard spec harness `{selector}` is not `<kind>:<name>`"))?;
+        let kind = match kind {
+            "lib" => Kind::Lib,
+            "bin" => Kind::Bin,
+            "example" => Kind::Example,
+            "test" => Kind::Test,
+            "bench" => Kind::Bench,
+            other => {
+                return Err(format!(
+                    "shard spec harness `{selector}` has unsupported kind `{other}`"
+                ));
+            }
+        };
+        let mut step = Step {
+            job: String::new(),
+            name: String::new(),
+            platform: Platform::Linux,
+            executes: true,
+            features: entry["features"]
+                .as_array()
+                .map(|features| {
+                    features
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            targets: Vec::new(),
+            filters: Vec::new(),
+            skips: Vec::new(),
+            exact: false,
+            scope: PackageScope::Root,
+            member_packages: Vec::new(),
+            member_excludes: Vec::new(),
+            member_kinds: BTreeSet::new(),
+            profile: Profile::Full,
+            affected: false,
+        };
+        if name == "*" {
+            step.targets
+                .extend(targets.iter().filter(|target| target.kind == kind).cloned());
+        } else {
+            step.targets.push(
+                targets
+                    .iter()
+                    .find(|target| target.kind == kind && target.name == name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("shard spec harness `{selector}` names no Cargo target")
+                    })?,
+            );
+        }
+        let libtest: Vec<&str> = entry["libtest_args"]
+            .as_array()
+            .map(|args| args.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        parse_libtest_arguments(&mut step, &libtest)?;
+        if step.targets.is_empty() {
+            return Err(format!(
+                "shard spec harness `{selector}` selected no Cargo targets"
+            ));
+        }
+        step.targets.sort();
+        step.targets.dedup();
+        shard_steps.push(step);
+    }
+    if shard_steps.is_empty() {
+        return Err(format!("shard spec `{spec_path}` has no entries"));
+    }
+    Ok(shard_steps)
 }
 
 fn platform_of(job: &serde_yaml_ng::Value) -> Result<Platform, String> {
