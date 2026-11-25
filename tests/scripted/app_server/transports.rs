@@ -538,6 +538,56 @@ async fn workspace_mcp_management_requires_its_binding_only_after_reservation() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_catalog_disconnect_releases_a_queued_private_probe() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = fixture.workspaces[0].clone();
+        fixture
+            .manager
+            .configure_local_sessions(vec![workspace.clone()])
+            .unwrap();
+        let (client, serving) = connected(&fixture, true).await;
+        initialize(&client).await;
+        let slot = fixture
+            .host
+            .local_workspace_probes()
+            .acquire()
+            .await
+            .unwrap();
+        let mut operations = fixture.host.request_operations();
+        let request = client.try_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(710),
+            call: Method::WorkflowToolCatalog {
+                target: SourceTarget::Workspace {
+                    directory: workspace,
+                },
+                execution_session: None,
+                source: Some("queued".into()),
+                cursor: None,
+                expected_scope: None,
+            },
+        });
+        tokio::pin!(request);
+        tokio::select! {
+            reply = &mut request => panic!("expected a queued request: {reply:?}"),
+            entered = operations.wait_for(|count| *count == 1) => { entered.unwrap(); }
+        }
+        client.close_output().await;
+        serving.await.unwrap().unwrap();
+        assert!(request.await.is_err());
+        // The peer's close retires the queue entry even if the probe slot never opens.
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert_eq!(fixture.host.local_workspace_probes().available_permits(), 0);
+        drop(slot);
+        fixture.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t12_workflow_scratch_disconnect_retains_physical_request_until_settlement() {
     use base64::Engine as _;
     use futures_util::FutureExt as _;

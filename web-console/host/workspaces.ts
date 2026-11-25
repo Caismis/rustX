@@ -537,19 +537,25 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   /** Read-only native work owns its connection and frozen target, without
    * holding the Workspace mutation lane during external source preparation. */
-  private async nativeConnection<T>(resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string): Promise<T> {
+  private async nativeConnection<T>(resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     const cwd = await resolve();
     if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
+    signal?.throwIfAborted();
     const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
-    const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
+    const abort = () => { void transport.close(); };
+    signal?.addEventListener('abort', abort, { once: true });
     try {
+      signal?.throwIfAborted();
+      const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } });
       // The connection just opened may reach another App Server process at
       // the same endpoint; a transaction bound to one never runs on another.
       if (native !== undefined && client.authorityId !== native) throw new WorkspaceHostError('App Server authority replaced', 'native_replaced');
       // Resolve again after asynchronous admission, immediately before submission.
       if (await resolve() !== cwd) throw new Error('Workspace authority changed');
+      signal?.throwIfAborted();
       return await run(client, cwd, async () => await resolve() === cwd);
-    } finally { await client.close(); }
+    } finally { signal?.removeEventListener('abort', abort); await transport.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
     const transfer = operation.kind === 'transfer' ? operation : undefined;
@@ -620,7 +626,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
    * replaced authority is `authority_replaced` even when it reuses the
    * registration ID; a registration that is unknown, unavailable or changed
    * is `workspace_unavailable`. Neither falls back to another directory. */
-  async workflowWorkspace(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
+  async workflowWorkspace(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation, signal?: AbortSignal): Promise<WorkflowHostResult> {
     validateWorkflowOperation(operation);
     if (typeof native !== 'string' || !native) throw new WorkspaceHostError('Expected native App Server authority', 'native_replaced');
     // Both lane resolutions, including the one immediately before native
@@ -689,7 +695,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       }
     };
     return operation.kind === 'tool_catalog'
-      ? this.nativeConnection(resolve, run, native)
+      ? this.nativeConnection(resolve, run, native, signal)
       : this.nativeLane(id, resolve, run, native);
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {

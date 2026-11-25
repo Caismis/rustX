@@ -149,7 +149,7 @@ export interface ProductHostWorkspaces {
    * transaction was bound to. The two are separate constraints: the Host
    * checks `native` against the connection it opened, after initializing it
    * and before dispatching anything. */
-  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
+  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation, signal?: AbortSignal): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** The Host obtains the path from its desktop chooser. Null means canceled. */
   browseWorkspace?(scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal): Promise<WorkspaceFolderListing>;

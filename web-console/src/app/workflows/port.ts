@@ -97,7 +97,7 @@ export interface WorkflowScopePort {
    * `source` connected, listed and closed. Global sees User sources, a
    * Workspace also its own. Supply the expected owner when listing a source
    * from a previously observed definition. */
-  toolCatalog(source?: string, cursor?: WorkflowToolCatalogCursor | null, expectedScope?: SourceScope): Promise<WorkflowToolCatalog>;
+  toolCatalog(source?: string, cursor?: WorkflowToolCatalogCursor | null, expectedScope?: SourceScope, signal?: AbortSignal): Promise<WorkflowToolCatalog>;
   /** Check the exact candidate. A Workspace file's dependencies are
    * checked in its own Workspace; a Global file's are not checked. */
   check(id: string, document: WorkflowFileDocument): Promise<WorkflowCheckReport>;
@@ -111,12 +111,15 @@ export interface WorkflowScopePort {
 
 /** Each page belongs to one unchanged catalog. A source becomes listed only
  * after every page has arrived through the same captured authority. */
-export async function readToolCatalog(port: Pick<WorkflowScopePort, 'toolCatalog'>, source?: string, expectedScope?: SourceScope, owns = () => true) {
+export async function readToolCatalog(port: Pick<WorkflowScopePort, 'toolCatalog'>, source?: string, expectedScope?: SourceScope,
+  { owns = () => true, signal }: { owns?: () => boolean; signal?: AbortSignal } = {}) {
   const sources: WorkflowToolSource[] = [];
   let cursor: WorkflowToolCatalogCursor | undefined;
   do {
     if (!owns()) throw new Error('Tool catalog request superseded');
-    const catalog = await port.toolCatalog(source, cursor, expectedScope);
+    signal?.throwIfAborted();
+    const catalog = await port.toolCatalog(source, cursor, expectedScope, signal);
+    signal?.throwIfAborted();
     if (!owns()) throw new Error('Tool catalog request superseded');
     for (const item of catalog.sources) {
       const prior = source && sources.find(prior => prior.source_id === item.source_id);
@@ -176,8 +179,9 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
     const commit = await attempt(true, operation);
     return current() || commit.reread.status === 'failed' ? commit : { ...commit, reread: { status: 'failed', error: 'server_replaced' } };
   };
-  const viaHost = async <K extends WorkflowHostResult['kind']>(workspaceId: string, operation: WorkflowHostOperation & { kind: K }, owns?: () => boolean) => {
+  const viaHost = async <K extends WorkflowHostResult['kind']>(workspaceId: string, operation: WorkflowHostOperation & { kind: K }, owns?: () => boolean, signal?: AbortSignal) => {
     const dispatch = async () => {
+      signal?.throwIfAborted();
       if (!current()) throw replaced(false);
       const owner = host();
       if (!owner?.workflowWorkspace) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
@@ -185,7 +189,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
         throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' });
       }
       if (!native) throw new WorkflowOperationError({ kind: 'unavailable', message: 'server_unavailable' });
-      const result = await owner.workflowWorkspace(hostAuthority.scope, native, workspaceId, operation);
+      const result = await owner.workflowWorkspace(hostAuthority.scope, native, workspaceId, operation, signal);
       if (result.kind !== operation.kind) throw new Error('Unexpected Product Host result');
       return result as Extract<WorkflowHostResult, { kind: K }>;
     };
@@ -201,7 +205,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
-      toolCatalog: (source, cursor, expected_scope) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor, expected_scope, expected_directory: expectedWorkspaceDirectory, execution_session: catalogSession })).catalog),
+      toolCatalog: (source, cursor, expected_scope, signal) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor, expected_scope, expected_directory: expectedWorkspaceDirectory, execution_session: catalogSession }, undefined, signal)).catalog),
       analyze: (id, document, generation, query, owns) => read(async () => {
         if (owns && !owns()) throw new Error('Workflow analysis request superseded');
         return (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query }, owns)).report;
@@ -225,7 +229,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
     read: id => read(() => readWorkflowSource(client, request, target, id)),
     modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
-    toolCatalog: (source, cursor, expected_scope) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor, expected_scope, execution_session: executionSession?.id } }, 'workflow_tool_catalog')).catalog),
+    toolCatalog: (source, cursor, expected_scope, signal) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor, expected_scope, execution_session: executionSession?.id } }, 'workflow_tool_catalog', undefined, () => current() && !signal?.aborted)).catalog),
     analyze: (id, document, generation, query, owns) => read(async () => {
       const { report } = await withWorkflowDocument(client, request, target, document, reference => client.request({ method: 'workflow/analyze', params: { target, id, document: reference, generation, query } }, 'workflow_analysis'), owns);
       if (!analysisMatches(report, target, id, generation, query)) throw new Error('Mismatched Workflow analysis target or query');

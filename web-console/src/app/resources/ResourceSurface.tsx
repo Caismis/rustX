@@ -222,7 +222,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     if (scope === 'workspace' && (!workspaceId || !directory || !hostAuthority || currentHost !== hostOwner)) return;
     const port = createWorkflowPort({ client, host: () => host, hostAuthority, expectedWorkspaceDirectory: directory, executionSession,
       scope: scope === 'workspace' && workspaceId ? { kind: 'workspace', workspaceId } : USER_SCOPE });
-    const catalog = await readToolCatalog(port, server, owner, () => owns() && (scope === 'user' || !!hostAuthority?.current()));
+    const catalog = await readToolCatalog(port, server, owner, { owns: () => owns() && (scope === 'user' || !!hostAuthority?.current()) });
     return catalog.sources.find(entry => entry.source_id === server);
   }, [client, host, authority, workspaceId, directory, hostOwner, executionSession]);
   const listTitle = useRef<HTMLHeadingElement>(null);

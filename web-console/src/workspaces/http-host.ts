@@ -116,8 +116,8 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       throw new WorkspaceHostError('Resource transfer acknowledgement lost', undefined, true);
     }
   };
-  workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
-    try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
+  workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation, signal?: AbortSignal) => {
+    try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }, operation.kind === 'tool_catalog' ? signal : undefined); }
     catch (cause) {
       // A lost write carrier conceals whether native committed it.
       if (cause instanceof WorkspaceHostError || operation.kind !== 'write') throw cause;

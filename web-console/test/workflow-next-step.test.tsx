@@ -84,7 +84,7 @@ it('lists each MCP server and Python package of the scope as a provider of its T
   const toolCatalog = vi.fn(async (source?: string) => ({ sources: source === undefined
     ? sources.map(item => ({ ...item, state: item.state === 'listed' ? 'pending' as const : item.state, tools: [] }))
     : sources.filter(item => item.source_id === source) }));
-  const port = { toolCatalog } as unknown as WorkflowScopePort;
+  const port = { scope: { kind: 'workspace', workspaceId: 'workspace' }, toolCatalog } as unknown as WorkflowScopePort;
   let current: WorkflowDocument = { description: 'Search', block: rootBlock() };
   current.block.edges = [];
   function Harness() {

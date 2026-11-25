@@ -159,7 +159,18 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
             // The native App Server identity the transaction is bound to: required, never inferred.
             const native = string('native');
             if (!native || native.length > 256) throw new Error('Expected native App Server authority');
-            value = await host.workflowWorkspace(scope(), native, string('id'), body.operation);
+            if (body.operation?.kind !== 'tool_catalog') {
+              value = await host.workflowWorkspace(scope(), native, string('id'), body.operation);
+            } else {
+              const abort = new AbortController();
+              const closed = () => { if (!response.writableFinished) abort.abort(); };
+              response.once('close', closed);
+              if (response.destroyed) closed();
+              try { value = await host.workflowWorkspace(scope(), native, string('id'), body.operation, abort.signal); }
+              catch (error) { if (!abort.signal.aborted) throw error; }
+              finally { response.off('close', closed); }
+              if (abort.signal.aborted) return;
+            }
           }
           break;
         case 'classify': {

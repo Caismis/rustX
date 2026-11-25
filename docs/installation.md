@@ -110,8 +110,11 @@ selected Session uses only that Session's binding.
 Each Server allows one private Workspace Client at a time across these
 requests and the picker. Catalog requests already admitted by the Server wait
 in order for that slot. Their handshake and listing deadlines start after
-admission to the slot. Grant revocation or Server shutdown cancels the wait.
-The picker reports busy immediately if the slot is occupied.
+admission to the slot. Disconnect, grant revocation, or Server shutdown
+cancels the wait. The Workflow editor lists Workspace sources one at a time
+and closes its catalog connection when the editor closes. The Server
+settles any probe that already acquired the slot. The picker reports busy
+immediately if the slot is occupied.
 
 Web and TUI need Node.js 24 on `PATH`. Run `rustx app-server --help` for
 headless startup with the installed binaries. On Linux, local recovery

@@ -133,7 +133,7 @@ impl AppServerConnection {
         let slot = tokio::select! {
             biased;
             () = grant.cancelled() => return Err(unavailable()),
-            () = stop.cancelled() => return Err(unavailable()),
+            () = self.service_events.closed.cancelled() => return Err(unavailable()),
             slot = capacity.acquire_owned() => slot.map_err(|_| unavailable())?,
         };
         // Once admitted, the request and probe permits cover the Client

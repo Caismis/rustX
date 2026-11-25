@@ -63,6 +63,13 @@ recovery record is still pending, and requires unscoped MCP and Workflow
 catalog requests to return `ExecutionUnavailable` without reaching the
 configured MCP peer.
 
+The Workflow editor keeps all but one Workspace source in memory. The Web
+regression queues eight sources through the Product Host HTTP handler and
+checks a peak of one catalog fetch and one native connection. Closing the
+editor closes both and skips the remaining sources. A separate WebSocket
+test closes a client waiting for the private probe slot and observes its Host
+request permit return while the slot is still held.
+
 The in-crate `installed_resume` tests run real sibling Clients through the
 installed composition owner. Eight invalid saved Sessions release their
 Client slots and recovery records, a healthy Session can still be created,
