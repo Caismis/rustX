@@ -2,7 +2,11 @@ import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
-import { SettingsScopeMenu } from './SettingsScopeMenu';
+import { PageScopeToolbar, PageRefreshButton, ScopeNavContext } from './ScopeToolbar';
+import { PageTransactionProvider } from './forms/bridge';
+import { useNavigationGuard } from './forms/guard';
+import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../presentation/settings/SettingsPageShell';
+import { SettingsPageSkeleton } from '../../presentation/primitives/Skeleton';
 import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../client/app-server';
@@ -31,12 +35,13 @@ import { ExtensionsPage, type ExtensionFilter } from './extensions/ExtensionsPag
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
   catalogIdentities, catalogProfiles, configAuthoring, settingsLifecycle,
-  settingsTargetKey, settingsTargetLabel, settingsTargetScope, userSettingsTarget, type SettingsTarget,
+  settingsTargetKey, settingsTargetScope, type SettingsTarget,
 } from './projection';
 import {
   admitsFocus, connectionFocus, settingsPages,
   type FocusMap, type SettingsFocus, type SettingsNavigationActor, type SettingsPage,
 } from './machines/navigation';
+import { Textarea } from '@/components/ui/textarea';
 
 export interface SettingsProps {
   client: AppServerClient; host?: ProductHostWorkspaces; associations?: WorkspaceAssociations;
@@ -97,21 +102,35 @@ export function Settings(props: SettingsProps) {
     targetReady: snapshot.context.targetReady, resolving: snapshot.matches('resolvingOwner'),
   }), shallowEqual);
   if (!view.targetReady) return <section aria-label={tx('settings:settings.settings')} data-settings-owner-pending aria-busy={view.resolving}>
-    <p role="status">{tx(view.resolving ? 'settings:navigation.resolving' : 'settings:navigation.unavailable')}</p>
+    {view.resolving
+      ? <SettingsPageSkeleton label={tx('settings:navigation.resolving')} />
+      : <p role="status">{tx('settings:navigation.unavailable')}</p>}
   </section>;
-  return (visited || visible) && <SettingsPageContent key={settingsTargetKey(view.target)} {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
+  return (visited || visible) && <SettingsPageContent {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
 }
+
+
 
 function SettingsPageContent({ client, host, theme = 'system', setTheme, connection, navigation, target, page: current, focus, visible = true }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
   const activeTarget = target;
+  const guard = useNavigationGuard();
   const [extensionFilter, setExtensionFilter] = useState<ExtensionFilter>('all');
   // The navigation machine admits only pages and details this owner
   // authorizes, so the page and focus are rendered exactly as they are.
   const { actor, transport } = useSettingsTarget(client, activeTarget, host);
   const onFocus = (next?: SettingsFocus) => navigation.send({ type: 'FOCUS', focus: next });
+  // Scope switching is page-level navigation: a dirty page asks first.
+  const scopeNav = {
+    target: activeTarget,
+    host,
+    open: (next: SettingsTarget) => guard.guard(() => {
+      navigation.send({ type: 'OPEN', target: next });
+      navigation.send({ type: 'SELECT', page: current });
+    }),
+  };
   const scope: SourceScope = settingsTargetScope(activeTarget);
   // The fresh authoritative observation, and the last one demoted to stale
   // presentation data by a presentation or generation boundary. Rendering the
@@ -160,65 +179,98 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   // target-wide admission fact, which each unit form reads.
   const editable = !!selected && !!observed && targetValid && transport.connection === 'connected';
   const structured = config.state === 'structured';
-  const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
+  const bodyDisabled = !editable;
+  const body = !source || !selected ? null : <>
     {current === 'models' && (structured
-      ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} refreshing={busy} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} />
-      : <MalformedNotice config={config} />)}
-    {current === 'agent' && <>
-      {(structured || scope === 'user' && source.global_guidance) &&
-        <AgentPage config={structured ? config : undefined} globalGuidance={scope === 'user' ? source.global_guidance : undefined} />}
-      {!structured && <MalformedNotice config={config} />}
-    </>}
+      ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} bodyDisabled={bodyDisabled} />
+      : <MalformedPage title={tx('settings:page.models')} config={config} bodyDisabled={bodyDisabled} />)}
+    {current === 'agent' && (structured || scope === 'user' && source.global_guidance
+      ? <AgentPage scope={scope} config={structured ? config : undefined}
+        closed={!structured && config.state === 'malformed' ? <><MalformedNotice config={config} /><RepairSourceForm revision={config.revision} /></> : undefined}
+        globalGuidance={scope === 'user' ? source.global_guidance : undefined} bodyDisabled={bodyDisabled} />
+      : <MalformedPage title={tx('settings:page.agent')} config={config} bodyDisabled={bodyDisabled} />)}
     {current === 'tools' && (structured
-      ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} />
-      : <MalformedNotice config={config} />)}
+      ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} bodyDisabled={bodyDisabled} />
+      : <MalformedPage title={tx('settings:page.tools')} config={config} bodyDisabled={bodyDisabled} />)}
     {/* A malformed configuration closes extension grants, while the native
         managed-Python inventory remains available for inspection. */}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
       revision={structured ? config.revision : undefined} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
-      scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
-    {current === 'advanced' && <AdvancedPage source={source} scope={scope}
-      config={structured ? { document: config.document, revision: config.revision } : undefined}
-      repairFocused={focus.advanced?.kind === 'auto_repair'}
-      inspection={inspection}
-      repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
-      closed={<MalformedNotice config={config} />}
-      busy={busy} targetValid={targetValid} />}
-    {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
-        current revision. It exists only while the source contract is invalid. */}
-    {config.state === 'malformed' && current !== 'extensions' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
-      mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
-      {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
-    </UnitForm>}
-  </fieldset>;
+      scopeControl={<PageScopeToolbar />} bodyDisabled={bodyDisabled} />}
+    {current === 'advanced' && (structured
+      ? <AdvancedPage source={source} scope={scope}
+        config={{ document: config.document, revision: config.revision }}
+        repairFocused={focus.advanced?.kind === 'auto_repair'}
+        inspection={inspection}
+        repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
+        closed={<MalformedNotice config={config} />}
+        openConnection={connectionReachable ? () => onFocus(connectionFocus) : undefined}
+        busy={busy} targetValid={targetValid} bodyDisabled={bodyDisabled} />
+      : config.state === 'malformed'
+        ? <AdvancedPage source={source} scope={scope}
+          config={undefined}
+          repairFocused={focus.advanced?.kind === 'auto_repair'}
+          inspection={inspection}
+          repairPresented={undefined}
+          closed={<><MalformedNotice config={config} /><RepairSourceForm revision={config.revision} /></>}
+          busy={busy} targetValid={targetValid} bodyDisabled={bodyDisabled} />
+        : <MalformedPage title={tx('settings:page.advanced')} config={config} bodyDisabled={bodyDisabled} />)}
+  </>;
 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
+  // Fallback/error states render the same shell each page uses, with the same
+  // title — a retry must not swap "Models" for "Model Settings" or reflow
+  // the header.
+  const loadedTitles: Record<SettingsPage, string> = {
+    general: tx('settings:general-page.general'),
+    models: tx('settings:models-page.models'),
+    agent: tx('settings:agent-page.agent'),
+    tools: tx('settings:tools-page.tools-amp-permissions'),
+    extensions: tx('settings:extensions-page.extensions'),
+    advanced: tx('settings:advanced-page.advanced'),
+  };
+  const pageTitle = loadedTitles[current] ?? tx(`settings:page.${current}`);
   return <SettingsFeedback active={visible}><SettingsPanel pages={pages} activeId={current} visible={visible}
-    onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })}
-    // Scope stays visible; internal observation metadata is not product copy.
-    context={<div className={css.context} data-lifecycle={lifecycle}>
-      <div className={css.contextTitle}>
-        <h2>{settingsTargetLabel(tx, activeTarget)}</h2>
-        {target.kind === 'workspace' && <Button size="sm" onClick={() => navigation.send({ type: 'OPEN', target: userSettingsTarget })}>{tx('settings:copy.open-user-settings')}</Button>}
-      </div>
-      {(current !== 'models' || !editable || !structured) && <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>}
-    </div>}>
-    <section className={`${css.settings} ${css.page}`} data-settings-section={current} aria-busy={busy}>
-      {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
-        ? <ConnectionSettings connection={connection} client={client} />
-        : !source ? <SourcePending lifecycle={lifecycle} />
-          : <SettingsActorContext value={actor}><SourceContext value={source}>
-            <div key={editorKey}>{body}</div>
-          </SourceContext></SettingsActorContext>}
-      <SettingsNotice text={convergenceError || maintenanceError}/>
-      <SettingsNotice text={outcome.kind === 'uncertain' ? tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re') : undefined}/>
-      <SettingsNotice text={readError ? `${tx('settings:settings.source-read-failed')} ${readError}` : undefined}/>
-      {connectionReachable && <p>
-        <Button onClick={() => onFocus(connectionFocused ? undefined : connectionFocus)}>
-          {connectionFocused ? tx('settings:settings.back-to-advanced') : tx('settings:connection-settings.connection')}
-        </Button>
-      </p>}
+    onSelect={id => guard.guard(() => navigation.send({ type: 'SELECT', page: id as SettingsPage }))}>
+    <section className={css.surface} data-settings-section={current} data-lifecycle={lifecycle} aria-busy={busy}>
+      <SettingsActorContext value={actor}><SourceContext value={source}><ScopeNavContext value={scopeNav}>
+        {current === 'general'
+          ? <PageTransactionProvider><GeneralPage theme={theme} setTheme={setTheme} /></PageTransactionProvider>
+          : connectionFocused
+            ? <SettingsPageShell
+                className={`${css.settings} ${css.page}`}
+                title={tx('settings:connection-settings.connection')}
+                breadcrumb={
+                  <SettingsBackButton
+                    label={tx('settings:settings.back-to-advanced')}
+                    current={tx('settings:connection-settings.connection')}
+                    onClick={() => onFocus(undefined)}
+                  />
+                }
+                toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}
+                footer={null}
+              >
+                <ConnectionSettings connection={connection} client={client} />
+              </SettingsPageShell>
+            : !source ? <SettingsPageShell className={`${css.settings} ${css.page}`} title={pageTitle} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
+                {/* Connection is client-owned global configuration: it never
+                    waits for a source read, unlike every unit editor. */}
+                {connectionReachable && <SettingsGroup title={tx('settings:connection-settings.connection')}>
+                  <div><Button variant="outline" size="sm" onClick={() => onFocus(connectionFocus)}>{tx('settings:connection-settings.connection')}</Button></div>
+                </SettingsGroup>}
+                {lifecycle === 'loading' || lifecycle === 'connecting'
+                  ? <SettingsPageSkeleton bodyOnly lifecycle={lifecycle} label={tx(lifecycle === 'connecting' ? 'settings:copy.configuration-is-shown-once-the-app-server-connection-is-established' : 'settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers')} />
+                  : <SourcePending lifecycle={lifecycle} retry={lifecycle === 'failed' ? () => actor.send({ type: 'REFRESH' }) : undefined} />}
+              </SettingsPageShell>
+            : <div key={editorKey} className={css.editorFrame}><PageTransactionProvider>{body}</PageTransactionProvider>
+            </div>}
+        <div className={css.surfaceNotices}>
+          <SettingsNotice text={convergenceError || maintenanceError}/>
+          <SettingsNotice text={outcome.kind === 'uncertain' ? tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re') : undefined}/>
+          <SettingsNotice text={readError ? `${tx('settings:settings.source-read-failed')} ${readError}` : undefined}/>
+        </div>
+      </ScopeNavContext></SourceContext></SettingsActorContext>
     </section>
   </SettingsPanel></SettingsFeedback>;
 }
@@ -226,12 +278,44 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
 /** The page body before this target has any projection to present — not even
  * a stale one. Loading, connecting and unavailable are different states, and
  * none of them is shown as an empty configuration. */
-function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLifecycle> }) {
+function SourcePending({ lifecycle, retry }: { lifecycle: ReturnType<typeof settingsLifecycle>; retry?: () => void }) {
   const tx = useTranslation();
   const text = lifecycle === 'failed' ? tx('settings:copy.no-configuration-can-be-shown-until-the-source-is-read-reload-configuration-to-try-again')
     : lifecycle === 'connecting' ? tx('settings:copy.configuration-is-shown-once-the-app-server-connection-is-established')
       : tx('settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers');
-  return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}><p>{text}</p></div>;
+  return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}>
+    <p>{text}</p>
+    {retry && <Button variant="outline" size="sm" onClick={retry}>{tx('common:session-configuration.retry')}</Button>}
+  </div>;
+}
+
+/** The malformed-`rustx.toml` page: the diagnostic plus the single
+ * `repair_config` mutation the source contract admits, committed by the
+ * repair form's own explicit Save. */
+function MalformedPage({ title, config, bodyDisabled = false }: {
+  title: string;
+  bodyDisabled?: boolean;
+  config: { state: 'malformed'; path: string; diagnostic?: string; revision: string } | { state: 'structured' } | { state: 'unavailable' };
+}) {
+  if (config.state !== 'malformed') return null;
+  return <SettingsPageShell title={title} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} bodyDisabled={bodyDisabled} footer={null}>
+    <div className={css.page}>
+      <MalformedNotice config={config} />
+      <RepairSourceForm revision={config.revision} />
+    </div>
+  </SettingsPageShell>;
+}
+
+/** The one mutation a malformed `rustx.toml` admits, fenced on its exact
+ * current revision. It exists only while the source contract is invalid. */
+function RepairSourceForm({ revision }: { revision: string }) {
+  const tx = useTranslation();
+  // A structured repair commits through its own Save, wherever it renders.
+  return <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={revision} removable={false}
+    presentation="dialog" saveLabel={tx('settings:bridge.save')}
+    mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
+    {(value, change) => <label>{tx('settings:settings.replacement-toml')}<Textarea value={value} onChange={event => change(event.target.value)} /></label>}
+  </UnitForm>;
 }
 
 /** Keep the actual parse error next to the configuration repair action. */

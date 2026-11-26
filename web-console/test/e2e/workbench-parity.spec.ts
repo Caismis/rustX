@@ -41,19 +41,19 @@ for (const locale of ['en', 'zh'] as const) for (const narrow of [false, true]) 
     expect(boxes[1]!.left - boxes[0]!.right).toBeCloseTo(8, 3);
     expect(boxes[2]!.left - boxes[1]!.right).toBeCloseTo(8, 3);
     await collapse.hover();
-    await expect(panel.getByRole('tooltip', { name: locale === 'zh' ? '收起侧边栏' : 'Collapse sidebar', exact: true })).toBeVisible();
+    await expect(page.getByRole('tooltip', { name: locale === 'zh' ? '收起侧边栏' : 'Collapse sidebar', exact: true })).toBeVisible();
     await mode.hover();
-    await expect(panel.getByRole('tooltip')).toContainText(narrow ? (locale === 'zh' ? '退出全屏' : 'Exit fullscreen') : (locale === 'zh' ? '全屏' : 'Fullscreen'));
-    await expect(panel.getByRole('tooltip').locator('kbd')).toHaveCount(5);
+    await expect(page.getByRole('tooltip')).toContainText(narrow ? (locale === 'zh' ? '退出全屏' : 'Exit fullscreen') : (locale === 'zh' ? '全屏' : 'Fullscreen'));
+    await expect(page.getByRole('tooltip').locator('kbd')).toHaveCount(5);
     const split = panel.locator('[data-dockkit-split-button]');
     if (narrow) {
       await expect(split).toBeDisabled();
       await split.locator('..').hover();
-      await expect(panel.getByRole('tooltip')).toContainText(locale === 'zh' ? '栏宽不足' : 'Not enough width');
+      await expect(page.getByRole('tooltip')).toContainText(locale === 'zh' ? '栏宽不足' : 'Not enough width');
     } else {
       await split.click();
       await panel.locator('[data-dockkit-split-button]').last().locator('..').hover();
-      await expect(panel.getByRole('tooltip')).toContainText(locale === 'zh' ? '已达两格上限' : 'Two panes is the limit');
+      await expect(page.getByRole('tooltip')).toContainText(locale === 'zh' ? '已达两格上限' : 'Two panes is the limit');
     }
     await page.screenshot({ path: info.outputPath('right-sidebar-chrome.png') });
   });

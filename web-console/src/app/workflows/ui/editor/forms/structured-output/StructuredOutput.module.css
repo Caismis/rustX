@@ -97,6 +97,7 @@
 .validations textarea:focus { border-color: var(--dsw-alias-state-business-primary); outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -1px; }
 .fieldCard .error { margin: 4px 8px; }
 .menuPositioner { z-index: 1100; }
+.typeMenu > div { padding: 0; }
 .typeMenu { min-width: 150px; max-height: min(360px, calc(100vh - 32px)); padding: 4px; overflow: auto; border: 0; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); }
 .typeItem { min-height: 30px; padding: 5px 9px; border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); font-size: 13px; cursor: pointer; outline: none; }
 .typeItem[data-highlighted] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }

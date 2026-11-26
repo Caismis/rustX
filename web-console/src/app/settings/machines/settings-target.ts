@@ -151,6 +151,7 @@ export type SettingsTargetEvent =
   | { type: 'REFRESH' }
   | { type: 'RECONCILE' }
   | { type: 'UNIT.EDIT'; identity: string; selector: RevisionSelector; revision: string; value: unknown }
+  | { type: 'UNIT.RESTORE'; identity: string; selector: RevisionSelector; revision: string; value: unknown }
   | { type: 'UNIT.REVIEW'; identity: string }
   | { type: 'UNIT.DISCARD'; identity: string }
   | { type: 'UNIT.SUBMIT'; identity: string; selector: RevisionSelector; revision: string; mutation: SourceMutation }
@@ -508,7 +509,7 @@ export const settingsTargetMachine = setup({
     }),
 
     ensureUnit: enqueueActions(({ context, event, enqueue }) => {
-      const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.EDIT' | 'UNIT.SUBMIT' }>;
+      const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.EDIT' | 'UNIT.RESTORE' | 'UNIT.SUBMIT' }>;
       if (context.units[request.identity]) return;
       enqueue.assign({
         completions: Object.fromEntries(Object.entries(context.completions).filter(([identity]) => identity !== request.identity)),
@@ -525,6 +526,11 @@ export const settingsTargetMachine = setup({
       const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.EDIT' }>;
       const unit = context.units[request.identity];
       if (unit) enqueue.sendTo(unit, { type: 'EDIT', value: request.value });
+    }),
+    forwardRestore: enqueueActions(({ context, event, enqueue }) => {
+      const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.RESTORE' }>;
+      const unit = context.units[request.identity];
+      if (unit) enqueue.sendTo(unit, { type: 'RESTORE', value: request.value });
     }),
     forwardReview: enqueueActions(({ context, event, enqueue }) => {
       const unit = context.units[(event as Extract<SettingsTargetEvent, { type: 'UNIT.REVIEW' }>).identity];
@@ -924,6 +930,7 @@ export const settingsTargetMachine = setup({
       { guard: 'transportChanged', actions: ['applyTransport', raise({ type: 'TRIGGER' })] },
     ],
     'UNIT.EDIT': { actions: ['ensureUnit', 'forwardEdit'] },
+    'UNIT.RESTORE': { actions: ['ensureUnit', 'forwardRestore'] },
     'UNIT.REVIEW': { actions: 'forwardReview' },
     'UNIT.DISCARD': { actions: ['forwardDiscard', raise(({ event }) => ({ type: 'INTENT.DISCARDED' as const, identity: event.identity }))] },
     'UNIT.RETIRED': { actions: ['retireUnit', 'countReset'] },

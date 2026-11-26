@@ -30,6 +30,11 @@ function fixture(data: Uint8Array | string) {
   const path = join(root, 'file'); writeFileSync(path, data); return { root, path };
 }
 const signal = () => new AbortController().signal;
+const timestampTick = new Int32Array(new SharedArrayBuffer(4));
+/** The preview contract detects same-descriptor mutation through lossless
+ * metadata. Make the mutation land on a later filesystem timestamp tick
+ * instead of depending on how much scheduler noise the test happened to get. */
+const afterTimestampTick = () => Atomics.wait(timestampTick, 0, 0, 10);
 it('returns exact concurrent pages, short tails, EOF, beyond EOF and empty bytes', async () => {
   const source = Uint8Array.from({ length: FILE_PREVIEW_LIMITS.pageBytes + 17 }, (_, i) => i % 251);
   const { root } = fixture(source);
@@ -81,6 +86,7 @@ it.each(['replacement', 'same descriptor', 'missing', 'symlink'])('rejects %s ch
   const { root, path } = fixture('original');
   boundary.before = () => {
     boundary.before = undefined;
+    afterTimestampTick();
     if (change === 'same descriptor') writeFileSync(path, 'modified');
     else if (change === 'missing') unlinkSync(path);
     else {
@@ -123,6 +129,7 @@ it.each(['replacement', 'missing', 'symlink', 'same descriptor'])('persistent op
   const { root, path } = fixture('original');
   const operation = openWorkspaceBytePreview(root, 'file', signal());
   await operation.read({ offset: 0, length: 3 });
+  afterTimestampTick();
   if (change === 'same descriptor') writeFileSync(path, 'modified');
   else if (change === 'missing') unlinkSync(path);
   else { renameSync(path, join(root, 'old')); if (change === 'symlink') symlinkSync('old', path); else writeFileSync(path, 'replacement'); }

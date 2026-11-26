@@ -2,10 +2,23 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import type { AttachmentTarget } from '../../../protocol/app-server/v80';
 import type { wireProbe } from './wire-probe';
 
-/** A dirty editor's save has settled when its button is idle and disabled. */
-export function settledSave(scope: Page | Locator, title: string) {
-  return scope.getByRole('button', { name: `Save ${title}`, exact: true })
+/** A dirty page's save has settled when its footer button is idle and disabled.
+ * A dialog-owned save passes its exact title (`Save Model {id}`). */
+export function settledSave(scope: Page | Locator, title?: string) {
+  return scope.getByRole('button', { name: title ? `Save ${title}` : 'Save', exact: true })
     .and(scope.locator('button[aria-busy="false"]:disabled'));
+}
+/** Scalar settings commit themselves after a short debounce: the form's
+ * staged-draft marker clears when the write has settled. Structured editors
+ * still save through `settledSave`. */
+export async function settledSetting(form: Locator) {
+  await expect(form).not.toHaveAttribute('data-draft', /./);
+}
+/** A settings/resource page can greet a retained detail instead of its list.
+ * Wait for either surface to mount, then step back when the detail greeted. */
+export async function leaveRetainedDetail(back: Locator, landing: Locator) {
+  await expect(landing.or(back).first()).toBeVisible();
+  if (await back.isVisible()) { await back.click(); await expect(back).toHaveCount(0); }
 }
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
@@ -55,8 +68,8 @@ export async function openConnectionSettings(page: Page) {
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
   if (!await settings.isVisible()) await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(settings).toBeVisible();
-  const user = settings.getByRole('button', { name: 'Open User Settings', exact: true });
-  if (await user.isVisible()) await user.click();
+  const user = settings.getByRole('button', { name: 'User (global)', exact: true });
+  if (await user.isVisible() && await user.getAttribute('aria-pressed') !== 'true') await user.click();
   if (!await settings.getByRole('region', { name: 'Connection Settings', exact: true }).isVisible()) {
     await openSettingsPage(page, 'Advanced');
     // Section selection resumes its retained detail. A prior Connection visit
@@ -96,10 +109,10 @@ export async function openSettingsPage(page: Page, name: string) {
   await tab.click();
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
-/** Pick a value from a React Aria Select. Its trigger is named by its current
- * value followed by its label, and its listbox opens in a popover. */
+/** Pick a value from a Base UI Select. Its trigger is a combobox whose
+ * listbox opens in a popover. */
 export async function choose(scope: Locator, label: string, option: string) {
-  await scope.getByRole('button', { name: new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).click();
+  await scope.getByRole('combobox', { name: label, exact: true }).click();
   await scope.page().getByRole('listbox').getByRole('option', { name: option, exact: true }).click();
 }
 /** Complete a removal through its confirmation dialog. Restoring inheritance
@@ -118,7 +131,10 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   // connection owner may then start restoration before the explicit Connect
   // gesture, whose replacement would retire that just-dispatched Attach.
   const mode = page.getByLabel('Connection mode');
-  if (await mode.inputValue() !== 'remote') await mode.selectOption('remote');
+  if (!(await mode.textContent())?.includes('Remote')) {
+    await mode.click();
+    await page.getByRole('option', { name: /Remote/ }).click();
+  }
   const address = page.getByLabel('WebSocket endpoint');
   const currentAddress = await address.inputValue();
   let sameAddress = currentAddress === endpoint;
@@ -132,7 +148,7 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   // Fixture setup leaves both the section and its retained detail at known
   // roots. Later primary-page navigation is free to resume its exact detail.
   const back = page.getByRole('button', { name: 'Back to Advanced', exact: true });
-  if (await back.isVisible()) await back.click();
+  await leaveRetainedDetail(back, page.getByRole('tablist', { name: 'Settings pages', exact: true }));
   await openSettingsPage(page, 'General');
   await returnHome(page);
 }
@@ -205,6 +221,18 @@ export async function expandModelAuthoring(page: Page) {
     const toggle = page.getByRole('button', { name, exact: true, expanded: false });
     if (await toggle.isVisible()) await toggle.click();
   }
+}
+
+export async function enableWorkspaceCustomization(page: Page) {
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  const toggle = settings.getByRole('switch', { name: 'Follow global settings', exact: true });
+  if (!(await toggle.isVisible())) return;
+  // The toggle commits immediately now, and a rescan re-render can swallow the
+  // first click: retry until the unchecked (customized) state settles.
+  await expect(async () => {
+    if (await toggle.isChecked()) await toggle.click();
+    await expect(toggle).not.toBeChecked();
+  }).toPass();
 }
 
 /** Enter a resource module and select the exact native source scope. */

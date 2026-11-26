@@ -119,6 +119,7 @@
 }
 .zoom .zoomLevel { width: auto; min-width: 44px; padding: 0 4px; color: var(--dsw-alias-label-primary); font: inherit; }
 .zoomPositioner { z-index: 60; }
+.zoomMenu > div, .branchOperatorPopup > div, .strategyPopup > div, .profilePopup > div { padding: 0; }
 .zoomMenu { width: 145px; padding: 4px; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); color: var(--dsw-alias-label-secondary); box-shadow: var(--dsw-elevation-prominent); outline: none; }
 .zoomItem { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 8px 0 12px; border-radius: var(--dsw-radius-sm); font-size: 13px; cursor: pointer; outline: none; }
 .zoomItem[data-highlighted] { background: var(--dsw-alias-interactive-bg-hover); }
@@ -204,6 +205,8 @@
 .nextAdd:focus-visible, .nextTarget:focus-visible, .nextRemove:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .nextAddIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-xs); background: var(--dsw-alias-bg-layer-1); }
 .nextPicker { z-index: 100; width: min(328px, calc(100vw - 24px)); max-height: min(560px, calc(100vh - 24px)); display: flex; flex-direction: column; box-sizing: border-box; padding: 4px; border: 0; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); color: var(--dsw-alias-label-primary); }
+.nextPicker > [data-slot=popover-viewport] { padding: 0; }
+
 .node {
   position: relative;
   width: 100%;
@@ -647,6 +650,8 @@ name. */
 .branchNextFlow .nextPort { padding: 6px 6px 6px 10px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover-solid); }
 .branchNextFlow .nextPortLabel { margin: 0 0 4px; font-size: 10px; }
 .branchVariablePopup { z-index: 100; width: 328px; max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); box-sizing: border-box; background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); }
+.branchVariablePopup > [data-slot=popover-viewport] { padding: 0; }
+
 .branchVariablePopup .variableGroup legend code { display: none; }
 .branchVariablePopup .variableChoice > span { display: flex; align-items: center; gap: 8px; }
 .branchVariablePopup .variableChoice > span::before { content: '{x}'; color: var(--dsw-alias-state-business-primary); font-family: var(--ds-font-family-code); }
@@ -668,6 +673,7 @@ name. */
 .modelTriggerBadge { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 16px; text-transform: uppercase; }
 .modelTriggerSettings { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: auto; border-left: 0.5px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
 .modelPopup { z-index: 100; width: min(360px, calc(100vw - 24px)); max-height: min(640px, calc(100vh - 24px)); overflow: auto; box-sizing: border-box; padding: 14px 16px 6px; border: 0; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); color: var(--dsw-alias-label-primary); }
+.modelPopup > [data-slot=popover-viewport] { padding: 0; }
 .modelPopupTitle { margin: 0 0 12px; font-size: 13px; font-weight: 500; }
 .promptMessages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .promptCard { border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover-solid); }
@@ -904,6 +910,7 @@ name. */
 .checklistButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .checklistCount { position: absolute; top: -6px; right: -6px; display: flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box; border: 0; border-radius: 999px; corner-shape: round; background: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-label-primary-inverted); font-size: 11px; font-weight: 500; }
 .checklistPositioner { z-index: 60; }
+.checklist > [data-slot=popover-viewport] { padding: 0; }
 .checklist { width: 420px; max-width: calc(100vw - 32px); max-height: calc(2 / 3 * 100vh); overflow-y: auto; box-sizing: border-box; padding: 14px 16px 16px; border: 0; border-radius: var(--dsw-radius-lg); background: var(--dsw-specific-menu); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-prominent); outline: none; }
 .checklistHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .checklistTitle { margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; }

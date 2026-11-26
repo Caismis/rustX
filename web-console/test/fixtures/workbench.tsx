@@ -7,6 +7,7 @@ import { HttpWorkspaceHost } from '../../src/workspaces/http-host';
 import { Server, endpoint } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { agentMetrics } from '../agent-statistics-fixture';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';

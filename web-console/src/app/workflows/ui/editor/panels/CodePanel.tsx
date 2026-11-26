@@ -23,6 +23,7 @@ import { ErrorStrategy, RetrySettings, RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from '../forms/WorkflowCode.module.css';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
 const WorkflowCodeView=lazy(()=>import('../forms/WorkflowCodeView'));
 const TYPES:readonly WorkflowVarType[]=['string','number','boolean','object','array[string]','array[number]','array[boolean]','array[object]'];
@@ -64,7 +65,7 @@ export function CodePanel(props:PanelProps) {
       <h3 className={css.groupHeading}><span>{tx('workflows:prompt.output-variables')}<span className={css.required} aria-hidden>*</span></span><button type="button" className={css.iconButton} aria-label={tx('workflows:code.add-output')} onClick={()=>{const name=freshKey(Object.keys(node.outputs),'result');props.edit(document=>{const value=fieldValue(document,at('outputs'))?.value as typeof node.outputs;return setOrder(setField(document,at('outputs'),{...value,[name]:'string'}),orderTarget,[...orderedKeys(document,orderTarget,Object.keys(value)),name]);});}}><IconPlus size={14}/></button></h3>
       <div className={styles.variables}>{outputs.map(name=><div className={clsx(styles.row,styles.output)} key={name}>
         <div><RouteId label={tx('workflows:data.group-name')} value={name} address={{...at('outputs',{key:name}),role:'key'}} rename={(document,from,to)=>renameCodeOutput(document,props.block,props.id,from,to)}/></div>
-        <select className={css.input} aria-label={tx('workflows:code.output-type',{p0:name})} value={node.outputs[name]} onChange={event=>{const kind=event.target.value as WorkflowVarType;update(current=>({...current,outputs:{...current.outputs,[name]:kind}}),at('outputs',{key:name}));}}>{TYPES.map(kind=><option key={kind} value={kind}>{tx(`workflows:code.type-${kind}`)}</option>)}</select>
+        <EnumSelect className={css.input} label={tx('workflows:code.output-type',{p0:name})} value={node.outputs[name]} onChange={kind=>update(current=>({...current,outputs:{...current.outputs,[name]:kind}}),at('outputs',{key:name}))} options={TYPES.map(kind=>({value:kind,label:tx(`workflows:code.type-${kind}`)}))}/>
         <button type="button" className={css.iconButton} aria-label={tx('workflows:code.remove-output',{p0:name})} onClick={()=>requestRemove(name)}><IconTrashOutline16/></button>
       </div>)}</div>
       <p className={styles.help}>{tx('workflows:code.output-help')}</p>
@@ -90,7 +91,7 @@ function CodeEditor(props:PanelProps) {
   };
   return <div ref={expand.anchor} style={expand.expanded?{height:expand.collapsedHeight}:undefined}>
     <section className={clsx(styles.editor,expand.expanded&&styles.expanded)} style={expand.expanded?expand.bounds:undefined} aria-label={tx('workflows:code.editor')} data-code-expanded={expand.expanded||undefined} onKeyDown={event=>{if(expand.expanded&&event.key==='Escape'&&!event.defaultPrevented){event.preventDefault();event.stopPropagation();expand.setExpanded(false);}}}>
-      <header><select aria-label={tx('workflows:code.language')} value={node.code_language} onChange={event=>changeLanguage(event.target.value as CodeLanguage)}><option value="python3">{/* i18n-raw: language name */ 'Python3'}</option><option value="javascript">{/* i18n-raw: language name */ 'JavaScript'}</option></select><div>
+      <header><EnumSelect label={tx('workflows:code.language')} value={node.code_language} onChange={changeLanguage} options={[{value:'python3',label:/* i18n-raw: programming language name */ 'Python3'},{value:'javascript',label:/* i18n-raw: programming language name */ 'JavaScript'}]}/><div>
         <button type="button" className={css.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
         <button type="button" className={css.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} title={tx('workflows:prompt.expand')} onClick={expand.toggle}><IconFullscreenOutline16/></button>
       </div></header>

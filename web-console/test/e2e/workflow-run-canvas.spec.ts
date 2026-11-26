@@ -42,13 +42,16 @@ for (const width of [1440, 390]) {
     const closeButton = dialog.getByRole('button', { name: 'Close run graph', exact: true });
     await closeButton.focus();
     await page.keyboard.press('Shift+Tab');
-    expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
+    // The focus trap redirects wrap-around focus asynchronously once the
+    // target lands outside the dialog, so the containment check waits for
+    // the redirection to settle.
+    await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
     await page.keyboard.press('Tab');
     await expect(closeButton).toBeFocused();
     const focusableCount = await dialog.locator('button,input,select,textarea,a[href],[tabindex]').count();
     for (let index = 0; index < focusableCount + 2; index++) {
       await page.keyboard.press('Tab');
-      expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
+      await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
     }
     const startBadge = dialog.locator('[data-run-node-status="completed"]').first();
     await expect(startBadge).toBeVisible();

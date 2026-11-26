@@ -1,10 +1,10 @@
 import { readSource } from './source-reading';
-import { openEmptySession, settledSave } from './shell-actions';
+import { openEmptySession, settledSetting } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, connectionAction, enableWorkspaceCustomization, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
@@ -19,39 +19,51 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    expect((await sessions()).sessions).toEqual([]);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+   // Dirty staged drafts intercept the Home navigation with the unsaved-changes
+   // modal, so the gesture and the discard run as one step.
+   const discardLeave = async () => {
+     await page.getByRole('button', { name: 'Home', exact: true }).click();
+     const leave = page.getByRole('button', { name: 'Discard and leave', exact: true });
+     if (await leave.isVisible()) await leave.click();
+     await expect(page.getByRole('button', { name: 'Home', exact: true })).toHaveAttribute('aria-current', 'page');
+   };
    await openSettingsPage(page, 'Advanced');
    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
+   const context = settings.getByRole('form', { name: 'Context', exact: true });
    await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
-   await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
-   await expect(settledSave(settings, 'Context')).toBeVisible();
+   await settledSetting(context);
    const source = await readSource(remote,{kind:'user'});
    expect(source.user.authored?.context?.reserve_tokens).toBe('19');
    expect(source.workspace).toBeNull();
    await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
+   await expect(settings.getByRole('switch', { name: 'Follow global settings', exact: true })).toBeChecked();
+   await enableWorkspaceCustomization(page);
    // The User source authors every Native Tool, so this Workspace displays the
    // native effective value while authoring none of it.
-   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByRole('form', { name: 'Built-in tools', exact: true })).toHaveAttribute('data-authored', 'absent');
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
-   // An explicit edit against that displayed value is Workspace A's own draft.
-   await settings.getByLabel('read', { exact: true }).uncheck();
-   await returnHome(page);
+   await expect(settings.getByRole('switch', { name: 'read', exact: true })).toBeChecked();
+   const builtinTools = () => settings.getByRole('form', { name: 'Built-in tools', exact: true });
+   await expect(builtinTools()).toHaveAttribute('data-authored', 'absent');
+   await expect(builtinTools()).not.toHaveAttribute('data-draft', /./);
+   // An explicit edit against that displayed value commits itself as Workspace
+   // A's own write — no staged draft to discard.
+   await settings.getByRole('switch', { name: 'read', exact: true }).uncheck();
+   await settledSetting(builtinTools());
    await openWorkspaceSettings(page, b.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
-   // Workspace B is a different target: it still shows the inherited value and
-   // never receives Workspace A's draft.
-   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
-   await settings.getByLabel('write', { exact: true }).uncheck();
-   await returnHome(page);
+   // Workspace B is a different target: Follow global settings starts checked
+   // and Workspace A's write never reaches it.
+   await expect(settings.getByRole('switch', { name: 'Follow global settings', exact: true })).toBeChecked();
+   await enableWorkspaceCustomization(page);
+   await expect(settings.getByRole('switch', { name: 'read', exact: true })).toBeChecked();
+   await expect(settings.getByRole('switch', { name: 'write', exact: true })).toBeChecked();
+   await expect(builtinTools()).not.toHaveAttribute('data-draft', /./);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
-   await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
-   await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
-   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-   await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
+   await enableWorkspaceCustomization(page);
+   await expect(settings.getByRole('switch', { name: 'read', exact: true })).not.toBeChecked();
+   await expect(settings.getByRole('switch', { name: 'write', exact: true })).toBeChecked();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
@@ -61,29 +73,27 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');
    await f.workspaceHost.host.removeWorkspace(await f.workspaceHost.host.listWorkspaces(), a.id);
    // A revoked target fences the next authored change and retains the draft.
-   await settings.getByLabel('read', { exact: true }).check();
-   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   await settings.getByRole('switch', { name: 'read', exact: true }).check();
    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'Unknown Workspace registration' })).toBeVisible();
-   await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await returnHome(page);
+   await expect(settings.getByRole('switch', { name: 'read', exact: true })).toBeChecked();
+   await discardLeave();
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-   await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
+   await settings.getByRole('button', { name: 'User (global)', exact: true }).click();
    await openSettingsPage(page, 'Tools & Permissions');
-   // A fresh User lifetime carries no draft, so there is nothing to save until
-   // an explicit edit changes the authored value.
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
-   await settings.getByLabel('read', { exact: true }).uncheck();
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
+   // A fresh User lifetime carries no draft.
+   const userTools = settings.getByRole('form', { name: 'Built-in tools', exact: true });
+   await expect(userTools).not.toHaveAttribute('data-draft', /./);
    const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
    wire.loseNext('configuration/sourceWrite');
-   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   // The auto-commit write is lost on the wire; the unit keeps its draft so
+   // the change stays recoverable.
+   await settings.getByRole('switch', { name: 'read', exact: true }).uncheck();
    await expect.poll(wire.lost).toBe(1);
    await connectionAction(page, 'Reconnect');
-   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
    expect(wire.lost()).toBe(1);
    expect(wire.requests.filter(row => row.method === 'configuration/sourceWrite')).toHaveLength(before + 1);
    expect((await sessions()).sessions).toEqual([]);
- } finally { await remote.shutdown(); const report = await f.stop(false); expect(report.requestCount).toBe(0); }
+ } finally { await remote.shutdown(); const report = await stopDogfoodPage(page, f, false); expect(report.requestCount).toBe(0); }
 });
 
 test('C13 C15 real native automatic commit waits for Session work and preserves the settled history', async ({ page }) => {
@@ -126,5 +136,5 @@ test('C13 C15 real native automatic commit waits for Session work and preserves 
    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
    await expect(page.locator('[data-configuration-change]')).toHaveCount(0);
    expect((await f.control('requests')).requests).toHaveLength(1);
- } finally { await remote.shutdown(); await page.close(); await f.stop(false); }
+ } finally { await remote.shutdown(); await stopDogfoodPage(page, f, false); }
 });

@@ -12,6 +12,8 @@ import { SourceContext } from '../src/app/settings/source-context';
 import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../src/app/settings/projection';
 import { settingsNavigationMachine, type SettingsNavigationActor, type SettingsPage } from '../src/app/settings/machines/navigation';
 import { Settings, type SettingsProps } from '../src/app/settings/Settings';
+import { PageTransactionProvider, PageTransactionFooter } from '../src/app/settings/forms/bridge';
+import { NavigationGuardProvider } from '../src/app/settings/forms/guard';
 import {ResourceSurface} from '../src/app/resources/ResourceSurface';
 import type {ResourceModule} from '../src/app/resources/types';
 import {WorkspaceAuthority} from '../src/workspaces/authority';
@@ -84,12 +86,12 @@ export async function renderEditor(node: ReactNode, options: {
   reread?: () => Promise<SourceSettings>;
 } = {}) {
   const authority = settingsAuthority(options.source ?? options.context ?? cfg3Source(), { write: options.write, reread: options.reread });
-  const view = render(<InSettings actor={authority.actor} source={options.context}>{node}</InSettings>);
+  const view = render(<InSettings actor={authority.actor} source={options.context}><NavigationGuardProvider><PageTransactionProvider>{node}<PageTransactionFooter /></PageTransactionProvider></NavigationGuardProvider></InSettings>);
   await waitFor(() => expect(authority.context().observation).toBeTruthy());
   const advanced = screen.queryByRole('dialog', { name: /^Model / });
   if (advanced) fireEvent.click(within(advanced).getByRole('button', { name: 'Advanced configuration' }));
   await waitFor(() => expect(document.querySelector('[data-json-editor-loading]')).toBeNull());
-  const rerender = (next: ReactNode) => view.rerender(<InSettings actor={authority.actor} source={options.context}>{next}</InSettings>);
+  const rerender = (next: ReactNode) => view.rerender(<InSettings actor={authority.actor} source={options.context}><NavigationGuardProvider><PageTransactionProvider>{next}<PageTransactionFooter /></PageTransactionProvider></NavigationGuardProvider></InSettings>);
   return { ...authority, view, rerender };
 }
 
@@ -139,8 +141,8 @@ export function SettingsSurface({ target, initialPage, navigation, connection, .
     opened.current = settingsTargetKey(target);
     actor.send({ type: 'OPEN', target });
   }, [actor, target]);
-  return <><div hidden={!!module}><Settings {...props} visible={props.visible!==false&&!module} navigation={actor} connection={controller}/></div>
-    {(['subagents','mcp','skills'] as const).map(kind=><ResourceSurface key={kind} module={kind} visible={module===kind} client={props.client} host={props.host!} authority={workspaceAuthority} associations={associations} initialWorkspace={target.kind==='workspace'?target.id:undefined}/>)}</>;
+  return <NavigationGuardProvider><div hidden={!!module}><Settings {...props} visible={props.visible!==false&&!module} navigation={actor} connection={controller}/></div>
+    {(['subagents','mcp','skills'] as const).map(kind=><ResourceSurface key={kind} module={kind} visible={module===kind} client={props.client} host={props.host!} authority={workspaceAuthority} associations={associations} initialWorkspace={target.kind==='workspace'?target.id:undefined}/>)}</NavigationGuardProvider>;
 }
 
 /** Move to one primary product page through its actual tab, so a page change
@@ -174,7 +176,10 @@ export async function openResourceModule(module:ResourceModule) {
  * navigation in a test is the same interaction a user performs. */
 export async function openResourceRow(name: string) {
   const card = screen.queryByRole('listitem', { name });
-  fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
+  const provider = screen.queryByRole('button', { name: `${name} →` });
+  // Resource rows expose their opening gesture as the row's first button;
+  // the row container itself is presentational so nested actions stay valid ARIA.
+  fireEvent.click(card ? within(card).getAllByRole('button')[0] : provider ?? await screen.findByRole('row', { name }));
   const modelDialog = screen.queryByRole('dialog', { name: /^Model / });
   if (modelDialog) fireEvent.click(within(modelDialog).getByRole('button', { name: 'Advanced configuration', expanded: false }));
   if (resourceModule==='mcp') openMcpContractEditor(name);
@@ -201,6 +206,10 @@ export function currentSettingsPage(): string {
 
 /** Coordination tests inspect the actual authority rather than requiring
  * internal revisions and projections in the product UI. */
+export function settingsActor() {
+  if (!contractAuthority) throw new Error('No Settings surface mounted');
+  return contractAuthority();
+}
 export function settingsContext() {
   if (!contractAuthority) throw new Error('No Settings surface mounted');
   return contractAuthority().getSnapshot().context;
@@ -221,7 +230,7 @@ export async function waitForSettingsRevision(expected?: string) {
   await waitFor(() => expect(observedRevision(expected)).toBeTruthy());
 }
 
-/** Pick a value from a React Aria Select.
+/** Pick a value from a coss/Base UI Select.
  *
  * The trigger's accessible name is its current value followed by its label, and
  * the listbox opens in a portal outside the form, so the trigger is found in
@@ -232,11 +241,13 @@ export async function providerAction(name: string, scope: { getByRole: typeof sc
 }
 
 export async function chooseOption(label: string, option: string, scope: { getByRole: typeof screen.getByRole } = screen) {
-  fireEvent.click(scope.getByRole('button', { name: (accessible: string) => accessible.endsWith(label) }));
-  fireEvent.click(await screen.findByRole('option', { name: option }));
+  fireEvent.click(scope.getByRole('combobox', { name: (accessible: string) => accessible.endsWith(label) }));
+  const item = await screen.findByRole('option', { name: option });
+  fireEvent.pointerDown(item);
+  fireEvent.click(item);
 }
 
-/** Complete a removal through its React Aria confirmation: the
+/** Complete a removal through its confirmation dialog: the
  * trigger opens the dialog, and only the dialog's own button submits. */
 export async function confirmAction(label: string, scope: { getByRole: typeof screen.getByRole } = screen) {
   fireEvent.click(scope.getByRole('button', { name: label }));
@@ -257,4 +268,14 @@ export async function cancelAction(label: string) {
   const dialog = await confirmation(label);
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(dialog.isConnected).toBe(false));
+}
+
+export function enableWorkspaceCustomization() {
+  const toggle = screen.getByRole('switch', { name: 'Follow global settings' });
+  if (toggle.getAttribute('aria-checked') === 'true') fireEvent.click(toggle);
+}
+
+export function followGlobalSettings() {
+  const toggle = screen.getByRole('switch', { name: 'Follow global settings' });
+  if (toggle.getAttribute('aria-checked') === 'false') fireEvent.click(toggle);
 }

@@ -9,6 +9,7 @@ import { IconChevronDownOutline14, IconWarningOutline16, SHIELD_OUTLINE_PATH, SH
 import css from './PermissionSelect.module.css';
 import risk from '../primitives/RiskConfirmation.module.css';
 import modal from '../primitives/Modal.module.css';
+import { Checkbox } from '@/components/ui/checkbox';
 /** Closed native-expressible vocabulary supplied by the Workspace adapter. */
 type ApprovalMode = 'plan' | 'automatic' | 'full_access';
 export function PermissionSelect({ value, disabled, choose }: { value?: ApprovalMode; disabled: boolean; choose: (value: ApprovalMode) => void }) {
@@ -34,7 +35,7 @@ export function PermissionSelect({ value, disabled, choose }: { value?: Approval
     <DialogSurface open={confirm} onClose={() => setConfirm(false)} title={tx('agent:permission-select.enable-full-access')} overlayClassName={`${modal.root} ${modal.scrim}`} className={`${modal.dialog} ${risk.confirmation}`}>
       <div className={`${modal.content} ${risk.confirmationContent}`}><div className={modal.header}><h2 className={modal.title}>{tx('agent:permission-select.enable-full-access')}</h2></div><div className={modal.body}>
         <div className={risk.warning}><IconWarningOutline16 size={18} className={risk.warningIcon}/><p>{tx('agent:permission-select.future-attempts-in-this-workspace-may-run-without-policy-approva')}</p></div>
-        <label className={risk.acknowledgement}><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)}/><span>{tx('agent:permission-select.i-understand-and-authorize-full-access-for-this-workspace')}</span></label></div>
+        <label className={risk.acknowledgement}><Checkbox checked={acknowledged} onCheckedChange={setAcknowledged}/><span>{tx('agent:permission-select.i-understand-and-authorize-full-access-for-this-workspace')}</span></label></div>
       </div>
       <div className={modal.footer}><Button onClick={() => setConfirm(false)}>{tx('agent:permission-select.cancel')}</Button><Button variant="primary" disabled={disabled || !acknowledged} onClick={() => { setConfirm(false); choose('full_access'); }}>{tx('agent:permission-select.enable-full-access-2')}</Button></div>
     </DialogSurface>

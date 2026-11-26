@@ -96,10 +96,21 @@ export interface UnitTransactionContext {
   /** Pending Provider autosave owns only the draft generation, never a second
    * copy of its value or a native mutation waiting outside the actor. */
   autosaveGeneration?: number;
+  /** The draft generation last handed to a native submission. A generation
+   * whose submit ended in rejection, conflict or an unknown outcome keeps its
+   * intent but never re-earns write authorization by itself: remounting an
+   * editor, switching a filter or refreshing the projection must not replay
+   * it — only a further edit (a newer generation) or the explicit review
+   * gesture clears this. */
+  attempted?: number;
 }
 
 export type UnitTransactionEvent =
   | { type: 'EDIT'; value: unknown }
+  /** Replace a superseded part of the existing draft without making a new
+   * authoring generation. Invalid local input uses this to withdraw a pending
+   * value; it must not re-authorize a generation native already refused. */
+  | { type: 'RESTORE'; value: unknown }
   | { type: 'DISCARD' }
   | { type: 'REVIEW' }
   | { type: 'AUTOSAVE'; action: 'idle' | 'blur' | 'now' | 'flush' | 'hold' | 'cancel' }
@@ -162,6 +173,7 @@ export const unitTransactionMachine = setup({
     followObservation: assign({ base: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     beginSubmission: assign({
       completion: () => undefined,
+      attempted: ({ context }) => context.generation,
       selector: ({ context, event }) => event.type === 'SUBMIT' ? event.selector : context.selector,
       submitted: ({ context, event }) => event.type === 'SUBMIT'
         ? { token: event.token, generation: context.generation }
@@ -179,10 +191,15 @@ export const unitTransactionMachine = setup({
     } }),
     dropDraft: assign({ draft: () => undefined }),
     recordEdit: assign({
-      draft: ({ context, event }) => event.type === 'EDIT' ? { value: event.value } : context.draft,
+      draft: ({ context, event }) => event.type === 'EDIT' || event.type === 'RESTORE' ? { value: event.value } : context.draft,
       generation: ({ context }) => context.generation + 1,
     }),
-    reviewObservation: assign({ base: ({ context }) => context.observed }),
+    restoreDraft: assign({
+      draft: ({ context, event }) => event.type === 'RESTORE' ? { value: event.value } : context.draft,
+    }),
+    /** The explicit review gesture re-arms the write path: the kept draft is
+     * rebased on the reviewed revision and may be submitted again. */
+    reviewObservation: assign({ base: ({ context }) => context.observed, attempted: () => undefined }),
     announceRetirement: sendParent(({ context }) => ({ type: 'UNIT.RETIRED' as const, identity: context.identity })),
     /** The owner replaced what every editor of this unit presents — a
      * discarded intent or a reviewed revision — so editor-local buffers that
@@ -207,6 +224,7 @@ export const unitTransactionMachine = setup({
       initial: 'off',
       on: {
         EDIT: { guard: 'editable', target: '.off', actions: 'clearAutosave' },
+        RESTORE: { guard: 'editable', target: '.off', actions: 'clearAutosave' },
         DISCARD: { guard: not('inFlight'), target: '.off', actions: 'clearAutosave' },
         SUBMIT: { target: '.off', actions: 'clearAutosave' },
         AUTOSAVE: [
@@ -252,10 +270,14 @@ export const unitTransactionMachine = setup({
         DISCARD: { guard: not('inFlight'), target: '.clean', actions: ['dropDraft', 'announceReset', raise({ type: 'RELEASE' })] },
       },
       states: {
-        clean: { on: { EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' } } },
+        clean: { on: {
+          EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
+          RESTORE: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
+        } },
         dirty: {
           on: {
             EDIT: { guard: 'editable', target: 'dirty', actions: 'recordEdit' },
+            RESTORE: { guard: 'editable', target: 'dirty', actions: 'restoreDraft' },
             // A confirmed commit of exactly this intent drops the authored
             // draft. A newer intent survives its own older acknowledgement.
             COMMITTED: { guard: 'intentUnchanged', target: 'clean', actions: 'dropDraft' },
@@ -272,6 +294,7 @@ export const unitTransactionMachine = setup({
           on: {
             OBSERVED: { actions: ['recordObservation', 'followObservation'] },
             EDIT: { guard: 'editable', target: 'pinned' },
+            RESTORE: { guard: 'editable', target: 'pinned' },
             SUBMIT: 'pinned',
             REVIEW: { target: 'pinned', actions: ['reviewObservation', 'announceReset'] },
           },
@@ -342,6 +365,7 @@ export const unitTransactionMachine = setup({
         settled: {
           on: {
             EDIT: 'idle',
+            RESTORE: 'idle',
             SUBMIT: { target: 'submitting', actions: 'beginSubmission' },
           },
         },
@@ -389,6 +413,23 @@ export function discardable(snapshot: UnitTransactionSnapshot): boolean {
   if (snapshot.matches({ mutation: 'submitting' })) return false;
   return snapshot.matches({ intent: 'dirty' })
     || (snapshot.matches({ base: 'pinned' }) && !snapshot.matches({ mutation: 'acknowledged' }));
+}
+
+/** Whether the transaction holds intent that has NOT been submitted — what a
+ * navigation away from the page would lose. A mutation already acknowledged
+ * (or settled) is owned by the target actor and completes regardless of what
+ * the page does, so it never counts; a still-in-flight submission counts
+ * (leaving mid-save still asks, per the guard contract); a draft edited again
+ * after its submission counts until that newer intent is itself submitted. */
+export function unsavedIntent(snapshot: UnitTransactionSnapshot): boolean {
+  const { draft, submitted, generation } = snapshot.context;
+  // A pure-removal pin whose submission was refused is durable conflict state
+  // in the owning actor — it survives a page swap, so leaving asks nothing.
+  if (snapshot.matches({ mutation: 'unconfirmed' }) && draft === undefined) return false;
+  const unsubmittedDraft = draft !== undefined && submitted?.generation !== generation;
+  const pinnedIntent = snapshot.matches({ base: 'pinned' })
+    && !snapshot.matches({ mutation: 'acknowledged' });
+  return unsubmittedDraft || pinnedIntent;
 }
 
 /** Whether the last submitted mutation is natively confirmed. */

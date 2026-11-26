@@ -3,11 +3,11 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ProviderView, ProviderWrite, SourceScope } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
+import { Input } from '../../../presentation/primitives/Input';
 import { Menu } from '../../../presentation/primitives/Menu';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { IconEditOutline16, IconEllipsisOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
-import { UnitOutcomeNotice, useUnitEditing } from '../forms/bridge';
-import { useSettingsActor } from '../machines/react';
+import { UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../forms/bridge';
 import { Choice, ConfirmAction } from '../primitives/aria';
 import { IconPicker, ProviderIcon } from './ProviderIcon';
 import { providerMutation, providerTemplates } from './ProviderTemplates';
@@ -18,7 +18,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   hasModels: boolean;
 }) {
   const tx = useTranslation();
-  const actor = useSettingsActor();
+  const page = usePageTransaction();
+  const setLocal = page?.setLocal;
   const restores = scope === 'workspace' && !!inherited;
   const unit = useUnitEditing<ProviderWrite>({
     authored: authored && { display_name: authored.display_name, hidden: authored.hidden, icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } },
@@ -34,9 +35,6 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     draftKey: JSON.stringify(providerMutation(id, null)),
     mutation: value => providerMutation(id, value, restores),
   });
-  const identity = unit.identity;
-  const autosave = (action: 'idle' | 'blur' | 'now' | 'flush' | 'hold' | 'cancel') => actor.send({ type: 'UNIT.AUTOSAVE', identity, action });
-  useEffect(() => () => actor.send({ type: 'UNIT.AUTOSAVE', identity, action: 'flush' }), [actor, identity]);
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [invalidName, setInvalidName] = useState(0);
@@ -69,59 +67,44 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const creating = !authored && !inherited;
   const canDiscardCreation = creating && unit.intent && !hasModels;
   const { endpointError, credentialError } = connectionErrors(value);
-  const canRetry = unit.draft && unit.admitted && !unit.reviewNeeded && !endpointError && !credentialError
-    && (unit.outcome.kind === 'rejected' || unit.outcome.kind === 'uncertain');
-  const edit = (next: ProviderWrite, trigger?: 'idle' | 'blur' | 'now') => {
-    setAttempted(0);
-    unit.edit(next);
-    const errors = connectionErrors(next);
-    if (errors.endpointError || errors.credentialError) autosave('cancel');
-    else autosave(trigger ?? 'idle');
-  };
-  const changeCredential = (next: ProviderWrite['credential']) =>
-    // Acknowledgement redacts the new literal. Wait until the user finishes
-    // editing it so a pause while typing cannot replace the remaining prefix.
-    edit({ ...value, credential: next }, next.kind === 'literal' ? 'blur' : undefined);
-  const flush = () => {
-    if (!unit.draft) return;
-    if (endpointError || credentialError) setAttempted(attempt => attempt + 1);
-    else autosave('flush');
-  };
+  // Every edit stages into this detail's shared page transaction; nothing is
+  // sent on change, blur or a timer. The footer's Save is the only commit.
+  const edit = (next: ProviderWrite) => { setAttempted(0); unit.edit(next); };
+  useEffect(() => {
+    // The footer's Save runs this veto: an invalid connection stays a draft
+    // and the attempt notice marks the failing field. Returning the
+    // unregistration releases the veto when this editor unmounts — a dead
+    // editor must not keep blocking the page's Save with no visible error.
+    return setLocal?.(false, undefined, undefined, () => {
+      if (endpointError || credentialError) { setAttempted(occurrence => occurrence + 1); return false; }
+      return undefined;
+    });
+  }, [setLocal, endpointError, credentialError, unit.identity]);
+  const changeCredential = (next: ProviderWrite['credential']) => edit({ ...value, credential: next });
   const actionsTrigger = () => form.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
   const finishRename = (input: string) => {
     setRenaming(false);
     const next = input.trim();
     if (nameEditing.current.cancelled || !next || next === name) {
-      autosave('flush');
       return;
     }
     if ([...next].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(next)) {
       setInvalidName(occurrence => occurrence + 1);
-      autosave('flush');
       return;
     }
-    edit({ ...value, display_name: next === id ? undefined : next }, 'now');
+    edit({ ...value, display_name: next === id ? undefined : next });
   };
 
   return <form ref={form} tabIndex={-1} aria-label={title} aria-busy={locked} className={cards.connection} noValidate
-    onSubmit={event => { event.preventDefault(); flush(); }}
+    onSubmit={event => event.preventDefault()}
     onKeyDown={event => {
       if (event.key !== 'Enter' || !(event.target instanceof HTMLInputElement) || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       event.preventDefault();
-      flush();
-    }}
-    onBlur={event => {
-      const leavingKey = keyEditor.current?.contains(event.target) && !keyEditor.current.contains(event.relatedTarget);
-      const leavingForm = event.target instanceof HTMLInputElement && event.target !== nameInput.current && !event.currentTarget.contains(event.relatedTarget);
-      if (leavingKey || leavingForm) {
-        if (endpointError || credentialError) return;
-        flush();
-      }
     }}>
     <div className={cards.detailHeader}>
       <h3 title={name} aria-label={title}>
         <ProviderIcon icon={value.icon} size={18}/>
-        {renaming ? <input ref={nameInput} className={cards.providerRename} type="text" defaultValue={name}
+        {renaming ? <Input ref={nameInput} className={cards.providerRename} type="text" defaultValue={name}
           aria-label={tx('settings:models.provider-display-name')}
           onCompositionStart={() => { nameEditing.current.composing = true; }}
           onCompositionEnd={() => { nameEditing.current.composing = false; }}
@@ -137,7 +120,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
           : <span>{name}</span>}
       </h3>
       {!creating && <Switch checked={!value.hidden} label={tx('settings:models.show-provider', { p0: name })}
-        disabled={!authored || locked || endpointError || credentialError} onChange={checked => edit({ ...value, hidden: !checked }, 'now')}/>}
+        disabled={!authored || locked || endpointError || credentialError} onChange={checked => edit({ ...value, hidden: !checked })}/>}
       <ConfirmAction
         label={tx('settings:bridge.remove-value', { p0: title })}
         title={restores ? tx('settings:bridge.use-the-global-default-for-value', { p0: title }) : tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: tx(scope === 'workspace' ? 'settings:extension-detail.workspace' : 'settings:extension-detail.user') })}
@@ -145,7 +128,6 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         description={tx(restores ? 'settings:forms.restore-help' : hasModels ? 'settings:models.delete-provider-and-models' : 'settings:forms.delete-help')}
         tone={restores ? 'restore' : 'destructive'} settle={form} onConfirm={() => {
           if (!unit.admitted || locked) return;
-          autosave('cancel');
           unit.submit(true);
         }}
         renderTrigger={(open, ref) => <Menu open={menu} align="end" compact autoFocus onClose={() => setMenu(false)}
@@ -158,33 +140,29 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
               { id: 'icon', label: tx('settings:models.choose-icon') },
               { id: 'credential', label: tx(credential.kind === 'environment' ? 'settings:models.use-key' : 'settings:models.use-environment') },
               ...canDiscardCreation ? [{ id: 'discard-creation', label: tx('settings:copy.delete'), icon: <IconTrashOutline16/>, danger: true }] : [],
-              ...canRetry ? [{ id: 'retry', label: tx('settings:models.retry-provider-save') }] : [],
               ...authored ? [{ id: 'delete', label: tx(restores ? 'settings:models.restore' : 'settings:copy.delete'),
                 icon: <IconTrashOutline16/>, danger: !restores, disabled: !unit.admitted }] : [],
             ]}
           onSelect={action => {
             setMenu(false);
             if (action === 'rename' && !locked) {
-              // Combine the name and any pending connection edits in the next write.
-              autosave('hold');
               nameEditing.current = { cancelled: false, composing: false };
               setRenaming(true);
             }
             if (action === 'icon') setIconPicker(true);
             if (action === 'credential') changeCredential(credential.kind === 'environment' ? { kind: 'literal', value: '' } : { kind: 'environment', variable: '' });
             if (action === 'customize') setCustomizing(true);
-            if (action === 'discard-creation') { autosave('cancel'); unit.discard(); }
-            if (action === 'retry') autosave('now');
+            if (action === 'discard-creation') unit.discard();
             if (action === 'delete') open();
           }}/>}
       />
     </div>
-    {iconPicker && <IconPicker value={value.icon} onChange={icon => { if ((icon ?? null) !== (value.icon ?? null)) edit({ ...value, icon }, 'now'); }} onClose={() => setIconPicker(false)}
+    {iconPicker && <IconPicker value={value.icon} onChange={icon => { if ((icon ?? null) !== (value.icon ?? null)) edit({ ...value, icon }); }} onClose={() => setIconPicker(false)}
       finalFocus={() => actionsTrigger() ?? false}/>}
     {inspecting && <p className={cards.inherited}>{tx('settings:forms.using-global')}</p>}
     <fieldset disabled={inspecting} className={cards.connectionFields}>
       <label>{tx('settings:models-page.endpoint')}
-        <input type="url" required value={value.base_url} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && endpointError}
+        <Input type="url" required value={value.base_url} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && endpointError}
           placeholder={/* i18n-raw: example URL */ 'https://api.example.com/v1'}
           onChange={event => edit({ ...value, base_url: event.target.value })}/>
       </label>
@@ -192,16 +170,16 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         ['openai_chat_completions', tx('settings:models.api-chat')],
         ['openai_responses', tx('settings:models.api-responses')],
         ['anthropic_messages', tx('settings:models.api-anthropic')],
-      ]} onChange={protocol => edit({ ...value, protocol }, 'now')}/>
+      ]} onChange={protocol => edit({ ...value, protocol })}/>
       {credential.kind === 'environment' ? <label>{tx('settings:models-page.environment-variable')}
-        <input required value={credential.variable} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
+        <Input required value={credential.variable} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
           onChange={event => changeCredential({ kind: 'environment', variable: event.target.value })}/>
       </label> : <div ref={keyEditor} className={cards.secret}>
         <div className={cards.keyHeading}>
           <label htmlFor={keyId}>{tx('settings:models-page.new-literal-credential')}</label>
           {getKey && !authored && <a href={getKey} target="_blank" rel="noreferrer">{tx('settings:models.get-key')}</a>}
         </div>
-        <input id={keyId} type={keyVisible ? 'text' : 'password'} autoComplete="new-password" spellCheck={false}
+        <Input id={keyId} type={keyVisible ? 'text' : 'password'} autoComplete="new-password" spellCheck={false}
           value={key} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
           placeholder={credential.kind === 'retain' || inspecting ? tx('settings:models.saved-key-placeholder') : tx('settings:models.enter-key')}
           onChange={event => {
@@ -221,10 +199,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     <SettingsNotice occurrence={attempted} text={attempted ? endpointError ? tx('settings:models.invalid-endpoint') : credentialError ? tx('settings:models.invalid-key') : undefined : undefined}/>
     <UnitOutcomeNotice title={title} outcome={unit.outcome}/>
     {unit.reviewNeeded && <div className={cards.connectionActions}>
-      <Button size="sm" disabled={locked || !unit.admitted || endpointError || credentialError} onClick={() => {
-        unit.review();
-        autosave('now');
-      }}>{tx('settings:models.apply-provider-changes')}</Button>
+      <Button size="sm" disabled={locked || !unit.admitted || endpointError || credentialError} onClick={() => unit.review()}>{tx('settings:models.apply-provider-changes')}</Button>
     </div>}
   </form>;
 }

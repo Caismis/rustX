@@ -130,8 +130,10 @@ it('preserves source-authored protocol overrides when editing unrelated Model fi
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'new-wire' } } }, 'exact'));
   rerender(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="exact"
-    models={['main']} profiles={{}} onFocus={noop} onRefresh={noop} />);
-  await confirmAction('Use global default Model main', within(screen.getByRole('row', { name: 'main' })));
+    models={['main']} profiles={{}} focus={{ kind: 'provider', id: 'transport' }} onFocus={noop} onRefresh={noop} />);
+  await confirmAction('Use global default Model main', within(screen.getByRole('listitem', { name: 'main' })));
+  await waitFor(() => expect((screen.getAllByRole('button', { name: 'Save' }).pop()! as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } }, 'exact'));
 });
 
@@ -225,9 +227,10 @@ it('keeps automatically composed Agent controls out of settings', async () => {
   const controls = ['subagent', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'];
   const source = workspaceSource();
   await renderEditor(toolsPage(source, {}, 'workspace', 'c1'), { source, context: source });
-  const whitelist = within(screen.getByRole('group', { name: 'Available tools' }));
-  expect(whitelist.getByRole('checkbox', { name: 'read' })).toBeTruthy();
-  for (const name of controls) expect(whitelist.queryByRole('checkbox', { name })).toBeNull();
+  // Tool selection is all/none/exact-identities — no per-tool checkboxes for
+  // the composed Agent controls to leak into.
+  expect(screen.queryByRole('checkbox')).toBeNull();
+  for (const name of controls) expect(screen.queryByText(name)).toBeNull();
   // Issue #544 removed per-tool execution-policy authoring; Agent controls stay
   // out of both the whitelist and any obsolete policy card.
   expect(screen.queryByRole('button', { name: 'Advanced Tool policies' })).toBeNull();
@@ -264,10 +267,10 @@ it('round-trips an independent Agent profile with guidance and model', async () 
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={['main']} profiles={{}} name="reviewer" />, { source, context: source });
   // Opening an authored profile authors nothing new, so a no-op Save is
   // unavailable; an edit back to the same text still round-trips every field.
-  expect((screen.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getAllByRole('button', { name: 'Save' }).pop()! as HTMLButtonElement).disabled).toBe(true);
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Review draft' } });
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Review' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'reviewer', authored }, 'agent-r1'));
 });
 
@@ -280,7 +283,7 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
   for (const mode of ['all', 'none', 'exact'] as const) {
     await chooseOption('Selection', mode === 'all' ? 'All' : mode === 'none' ? 'None' : 'Exact identities', form);
     if (mode === 'exact') fireEvent.change(form.getByRole('textbox', { name: `${id} names 1` }), { target: { value: 'inspect' } });
-    fireEvent.click(form.getByRole('button', { name: `Save Tools: ${id}` }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
     await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'source_tools', id, authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['inspect'] } }, 'tools-r1'));
   }
 });
@@ -300,26 +303,27 @@ it('replaces default model intent on the Models page', async () => {
     <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'other', 'plain']}
       profiles={{ main: ['deep', 'quick'], other: ['quick', 'high'] }} onFocus={noop} onRefresh={noop} />,
     { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
   for (const label of ['Output limit', 'Request parameter overrides']) {
     expect(model.queryByLabelText(label, { exact: true })).toBeNull();
   }
   expect(model.getByRole('button', { name: 'Auxiliary models' })).toBeTruthy();
   await chooseOption('Profile', 'deep', model);
-  fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
     authored: { model: 'main', profile: 'deep', auxiliary },
   } }, 'root-r1'));
   await chooseOption('Profile', 'quick', model);
   await chooseOption('Model', 'other', model);
-  expect(model.getByRole('button', { name: /Profile$/ }).textContent).toContain('Model default profile');
-  fireEvent.click(model.getByRole('button', { name: /Profile$/ }));
+  expect(model.getByRole('combobox', { name: /Profile$/ }).textContent).toContain('Model default profile');
+  fireEvent.click(model.getByRole('combobox', { name: /Profile$/ }));
   expect(screen.queryByRole('option', { name: 'deep' })).toBeNull();
-  fireEvent.click(screen.getByRole('option', { name: 'high' }));
+  const high = screen.getByRole('option', { name: 'high' });
+  fireEvent.pointerDown(high);
+  fireEvent.click(high);
   await chooseOption('Model', 'plain', model);
-  expect(model.queryByRole('button', { name: /Profile$/ })).toBeNull();
-  fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
+  expect(model.queryByRole('combobox', { name: /Profile$/ })).toBeNull();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
     authored: { model: 'plain', auxiliary },
   } }, 'root-r1'));
@@ -328,7 +332,7 @@ it('replaces default model intent on the Models page', async () => {
   await chooseOption('Auxiliary model', 'other', model);
   await chooseOption('Auxiliary reasoning profile', 'Explicit profile', model);
   await chooseOption('Auxiliary profile', 'quick', model);
-  fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
     authored: { model: 'plain',
       auxiliary: { mode: 'explicit', model: 'other', profile: { mode: 'explicit', id: 'quick' } } },
@@ -342,7 +346,7 @@ it('saves the automatic project guidance switch', async () => {
   expect(automatic.getAttribute('aria-checked')).toBe('true');
   expect(guidance.queryByRole('button', { name: 'Advanced options' })).toBeNull();
   fireEvent.click(automatic);
-  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'project_guidance', authored: { inherit: false } } }, 'root-r1'));
 });
 
@@ -359,7 +363,7 @@ it('a named Agent preserves and edits the complete explicit Auxiliary Model inde
     const before = write.mock.calls.length;
     const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
     expect(form.checkValidity()).toBe(true);
-    fireEvent.click(within(form).getByRole('button', { name: 'Save Agent reviewer' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
     await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
     expect(write.mock.calls.at(-1)).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
   };
@@ -394,7 +398,7 @@ it('the explicit Auxiliary Model variant owns complete labels in each locale wit
     const nested = within(group);
     return {
       group,
-      profile: screen.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.auxiliary-profile')) }),
+      profile: screen.getByRole('combobox', { name: (name: string) => name.endsWith(tx('settings:models-page.auxiliary-profile')) }),
       limit: nested.getByLabelText(tx('settings:models-page.output-limit-auxiliary')) as HTMLInputElement,
       params: nested.getByLabelText(tx('settings:models-page.request-parameter-overrides-auxiliary')) as HTMLElement,
       outer: screen.getByLabelText(tx('settings:models-page.request-parameter-overrides')) as HTMLElement,
@@ -411,7 +415,7 @@ it('the explicit Auxiliary Model variant owns complete labels in each locale wit
   expect([chinese.limit, chinese.params, chinese.outer]).toEqual([english.limit, english.params, english.outer]);
   expect(screen.getByLabelText('输出上限（辅助）')).toBe(english.limit);
   expect(screen.getByLabelText('请求参数覆盖（辅助）')).toBe(english.params);
-  expect(screen.getByRole('button', { name: /辅助配置档$/ })).toBe(chinese.profile);
+  expect(screen.getByRole('combobox', { name: /辅助配置档$/ })).toBe(chinese.profile);
   expect(within(chinese.group).queryAllByRole('button', { name: /Summary|Auxiliary/ })).toEqual([]);
   expect(chinese.group.textContent).not.toMatch(/Summary|Profile|Output limit|Request parameter/);
   expect(write).not.toHaveBeenCalled();
@@ -419,9 +423,7 @@ it('the explicit Auxiliary Model variant owns complete labels in each locale wit
 
   fireEvent.change(chinese.limit, { target: { value: '1024' } });
   const zh = translator('zh');
-  const title = zh('settings:extension-detail.agent-value', { p0: 'reviewer' });
-  const form = screen.getByRole('form', { name: title });
-  fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${title}` }));
+  fireEvent.click(screen.getAllByRole('button', { name: zh('settings:bridge.save') }).pop()!);
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   expect(write.mock.calls[0]).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: {
     ...model, auxiliary: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 } },
@@ -432,9 +434,9 @@ it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an 
   const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={[]} profiles={{}} name="optional" />, { source, context: source });
-  fireEvent.click(screen.getByLabelText('read'));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'read' }));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'agent', name: 'optional', authored: { ...authored, tools: { builtin: ['read'] } } }, 'optional-r1'));
 });
 

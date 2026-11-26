@@ -1,5 +1,4 @@
-import {openResourceModule} from './shell-actions';
-import { expandModelAuthoring } from './shell-actions';
+import { expandModelAuthoring, leaveRetainedDetail } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectionAction, connectRemote, openSettingsPage, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 import { expect, test } from '@playwright/test';
@@ -44,20 +43,45 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       // tabpanel remains rendered but is aria-hidden while the modal is open.
       await expect(page.getByRole('tabpanel', { name: 'Models', exact: true, includeHidden: true })).toBeVisible();
       if (mode === 'restore') {
-        await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
+        // Reconnecting restores the retained Models surface: the dialog when
+        // its transaction survived, or the provider detail it was opened
+        // from — reopen the row edit in that case.
+        const heading = model.getByRole('heading', { name: 'Edit Model', exact: true });
+        if (!(await heading.waitFor({ timeout: 5000 }).then(() => true).catch(() => false))) {
+          await leaveRetainedDetail(settings.getByRole('button', { name: 'Model Settings', exact: true }), settings.getByRole('button', { name: 'fixture →', exact: true }));
+          const card = settings.getByRole('button', { name: 'fixture →', exact: true });
+          if (await card.isVisible()) await card.click();
+          await settings.getByRole('listitem', { name: 'fixture/console-model', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
+          await expect(heading).toBeVisible();
+        }
         return;
       }
       await expandModelAuthoring(page);
-      await settings.getByRole('row', { name: 'fixture/console-model', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
+      // Model rows live on the provider's in-page detail; a retained detail
+      // must be left before the landing cards are visible.
+      await leaveRetainedDetail(settings.getByRole('button', { name: 'Model Settings', exact: true }), settings.getByRole('button', { name: 'fixture →', exact: true }));
+      await settings.getByRole('button', { name: 'fixture →', exact: true }).click();
+      await settings.getByRole('listitem', { name: 'fixture/console-model', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
       await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     };
+    const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
     const openMcp = async () => {
-      if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
-      // A retained editor hides the scope tabs. Return to the catalog before
-      // selecting its scope, preserving the editor's transaction on the way.
-      await openResourceModule(page,'mcp');
+      if (await model.isVisible()) {
+        await model.getByRole('button', { name: 'Close', exact: true }).click();
+        // The guard also asks on a dirty Close, before the navigation below.
+        if (await leave.waitFor({ state: 'visible', timeout: 3000 }).then(() => true).catch(() => false)) {
+          await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
+        }
+      }
+      // A save whose response was deliberately lost above leaves genuinely
+      // uncertain intent — the guard may ask, and discarding abandons only the
+      // local record (the write already landed server-side). A surface with no
+      // pending uncertainty must NOT ask on this crossing.
+      await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'MCP servers',exact:true}).click();
+      if (await leave.isVisible()) await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
+      await expect(mcp).toBeVisible();
       await expect(mcp).toHaveAttribute('data-lifecycle', 'ready');
-      const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });
+      const back = mcp.getByRole('button', { name: 'MCP servers', exact: true });
       const create = mcp.getByRole('button', { name: '＋ New MCP server', exact: true });
       // Reconnecting can restore the retained editor after the tabpanel mounts.
       // Wait for its actual surface before deciding whether to return to the list.
@@ -104,17 +128,27 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(settings.getByText(/Preparing configuration/)).toHaveCount(0);
     expect(wire.requests.filter(request => request.method === 'configuration/reconcile')).toHaveLength(1);
     expect(writes()).toHaveLength(3);
-    // A User draft remains User-owned across Session focus changes.
+    // A User draft remains User-owned until the dirty surface is left: the
+    // guard asks first, Keep editing preserves the draft, Discard and leave
+    // abandons it — a draft cannot cross a confirmed leave.
     await openMcp();
     await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
     await mcp.getByLabel('Command', { exact: true }).fill('unsaved-draft');
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+    await expect(leave).toBeVisible();
+    await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
+    await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('unsaved-draft');
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+    await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     await openMcp();
     await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('unsaved-draft');
+    // The abandoned draft stayed abandoned: the committed command is what
+    // the editor shows now.
+    await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('inert-fixture');
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/250000|loss-fixture|unsaved-draft/);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

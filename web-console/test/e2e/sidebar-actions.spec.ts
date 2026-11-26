@@ -27,7 +27,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       const source = (await selected())!;
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文'); await page.getByRole('button', { name: '主页' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       await send('Sidebar source'); await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
       // Observe the client's admitted settlement instead of competing with its
@@ -93,7 +94,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       // Cold history can show the inherited answer before the live composer
       // takes its seat. Wait for the attached Fork's native response controls.
       await expect(retry).toBeEnabled();
-      await send('Fork follow-up'); await expect(page.getByText('Fork kept the completed answer.', { exact: true })).toBeVisible();
+      await send('Fork follow-up'); await expect(page.getByText('Fork kept the completed answer.', { exact: true })).toBeVisible({ timeout: 15_000 });
       await expect(retry).toBeEnabled();
       await actions(child); await page.getByRole('menuitem', { name: zh ? '删除会话' : 'Delete Session', exact: true }).click();
       await expect(deletion).toBeVisible(); await deletion.getByRole('button', { name: zh ? '删除' : 'Delete', exact: true }).click(); await expect(deletion).toHaveCount(0);

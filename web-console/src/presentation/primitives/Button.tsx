@@ -1,32 +1,48 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-// Button: token-styled button atom. Variants map to the --dsw-alias-button-*
-// fill families; no framework imports, all behavior via props.
+// Button: coss ui button atom behind the rustX variant vocabulary. Keeping
+// the vocabulary here prevents the external component API from leaking through
+// the application while the visual implementation is coss-owned.
 
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
-import clsx from 'clsx'
-import css from './Button.module.css'
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { Button as CossButton } from '@/components/ui/button'
 
-/** Visual variant, each backed by its --dsw-alias-button-* token family. */
-export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
+/** Visual variant, backed by the corresponding coss ui variant. */
+export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar' | 'danger' | 'danger-outline'
+
+const VARIANT_MAP = {
+  primary: 'default',
+  ghost: 'ghost',
+  outline: 'outline',
+  toolbar: 'secondary',
+  danger: 'destructive',
+  'danger-outline': 'destructive-outline',
+} as const
 
 /**
  * Render a button.
- * @param props.variant - visual family (default 'ghost').
- * @param props.size - 'md' 36px capsule (figma Button) or 'sm' 28px compact.
- * @param props.icon - optional leading 16px icon node.
+ * @param props.variant - visual family (default 'ghost'). 'danger' is a
+ * destructive action (e.g. confirming a deletion).
+ * @param props.size - 'md' standard control or 'sm' compact control.
+ * @param props.icon - optional leading icon node.
  * @returns the button element; native button attributes pass through.
  */
-export function Button({ variant = 'ghost', size = 'md', icon, className, children, ...rest }: {
+export const Button = forwardRef<HTMLButtonElement, {
   variant?: ButtonVariant
   size?: 'md' | 'sm'
   icon?: ReactNode
   className?: string | undefined
   children?: ReactNode
-} & ButtonHTMLAttributes<HTMLButtonElement>) {
+} & ButtonHTMLAttributes<HTMLButtonElement>>(function Button({ variant = 'ghost', size = 'md', icon, className, children, ...rest }, ref) {
   return (
-    <button type="button" className={clsx(css.button, css[variant], css[size], className)} {...rest}>
-      {icon != null && <span className={css.icon}>{icon}</span>}
+    <CossButton
+      ref={ref}
+      variant={VARIANT_MAP[variant]}
+      size={size === 'sm' ? 'sm' : 'default'}
+      className={className}
+      {...rest}
+    >
+      {icon}
       {children}
-    </button>
+    </CossButton>
   )
-}
+})

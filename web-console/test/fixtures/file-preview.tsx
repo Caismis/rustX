@@ -9,6 +9,7 @@ import { ArtifactResources } from '../../src/client/artifacts';
 import type { PreviewViewState } from '../../src/presentation/right-panel/preview-view-state';
 import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { Server } from '../fixture';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';

@@ -8,6 +8,7 @@ import type { CardMenuItems } from '../../../presentation/catalog/CardMenu';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import type { TransferResource } from '../../../workspaces/resource-transfer';
 import css from '../../../presentation/settings/SettingsContent.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export interface TransferIntent {
   operation: TransferOperation;
@@ -96,7 +97,7 @@ export function TransferDialog({ intent, close, refresh }: { intent: TransferInt
       </Button></>}>
     <form className={css.settings} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label htmlFor={input}>{tx('resources:transfer.destination-name')}</label>
-      <input id={input} value={name} autoFocus spellCheck={false} disabled={busy || reopen}
+      <TextInput id={input} value={name} data-modal-autofocus spellCheck={false} disabled={busy || reopen}
         aria-invalid={invalid || taken} aria-describedby={intent.family === 'skill' ? `${input}-hint` : undefined}
         onChange={event => { setName(event.target.value); setFailure(undefined); }} />
       {intent.family === 'skill' && <small id={`${input}-hint`}>{tx('resources:skills.transfer-name-hint')}</small>}

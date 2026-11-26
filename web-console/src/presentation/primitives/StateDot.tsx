@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import clsx from 'clsx'
+import { Spinner } from '@/components/ui/spinner'
 import css from './StateDot.module.css'
 
 /**
@@ -7,11 +8,6 @@ import css from './StateDot.module.css'
  * red error / grey idle for a tracked subject with nothing in progress.
  */
 export type StateDotState = 'done' | 'warning' | 'ongoing' | 'error' | 'idle'
-
-/** Outer 3x3 matrix cells (2px pixels on a 10px grid), clockwise from top-left. */
-const MATRIX_CELLS: readonly (readonly [number, number])[] = [
-  [0, 0], [4, 0], [8, 0], [8, 4], [8, 8], [4, 8], [0, 8], [0, 4],
-]
 
 /**
  * Render a state dot.
@@ -26,30 +22,7 @@ export function StateDot({ state, size = 10, className }: {
   className?: string | undefined
 }) {
   if (state === 'ongoing') {
-    return (
-      <svg
-        className={clsx(css.matrix, className)}
-        data-state="ongoing"
-        width={size}
-        height={size}
-        viewBox="0 0 10 10"
-        shapeRendering="crispEdges"
-        aria-hidden="true"
-      >
-        {MATRIX_CELLS.map(([x, y], index) => (
-          <rect
-            key={`${x}-${y}`}
-            className={css.cell}
-            x={x}
-            y={y}
-            width="2"
-            height="2"
-            /* Negative delay phases the chase so every cell animates from mount. */
-            style={{ animationDelay: `${(index - MATRIX_CELLS.length) * 125}ms` }}
-          />
-        ))}
-      </svg>
-    )
+    return <Spinner className={className} width={size} height={size} role={undefined} aria-label={undefined} aria-hidden="true" data-state="ongoing" />
   }
   return (
     <span

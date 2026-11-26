@@ -154,8 +154,10 @@ it('reload retries the unresolved startup selection after a transient failure an
   expect(pending.params).toMatchObject({session_id:'B'});
   await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
   await click(ui, 'View options');
-  await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Close view'})));
-  await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Session A'})));
+  const closeView = ui.getByRole('menuitem', {name:'Close view'});
+  fireEvent.pointerEnter(closeView);
+  const sessionA = ui.getByRole('menuitem', {name:'Session A'});
+  await act(async () => fireEvent.click(sessionA));
   expect(hints()).toEqual({endpoint,openViews:['B'],route:{kind:'session',sessionId:'B'}});
   await act(async () => ui.unmount()); await server.client.disconnect(); server = newServer();
   await mount(); await act(async () => server.connect());
@@ -261,7 +263,10 @@ it.each([false, true])('Connection Settings preserves startup restoration while 
   await click(ui, 'Settings');
   await act(async () => fireEvent.click(ui.getByRole('tab', { name: 'Advanced' })));
   await click(ui, 'Connection');
-  await act(async () => fireEvent.change(ui.getByLabelText('Connection mode', { exact: true }), { target: { value: 'remote' } }));
+  await act(async () => fireEvent.click(ui.getByRole('combobox', { name: 'Connection mode' })));
+  const remote = await ui.findByRole('option', { name: 'Remote server' });
+  fireEvent.pointerDown(remote);
+  await act(async () => fireEvent.click(remote));
   fireEvent.change(ui.getByLabelText('WebSocket endpoint', { exact: true }), { target: { value: endpoint } });
   fireEvent.change(ui.getByLabelText('Access token', { exact: true }), { target: { value: TOKEN } });
   await click(ui, 'Connect');

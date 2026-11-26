@@ -111,6 +111,7 @@ import type { MessageBlock, RuntimeClientEvent, RuntimeClientSnapshot } from '..
   return measurement;
 };
 
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';

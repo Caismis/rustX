@@ -1,5 +1,6 @@
 import { test,expect } from '@playwright/test';
 import { captureEvidence, expectStableScreenshot } from './screenshot';
+import { selectCossOption } from './coss-select';
 const origin=`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}`;
 for(const width of [1440,390])test(`completed turn changes and sampled back-to-bottom at ${width}px`,async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
@@ -28,19 +29,19 @@ for(const width of [1440,390])test(`completed turn changes and sampled back-to-b
   await card.getByRole('button',{name:'View changes to src/file-2.ts',exact:true}).click();
   const review=page.locator('[data-changes-review]');
   await expect(review).toBeVisible();
-  await expect(review.getByRole('combobox')).toHaveValue('1');
+  await expect(review.getByRole('combobox')).toContainText('1');
   await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
   await expectStableScreenshot(review,`turn-changes-review-${width}.png`);
-  await review.getByRole('combobox').selectOption('4');
+  await selectCossOption(review.getByRole('combobox'), '4');
   await expect(review.locator('[data-change-comparison]')).toContainText('src/file-5.ts');
   if(width===1440) {
     await page.getByRole('tab',{name:'Trajectory',exact:true}).click();
     await expect(page.getByRole('tab',{name:'Trajectory',exact:true})).toHaveAttribute('aria-selected','true');
-    await review.getByRole('combobox').selectOption('2');
+    await selectCossOption(review.getByRole('combobox'), '2');
     await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
     await page.getByRole('tab',{name:'Chat',exact:true}).click();
     await expect(page.getByLabel('Canonical conversation')).toBeVisible();
-    await review.getByRole('combobox').selectOption('0');
+    await selectCossOption(review.getByRole('combobox'), '0');
     await expect(review.locator('[data-change-comparison]')).toContainText('src/file-1.ts');
     await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
   }
@@ -73,6 +74,9 @@ for (const locale of ['en', 'zh'] as const) for (const dark of [false, true]) te
   const card = page.locator('[data-changed-files]');
   const row = card.locator('ul button').first();
   const preview = page.locator('[data-changes-hover-preview]');
+  // The visible card edge is the coss popup wrapper; the inner content is
+  // inset by the popup border, as card design intends.
+  const edge = page.locator('[data-hover-card="preview"]');
   const path = preview.locator('[data-changes-preview-path]');
   const diff = preview.locator('[data-review-view="unified"]');
   await expect(row).toBeVisible();
@@ -88,9 +92,12 @@ for (const locale of ['en', 'zh'] as const) for (const dark of [false, true]) te
     await expect(row).toHaveAccessibleDescription(await path.textContent() ?? '');
     await expect(row).not.toHaveAttribute('title');
     const anchor = (await row.boundingBox())!;
-    const bounds = (await preview.boundingBox())!;
+    const bounds = (await edge.boundingBox())!;
     const cardBounds = (await card.boundingBox())!;
-    expect(bounds.x - cardBounds.x).toBeCloseTo(24, 0);
+    // Overlay positioning rounds to device pixels: the inset may land exactly
+    // half a pixel off when the card itself sits on a fractional boundary.
+    expect(bounds.x - cardBounds.x).toBeGreaterThanOrEqual(23.5);
+    expect(bounds.x - cardBounds.x).toBeLessThanOrEqual(24.5);
     expect(bounds.width).toBeCloseTo(cardBounds.width - 48, 0);
     expect(bounds.height).toBeLessThanOrEqual(420);
     expect(bounds.y).toBeGreaterThanOrEqual(8);

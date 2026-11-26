@@ -27,12 +27,13 @@ it('catalog search filters by command and quick availability submits only the cu
   expect(writes(s)[0]).toMatchObject({ target: { kind: 'user' }, expected_revision: 'user-1', mutation: { kind: 'config', mutation: { unit: 'source_tools', id: 'search', authored: 'all' } } });
 });
 
-it('scope menu preserves the resource category and keeps definition drafts bound to their original owner', async () => {
+it('scope menu preserves the resource category, and leaving a definition draft takes an explicit discard', async () => {
   const s = cfg3Client();
   await catalog(s);
   await openResourceRow('search');
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'unsaved-server' } });
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^(Extensions|MCP servers|Back to list)$/ }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard and leave' }));
   fireEvent.click(screen.getByRole('tab',{name:'Workspace'}));
   fireEvent.click(screen.getByRole('button',{name:'Choose Workspace'}));
   fireEvent.click(await screen.findByRole('menuitem',{name:'A'}));
@@ -40,7 +41,8 @@ it('scope menu preserves the resource category and keeps definition drafts bound
   fireEvent.click(screen.getByRole('tab',{name:'Global'}));
   await screen.findByRole('listitem',{name:'search'});
   await openResourceRow('search');
-  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('unsaved-server');
+  // The discarded draft is gone: the authored command is what was always there.
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server');
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -51,7 +53,7 @@ it('disabling a partially granted MCP source explicitly revokes that source', as
   const card = within(screen.getByRole('listitem', { name: 'search' }));
   expect(card.queryByRole('button', { name: 'Manage selection' })).toBeNull();
   const toggle = card.getByRole('switch') as HTMLButtonElement;
-  expect(toggle.disabled).toBe(false);
+  expect(toggle.getAttribute('aria-disabled')).not.toBe('true');
   fireEvent.click(toggle);
   await waitFor(()=>expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0]).toMatchObject({mutation:{kind:'config',mutation:{unit:'source_tools',id:'search',authored:[]}}});
@@ -76,7 +78,7 @@ it('a rejected MCP toggle exposes the failure and cannot blindly retry', async (
   await catalog(s);
   fireEvent.click(within(screen.getByRole('listitem', { name: 'search' })).getByRole('switch'));
   await screen.findByText(/catalog rejected/);
-  expect((within(screen.getByRole('listitem', {name:'search'})).getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
+  expect(within(screen.getByRole('listitem', {name:'search'})).getByRole('switch').getAttribute('aria-disabled')).toBe('true');
   expect(screen.queryByRole('button', {name:'Manage selection'})).toBeNull();
   expect(writes(s)).toHaveLength(1);
 });

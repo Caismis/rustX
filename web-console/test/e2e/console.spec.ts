@@ -1,4 +1,4 @@
-import { settledSave } from './shell-actions';
+import { settledSetting } from './shell-actions';
 import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
@@ -6,7 +6,7 @@ import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import {
-  choose, returnHome, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, returnHome, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
@@ -59,17 +59,24 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     await returnHome(page);
-    await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
+    await openWorkspaceSettings(page, 'Workspace A');
+    const followGlobal = settings.getByRole('switch', { name: 'Follow global settings', exact: true });
+    await expect(followGlobal).toBeChecked();
+    await followGlobal.click();
+    await expandModelAuthoring(page);
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
-    await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
-    await expect(settledSave(settings, 'Default model')).toBeVisible();
+    await settledSetting(defaultModel);
     await openSettingsPage(page, 'Advanced');
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
-    await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
-    await confirmSettingsAction(page, 'Use global default Default model');
-    await expect(settledSave(settings, 'Default model')).toBeVisible();
+    await openSettingsPage(page, 'Models');
+    // Restoring inheritance is controlled by the workspace Follow global switch,
+    // which commits the restore itself.
+    await followGlobal.click();
+    // Restoring inheritance clears workspace overrides, which confirms first.
+    await settings.getByRole('button', { name: 'Clear workspace overrides', exact: true }).click();
+    await expect(followGlobal).toBeChecked();
     await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await openSession(idB); await send('Use B while A runs');

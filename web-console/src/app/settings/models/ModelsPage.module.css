@@ -1,6 +1,7 @@
 /* Provider rows use the Harness card material. The selected editor is a
    separate inset module, like the other sections of Settings. */
-.section { container-type: inline-size; }
+.section { container-type: inline-size; display: flex; flex-direction: column; gap: 20px; }
+.providerList { display: flex; flex-direction: column; gap: 10px; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .toolbar > div:first-child { flex: 1 1 220px; min-width: 0; }
 .section .description { margin-top: 4px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
@@ -21,13 +22,16 @@
 .providerDot[data-state=empty] { background: var(--dsw-alias-state-warn-primary); }
 .emptyNavigation { font-size: 13px; color: var(--dsw-alias-label-secondary); }
 .detailPane { min-width: 0; padding: 14px 16px; background: var(--dsw-alias-bg-module-platform); border-radius: 0 var(--dsw-radius-lg) var(--dsw-radius-lg) 0; }
-.connection { min-width: 0; }
+.connection { min-width: 0; padding: 16px; }
 .detailHeader { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 14px; }
 .section .detailHeader h3 { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 14px; line-height: 22px; margin: 0; }
 .detailHeader h3 span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section .providerRename { min-width: 0; height: 32px; font: inherit; }
 .section .iconButton { width: 28px; height: 28px; padding: 0; flex: none; border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); }
 .connectionFields { display: grid; gap: 12px; min-width: 0; border: 0; margin: 0; padding: 0; }
+/* Grid children otherwise keep their content width as their minimum and the
+   whole grid escapes a narrow panel. */
+.connectionFields > *, .connectionFields > * > label { min-width: 0; }
 .section .connectionFields label { padding: 0; }
 .connectionFields > :has(> button[aria-haspopup=listbox]) { padding: 0; }
 .connectionFields button[aria-haspopup=listbox] > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -43,17 +47,18 @@
 .modelsHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 4px; padding-top: 12px; border-top: .5px solid var(--dsw-alias-border-l2); }
 .section .modelsHeading h4 { margin: 0; }
 .modelList { min-width: 0; outline: none; }
-.modelRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px; min-height: 40px; cursor: pointer; outline: none; }
+.modelRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px; min-height: 40px; outline: none; }
 .modelRow[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
 .modelRow[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
 .modelRow + .modelRow { border-top: .5px solid var(--dsw-alias-border-l2); }
 .modelRow [role=alert] { flex-basis: 100%; }
-.modelIdentity { display: flex; flex: 1 1 152px; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.modelIdentity { display: flex; flex: 1 1 152px; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; border: 0; border-radius: var(--dsw-radius-sm); padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.modelIdentity:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .section .modelName { min-width: 0; max-width: 100%; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .modelRow[data-hidden=true] .modelName { color: var(--dsw-alias-label-secondary); }
 .modelBadges { display: flex; align-items: center; gap: 4px; }
 .modelActions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.section .emptyModels { margin: 8px 0 0; padding: 10px 12px; border: .5px dashed var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-lg); color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+.section .emptyModels { margin: 14px 16px; padding: 12px 14px; border: 1px dashed var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md, 10px); color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
 .unselected { grid-column: 1 / -1; display: flex; gap: 8px; padding: 24px 16px; align-items: center; flex-direction: column; border: .5px dashed var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-lg); text-align: center; color: var(--dsw-alias-label-secondary); font-size: 13px; }
 .defaultModel { border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg); padding: 0 14px; }
 .defaultModel > div { border: 0; }

@@ -21,6 +21,7 @@ import { goalDock } from '../../src/bindings/composer-context';
 import { applyTheme, readTheme } from '../../src/app/appearance';
 import { Server, checkpoint, domainReceipt, interaction, projectionHead, snapshot } from '../fixture';
 import { workflowRun } from '../workflow-data';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';

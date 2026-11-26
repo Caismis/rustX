@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
-import { drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
+import { drainAllWorkspaceHostRoutes, drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, opendirSync } from 'node:fs';
@@ -228,6 +228,9 @@ timezone = "UTC"
           const report = await control('shutdown', 'POST');
           // Product Host observers and terminals settle through the live native
           // connection; retire that ownership before terminating its server.
+          // Retire routed page proxies first so in-flight forwards finish
+          // against a listening server instead of racing the close.
+          await drainAllWorkspaceHostRoutes();
           await workspaceHost.stop();
           app!.kill('SIGTERM'); provider.stdin.end();
           const [providerCode] = await Promise.all([exited(provider), exited(app!)]);

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import { useTranslation } from '../../../../../../locale/react';
 import { Switch } from '../../../../../../presentation/primitives/Switch';
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconEditOutline16, IconTrashOutline16 } from '../../../../../../presentation/primitives/icons';
@@ -10,6 +10,8 @@ import { orderedKeys } from '../../../../document/presentation';
 import { schemaObject, schemaTarget, schemaTemplate, schemaTypes, type Schema } from '../../../../document/schema';
 import { putProperty, removeProperty, schemaAt, type SchemaEdit } from './schema';
 import css from './StructuredOutput.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Textarea } from '@/components/ui/textarea';
 
 interface Editing { parent: FieldAddress; name?: string }
 export const fieldType = (schema: Schema) => schema.type === 'array' ? `array[${schemaObject(schema.items)?.type ?? 'string'}]` : String(schema.type ?? 'string');
@@ -88,16 +90,16 @@ function FieldCard({ document, parent, name, onCancel, onConfirm }: {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel(); }
   }}>
     <div className={css.fieldTop}>
-      <input autoFocus className={css.fieldName} aria-label={tx('workflows:schema.name')} placeholder={tx('workflows:schema.name')} value={field} onChange={event => { setField(event.target.value); setError(''); }} />
+      <TextInput autoFocus className={css.fieldName} aria-label={tx('workflows:schema.name')} placeholder={tx('workflows:schema.name')} value={field} onChange={event => { setField(event.target.value); setError(''); }} />
       <TypeSelector value={type} onChange={setType} />
       <div className={css.fieldActions}><span className={css.required}>{tx('workflows:schema.required')}<Switch className={css.requiredSwitch} label={tx('workflows:schema.required')} checked={required} onChange={setRequired} /></span>
         <span className={css.separator} /><button type="button" onClick={onCancel}>{tx('workflows:dialog.cancel')}</button>
         <button type="submit" className={css.confirm} disabled={!field.trim()}>{tx('workflows:structured.confirm')}<kbd>{/* i18n-raw: keyboard shortcut */ 'Ctrl ↵'}</kbd></button>
       </div>
     </div>
-    <input className={css.description} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
+    <TextInput className={css.description} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
     {type === 'string' && <div className={css.validations}><div className={css.validationTitle}>{tx('workflows:structured.string-validations')}<span /></div>
-      <label>{tx('workflows:structured.enum')}<textarea aria-label={tx('workflows:structured.enum')} placeholder={tx('workflows:structured.enum-placeholder')} rows={2} value={enums} onChange={event => setEnums(event.target.value)} /></label>
+      <label>{tx('workflows:structured.enum')}<Textarea aria-label={tx('workflows:structured.enum')} placeholder={tx('workflows:structured.enum-placeholder')} rows={2} value={enums} onChange={event => setEnums(event.target.value)} /></label>
     </div>}
     {error && <p role="alert" className={css.error}>{error}</p>}
   </form>;
@@ -105,9 +107,9 @@ function FieldCard({ document, parent, name, onCancel, onConfirm }: {
 
 function TypeSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const tx = useTranslation();
-  return <Menu.Root modal={false}><Menu.Trigger className={css.typeTrigger} aria-label={tx('workflows:schema.type')}>{value}<IconChevronDownOutline14 /></Menu.Trigger>
-    <Menu.Portal><Menu.Positioner className={css.menuPositioner} sideOffset={4} align="start"><Menu.Popup className={css.typeMenu}>
-      {(types.includes(value) ? types : [...types, value]).map(type => <Menu.Item key={type} className={css.typeItem} onClick={() => onChange(type)}>{type}</Menu.Item>)}
-    </Menu.Popup></Menu.Positioner></Menu.Portal>
-  </Menu.Root>;
+  return <Menu modal={false}><MenuTrigger className={css.typeTrigger} aria-label={tx('workflows:schema.type')}>{value}<IconChevronDownOutline14 /></MenuTrigger>
+    <MenuPopup side="bottom" align="start" sideOffset={4} className={css.typeMenu}>
+      {(types.includes(value) ? types : [...types, value]).map(type => <MenuItem key={type} className={css.typeItem} onClick={() => onChange(type)}>{type}</MenuItem>)}
+    </MenuPopup>
+  </Menu>;
 }

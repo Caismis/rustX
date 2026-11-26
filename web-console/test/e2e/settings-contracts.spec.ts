@@ -1,4 +1,4 @@
-import {openResourceModule, settledSave } from './shell-actions';
+import {openResourceModule, settledSetting } from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
@@ -53,12 +53,16 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
       const form = surface.getByRole('form', { name: title, exact: true });
       const save = async () => {
-        await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
-        if (owner === 'Root') await expect(settledSave(surface, title)).toBeVisible();
-        else await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible({ timeout: 15_000 });
+        // The scalar 'Default model' unit commits itself after a short
+        // debounce; the structured subagent editor still saves explicitly.
+        if (owner === 'Root') await settledSetting(form);
+        else {
+          await surface.getByRole('button', { name: 'Save', exact: true }).click();
+          await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible({ timeout: 15_000 });
+        }
       };
       if (owner === 'Root') {
-        await expect(form.getByRole('button', { name: /Auxiliary model$/ })).toBeHidden();
+        await expect(form.getByRole('combobox', { name: /Auxiliary model$/ })).toBeHidden();
         await choose(form, 'Model', 'summary-b');
         await choose(form, 'Profile', 'quick');
         await save();
@@ -72,7 +76,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       await choose(form, 'Auxiliary model', 'summary-b');
       await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
       await expect(form.getByLabel('System prompt', { exact: true })).toHaveValue('');
-      await form.getByLabel('read', { exact: true }).check();
+      await form.getByRole('checkbox', { name: 'read', exact: true }).check();
       await save();
       const sourceFile = join(fixture.workspaceA, '.agents/agents/optional.toml');
       const preserved = readFileSync(sourceFile, 'utf8');
@@ -87,8 +91,8 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       };
       await reopen();
       const nested = form.getByRole('group', { name: 'Auxiliary model settings', exact: true });
-      await expect(form.getByRole('button', { name: /Auxiliary reasoning profile$/ })).toContainText('Explicit profile');
-      await expect(nested.getByRole('button', { name: /Auxiliary profile$/ })).toContainText('deep');
+      await expect(form.getByRole('combobox', { name: /Auxiliary reasoning profile$/ })).toContainText('Explicit profile');
+      await expect(nested.getByRole('combobox', { name: /Auxiliary profile$/ })).toContainText('deep');
       await expect(nested.getByLabel('Output limit (Auxiliary)')).toHaveValue('2048');
       await expect(nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true})).toHaveText('{\n  "temperature": 0.2\n}', {useInnerText:true});
       await choose(nested, 'Auxiliary profile', 'quick');
@@ -102,8 +106,8 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       await reopen();
       await choose(form, 'Auxiliary model', 'Follow selected model'); await save();
       await reopen();
-      await expect(form.getByRole('button', { name: /Auxiliary model$/ })).toContainText('Follow selected model');
-      await expect(form.getByRole('button', { name: /Auxiliary reasoning profile$/ })).toContainText('Lowest');
+      await expect(form.getByRole('combobox', { name: /Auxiliary model$/ })).toContainText('Follow selected model');
+      await expect(form.getByRole('combobox', { name: /Auxiliary reasoning profile$/ })).toContainText('Lowest');
       await expect(nested.getByLabel('Output limit (Auxiliary)')).toHaveValue('');
       await expect(nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true})).toHaveText('{}', {useInnerText:true});
       expect(readFileSync(sourceFile, 'utf8')).toMatch(/mode\s*=\s*"session"/);

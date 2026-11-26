@@ -2,7 +2,7 @@ import type { SourceMutation, SourceScope, SourceSettings } from '../../../../..
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
-import { UnitOutcomeNotice, useUnitEditing } from '../../settings/forms/bridge';
+import { UnitOutcomeNotice, useUnitEditing, type UnitEditing } from '../../settings/forms/bridge';
 import { Choice } from '../../settings/primitives/aria';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
 import { toolSourceId } from '../../settings/capability';
@@ -37,13 +37,26 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
         if (next === 'inherit') { if (unit.authoredPresent) unit.submit(true); }
         else unit.apply(next === 'all' ? 'all' : next === 'none' ? [] : selection === 'all' ? skillNames! : selection);
       }} />
-    <div className={css.availability}>
-      {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
-      {unit.draft && !unit.busy && !unit.awaitingObservation && <Button size="sm" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
-    </div>
+    <FailedIntentRecovery unit={unit} />
     <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined} />
     <UnitOutcomeNotice title={tx('resources:skills.title')} outcome={unit.outcome}/>
   </section>;
+}
+
+/** A refused quick gesture keeps its draft intent — the control it disabled
+ * must offer the recovery itself: rebase on the reviewed revision and retry,
+ * or abandon the intent and show the committed fact again. */
+function FailedIntentRecovery({ unit }: { unit: UnitEditing<Selection> }) {
+  const tx = useTranslation();
+  const failed = unit.outcome.kind === 'rejected' || unit.outcome.kind === 'uncertain' || unit.outcome.kind === 'conflict';
+  // Recovery exists wherever intent could be discarded: a value draft, or a
+  // pinned base a refused removal left behind (a refused "inherit" gesture
+  // has no draft, but its intent still needs the retry/discard affordance).
+  if (!unit.intent || !(unit.reviewNeeded || failed)) return null;
+  return <div className={css.availability}>
+    <Button size="sm" onClick={() => { unit.review(); unit.submit(!unit.draft); }}>{tx('settings:aria.retry')}</Button>
+    <Button size="sm" variant="ghost" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>
+  </div>;
 }
 
 /** Quick selection edits the same semantic unit as the full permission editor. */
@@ -77,8 +90,7 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
       disabled={review || !unit.writable || !unit.admitted || unit.busy || valid === false && !selected
         || family === 'skill' && selection === 'all' && skillNames === undefined}
       onChange={enabled => unit.apply(family === 'mcp' ? enabled ? 'all' : [] : enabled ? [...new Set([...names, name])] : names.filter(item => item !== name))}/>
-    {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
-    {unit.draft && !unit.busy && !unit.awaitingObservation && <Button size="sm" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
+    <FailedIntentRecovery unit={unit} />
     <UnitOutcomeNotice title={name} outcome={unit.outcome}/>
   </div>;
 }

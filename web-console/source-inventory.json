@@ -253,6 +253,7 @@
         "../composer/stop-sequence",
         "../composer/submission-policy",
         "../new-conversation/first-submit",
+        "@/components/ui/textarea",
         "react"
       ],
       "excluded_dependencies": [
@@ -261,7 +262,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "4f1806f54960054b985ee19eafc05243aad93aa528144a145421c3570f39e7e0",
+      "local_sha256": "48020d41a7d6f5a86bc645ba8f4878a5f98aa581142343cbf63f55041775187c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -301,6 +302,7 @@
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
+        "@/components/ui/textarea",
         "clsx",
         "react"
       ],
@@ -310,7 +312,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b1a658cb26a1d89e165e536d6b62df17a91a40876e719a2f7eaf6ec2d5ec5ecf",
+      "local_sha256": "27c9bc88447a9265956a47f5aeb2d81538b01b94ca54af62164c4eed78e9fdbb",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -358,6 +360,7 @@
         "./Commands.module.css",
         "./native",
         "./registry",
+        "@/presentation/primitives/Input",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -368,7 +371,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f7599f06b6dfabfa7e269809c2912376a0237c089618cd3421165907e7ceaceb"
+      "local_sha256": "317a058df134eebfd1c2d99694fb203c376e4e93509663b7b8dceeed6379f425"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -476,6 +479,7 @@
         "../../locale/react",
         "../../presentation/primitives/icons",
         "./GoalDock.module.css",
+        "@/presentation/primitives/Input",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -488,7 +492,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c1b9a8b38fecfbcef396a445d41b8d76281c268cfae97b0870208ad4fc9281d6"
+      "local_sha256": "9ebad22b07a2fa84e8a5b13c8ed110872f5e73d06d461ed902dc4920faf8b4e8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -524,6 +528,7 @@
         "../../presentation/primitives/icons",
         "../components/Artifact",
         "./QueueDock.module.css",
+        "@/components/ui/textarea",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -534,7 +539,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "abb33c54394450b88a889547406fe13fe88510e02d99c6787917214ff146dab3"
+      "local_sha256": "e85d7495aff78873bbf28801fd13c2c977a08ab7f0c242616435ee0b677ec813"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -630,10 +635,14 @@
         "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../../workspaces/host",
+        "../ScopeToolbar",
         "../SettingsFeedback",
+        "../WorkspaceFollowGlobal",
         "../forms/bridge",
         "../forms/fields",
+        "../forms/guard",
         "../machines/navigation",
         "../machines/react",
         "../primitives/aria",
@@ -644,9 +653,9 @@
         "./ProviderIcon",
         "./ProviderTemplates",
         "./useModelProbe",
+        "@/presentation/primitives/Input",
         "@xstate/react",
-        "react",
-        "react-aria-components"
+        "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -674,7 +683,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d36b8ae42075895e3ae4fb24580b97f422f8e4f4f54d5aa7de446946c5e822b4"
+      "local_sha256": "9304f6d742d79d653715315d4c352fa6a9ef65e0f99860d67b9466daa3dfef8e"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -684,8 +693,8 @@
       "retained_dependencies": [
         "../../../../../protocol/app-server/v80",
         "../../../locale/react",
-        "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../resources/shared/AvailabilityDetail",
         "../../resources/shared/inventory",
         "../SettingsFeedback",
@@ -730,7 +739,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b574c35fb445c167640d811b87c379fd1467a00b54039963f71ed2728e0d6ca2"
+      "local_sha256": "0e5757f31286b2a81edfe95b35c8240c8d69241f71d515403ea71b36123e00be"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -743,19 +752,22 @@
         "../../connection/controller",
         "../../locale/react",
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Skeleton",
         "../../presentation/primitives/icons",
         "../../presentation/settings/SettingsContent.module.css",
+        "../../presentation/settings/SettingsPageShell",
         "../../presentation/settings/SettingsRoot",
         "../../workspaces/associations",
         "../../workspaces/host",
         "../appearance",
         "./ConnectionSettings",
+        "./ScopeToolbar",
         "./SettingsFeedback",
-        "./SettingsScopeMenu",
         "./advanced/AdvancedPage",
         "./agent/AgentPage",
         "./extensions/ExtensionsPage",
         "./forms/bridge",
+        "./forms/guard",
         "./general/GeneralPage",
         "./machines/navigation",
         "./machines/react",
@@ -765,6 +777,7 @@
         "./projection",
         "./source-context",
         "./tools/ToolsPage",
+        "@/components/ui/textarea",
         "@xstate/react",
         "react"
       ],
@@ -782,7 +795,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "26aac9cc6567d0a84b276b70083cf66c01b0fbca47891bb486b932161402394c"
+      "local_sha256": "1a39ac953bf9a92d55428b2760662a8c29a44c11753a5a0857e0754d5c209d5b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -858,6 +871,7 @@
         "./useTraceContexts",
         "./useWorkflowNodes",
         "./workflow",
+        "@/presentation/primitives/Input",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -917,7 +931,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "3440e4ee4b84ce87304abe5e493a7c4ab61aadad910804f9f73f7f80c5780c8b"
+      "local_sha256": "a062a959ce6d64b46acece5ad52e9219f9757456fb4ad5cceeb45f63bb666cdc"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -1489,7 +1503,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e031491f3f06461b3cf09c02046191ebf9466983bad27539f1fc89dabd699d1b",
+      "local_sha256": "15cf051c285b8af306b88e164cca36deb2037d5800edca801e1c1d9c23efaed7",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1511,14 +1525,14 @@
         "../../locale/react",
         "../primitives/DialogSurface",
         "../primitives/MenuGroup",
-        "../primitives/MenuSurface",
         "../primitives/StateDot",
         "../primitives/icons",
         "../primitives/rank-by-name",
         "./ModelSelect.module.css",
+        "@/components/ui/popover",
+        "@/presentation/primitives/Input",
         "clsx",
-        "react",
-        "react-dom"
+        "react"
       ],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1526,7 +1540,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "667cc82ae0b5ab4e9cef6647d820288f415592784311124ced59dd79887a5620",
+      "local_sha256": "b44c4cf787f620bbf134d2f58b16afdf6623a30515418ac48712908a7a5d3fd2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -2138,6 +2152,7 @@
         "./MarkdownText.module.css",
         "./incremental.ts",
         "./katex.tsx",
+        "@/components/ui/checkbox",
         "clsx",
         "mdast",
         "mdast-util-math",
@@ -2150,7 +2165,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fc78b1c505f4f84da504af1f19d0a2b2f20203d360b98dd65721e1105b406313"
+      "local_sha256": "defdeafaf12b6a70cd41cc526313da69d9c4b8707738ae512bb132676be67904"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
@@ -2170,33 +2185,12 @@
       "local_sha256": "ee70704ebd5786784efd06ee0179ce77843ad8f567f6b49013cc6fe3bf01f9ff"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/Button.module.css",
-      "destination": "web-console/src/presentation/primitives/Button.module.css",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "a32017eff252569cef883d7d3308b2ca01fc41b167b568ad00b923603a902f99",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9c783903f8dbd7527ff19dc9f2a99d9d857f61ed6f851c56be0032d324ac5e27",
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/Button.tsx",
       "destination": "web-console/src/presentation/primitives/Button.tsx",
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371",
       "retained_dependencies": [
-        "./Button.module.css",
-        "clsx",
+        "@/components/ui/button",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2207,7 +2201,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3d815319babc3837cbfcec1c17788ebe5fbebb6c0011a3449ab00c85cb7056b9",
+      "local_sha256": "004723c207214f019b643700cf8012f2cdd89f096213dcb1b9b4a93236b17ffd",
       "classification": "A"
     },
     {
@@ -2264,31 +2258,6 @@
       ]
     },
     {
-      "destination": "web-console/src/presentation/primitives/HoverCard.module.css",
-      "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "4d8fbf2368bd9f232f09422af94bf3527b4c9715445deaae18cf04fc1306475b",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "local_sha256": "260cc359c58bb1066b5163cb0e014f7edc7ce6587953e96b4054c65a0f9c1989",
-      "retained_dependencies": [],
-      "classification": "A",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "e5dc1c4235065942925aecd48b36c29c8f4df79ec571345b95fdd7f2fef82c02",
-          "treatment": "Adapt the inset, viewport-bounded preview variant and its themed panel surface. Preserve the compact variant for workspace rows."
-        }
-      ]
-    },
-    {
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
       "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2303,14 +2272,13 @@
       ],
       "retained_dependencies": [
         "../../locale/react",
-        "./HoverCard.module.css",
         "./clipboard.ts",
         "./pointer-grace.ts",
-        "@floating-ui/react-dom",
-        "react",
-        "react-dom"
+        "@/components/ui/preview-card",
+        "clsx",
+        "react"
       ],
-      "local_sha256": "83585f101c96f43e2a19f4158f052f92b47f27f502e59a4c1e7d078f0bbf1d41",
+      "local_sha256": "6bcd5bf9c8fbff25ff3eb3f609402211b65245e5c6dea0a3b228904e58c7288b",
       "classification": "A",
       "additional_sources": [
         {
@@ -2322,33 +2290,13 @@
       ]
     },
     {
-      "upstream": "packages/client/ui-primitives/src/Input.module.css",
-      "destination": "web-console/src/presentation/primitives/Input.module.css",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "f13333abf03b98d52bd65702ac34fbbf00b3c4fc3d8985b793d5e912a3e22b2e",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ff7eabf53b32c73e23bf58082cbf3851ea4c701430b56887f4a9de2261a146f4",
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/Input.tsx",
       "destination": "web-console/src/presentation/primitives/Input.tsx",
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "dcb73dad681f3f37975c08ed3aa97922a1f5337548b406806324877a5d398c51",
       "retained_dependencies": [
-        "./Input.module.css",
-        "clsx",
+        "@/components/ui/input",
+        "@/components/ui/input-group",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2359,7 +2307,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f0a215537e96d4a520e8d79bd22d258f7d6126fc885a2b94b7ba75756c82252f",
+      "local_sha256": "4002bf54cec8996065ffa5597b713748f10f332b269c4227a7651e878bf4ff97",
       "classification": "A"
     },
     {
@@ -2424,7 +2372,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "02d5978fd12570c22116fc63e9938730f02cdc376e9b772675910655847badd2",
+      "local_sha256": "f94e0623c6254535d8e4a23cbc88b38aad0e0b159d0e93bb92a89c5376b2bb89",
       "classification": "B"
     },
     {
@@ -2436,8 +2384,7 @@
         "./DialogSurface",
         "./Menu.module.css",
         "./icons/index.tsx",
-        "./pointer-grace.ts",
-        "@floating-ui/react-dom",
+        "@/components/ui/menu",
         "clsx",
         "react",
         "react-dom"
@@ -2450,7 +2397,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "fb864a774d80c2adb217a008803b7d11bdcce0536a0b7ef2a229508f8de580e9",
+      "local_sha256": "29a070fc923d3bc63e2243c05c603efeb3f3ecfe84c468d5f64eb5423baee037",
       "classification": "B",
       "additional_sources": [
         {
@@ -2478,7 +2425,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "af5ae86537bda57bf012c6d6cbe964f0dc658187b5eb857134dfb4f7da2abaa6",
+      "local_sha256": "2ed15ca4d391a1ea7e8e5562c059c57d608d6ce34a4d1bdb8a9196878a06fc1a",
       "classification": "A"
     },
     {
@@ -2495,34 +2442,13 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [
+        "./DialogSurface",
         "./Modal.module.css",
         "./icons/index.tsx",
-        "./useModalFocus",
         "clsx",
-        "react",
-        "react-dom"
+        "react"
       ],
-      "local_sha256": "efe3becd2944b315ce0b498a32896200aadc5281ef7f3df48a87d90535b549c1",
-      "classification": "A"
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/Pill.module.css",
-      "destination": "web-console/src/presentation/primitives/Pill.module.css",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "c1c39eb6adc0e40326f7a33598a32195b388cb9db2627a9c723c009b44a94dab",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ff1ab0564e4da8096d626874ddba4013ce6bcdbe308f87f772c20471280f501e",
+      "local_sha256": "0d9d98c9f05d3a908c637a9110309504de1c11fc64dd88aa92355e18ba702c7b",
       "classification": "A"
     },
     {
@@ -2531,8 +2457,8 @@
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "851727b4f745755f8553a92bc5881e54d0479ea680d1686533ba210cb943ca2f",
       "retained_dependencies": [
-        "./Pill.module.css",
-        "clsx",
+        "@/components/ui/badge",
+        "@/components/ui/button",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2543,7 +2469,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "cc059ffa398112f9b8b546f11d60c6ba2443e427998cd56bcaa8cbd5c83c593e",
+      "local_sha256": "bf48d68afdf50da0354ccc5e1321db935d24691d3b5c56a6387c6a54120782d6",
       "classification": "A"
     },
     {
@@ -2573,6 +2499,7 @@
       "upstream_sha256": "94e287b278d5481d6812dae820a95afee6856d34b4056bfd84017f43a5b43ad2",
       "retained_dependencies": [
         "./StateDot.module.css",
+        "@/components/ui/spinner",
         "clsx"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2583,23 +2510,8 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ed5cbb6c95a0e69342f19dd2966b993fbfb5d547ab4795208f44a0eaad9576a2",
+      "local_sha256": "8f5aba6a9118c95ae838fd22110565fd8428d87ed27b60785687c7a9526e449a",
       "classification": "A"
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/Switch.module.css",
-      "destination": "web-console/src/presentation/primitives/Switch.module.css",
-      "treatment": "Direct theme-token switch track/thumb styling.",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream_sha256": "9baa1cfa828e5806cf59d88b82bbde6d9ba5f795c1105a2e819476388f734149",
-      "local_sha256": "13f11d90a28e7e4bf69a66260a2e5cf5bcb42b5bf18ecad168f9259dcf49071f",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Host filesystem ownership",
-        "Cordis/plugin lifecycle",
-        "Harness configuration and runtime stores"
-      ]
     },
     {
       "upstream": "packages/client/ui-primitives/src/Switch.tsx",
@@ -2607,41 +2519,15 @@
       "treatment": "Direct controlled accessible Switch; caller owns only a local native CFG3 draft.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "9f0f6db0de338793711b4333e87dcd2b82d06d8ad43aa362eb67efc63573ccb1",
-      "local_sha256": "6dc107fb1867c0ee082aaf20eb5c23900f6d2568c73820c32816abc6d43f7c0f",
+      "local_sha256": "3630b0de9703931f7b0d30e46d680e98fad1c95a0eba37510874f25e17bf83b8",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./Switch.module.css",
-        "clsx"
+        "@/components/ui/switch"
       ],
       "excluded_dependencies": [
         "Host filesystem ownership",
         "Cordis/plugin lifecycle",
         "Harness configuration and runtime stores"
-      ]
-    },
-    {
-      "destination": "web-console/src/presentation/primitives/Tooltip.module.css",
-      "upstream": "packages/client/ui-primitives/src/Tooltip.module.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "6ee070b9ce1c62eaaddaed1e96be8ff6d59eb4e09df708b219cd4ba3f676ca6b",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "local_sha256": "ab23bb4fd58bf4391996c63f25d7d97250e6c05af8f1235e00a8b25ca203bc8d",
-      "retained_dependencies": [],
-      "classification": "A",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-primitives/src/Tooltip.module.css",
-          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-          "upstream_sha256": "d1f3aa2d804d18f234a12b7219498fd1823ce8cc207a4da3778fa414bca97678",
-          "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
-        }
       ]
     },
     {
@@ -2659,10 +2545,10 @@
       ],
       "retained_dependencies": [
         "./ShortcutKeys",
-        "./Tooltip.module.css",
+        "@/components/ui/tooltip",
         "react"
       ],
-      "local_sha256": "29400100c354cf70a62c6bed53eb11b57057ef52d1aac4139bee44ef4f1574fb",
+      "local_sha256": "26457a2ee591fd701218520445b35c7fc1799c01a78cc8c2af45bede93f65c54",
       "classification": "A",
       "additional_sources": [
         {
@@ -2837,7 +2723,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "c2f99217bc63d8b85489d983b6b8864a028a55ed7d13bfabaeb10087b2727680",
+      "local_sha256": "4bd3f4b3e2792179367fd129358391db00a0365ea000d555c560a82f7304ae4b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2879,7 +2765,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "bfe4c00b3cfac19605104bb26e48da8897c41e01cba40908482447b39a15d08f",
+      "local_sha256": "a5135e3df8799e80efbedd120328f2ac954732a5fa4fae695d1409a5fe063435",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2902,11 +2788,11 @@
         "../primitives/icons",
         "./SettingsRoot.module.css",
         "./SettingsWorkflow.module.css",
+        "@/components/ui/tabs",
         "clsx",
-        "react",
-        "react-aria-components"
+        "react"
       ],
-      "local_sha256": "b687e75f778d13c55dac7f3aa01319178f87eed885624d945661d20b1143c413",
+      "local_sha256": "6ba0252234432d17d242f7d75236f0cd83692fc4c6e6acb7cf553e7859876976",
       "classification": "B"
     },
     {
@@ -3008,7 +2894,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "5f4555fa1f03a38ea8dd550a928dad0d00a50bdbba5eeb760a6f3ea3211855c5",
+      "local_sha256": "bd724268533ab8af0d6c62cd153ab5da5cad0cdda0fcc270b0a278bc4d99cc2a",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -3146,7 +3032,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "a191c30c1fc0a1aaf694ec19a6cfdfdf5ae498db8a1e8582bc0f23de595df8e2",
+      "local_sha256": "ca85c4651b21c74d4ffac8a90937cc6d00a6bf84e2bd8bf774e0099d12b9661d",
       "classification": "B",
       "additional_sources": [
         {
@@ -3221,10 +3107,11 @@
         "./Rows",
         "./WorkspaceBrowser.module.css",
         "./types",
+        "@/presentation/primitives/Input",
         "clsx",
         "react"
       ],
-      "local_sha256": "3b8b1d80f4c940ef5e70ed5381ec672548ac5cd2027829654579f7ba73073151",
+      "local_sha256": "5778612034e3285cc53efea92d3a490585f5031f7df2c3289c8b6bc272ee4301",
       "classification": "B",
       "additional_sources": [
         {
@@ -3307,7 +3194,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6482b355a216e797496677c0c3595d61ce164c7fe3842e76cc1ad0089892f900"
+      "local_sha256": "b98f9dc8e6600a7e022405174ce2350980ce6e9a4ca19a546afbc65a33a9534b"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3630,6 +3517,7 @@
         "../primitives/RiskConfirmation.module.css",
         "../primitives/icons",
         "./PermissionSelect.module.css",
+        "@/components/ui/checkbox",
         "react"
       ],
       "excluded_dependencies": [
@@ -3637,7 +3525,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "d276522e24b436866dd4c82df76ee045244fb87998dd420fd7871ccc9f4160e6",
+      "local_sha256": "c04af138fa8ef5370b3cb2f5f5502602da330b22bbcfdeb90788fe8a4ce9ed0e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",
@@ -4032,7 +3920,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "b9adeda7a274a9a8f808c48ed0c221ba4f021dba557031c8fce16c214f68dba6"
+      "local_sha256": "e8806f9e8084358f14a66610c6949d5d65c3185f0d13340097ae0c325505174e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4170,7 +4058,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "b577f175a9e0fcfc832d9dda4b915825473316e19be7d2240a3907167d14173e"
+      "local_sha256": "01664eefcb92b9a8b061c480e6aa075e12f2d02a5893c8a9776d0613d4ae65ab"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4506,11 +4394,11 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./StatDialog.module.css",
-        "@base-ui/react/popover",
+        "@/components/ui/popover",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "cde1d28a47bb870a63ea94fd13a37ea30064d3cfc97746bccf5aa54a319af97e"
+      "local_sha256": "a385434b04ab83483d7e6990c64b98f191c19a6d87e17a9e7162fefe331d3fa1"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.module.css",
@@ -4522,7 +4410,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "6b290931c5423b543c27f6777111c7f2061e56aa2ac1af229e237cec0a3c4e79"
+      "local_sha256": "e58477a8632d49723e589ba2151e82cc3eb9174f5358bcc3e4bec9ed917881ac"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/token-format.ts",
@@ -5242,10 +5130,10 @@
         "../contract/adapter.ts",
         "../primitives",
         "./dockkit.module.css",
-        "react",
-        "react-dom"
+        "@/components/ui/popover",
+        "react"
       ],
-      "local_sha256": "322456b721eb48d911b5244c00c7a8c13b28bda6045154b9fe1c5d3559858f2d"
+      "local_sha256": "134a8854fbad99bd81b92acfbcf3b4dda26c14b6e15e7c32613324367e3ee441"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/TabPanel.tsx",
@@ -5305,7 +5193,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "102ed447057b3f04745c3de395a61de6bf45ec6e906607f5ac2057d95f246e14"
+      "local_sha256": "e874eadaad5e6c19bd692dd854382b4ec74b5e6a78c91c1b7cc5bd735a13534d"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/measure.ts",
@@ -6620,7 +6508,7 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/resources/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "a6eefe529af77062bf6ef3103957fa2827aaa814cdf8ce239fca0f46cb3485da",
+      "local_sha256": "3814745e3f54e4b8946a08b000b2e911765fadb40fb61fb57296fc55e3c0a71d",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Issue #499: wrap native connecting/catalog-hint provenance in the existing MCP list row; upstream baseline unchanged. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Centered editor with Harness setting-row spacing and persistent form actions.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
@@ -6737,13 +6625,12 @@
         "./subagent-state",
         "./token-format",
         "./workflow-state",
-        "@floating-ui/react-dom",
-        "react",
-        "react-dom"
+        "@/components/ui/popover",
+        "react"
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "5e926e6bb6b6eac6615cf4aa5e80a9c2c1ad8985053df085b173ae369c0f3003",
+      "local_sha256": "a707ac4be03fae9e4ff28a8d86010c498a54013378b8e790f0322417638c2e3f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
@@ -6762,7 +6649,7 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "dd62752be73dda0133874d3af9157ab7e446f96f34e5ed93f5e2316d9a7033e8",
+      "local_sha256": "f9cf2a42c27819d943a2ed886e7004035457f53605f7397f15a76979bbddaa0f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
@@ -6828,29 +6715,13 @@
       "classification": "B",
       "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
       "upstream_sha256": "85ed92693c910decadb38f095764bbdb3a1c6992b60bf63dedabdbebccd309b6",
-      "local_sha256": "47fee2806b4e29392f09ef00479ad01a1c24d4aead567d24efe8ed78ad4b0df2",
+      "local_sha256": "2458b46f10d0476dfb15584d35ae92890b1fe998c012f52039b8d328600d88d1",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./Toast.module.css",
-        "./icons",
-        "@floating-ui/react-dom",
+        "@/components/ui/toast",
         "react",
         "react-dom"
       ],
-      "excluded_dependencies": [
-        "Success tone and inline actions (unused by model-selection errors)"
-      ]
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/Toast.module.css",
-      "destination": "web-console/src/presentation/primitives/Toast.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "classification": "A",
-      "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
-      "upstream_sha256": "74cab625e372a6cdaff92fa468b7d59bc037212d738e476ea0f8d485e4f8dbcb",
-      "local_sha256": "54bf1fc5e0480eac991bdb5d6f8a4763a84e0698dc70f56bf1769f2e86f4058a",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
       "excluded_dependencies": [
         "Success tone and inline actions (unused by model-selection errors)"
       ]
@@ -7247,15 +7118,15 @@
       "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "./DialogSurface",
         "./ImageLightbox.module.css",
         "./icons/index.tsx",
-        "react",
-        "react-dom"
+        "react"
       ],
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "8a1a5ded2e1a562ba04372042dc91282c27dcdbab8ee2a421dfede73f5b5798d"
+      "local_sha256": "8a5dccf3157b6abe07e0cf5e050e3ea6bb1a3ba2c27be40e76722431665e89d4"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -7298,13 +7169,14 @@
         "../presentation/primitives/Button",
         "../presentation/primitives/Modal",
         "../presentation/workspace/WorkspaceBrowser.module.css",
+        "@/presentation/primitives/Input",
         "react"
       ],
       "excluded_dependencies": [
         "Cordis slots and injected Session mutation service",
         "Harness Host metadata persistence"
       ],
-      "local_sha256": "c316d3c5252f63d64f4151133539e68651787133f957d8cf16f5a2cbd0c73174"
+      "local_sha256": "d4f9136d780dfdbe8e2b8c430b4f38dc542a9d707eaff713405e6dcadce191f1"
     },
     {
       "upstream": "packages/api/session-controller/src/client/sessions/service.ts",
@@ -7331,7 +7203,7 @@
       "destination": "web-console/src/presentation/theme/reset.css",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "f7398e7730415592ab1e81cec36f8c5e23065becd06c050f0129a6fa44d247e8",
-      "local_sha256": "2d59990c632539b0592d59e8058ff6acbaff8ba9aa2d7aacf44f731eca0bdce8",
+      "local_sha256": "92159ea9b1e7009fd5d66234fa5cb51a8572eb78db5f2a321dce3ec0a3ae0b29",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "B",
       "treatment": "DSH focus paint sets color and width without forcing outline style, preserving each component's outline:none. rustX text editors default to no external outline; field/card borders remain component-owned. Existing layout/font reset is rustX-owned.",
@@ -7657,12 +7529,14 @@
         "../../../locale/react",
         "../../../locale/translation",
         "../../../presentation/primitives/Button",
+        "../../../presentation/primitives/Input",
         "../../../presentation/settings/SettingsContent.module.css",
         "../SettingsFeedback",
         "../forms/bridge",
         "../forms/fields",
         "../primitives/aria",
         "./ModelsPage.module.css",
+        "@/components/ui/checkbox",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -7691,7 +7565,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "82e61ff24b2341a0bd022dd8df022fd3aadb7737a05ba74f1c82b4fc6e379e8f"
+      "local_sha256": "e592dd5ede901175c24907b755149e99057c6668f0093d7e77d256614730583b"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",
@@ -7780,10 +7654,11 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./ShortcutKeys.module.css",
+        "@/components/ui/kbd",
         "clsx"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "8921fa2bf6aed4b2a9599cf5e98d8c3753db4aa7434a3a7582f4fc087939bd61"
+      "local_sha256": "01574b52b4f1d36938b96fb85f75ca78acdbe642e02e2bda7ccc60c0db1bbfcc"
     },
     {
       "upstream": "packages/client/ui-primitives/src/ShortcutKeys.module.css",
@@ -7941,17 +7816,16 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./PickerPopover.module.css",
-        "@floating-ui/react-dom",
+        "@/components/ui/popover",
         "clsx",
-        "react",
-        "react-dom"
+        "react"
       ],
       "excluded_dependencies": [
         "Harness Host and Peer services",
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "9140cec2350b94948c9569ee327784b613318019e59de60925cff85f537dbce7"
+      "local_sha256": "0f7d44630f4caf66c498de27a72d34806fe72077e7fcdfa6fa24911ef7f22c95"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7967,7 +7841,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "27b11b13f3fdfd95b619bdda8748cb79ebf477d9cc8b9cccd23169f64e70fee8"
+      "local_sha256": "5ef891e1ecf1a3de38e5753c28d24021f8656734ea0f15c95a38c149c02fe7d1"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8054,6 +7928,8 @@
         "./model",
         "./scheduler.module.css",
         "./timing",
+        "@/components/ui/textarea",
+        "@/presentation/primitives/Input",
         "react"
       ],
       "excluded_dependencies": [
@@ -8061,7 +7937,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "293dbd41f04995ba0c72a9e5df7337c4578d7c09968fe2839ad3ac4ad034bb81"
+      "local_sha256": "d7f774924e51d16fedc806aebc0717e5424c1eefa85bf256917b6a61fcf4f86a"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8073,6 +7949,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../presentation/primitives/Button",
+        "../../presentation/primitives/Input",
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/icons",
         "./CalendarIcon",
@@ -8083,16 +7960,16 @@
         "./cron",
         "./scheduler.module.css",
         "./timing",
+        "@/components/ui/autocomplete",
         "clsx",
-        "react",
-        "react-aria-components"
+        "react"
       ],
       "excluded_dependencies": [
         "Harness Host and Peer services",
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "53d6577aadc4ecffb8f2bf8ef95e58e4d702cf9f2c2ce0398fa8915e51545167"
+      "local_sha256": "7c28e65f61fe759f61fa830f7f45d10d92a1e45d0c77a9081090205b725c199f"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8393,12 +8270,13 @@
         "../../../locale/react",
         "../../../presentation/primitives/Button",
         "../../../presentation/primitives/Switch",
-        "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../presentation/settings/SettingsPageShell",
         "../../../workspaces/host",
         "../../settings/SettingsFeedback",
         "../../settings/SettingsScopeMenu",
         "../../settings/forms/bridge",
+        "../../settings/forms/guard",
         "../../settings/models/ModelsPage",
         "../../settings/primitives/aria",
         "../../settings/projection",
@@ -8406,6 +8284,9 @@
         "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
+        "@/components/ui/textarea",
+        "@/presentation/primitives/Input",
+        "clsx",
         "react"
       ],
       "excluded_dependencies": [
@@ -8447,7 +8328,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c7d0db12b1373cd5de72eefa93b2ec3acc848b6b071af92b9767832876d6b127"
+      "local_sha256": "f0e2f06f1b8ec792faa11bab0db7a9f0b2286a6b585f170f9acd9b3839ea924b"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -8501,7 +8382,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3e6808b81ff47fad6fb1a04e816f1b8574a01ea491c7fa973a62e6768c1bc92f"
+      "local_sha256": "e6c9392ad8108fba8bc57d2ae361225d0dbe2510fd754ca4b29f65331c5ea44b"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -8531,7 +8412,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "513c289fa9ebeac504b596c64d50a0b23ee58b68309719fecb6cf24f43a0848d"
+      "local_sha256": "2501cc8d5ab6221983730757259df1c8add36ccd684b58b2dbc2829e0d110041"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",

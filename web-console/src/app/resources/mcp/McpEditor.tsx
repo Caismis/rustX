@@ -1,51 +1,55 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
-import { DefinitionNotice, UnitOutcomeNotice, useUnitEditing } from '../../settings/forms/bridge';
+import { DefinitionNotice, UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
-import type { McpEditorDraft, McpFieldBuffers, McpFocus } from '../types';
+import type { McpFieldBuffers, McpFocus } from '../types';
 import { McpPermissionDetail } from '../shared/McpPermissionDetail';
 import { Advanced,ConfirmAction } from '../../settings/primitives/aria';
 import { McpFormFields } from './McpFormFields';
 import { formatMcpJson, parseMcpJson } from './json';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import css from './McpPage.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 interface EditorProps {
   source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus; scopeControl: ReactNode; close: () => void;
-  editorDraft?: McpEditorDraft; onEditorDraftChange: (draft?: McpEditorDraft) => void;
 }
 
 export function McpEditor(props: EditorProps) {
-  const { source, scope, revision, focus, close } = props;
+  const { source, scope, revision, focus } = props;
   const tx = useTranslation();
-  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></>;
+  if (focus.mode === 'permissions' && focus.name) return <McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/>;
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
-  if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
+  if (document.state !== 'structured') return <p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>;
   return <Editor {...props} document={document}/>;
 }
-function Editor({ source, scope, revision, focus, scopeControl, close, editorDraft, onEditorDraftChange, document }: EditorProps & {
+function Editor({ source, scope, revision, focus, scopeControl, close, document }: EditorProps & {
   document: Extract<ReturnType<typeof documentAuthoring<NonNullable<SourceSettings['user_mcp']['authored']>>>, {state:'structured'}>;
 }) {
   const tx = useTranslation();
-  const [name, setName] = useState(focus.name ?? editorDraft?.name ?? '');
-  const [mode, setMode] = useState<McpEditorDraft['mode']>(editorDraft?.mode ?? (focus.mode === 'json' ? 'json' : 'form'));
+  const page = usePageTransaction();
+  const setLocal = page?.setLocal;
+  const setFooterLeading = page?.setFooterLeading;
+  const [name, setName] = useState(focus.name ?? '');
+  const [mode, setMode] = useState<'form' | 'json'>(focus.mode === 'json' ? 'json' : 'form');
   const [error, setError] = useState('');
   const [imports, setImports] = useState<Record<string,McpWrite>>({});
-  const [pendingImport, setPendingImport] = useState(editorDraft?.pendingImport);
-  const [jsonEdit, setJsonEdit] = useState(editorDraft?.json);
+  const [pendingImport, setPendingImport] = useState<{ value: McpWrite; revision: string }>();
+  const [jsonEdit, setJsonEdit] = useState<{ text: string; pinned: boolean }>();
   const [formReset, setFormReset] = useState(0);
   const authored = Object.hasOwn(document.document, name) ? document.document[name] : undefined;
   const unit = useUnitEditing<McpWrite>({ draftKey: focus.name ? undefined : JSON.stringify(['create-mcp', name]),
     authored, revision: document.revision,
-    onSaved: () => { onEditorDraftChange(undefined); close(); },
+    onSaved: close,
     blank: {definition:{type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}, mutation: value => ({kind:'mcp',id:name,authored:value}) });
-  const pendingSave = useRef(false), card = useRef<HTMLFormElement>(null);
+  const card = useRef<HTMLFormElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
-  const [invalidFields, setInvalidFields] = useState<McpFieldBuffers>(editorDraft?.invalidFields ?? {});
+  const [invalidFields, setInvalidFields] = useState<McpFieldBuffers>({});
   const validity = useCallback((field: keyof McpFieldBuffers, invalidText?: string) => setInvalidFields(current => {
     if (current[field] === invalidText) return current;
     const next = { ...current };
@@ -83,10 +87,11 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   };
   const updateJson = (text: string) => {
     if (!unit.writable || duplicate) return;
-    // Even invalid text holds an intent at the unit's exact source revision.
-    // Pin the current value until this text can replace it as a typed draft.
+    // A raw buffer is page-local intent, like any other field edit: it marks
+    // the page dirty but holds no unit draft, so abandoning it can never
+    // resurrect it. `pinned` only records whether the buffer was opened over
+    // a clean definition — it picks the credential-retention base on import.
     const pinned = jsonEdit?.pinned ?? !unit.draft;
-    if (!jsonEdit && pinned) unit.edit(unit.displayed);
     setJsonEdit({ text, pinned });
     setImports({}); setError('');
   };
@@ -123,17 +128,14 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
       else { setImports(parsed); setError(''); }
     } catch (cause) { setError(String(cause)); }
   };
-  useEffect(() => {
+  // A layout effect so a synchronous page Save (flushSync through commitJson)
+  // sees the seeded draft under the renamed identity in the same commit.
+  useLayoutEffect(() => {
     if (pendingImport && !duplicate && unit.writable && !reviewNeeded) {
       unit.edit(pendingImport.value); setPendingImport(undefined);
     }
   }, [pendingImport, name, duplicate, unit.writable, reviewNeeded]);
-  useEffect(() => {
-    if (pendingSave.current && (!unit.writable || reviewNeeded)) pendingSave.current = false;
-    if (pendingSave.current && !pendingImport && complete && unit.draft && unit.admitted && unit.writable) {
-      pendingSave.current = false; unit.submit();
-    }
-  }, [pendingImport, complete, unit.draft, unit.admitted, unit.writable, reviewNeeded]);
+
   let jsonReady = false;
   const jsonDirty = json !== formatted || unit.draft && !jsonEdit?.pinned;
   if (mode === 'json' && jsonDirty) {
@@ -147,35 +149,65 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   }
   const blocked = unit.busy || unit.awaitingObservation;
   const canWrite = !blocked && unit.admitted && !reviewNeeded;
-  const canSave = canWrite && unit.writable && (mode === 'json' ? jsonReady : complete && validFields && unit.draft && !pendingImport);
-  const save = () => {
-    if (!canSave) return;
-    if (mode === 'json') { pendingSave.current = true; applyJson(); }
-    else unit.submit();
-  };
+  // The delete affordance belongs to the page footer's left slot, which
+  // whoever mounts the footer renders — the editor only publishes it. Confirming
+  // the modal submits the removal directly.
+  const submitRemovalRef = useRef<(() => void) | undefined>(undefined);
+  submitRemovalRef.current = canWrite ? () => unit.submit(true) : undefined;
+  const footerLeading = useMemo(() => focus.name && unit.authoredPresent
+    ? <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction
+        label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')}
+        title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})}
+        description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')}
+        confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite}
+        onConfirm={() => submitRemovalRef.current?.()}/></span>
+    : undefined, [focus.name, unit.authoredPresent, restoresInherited, removalLabel, identityTitle, canWrite, tx]);
+  useEffect(() => {
+    setFooterLeading?.(footerLeading);
+    return () => setFooterLeading?.(undefined);
+  }, [setFooterLeading, footerLeading]);
   const resetBuffers = () => {
-    pendingSave.current = false;
     setJsonEdit(undefined); setPendingImport(undefined); setImports({}); setError('');
     setInvalidFields({});
     setFormReset(current => current + 1);
   };
-  const discard = () => { resetBuffers(); unit.discard(); onEditorDraftChange(undefined); };
+  const discard = () => { resetBuffers(); unit.discard(); };
   const review = () => {
-    pendingSave.current = false;
     if (pendingImport) setPendingImport({ ...pendingImport, revision: document.revision });
     unit.review();
   };
-  const cancel = () => { discard(); close(); };
-  const back = () => {
-    const retain = jsonEdit || pendingImport || !validFields || !focus.name && (name || unit.intent);
-    onEditorDraftChange(retain ? { name, mode, json: jsonEdit, pendingImport, invalidFields: validFields ? undefined : invalidFields } : undefined);
-    close();
+  // The page transaction's Save runs this first: `false` vetoes while the
+  // buffers aren't saveable; a complete JSON buffer becomes the unit draft
+  // synchronously before the page walks registered units.
+  const commitJson = () => {
+    if (mode !== 'json') return complete && validFields;
+    if (json === formatted) return undefined;
+    // Synchronous so the import's rename + draft land before the page walks
+    // its registered units — a rejected JSON never reaches this line.
+    flushSync(() => applyJson());
+    return jsonReady;
   };
+  const localDirty = !!jsonEdit || !!pendingImport || Object.keys(invalidFields).length > 0
+    || (!focus.name && (!!name || !!unit.intent));
+  // setLocal's deps can't cover every value the veto reads, so it is invoked
+  // through a ref: the page's Save always judges the latest buffers.
+  const commitJsonRef = useRef(commitJson);
+  commitJsonRef.current = commitJson;
+  const discardRef = useRef(discard);
+  discardRef.current = discard;
+  useEffect(() => {
+    // Canceling a creation also leaves the detail: there is nothing left to
+    // discard to, and the list is where an aborted creation returns. The
+    // returned unregistration releases this editor's slot on unmount so a
+    // dead buffer cannot keep vetoing the page's Save.
+    return setLocal?.(localDirty, undefined,
+      () => { discardRef.current(); if (!focus.name) close(); },
+      () => commitJsonRef.current());
+  }, [setLocal, localDirty, focus.name]);
   return <>
-    <div className={css.back}><Button size="sm" variant="ghost" disabled={blocked} onClick={back}>{tx('settings:mcp.back')}</Button></div>
     <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
       <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
-    <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => {event.preventDefault();save();}}>
+    <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => event.preventDefault()}>
       <fieldset disabled={blocked} className={css.formBody}>
         <DefinitionNotice unit={unit}/>
         <div className={css.sectionHead}><h4>{tx('settings:mcp.connection')}</h4><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
@@ -187,7 +219,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
           {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} disabled={reviewNeeded} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
         </> : <fieldset className={css.formBody}>
           <McpFormFields key={formReset} value={value} change={unit.edit} invalidFields={invalidFields} validity={validity} disabled={duplicate || !unit.writable}
-            identity={<label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')}
+            identity={<label>{tx('settings:mcp.name')}<TextInput value={name} placeholder={tx('settings:mcp.name-placeholder')}
               disabled={!!focus.name || reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}/>
         </fieldset>}
         {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
@@ -195,18 +227,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
         <UnitOutcomeNotice title={identityTitle} outcome={unit.outcome}/>
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>
-      <div className={css.footer}>
-        {focus.name && unit.authoredPresent && <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite} onConfirm={() => {
-          if (!canWrite) return;
-          unit.submit(true);
-        }}/></span>}
-        <div className={css.footerButtons}>
-          {(unit.intent || pendingImport || jsonEdit || !validFields) && <Button size="sm" disabled={blocked} onClick={discard}>{tx('settings:bridge.discard-draft')}</Button>}
-          <Button size="sm" variant="outline" disabled={blocked} onClick={cancel}>{tx('settings:mcp.cancel')}</Button>
-          <Button size="sm" variant="primary" type="submit" aria-label={tx('settings:mcp.save')} aria-busy={blocked} disabled={!canSave}>{tx(blocked ? 'settings:catalog.saving' : 'settings:mcp.save')}</Button>
-        </div>
-      </div>
     </form>
-    {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
+    {focus.name && <Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail embedded source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
   </>;
 }

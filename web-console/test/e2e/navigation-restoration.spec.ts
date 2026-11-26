@@ -6,6 +6,7 @@ import { connectRemote, openConnectionSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { routeWorkspaceHost } from './workspace-host';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import { selectCossOption } from './coss-select';
 
 test('a real page reload restores the last selected Session on the same native authority', async ({ page }) => {
   const fixture = await startDogfood();
@@ -45,8 +46,8 @@ test('a real page reload restores the last selected Session on the same native a
     await page.reload();
     await expect.poll(async () => (await native!.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     await openConnectionSettings(page);
-    await expect(page.getByLabel('Connection mode', { exact: true })).toHaveValue('local');
-    await page.getByLabel('Connection mode', { exact: true }).selectOption('remote');
+    await expect(page.getByLabel('Connection mode', { exact: true })).toHaveAttribute('data-value', 'local');
+    await selectCossOption(page.getByLabel('Connection mode', { exact: true }), 'remote');
     await expect(page.getByLabel('Access token', { exact: true })).toHaveValue('');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');

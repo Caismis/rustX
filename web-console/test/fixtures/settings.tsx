@@ -9,6 +9,7 @@ import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
 import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v80';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -58,6 +59,14 @@ server.handlers.set('configuration/sourcesRead', () => {
   return { type: 'source_settings', projection:boundedSettings({ ...source, target: { kind: 'user' } }) };
 });
 if (variant.get('scenario') === 'loading') server.held.add('configuration/sourcesRead');
+// Scalar Settings units auto-commit: any User write advances the revision.
+// Scenario variants that shape the acknowledgement override this handler.
+let userRevision = 0;
+server.handlers.set('configuration/sourceWrite', request => {
+  if (request.method !== 'configuration/sourceWrite') throw new Error('Unexpected fixture method');
+  source.user.revision = `user-${++userRevision}`;
+  return { type: 'sources_written', revision: source.user.revision, configuration_revision: null };
+});
 // A User save meets an external edit of the same document: native refuses it
 // on the exact revision, and the draft and its base survive for review.
 if (variant.get('scenario') === 'conflict') server.handlers.set('configuration/sourceWrite', request => {
@@ -97,9 +106,13 @@ if (variant.get('conversation') === 'ready') {
     credentialSource: { type: 'environment', variable: 'KEY' },
   }] } };
 }
+// Workspace writes cross the Product Host boundary, not the User RPC socket;
+// the counter lets tests observe them.
+let workspaceWrites = 0;
+(window as unknown as { rustxWorkspaceWrites: () => number }).rustxWorkspaceWrites = () => workspaceWrites;
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
-  if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
+  if (operation.kind === 'write') { workspaceWrites++; return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } }; }
   if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:variant.get('scenario') === 'mcp-probe' && operation.id === 'broken' ? 'connection_failed' : 'reachable'}};
   return { kind: operation.kind, projection };

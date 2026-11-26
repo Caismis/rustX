@@ -3,6 +3,7 @@ import { modelEffortChoices, profileUnavailable, type ModelChoice, type ModelSel
 import { useTranslation } from '../../locale/react';
 import menuCss from '../commands/Commands.module.css';
 import css from './ModelPicker.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** `profile` is the configured (pinned) Profile, absent while following the
  * Model default; `effectiveProfile` is only what the invocation resolves to. */
@@ -57,7 +58,7 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
     if (rows.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setActive(rows[(index + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length].key); }
     if (event.key === 'Enter') { event.preventDefault(); if (rows[index]) void select(rows[index]); }
   }}>
-    <input autoFocus className={css.search} aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} value={query} onChange={event => { setQuery(event.target.value); setActive(undefined); }} role="combobox" aria-expanded="true" aria-controls="composer-models" aria-activedescendant={rows[index] ? `composer-model-${index}` : undefined}/>
+    <TextInput unstyled autoFocus className={css.search} aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} value={query} onChange={event => { setQuery(event.target.value); setActive(undefined); }} role="combobox" aria-expanded="true" aria-controls="composer-models" aria-activedescendant={rows[index] ? `composer-model-${index}` : undefined}/>
     <div id="composer-models" role="listbox" aria-label={tx('agent:model-select.model')} className={css.options}>
       {rows.map((row, i) => <Fragment key={row.key}>
         {(i === 0 || provider(row.intent.model) !== provider(rows[i - 1].intent.model)) && provider(row.intent.model) && <div className={menuCss.sectionTitle} role="presentation">{provider(row.intent.model)}</div>}

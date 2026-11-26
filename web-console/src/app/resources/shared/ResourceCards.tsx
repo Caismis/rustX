@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
-import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import catalog from '../../../presentation/catalog/Catalog.module.css';
+import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import css from './ResourceCatalog.module.css';
 
 export function ResourceGroup({ label, count, view, empty, children }: {
@@ -17,7 +17,7 @@ export function ResourceCard({ name, subtitle, label, icon, description, diagnos
   name: string; subtitle?: string; label?: string; icon: ReactNode; description: string; diagnostic?: string;
   onOpen: () => void; availability?: ReactNode; actions?: ReactNode; menu?: ReactNode;
 }) {
-  return <li aria-label={name} className={clsx(catalog.card, css.resourceCard, diagnostic && catalog.invalidCard)}>
+  return <li aria-label={name} className={clsx(catalog.card, catalog.fixedCard, css.resourceCard, diagnostic && catalog.invalidCard)}>
     <div className={clsx(catalog.cardHead, css.cardHeading)}>
       <button type="button" className={catalog.cardOpen} aria-label={label ?? name} onClick={onOpen}>
         <span className={catalog.fileTile}>{icon}</span>
@@ -26,8 +26,10 @@ export function ResourceCard({ name, subtitle, label, icon, description, diagnos
           {subtitle && <span className={catalog.cardId}>{subtitle}</span>}
         </span>
       </button>
-      {availability && <div className={catalog.enable}>{availability}</div>}
-      {menu}
+      {(availability || menu) && <div className={css.headControls}>
+        {availability && <div className={catalog.enable}>{availability}</div>}
+        {menu}
+      </div>}
     </div>
     {(diagnostic || description) && <p className={clsx(catalog.cardDescription, css.description, diagnostic && catalog.invalid)}>{diagnostic ?? description}</p>}
     {actions && <div className={css.cardActions}>{actions}</div>}

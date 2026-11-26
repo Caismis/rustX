@@ -9,6 +9,10 @@ import { wireProbe } from './wire-probe';
 import { METHOD_POLICY, type MethodName } from '../../../protocol/app-server/method-policy';
 
 test('native Workflow Agent child composes with Chat, Trace, reload and resource inventory', async ({ page }) => {
+  // The 16 MiB authored workflow must finish native attachment inside the
+  // session-open path; slower workers can sit on that hand-off for ~60s on top
+  // of the gated child turns, so this spec needs a wider budget than 120s.
+  test.setTimeout(180_000);
   const fixture = await startDogfood('web_workflow_observation'); let passed = false;
   const wire = await wireProbe(page);
   let session: string | undefined;

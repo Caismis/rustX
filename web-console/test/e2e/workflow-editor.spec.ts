@@ -13,6 +13,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { parse } from 'yaml';
 import { replaceJson, schemaJson, structuredDialog } from './workflow-schema-actions';
 import { COLLIDING_FIELDS } from '../workflow-colliding-document';
+import { selectCossOption } from './coss-select';
 
 const examples = fileURLToPath(new URL('../../../examples/local-runtime/', import.meta.url));
 const example = (path: string) => readFileSync(resolve(examples, path));
@@ -275,6 +276,8 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
     await editor(page).getByLabel('Workflow Start', { exact: true }).focus(); await editor(page).getByLabel('Workflow Start', { exact: true }).press('Enter');
     await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Add parallel node');
+    // Park the cursor: a hover left over the bare description field paints it.
+    await page.mouse.move(0, 0);
     await expectStableScreenshot(page.locator('[data-workflows-level="editor"]'), 'workflow-editor.png');
     await accessible(page, '[data-workflows-level="editor"] header');
     await accessible(page, '[aria-label="Inspector"]');
@@ -329,7 +332,8 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     // the full editor rather than being projected as binary equality to true.
     const predicates = page.getByRole('complementary', { name: 'Inspector' }).getByRole('combobox', { name: 'Predicate', exact: true });
     await expect(predicates).toHaveCount(2);
-    for (const predicate of await predicates.all()) await expect(predicate).toHaveValue('boolean');
+    for (const predicate of await predicates.all()) await expect(predicate).toContainText(/boolean/i);
+    await page.mouse.move(0, 0);
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
   } finally { await stopDogfoodPage(page, fixture, false); }
 });
@@ -542,9 +546,9 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await connectNext('done');
     await inspector.getByRole('button', { name: 'Model parameters', exact: true }).click();
     const parameters = page.getByRole('dialog', { name: 'Model parameters' });
-    await parameters.getByLabel('Model policy').selectOption('explicit');
-    await parameters.getByLabel('Model', { exact: true }).selectOption('fixture/integration-model');
-    await parameters.getByLabel('Model Profile').selectOption('low');
+    await selectCossOption(parameters.getByLabel('Model policy'), 'explicit');
+    await selectCossOption(parameters.getByLabel('Model', { exact: true }), 'fixture/integration-model');
+    await selectCossOption(parameters.getByLabel('Model Profile'), 'low');
     await showAdvanced(parameters);
     await parameters.getByLabel('Maximum output tokens').fill('512');
     await parameters.getByLabel('Request parameters').fill('{"temperature":0.25}');
@@ -560,7 +564,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await reopen();
     await expect(inspector.getByRole('button', { name: 'Model parameters', exact: true })).toContainText('fixture/integration-model');
     await inspector.getByRole('button', { name: 'Model parameters', exact: true }).click();
-    await expect(parameters.getByLabel('Model Profile')).toHaveValue('low');
+    await expect(parameters.getByLabel('Model Profile')).toContainText(/low/i);
     await showAdvanced(parameters);
     await expect(parameters.getByLabel('Maximum output tokens')).toHaveValue('512');
     await expect(parameters.getByText('Loading registered choices…', { exact: true })).toHaveCount(0);
@@ -597,7 +601,9 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await accessible(page, '[data-workflows-level="editor"]');
     await page.screenshot({ path: '/tmp/rustx-model-editor-json-schema.png', fullPage: false, animations: 'disabled' });
     await page.setViewportSize({ width: 900, height: 900 });
-    await expect(structured).toBeVisible();
+    // A modal schema editor inerts the inspector behind it by design; the
+    // narrow-layout probe is the dialog still fitting the viewport.
+    await expect(schemaDialog).toBeVisible();
     await openSchema();
     await expect(schemaDialog.getByRole('textbox', { name: 'JSON', exact: true })).toBeVisible();
     await page.screenshot({ path: '/tmp/rustx-model-editor-narrow.png', fullPage: false, animations: 'disabled' });

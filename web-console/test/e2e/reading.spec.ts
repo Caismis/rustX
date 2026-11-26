@@ -146,8 +146,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(rail.locator('[data-turn-ordinal="1"]')).toHaveCount(0);
     await expect(rail.locator('[data-turn-id]').first()).toBeVisible(); // latest native page 257..300
     await newest.hover();
-    await expect(rail.getByRole('tooltip')).toContainText('Reading 299');
-    await expect(rail.getByRole('tooltip')).toContainText('Native reading answer 299');
+    await expect(page.getByRole('tooltip')).toContainText('Reading 299');
+    await expect(page.getByRole('tooltip')).toContainText('Native reading answer 299');
     // A rejected history read fails visibly and stays recoverable.
     await railScroll(1900);
     const errorMark=rail.locator('[data-turn-ordinal="200"]');
@@ -161,12 +161,12 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await railScroll(0);
     const mark = rail.locator('[data-turn-ordinal="1"]');
     await expect(mark).toHaveAccessibleName('Load and jump to turn 1');
-    await mark.focus(); await expect(rail.getByRole('tooltip')).toContainText('Turn 1');
+    await mark.focus(); await expect(page.getByRole('tooltip')).toContainText('Turn 1');
     await page.evaluate(() => { (window as any).readingTransport.gate = true; });
     await page.keyboard.press('Enter'); await expect(mark).toHaveAttribute('aria-busy', 'true');
     await expect.poll(() => page.evaluate(() => (window as any).readingTransport.held.length)).toBe(1);
     await expect(mark).toHaveAccessibleName('Jump to turn 1');
-    await expect(rail.getByRole('tooltip')).toContainText('Reading 0');
+    await expect(page.getByRole('tooltip')).toContainText('Reading 0');
     await page.evaluate(() => { const s=(window as any).readingTransport; s.gate=false; s.held.shift()(); });
     await expect(mark).toHaveAttribute('aria-current', 'true');
     // The first loaded Turn opens on its own row; its prompt is on an earlier page.

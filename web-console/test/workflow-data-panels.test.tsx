@@ -188,11 +188,9 @@ it('uses typed list operators, extraction, limit bounds and radio sorting', asyn
   });
   fireEvent.click(view.panel.getByRole('switch', { name: 'Filter' }));
   const operator = view.panel.getByRole('combobox', { name: 'Operator' });
-  expect(
-    within(operator)
-      .getAllByRole('option')
-      .map((option) => option.getAttribute('value')),
-  ).toEqual(['equal', 'not_equal', 'greater', 'greater_equal', 'less', 'less_equal']);
+  fireEvent.click(operator);
+  expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['=', '≠', '>', '≥', '<', '≤']);
+  fireEvent.keyDown(document.activeElement ?? operator, { key: 'Escape' });
   expect(view.panel.queryByRole('combobox', { name: 'Value type' })).toBeNull();
   fireEvent.click(view.panel.getByRole('switch', { name: 'Extract by serial number' }));
   expect(view.document().block.nodes.list).toMatchObject({ extract: { type: 'literal', value: 1 } });

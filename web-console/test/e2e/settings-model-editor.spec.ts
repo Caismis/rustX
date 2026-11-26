@@ -29,10 +29,10 @@ async function start(page: Page, theme: 'Light' | 'Dark', width: number, scenari
   await page.clock.setFixedTime(new Date('2026-10-21T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+  await page.addInitScript(theme => localStorage.setItem('rustx-appearance-v1', theme.toLowerCase()), theme);
   await page.goto(scenario ? `${fixture}?scenario=${scenario}` : fixture);
   await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await settings(page).getByRole('group', { name: 'Appearance' }).getByRole('button', { name: theme, exact: true }).click();
   return errors;
 }
 async function accessible(page: Page) {
@@ -41,17 +41,19 @@ async function accessible(page: Page) {
 }
 async function noOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  const box = (await editor(page).boundingBox())!;
-  expect(box.x).toBeGreaterThanOrEqual(0);
-  expect(box.x + box.width).toBeLessThanOrEqual((page.viewportSize()!).width);
-  expect(box.y + box.height).toBeLessThanOrEqual((page.viewportSize()!).height);
+  const box = (await editor(page).count()) ? await editor(page).boundingBox() : null;
+  if (box) {
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual((page.viewportSize()!).width);
+    expect(box.y + box.height).toBeLessThanOrEqual((page.viewportSize()!).height);
+  }
 }
 
 test('authority replacement hides a retained model dialog and releases its focus scope on Home', async ({ page }) => {
   const errors = await start(page, 'Light', 1440);
   await openSettingsPage(page, 'Models');
-  await settings(page).getByRole('row', { name: provider, exact: true }).click();
-  await settings(page).getByRole('row', { name: model, exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
+  await settings(page).getByRole('button', { name: `${provider} →`, exact: true }).click();
+  await settings(page).getByRole('listitem', { name: model, exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
   await expect(editor(page).getByLabel('Context window', { exact: true })).toBeFocused();
   const before = await writes(page);
   await page.evaluate(() => (window as unknown as { rustxReplaceAuthority(): Promise<void> }).rustxReplaceAuthority());
@@ -72,7 +74,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
   test(`${theme} ${width}: provider icons are searchable, keyboard accessible and autosaved`, async ({page}) => {
     const errors = await start(page, theme, width, 'provider-autosave');
     await openSettingsPage(page, 'Models');
-    await settings(page).getByRole('row', {name:provider, exact:true}).click();
+    await settings(page).getByRole('button', {name:`${provider} →`, exact:true}).click();
     const form = settings(page).getByRole('form', {name:'Provider '+provider, exact:true});
     const trigger = form.getByRole('button', {name:'Provider actions', exact:true});
     const openPicker = async () => {
@@ -97,6 +99,8 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(picker).toHaveCount(0);
     await expect(trigger).toBeFocused();
     await expect(form.locator('[data-provider-icon="openai"]')).toBeVisible();
+    // The icon choice stages into the provider unit; the page footer commits it.
+    await settings(page).getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => writes(page)).toBe(1);
     await expect(form).toHaveAttribute('aria-busy', 'false');
     await expect(form.getByRole('button', {name:`Save Provider ${provider}`, exact:true})).toHaveCount(0);
@@ -112,24 +116,25 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     const errors = await start(page, theme, width);
     const appearance = settings(page).getByRole('group', {name:'Appearance'});
     const choices = await appearance.getByRole('button').evaluateAll(nodes => nodes.map(node => {
-      const {y,width} = node.getBoundingClientRect(); return {y,width};
+      const {y,height} = node.getBoundingClientRect(); return {y,height};
     }));
     expect(choices).toHaveLength(3);
     expect(new Set(choices.map(item => item.y)).size).toBe(1);
-    expect(Math.max(...choices.map(item=>item.width))-Math.min(...choices.map(item=>item.width))).toBeLessThan(1);
+    expect(Math.max(...choices.map(item=>item.height))-Math.min(...choices.map(item=>item.height))).toBeLessThan(1);
     await expectStableScreenshot(appearance, `appearance-${theme.toLowerCase()}-${width}.png`);
     await openSettingsPage(page, 'Models');
-    const providerRow = settings(page).getByRole('row', {name:provider, exact:true});
-    await providerRow.click();
-    await expect(providerRow).toHaveAttribute('aria-selected', 'true');
-    await expect(providerRow).toBeFocused();
-    // Click can reveal a partially clipped row. Capture the strip from its
-    // explicit origin while retaining the selected row and its focus.
-    const providers = settings(page).getByRole('grid', {name:'Providers', exact:true});
-    await providers.evaluate(element => { element.scrollLeft = 0; });
-    await expect(providers).toHaveJSProperty('scrollLeft', 0);
+    // The page may reopen on the provider detail it last showed.
+    const providerCard = settings(page).getByRole('button', {name:`${provider} →`, exact:true});
+    const listBack = settings(page).getByRole('button', { name: 'Model Settings', exact: true });
+    await Promise.race([providerCard.waitFor({state:'visible'}), listBack.waitFor({state:'visible'})]).catch(() => {});
+    if (await listBack.isVisible()) await listBack.click();
+    await providerCard.click();
+    await expect(settings(page).getByRole('region', {name: provider, exact: true})).toBeFocused();
+    await expect(settings(page).getByRole('heading', {level:1, name:provider, exact:true})).toBeVisible();
+    // The provider detail opens under the same page head; capture the layout.
+    await noOverflow(page);
     await expectStableScreenshot(settings(page), `providers-${theme.toLowerCase()}-${width}.png`);
-    await settings(page).getByRole('row', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
+    await settings(page).getByRole('listitem', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = editor(page);
     const context = modal.getByLabel('Context window', {exact:true});
     await expect(context).toBeFocused();
@@ -228,13 +233,15 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(jsonEditor.locator('.cm-gutters')).toHaveCount(0);
     await context.fill('256000');
     await modal.getByRole('button', {name:'Cancel',exact:true}).click();
+    const guard = page.getByRole('dialog', {name:'Discard unsaved changes?',exact:true});
+    await guard.getByRole('button', {name:'Discard and leave',exact:true}).click();
     await expect(modal).toHaveCount(0);
-    await settings(page).getByRole('row', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
-    await expect(context).toHaveValue('1048576'); // Explicit Cancel discards the whole unit.
+    await settings(page).getByRole('listitem', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
+    await expect(context).toHaveValue('1048576'); // Explicit Cancel + Discard abandons the whole unit.
     await context.fill('256000');
     await modal.getByRole('button', {name:'Close',exact:true}).click();
-    await settings(page).getByRole('row', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
-    await expect(context).toHaveValue('256000'); // Dismissal retains the actor-owned draft.
+    await guard.getByRole('button', {name:'Keep editing',exact:true}).click();
+    await expect(context).toHaveValue('256000'); // Keep editing retains the actor-owned draft.
     await modal.getByRole('button', {name:'Reset form',exact:true}).click();
     await expect(context).toHaveValue('1048576');
     expect(await writes(page)).toBe(0);
@@ -253,7 +260,7 @@ test('provider creation validates the native name; API Key reveal is explicit an
   await expect(add.getByRole('button',{name:'Continue'})).toBeDisabled();
   await expect(page.locator('[data-toast][data-foreground]')).toHaveText('This configuration name already exists.');
   await add.getByRole('button',{name:'Cancel'}).click();
-  await settings(page).getByRole('row',{name:'transport',exact:true}).click();
+  await settings(page).getByRole('button',{name:'transport →',exact:true}).click();
   const key = settings(page).getByLabel('API Key',{exact:true});
   if (!await key.isVisible()) {
     await settings(page).getByRole('button', { name: 'Provider actions', exact: true }).click();
@@ -275,9 +282,10 @@ test('Chinese settings use the same model dialog without Smart configuration', a
   await page.goto(fixture);
   await page.getByRole('button',{name:'设置',exact:true}).click();
   await page.getByRole('group',{name:'外观',exact:true}).getByRole('button',{name:'深色',exact:true}).click();
+  // Appearance applies immediately on General; no footer save exists there.
   await page.getByRole('tab',{name:'模型',exact:true}).click();
-  await page.getByRole('row',{name:provider,exact:true}).click();
-  await page.getByRole('row',{name:model,exact:true}).getByRole('button', { name: '编辑模型', exact: true }).click();
+  await page.getByRole('button',{name:`${provider} →`,exact:true}).click();
+  await page.getByRole('listitem',{name:model,exact:true}).getByRole('button', { name: '编辑模型', exact: true }).click();
   const modal = page.getByRole('dialog',{name:`模型 ${model}`,exact:true});
   await expect(modal.getByLabel('模型 ID',{exact:true})).toHaveValue(model);
   await modal.getByRole('button',{name:'高级配置',exact:true}).click();

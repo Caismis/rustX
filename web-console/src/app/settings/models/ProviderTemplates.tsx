@@ -9,6 +9,7 @@ import { useUnitEditing } from '../forms/bridge';
 import { ProviderIcon } from './ProviderIcon';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 interface ProviderTemplate {
   name: string;
@@ -56,7 +57,7 @@ export function ProviderNameDialog({ exists, revision, onCreate, onClose }: {
           onClick={() => { setTemplate(item); setIdentity(item.name); }}><ProviderIcon icon={item.icon} size={14}/>{item.name}</Button>)}
       </div>
       <label>{tx('settings:models-page.new-provider-identity')}
-        <input ref={input} required value={identity} aria-invalid={duplicate || invalid || undefined} onChange={event => setIdentity(event.target.value)} />
+        <TextInput ref={input} required value={identity} aria-invalid={duplicate || invalid || undefined} onChange={event => setIdentity(event.target.value)} />
       </label>
       <SettingsNotice text={duplicate ? tx('settings:models.duplicate') : invalid ? tx('settings:models.invalid-provider-name') : undefined}/>
       <div className={cards.nameActions}><Button onClick={onClose}>{tx('settings:aria.cancel')}</Button><Button type="submit" variant="primary" disabled={!name || duplicate || invalid}>{tx('settings:models.continue')}</Button></div>

@@ -8,8 +8,10 @@
 .settings header { justify-content: space-between; }
 .actions { margin-top: 12px; }
 .hint, .settings dt { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
-.card { border: .5px solid var(--dsw-alias-border-l4); border-radius: 16px; padding: 12px 14px; min-width: 0; overflow-wrap: anywhere; }
+.card { border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg); background: var(--settings-card-bg, var(--dsw-alias-bg-layer-1)); padding: 14px 16px; min-width: 0; overflow-wrap: anywhere; transition: border-color 0.14s ease, background-color 0.14s ease; }
 .rowHead > strong { font-size: 14px; font-weight: 500; flex: 1; }
+/* Long identity labels truncate instead of pushing the row past the panel. */
+.rowHead > strong, .rowHead > button { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { display: inline-flex; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l3); border-radius: 4px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
 /* A toned badge keeps full-contrast text: the word carries the meaning, and the
    state color is a border and a leading marker, never the text itself. */
@@ -21,15 +23,25 @@
 .badge[data-tone=success]::before { background: var(--dsw-alias-state-success-primary); }
 .unit { margin: 14px 0; border-radius: 12px; background: var(--dsw-alias-bg-module-platform); padding: 14px 16px; }
 .unit > fieldset, .editor { border: 0; margin: 0; padding: 0; min-width: 0; }
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .unit fieldset.fields { border: 0; margin: 0; padding: 0; min-width: 0; }
 .unit legend { font-size: 14px; font-weight: 500; margin-bottom: 8px; }
 .unit fieldset fieldset { min-width: 0; margin: 14px 0; padding: 12px; border: .5px solid var(--dsw-alias-border-l2); border-radius: 8px; }
 .settings label { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
 .settings label:has(> input[type=checkbox]) { flex-direction: row; align-items: center; gap: 10px; }
-.settings input:not([type=checkbox]), .settings select, .settings textarea { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 12px; border: .5px solid var(--dsw-alias-border-l4); border-radius: 8px; background: var(--dsw-alias-bg-layer-3); font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); }
-.settings textarea { min-height: 112px; padding: 10px 12px; resize: vertical; }
+.settings input:not([type=checkbox]):not([data-primitive-input]):not([data-slot="input"]), .settings select, .settings textarea:not([data-slot="textarea"]) { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md, 10px); background: var(--settings-input-bg, var(--dsw-alias-bg-layer-1)); font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); transition: border-color 0.14s ease, box-shadow 0.14s ease; }
+.settings textarea:not([data-slot="textarea"]) { min-height: 112px; height: auto; padding: 10px 12px; resize: vertical; }
 .settings input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--dsw-alias-state-business-primary); }
-.settings :is(input:not([type=checkbox]), textarea) { outline: none; }
+.settings :is(input:not([type=checkbox]):not([data-primitive-input]):not([data-slot="input"]), textarea:not([data-slot="textarea"])):hover:not(:focus) { border-color: var(--dsw-alias-border-l4); }
+.settings :is(input:not([type=checkbox]):not([data-primitive-input]):not([data-slot="input"]), textarea:not([data-slot="textarea"])):focus-visible { outline: none; border-color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent); }
 .settings :is(input[type=checkbox], select, button, summary):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 /* Buttons retain their primitive's disabled appearance regardless of module
  * import order. Settings owns the opacity of its remaining form controls. */
@@ -42,7 +54,7 @@
 .settings pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font-size: 12px; }
 .settings table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .settings th, .settings td { text-align: left; padding: 8px; border-bottom: .5px solid var(--dsw-alias-border-l2); overflow-wrap: anywhere; }
-.settings footer { border-top: .5px solid var(--dsw-alias-border-l2); margin-top: 20px; }
+.settings footer:not([data-settings-footer]) { border-top: .5px solid var(--dsw-alias-border-l2); margin-top: 20px; }
 /* A native error: full-contrast text on an error-tinted fill, marked by an
    error-colored edge, so the message stays readable in both themes. */
 .error { color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); border-left: 3px solid var(--dsw-alias-state-error-primary); padding: 10px 12px; border-radius: 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -70,7 +82,6 @@
 
 .page { gap: 16px; }
 .page p { margin: 0; overflow-wrap: anywhere; }
-.page section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 /* Page title and description. */
 .page h3 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; overflow-wrap: anywhere; }
 .page h3 + p { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
@@ -80,28 +91,22 @@
 .page h5 { margin: 8px 0 0; font-size: 13px; font-weight: 500; }
 .page ul { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
 
-/* Setting row card: one native semantic unit — its title, its native facts,
-   its fields and its actions. A restrained outline over the module fill;
-   groups nested inside it are separated by hairlines, never by more cards. */
+/* Setting row: one native semantic unit — its title, its native facts and
+   its fields. Flat DSH rows separated by a hairline, never cards; the only
+   actions live in the shared page footer. */
 .page .unit {
-  margin: 0; min-height: 56px; box-sizing: border-box; padding: 12px 16px;
-  border: .5px solid var(--dsw-alias-border-l2); border-radius: 16px;
-  background: var(--dsw-alias-bg-module-platform);
+  margin: 0; min-height: 56px; box-sizing: border-box; padding: 14px 16px;
+  border: 0; border-bottom: 1px solid var(--dsw-alias-border-l3); border-radius: 0;
+  background: transparent;
 }
+.page .unit:last-child { border-bottom: 0; }
 .page .unit legend { margin: 0 0 4px; padding: 0; font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
-.page .unit fieldset fieldset { margin: 12px 0 0; padding: 12px 0 0; border: 0; border-top: .5px solid var(--dsw-alias-border-l2); border-radius: 0; }
+.page .unit fieldset fieldset { margin: 8px 0 0; padding: 0; border: 0; border-radius: 0; }
 .page .unit fieldset fieldset legend { font-size: 13px; }
 /* The unit's own field wrapper is not a nested group: no hairline, no inset. */
 .page .unit fieldset.fields { margin: 4px 0 0; padding: 0; border-top: 0; }
 .page .unit .actions { margin-top: 12px; }
-/* A card with a draft keeps its Save / Discard row in reach while its fields
-   scroll past: the row sticks to the bottom of the one scrolling pane for as
-   long as the card itself is on screen, and never outlives it. */
-.page .unit[data-draft] .actions {
-  position: sticky; bottom: -1px; z-index: 1; margin: 12px -16px -12px; padding: 12px 16px;
-  border-top: .5px solid var(--dsw-alias-border-l2); border-radius: 0 0 16px 16px;
-  background: var(--dsw-alias-bg-module-platform);
-}
+.page .unit .actions:empty { display: none; }
 .page label { padding: 8px 0; }
 /* Secondary text in the Settings pages sits on the card fill as often as on the
    panel, so it takes the secondary label color, which keeps WCAG AA contrast
@@ -119,8 +124,6 @@
 @container settings (max-width: 680px) {
   .page .grid, .page dl { grid-template-columns: minmax(0, 1fr); }
   .page .actions { align-items: stretch; }
-  .page .unit { padding: 12px; }
-  .page .unit[data-draft] .actions { margin-inline: -12px; padding-inline: 12px; margin-bottom: -12px; }
   .page th, .page td { padding: 4px; }
   .context { align-items: flex-start; flex-wrap: wrap; }
 }
@@ -141,8 +144,55 @@
 .settings .unitResource { background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0 0 20px; }
 .unitResource > fieldset > legend { display: none; }
 .unitResource p { font-size: 12px; }
-.unitResource input:not([type=checkbox]) { min-height: 40px; background: transparent; }
+.unitResource input:not([type=checkbox]):not([data-primitive-input]) { min-height: 40px; background: transparent; }
 .unitResource button[aria-haspopup=listbox] { background: transparent; }
 .settings .unit.unitResource .actions { position: static; justify-content: flex-end; margin: 12px 0 0; padding: 0; background: none; box-shadow: none; gap: 6px; }
 .unitResource .actions button { font-size: 12px; border-radius: 8px; }
 .unitDialog .actions > button[type=submit] { margin-left: 0; }
+
+/* The Settings surface and its per-page frame: each page renders the shared
+   960px shell (pageHead / scrolling pageBody / fixed pageFooter). */
+.surface {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editorFrame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editorFrame > fieldset {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.surfaceNotices {
+  flex: none;
+  padding: 8px clamp(24px, 4vw, 48px);
+}
+
+.surfaceNotices:empty {
+  display: none;
+}
+
+.surfaceNotices > * {
+  max-width: 960px;
+  margin: 0 auto;
+}

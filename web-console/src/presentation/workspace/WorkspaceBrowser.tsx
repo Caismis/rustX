@@ -8,6 +8,7 @@ import { Tooltip } from '../primitives/Tooltip';
 import { ProjectRowItem, SessionNodeItem, SearchResultItem, DraftConversationRow } from './Rows';
 import type { DraftConversation, GroupNode, SessionNode } from './types';
 import css from './WorkspaceBrowser.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
 export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected, draft, query, search, open, rename, fork, remove, pin, copyId, closeView, closeAllViews,
@@ -17,7 +18,7 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
   renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
   workspaceSettings?: (id: string, label: string) => void;
   groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
-  query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string) => void;
+  query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string, returnFocus?: HTMLElement | null) => void;
   closeView?: (id: string) => void;
   pin?: (id: string) => void; copyId?: (id: string) => void;
   closeAllViews?: () => void;
@@ -45,7 +46,7 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
       {<span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? tx('workspace:workspace-browser.sessions') : tx('workspace:workspace-browser.workspaces')}</span>}
       {<div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}><div className={clsx(css.search, searchExpanded && css.searchExpanded)} onClick={() => { setSearchExpanded(true); searchInput.current?.focus(); }}>
         <button type="button" className={css.searchButton} aria-label={tx('workspace:workspace-browser.search-sessions')} aria-expanded={searchExpanded} onClick={() => setSearchExpanded(true)}><IconSearchOutline16 size={searchExpanded ? 11 : 14} /></button>
-        <input ref={searchInput} className={css.searchInput} aria-label={tx('workspace:workspace-browser.search-session-metadata')} placeholder={tx('workspace:workspace-browser.search-sessions-2')} maxLength={256} value={query} tabIndex={searchExpanded ? 0 : -1} onChange={e => search(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { search(''); setSearchExpanded(false); } }} />
+        <TextInput unstyled ref={searchInput} className={css.searchInput} aria-label={tx('workspace:workspace-browser.search-session-metadata')} placeholder={tx('workspace:workspace-browser.search-sessions-2')} maxLength={256} value={query} tabIndex={searchExpanded ? 0 : -1} onChange={e => search(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { search(''); setSearchExpanded(false); } }} />
         {searchExpanded && <button type="button" className={css.clearButton} aria-label={tx('workspace:workspace-browser.clear-search')} onClick={e => { e.stopPropagation(); search(''); setSearchExpanded(false); }}><IconCloseFill14 /></button>}
       </div></div>}
       <div className={clsx(css.headerActions, searchExpanded && css.headerActionsHidden)}>

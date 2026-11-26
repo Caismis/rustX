@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { choose, connectRemote, openEmptySession, openSettingsPage, settledSave } from './shell-actions';
+import { choose, connectRemote, leaveRetainedDetail, openEmptySession, openSettingsPage, settledSave, settledSetting } from './shell-actions';
 import { captureEvidence } from './screenshot';
 import { wireProbe } from './wire-probe';
 
@@ -17,14 +17,17 @@ test('new sessions receive independently configured title and compaction models'
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openSettingsPage(page, 'Models');
-    await page.getByRole('button', {name:'Default model for new Sessions', exact:true}).click();
-    const defaults = page.getByRole('form', {name:'Default model', exact:true});
+    const settingsPage = page.getByRole('region', {name:'Settings', exact:true});
+    // A previously focused provider detail is retained; step back to the list.
+    const backToList = settingsPage.getByRole('button', {name:'Model Settings', exact:true});
+    await leaveRetainedDetail(backToList, settingsPage.getByRole('form', {name:'Default model', exact:true}));
+    const defaults = settingsPage.getByRole('form', {name:'Default model', exact:true});
     const auxiliary = defaults.getByRole('button', {name:'Auxiliary models', exact:true});
     await expect(auxiliary).toHaveAttribute('aria-expanded', 'false');
     await auxiliary.click();
     await choose(defaults, 'Auxiliary model', 'fixture/second-model');
-    await defaults.getByRole('button', {name:'Save Default model', exact:true}).click();
-    await expect(settledSave(defaults, 'Default model')).toBeVisible();
+    // Scalar units commit on change; settling the form means the write landed.
+    await settledSetting(defaults);
     const session = await openEmptySession(page, fixture, 'Workspace A');
     native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
     const { settings } = await native.readSettings(session);
@@ -65,8 +68,10 @@ request_params = '{}'
     await page.getByRole('button', {name:'Settings',exact:true}).click();
     await openSettingsPage(page, 'Models');
     const settings = page.getByRole('region', {name:'Settings',exact:true});
-    await settings.getByRole('row', {name:'OpenAI',exact:true}).click();
-    await settings.getByRole('row', {name:'OpenAI/gpt-6-luna',exact:true}).click();
+    const backToList = settings.getByRole('button', {name:'Model Settings', exact:true});
+    await leaveRetainedDetail(backToList, settings.getByRole('button', {name:'OpenAI →',exact:true}));
+    await settings.getByRole('button', {name:'OpenAI →',exact:true}).click();
+    await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = page.getByRole('dialog', {name:'Model OpenAI/gpt-6-luna',exact:true});
     await modal.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     const params = modal.getByRole('textbox', {name:'API parameters (JSON)',exact:true});
@@ -86,7 +91,7 @@ request_params = '{}'
     expect(readFileSync(fixture.settings, 'utf8')).toContain('"reasoning":{"effort":"low"}');
     await captureEvidence(modal, `responses-profile-${width}`);
     await modal.getByRole('button', {name:'Cancel',exact:true}).click();
-    await settings.getByRole('row', {name:'OpenAI/gpt-6-luna',exact:true}).click();
+    await settings.getByRole('listitem', {name:'OpenAI/gpt-6-luna',exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     await modal.getByRole('button', {name:'Advanced configuration',exact:true}).click();
     await expect(limit).toHaveValue('2048');
     await expect(params).toHaveText(JSON.stringify(low,null,2), {useInnerText:true});
@@ -143,7 +148,9 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await provider.getByRole('button', { name: 'Show', exact: true }).click();
     await expect(key).toHaveAttribute('type', 'text');
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeDisabled();
-    await provider.getByLabel('Base URL', { exact: true }).focus();
+    // The typed key is a staged draft until the page footer's Save commits
+    // it; once committed the native 'retain' value clears the field.
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(key).toHaveValue('');
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeEnabled();
     await expect(settings.getByRole('alert')).toHaveCount(0);
@@ -151,12 +158,12 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     await expect(settings.getByRole('alert')).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('icon = "deepseek"');
-    await expect(settings.getByRole('row', { name: 'custom', exact: true }).locator('[data-provider-icon="deepseek"] img')).toHaveJSProperty('complete', true);
+    await expect(provider.locator('[data-provider-icon="deepseek"] img')).toHaveJSProperty('complete', true);
     await captureEvidence(settings, `provider-only-${width}`);
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
     const model = page.getByRole('dialog', { name: 'Add Model', exact: true });
-    await expect(model.getByRole('button', { name: /API format$/ })).toHaveCount(0);
+    await expect(model.getByRole('combobox', { name: 'API format', exact: true })).toHaveCount(0);
     await model.getByLabel('Model ID', { exact: true }).fill('first-model');
     await expect(model.getByLabel('Model ID', { exact: true })).toBeFocused();
     await model.getByLabel('Context window', { exact: true }).fill('1000');
@@ -168,14 +175,15 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await captureEvidence(model, `add-model-${width}`);
     await model.getByRole('button', { name: 'Save Add Model', exact: true }).click();
     await expect(model).toHaveCount(0);
-    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toBeVisible();
+    await expect(settings.getByRole('listitem', { name: 'custom/first-model', exact: true })).toBeVisible();
     await expect(settings.getByRole('alert')).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('first-model');
     expect(readFileSync(fixture.settings, 'utf8').split('[models.')[1]).not.toContain('protocol =');
-    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).not.toContainText('openai_responses');
+    await expect(settings.getByRole('listitem', { name: 'custom/first-model', exact: true })).not.toContainText('openai_responses');
     await choose(provider, 'API format', 'OpenAI Chat Completions (/v1/chat/completions)');
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(() => readFileSync(fixture.settings, 'utf8').split('[models.')[0]).toContain('protocol = "openai_chat_completions"');
-    await expect(provider.getByRole('button', { name: /API format$/ })).toContainText('OpenAI Chat Completions');
+    await expect(provider.getByRole('combobox', { name: 'API format', exact: true })).toContainText('OpenAI Chat Completions');
 
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
@@ -186,12 +194,12 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(model.getByLabel('Model ID', { exact: true })).toHaveValue('');
     await model.getByRole('button', { name: 'Cancel', exact: true }).click();
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toBeVisible();
+    await expect(settings.getByRole('listitem', { name: 'custom/first-model', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
     await model.getByLabel('Model ID', { exact: true }).fill('disposable-model');
     await model.getByRole('button', { name: 'Save Add Model', exact: true }).click();
-    const disposable = settings.getByRole('row', { name: 'custom/disposable-model', exact: true });
+    const disposable = settings.getByRole('listitem', { name: 'custom/disposable-model', exact: true });
     const remove = disposable.getByRole('button', { name: 'Remove Model custom/disposable-model', exact: true });
     await remove.click();
     const confirmation = page.getByRole('alertdialog');
@@ -199,13 +207,13 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(remove).toBeFocused();
     await remove.click();
     await confirmation.getByRole('button', { name: 'Remove Model custom/disposable-model', exact: true }).click();
+    await expect(settings.getByRole('region', { name: 'custom', exact: true })).toBeFocused();
     await expect(disposable).toHaveCount(0);
-    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toBeVisible();
-    await settings.getByRole('button', { name: 'Default model for new Sessions', exact: true }).click();
+    await expect(settings.getByRole('listitem', { name: 'custom/first-model', exact: true })).toBeVisible();
+    await settings.getByRole('button', { name: 'Model Settings', exact: true }).click();
     const defaults = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaults, 'Model', 'custom/first-model');
-    await defaults.getByRole('button', { name: 'Save Default model', exact: true }).click();
-    await expect(defaults.getByRole('button', { name: 'Save Default model', exact: true })).toBeDisabled();
+    await settledSetting(defaults);
     await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('model = "custom/first-model"');
     const sessionId = await openEmptySession(page, fixture, 'Workspace A');
     expect(sessionId).toBeTruthy();
@@ -214,9 +222,12 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     if (width === 1440) {
       await openSettingsPage(page, 'General');
       await choose(settings, 'Language', '中文');
+      // Language applies immediately — the Chinese surface mounts directly.
       const chinese = page.getByRole('region', { name: '设置', exact: true });
       await chinese.getByRole('tab', { name: '模型', exact: true }).click();
       await captureEvidence(chinese, 'models-zh-desktop');
+      // Add Model lives on the provider's in-page detail, not the list.
+      await chinese.getByRole('button', { name: 'custom →', exact: true }).click();
       await chinese.getByRole('button', { name: '+ 添加模型', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '添加模型', exact: true });
       await dialog.getByLabel('模型 ID', { exact: true }).fill('deepseek-flash');

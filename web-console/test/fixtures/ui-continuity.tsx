@@ -24,6 +24,7 @@ import { conversationPreferences } from '../../src/app/conversation-preferences'
 import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v80';
 import { Server, snapshot, checkpoint, projectionHead } from '../fixture';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';

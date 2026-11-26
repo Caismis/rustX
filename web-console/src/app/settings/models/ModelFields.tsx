@@ -5,6 +5,8 @@ import type { Model, Modality } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { message } from '../../../locale/translation';
 import { Button } from '../../../presentation/primitives/Button';
+import { Input } from '../../../presentation/primitives/Input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
 import { Bool, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
@@ -40,8 +42,8 @@ function InputModalities({ form }: { form: TypedForm<Model> }) {
   return <Bound name="capabilities.input_modalities">{field => {
     const value = (field.state.value as Modality[] | undefined) ?? [];
     return <div className={cards.modalityGroup}><span>{tx('settings:models-page.input-modalities')}</span><div className={cards.chips}>{inputModalities.map(modality => <label className={cards.chip} key={modality}>
-      <input type="checkbox" checked={value.includes(modality)} disabled={modality === 'text'}
-        onChange={event => field.handleChange((event.target.checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{tx(`settings:model-option.${modality}`)}
+      <Checkbox checked={value.includes(modality)} disabled={modality === 'text'}
+        onCheckedChange={checked => field.handleChange((checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{tx(`settings:model-option.${modality}`)}
     </label>)}</div></div>;
   }}</Bound>;
 }
@@ -125,7 +127,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
             focusAdd();
           }}>×</Button>
         </div>)}
-        {adding && <input autoFocus aria-label={tx('settings:models-page.new-profile-identity')} className={cards.profileName}
+        {adding && <Input autoFocus aria-label={tx('settings:models-page.new-profile-identity')} className={cards.profileName}
           value={identity} aria-invalid={duplicate || undefined}
           onChange={event => setIdentity(event.target.value)} onBlur={finishAdd} onKeyDown={event => {
             if (event.key === 'Enter') { event.preventDefault(); finishAdd(); }
@@ -200,7 +202,7 @@ function ProfileFields({ id, profile, change }: { id: string; profile: ProfileMa
   const tx = useTranslation();
   return <div role="group" aria-label={tx('settings:models-page.profile-value', { p0: id })} data-profile={id}>
     <label>{tx('settings:models-page.profile-output-limit')}
-      <input type="number" min="1" max="4294967295" step="1" value={profile.max_output_tokens ?? ''}
+      <Input type="number" min="1" max="4294967295" step="1" value={profile.max_output_tokens ?? ''}
         placeholder={tx('settings:models-page.profile-output-default')}
         onChange={event => change({ ...profile, max_output_tokens: event.target.value ? Number(event.target.value) : undefined })}/>
     </label>

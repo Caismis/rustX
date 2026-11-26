@@ -1,5 +1,5 @@
 import { afterEach,expect,it,vi } from 'vitest';
-import { act,cleanup,render,fireEvent,waitFor } from '@testing-library/react';
+import { act,cleanup,render,fireEvent,waitFor,screen } from '@testing-library/react';
 import { ChangeComparison,ChangesReview } from '../src/app/components/ChangesReview';
 import { ChangesReviewContext } from '../src/app/changes-review';
 import { TurnChanges } from '../src/app/agent/TurnChanges';
@@ -108,14 +108,19 @@ it('keeps distinct native file indices when serialized paths and display names a
     const review=render(<ChangesReview request={open.mock.calls[0][0]} visible/>);
     await review.findByText('first original');
     expect(review.getByText('first changed')).toBeTruthy();
-    expect(review.getAllByRole('option').map(option=>(option as HTMLOptionElement).value)).toEqual(['0','1']);
+    fireEvent.click(review.getByRole('combobox'));
+    const initialOptions=await screen.findAllByRole('option');
+    expect(initialOptions).toHaveLength(2);
+    fireEvent.pointerDown(initialOptions[0]!);fireEvent.click(initialOptions[0]!);
     fireEvent.click(rows[1]);
     expect(open).toHaveBeenNthCalledWith(2,expect.objectContaining({index:1,summary:collided}));
     review.rerender(<ChangesReview request={open.mock.calls[1][0]} visible/>);
     await review.findByText('second original');
     expect(review.getByText('second changed')).toBeTruthy();
     expect(review.queryByText('first changed')).toBeNull();
-    fireEvent.change(review.getByRole('combobox'),{target:{value:'0'}});
+    fireEvent.click(review.getByRole('combobox'));
+    const options=await screen.findAllByRole('option');
+    fireEvent.pointerDown(options[0]!);fireEvent.click(options[0]!);
     await review.findByText('first original');
     expect(review.getByText('first changed')).toBeTruthy();
     expect(review.queryByText('second changed')).toBeNull();

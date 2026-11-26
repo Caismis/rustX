@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it } from 'vitest';
 import { ConversationPreferenceStore, conversationPreferences, CONVERSATION_PREFERENCE_KEY } from '../src/app/conversation-preferences';
 import { GeneralPage } from '../src/app/settings/general/GeneralPage';
+import { renderEditor } from './settings-harness';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { snapshot } from './fixture';
 import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v80';
@@ -20,11 +21,14 @@ it('validates stored preferences and applies settings even when browser storage 
   denied.update({fontSize:10});expect(denied.getSnapshot().fontSize).toBe(10);
 });
 it('General edits the three preferences, bounds the font stepper and persists the selection', async () => {
-  render(<GeneralPage theme="dark"/>);
+  await renderEditor(<GeneralPage theme="dark"/>);
   fireEvent.click(screen.getByRole('button', {name:'Increase font size'}));
-  fireEvent.click(screen.getByRole('button', {name:'Work details Detailed'}));
-  fireEvent.click(await screen.findByRole('menuitem', {name:'Fully expanded'}));
+  fireEvent.click(screen.getByRole('combobox', {name:/Work details$/}));
+  const expanded = await screen.findByRole('option', {name:'Fully expanded'});
+  fireEvent.pointerDown(expanded);
+  fireEvent.click(expanded);
   fireEvent.click(screen.getByRole('switch', {name:'Show coding view'}));
+  // General preferences apply the moment each control is used; no save exists.
   expect(new ConversationPreferenceStore().getSnapshot()).toEqual({fontSize:15, transcriptMode:'verbose', codingView:false});
   act(()=>conversationPreferences().update({fontSize:22}));
   expect((screen.getByRole('button',{name:'Increase font size'}) as HTMLButtonElement).disabled).toBe(true);

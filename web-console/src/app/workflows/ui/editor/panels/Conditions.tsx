@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import clsx from 'clsx';
 import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
@@ -19,6 +19,7 @@ import { TemplateInput, templateParts, templateValue } from '../forms/TemplateIn
 import { useReferenceSchema } from '../forms/useReferenceSchema';
 import { comparisonSymbols } from '../summary';
 import type { PanelProps } from './shared';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 import css from '../Editor.module.css';
 
 const unfinished = (): Predicate => ({
@@ -256,8 +257,8 @@ function SimpleCondition({
           placeholder={tx('workflows:branch.select-variable')}
         />
         <span className={css.branchOperatorDivider} aria-hidden />
-        <Menu.Root modal={false}>
-          <Menu.Trigger
+        <Menu modal={false}>
+          <MenuTrigger
             className={css.branchOperator}
             aria-label={tx('workflows:branch.operator')}
             title={tx(`workflows:branch.${operator}`)}
@@ -265,19 +266,15 @@ function SimpleCondition({
           >
             {(kind === 'number' && comparisonSymbols[operator]) || tx(`workflows:branch.${operator}`)}
             <IconChevronDownOutline14 />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
-              <Menu.Popup className={css.branchOperatorPopup}>
+          </MenuTrigger>
+          <MenuPopup side="bottom" align="end" sideOffset={4} className={css.branchOperatorPopup}>
                 {options.map((type) => (
-                  <Menu.Item key={type} className={css.branchOperatorItem} onClick={() => setOperator(type)}>
+                  <MenuItem key={type} className={css.branchOperatorItem} onClick={() => setOperator(type)}>
                     {tx(`workflows:branch.${type}`)}
-                  </Menu.Item>
+                  </MenuItem>
                 ))}
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+              </MenuPopup>
+        </Menu>
       </div>
       {!valueFree && (
         <div className={css.branchConditionValue}>
@@ -333,20 +330,18 @@ function SimpleCondition({
                   line
                 />
               ) : right.type === 'literal' && typeof right.value === 'boolean' ? (
-                <select
+                <EnumSelect
                   className={css.input}
-                  aria-label={tx('workflows:branch.value')}
+                  label={tx('workflows:branch.value')}
                   value={String(right.value)}
-                  onChange={(event) =>
+                  onChange={(next) =>
                     binary(operator as Exclude<SimpleOperator, 'empty' | 'not_empty'>, {
                       type: 'literal',
-                      value: event.target.value === 'true',
+                      value: next === 'true',
                     })
                   }
-                >
-                  <option value="true">{tx('workflows:port.true')}</option>
-                  <option value="false">{tx('workflows:port.false')}</option>
-                </select>
+                  options={[{ value: 'true', label: tx('workflows:port.true') }, { value: 'false', label: tx('workflows:port.false') }]}
+                />
               ) : null}
             </>
           )}

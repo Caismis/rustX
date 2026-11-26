@@ -6,6 +6,7 @@ import { parse } from 'yaml';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { selectCossOption } from './coss-select';
 
 async function editor(page: Page, fixture: Awaited<ReturnType<typeof startDogfood>>, id: string) {
   await routeWorkspaceHost(page, fixture); await page.goto('/');
@@ -154,11 +155,11 @@ for (const kind of ['required', 'optional']) test(`catalog ${kind} enum saves an
     const tool = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Tool node call', { exact: true });
     await tool.focus(); await tool.press('Enter');
     const mode = page.getByRole('complementary', { name: 'Inspector' }).getByRole('combobox', { name: 'mode', exact: true });
-    await mode.selectOption({ label: '""' });
-    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(mode).toHaveValue('1');
-    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(mode).toHaveValue('0');
-    await mode.selectOption(''); await expect(mode).toHaveValue('');
-    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(mode).toHaveValue('0');
+    await selectCossOption(mode, '0');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(mode).toHaveAttribute('data-value', '1');
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(mode).toHaveAttribute('data-value', '0');
+    await selectCossOption(mode, ''); await expect(mode).toHaveAttribute('data-value', '');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(mode).toHaveAttribute('data-value', '0');
     await mode.press('ControlOrMeta+s');
     await expect.poll(() => parse(readFileSync(file, 'utf8')).block.nodes.call.arguments.fields.mode).toEqual({ type: 'literal', value: '' });
     await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();

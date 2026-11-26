@@ -11,6 +11,7 @@ import { statusSource } from './workflow-fixtures';
 import { WorkflowAnalysisSession } from '../src/app/workflows/document/analysis';
 import type { WorkflowAnalysisReport } from '../../protocol/app-server/v80';
 import { blockAt, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../src/app/workflows/document/model';
+import { chooseCossOption } from './coss-select';
 
 vi.mock('../src/app/workflows/ui/editor/forms/WorkflowCodeView',()=>({default:({label,value,onChange,onBlur}:{label:string;value:string;onChange:(value:string)=>void;onBlur:()=>void})=><textarea aria-label={label} value={value} onChange={event=>onChange(event.target.value)} onBlur={onBlur}/>}));
 beforeEach(()=>{vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});vi.stubGlobal('DOMMatrixReadOnly',class{m22=1;});});
@@ -73,7 +74,7 @@ it('uses declared output types for defaults and exposes an actual failure port',
 
 it('switches between language defaults as one undoable document edit',async()=>{
   const {panel,node,documentValue}=await open(),original=structuredClone(node());
-  fireEvent.change(panel.getByRole('combobox',{name:'Language'}),{target:{value:'javascript'}});
+  await chooseCossOption(panel.getByRole('combobox',{name:'Language'}),'JavaScript');
   expect(node()).toMatchObject({code_language:'javascript',variables:{arg1:{type:'reference',path:[]},arg2:{type:'reference',path:[]}},outputs:{result:'string'}});
   expect(node().code).toContain('function main({arg1, arg2})');
   expect(documentValue().block.nodes.done).toMatchObject({outputs:[{value_selector:['code','result']},{value_selector:[]}]});
@@ -116,7 +117,7 @@ for(const kind of ['iteration','loop'] as const) {
   });
   it(`clears removed Code outputs from its enclosing ${kind} when changing language`,async()=>{
     const before=initial(),{panel,documentValue}=await open(before,[{node:'repeat'}]);
-    fireEvent.change(panel.getByRole('combobox',{name:'Language'}),{target:{value:'javascript'}});
+    await chooseCossOption(panel.getByRole('combobox',{name:'Language'}),'JavaScript');
     expect(roundPath(documentValue())).toEqual([]);
     fireEvent.click(screen.getByRole('button',{name:'Undo'}));expect(documentValue()).toEqual(before);
   });

@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { lazy, Suspense, useState, type ReactNode } from 'react';
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import { IconChevronDownOutline14, IconEditOutline16, IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
 import { schemaObject, schemaTarget } from '../../../document/schema';
 import { Switch } from '../../../../../presentation/primitives/Switch';
@@ -20,6 +20,7 @@ import { ConflictActions, DraftTextField, JsonField, useFieldError } from '../fo
 import { useNode, type PanelProps } from './shared';
 import { useFieldDraft } from '../forms/drafts';
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 const StructuredOutputDialog = lazy(() => import('../forms/structured-output/StructuredOutputDialog').then(module => ({ default: module.StructuredOutputDialog })));
 
@@ -131,16 +132,14 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
     <h3 className={css.groupHeading}>
       <span className={css.headingText}>{tx('workflows:failure.title')}
         <Tooltip label={tx('workflows:failure.tip')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:failure.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
-      <Menu.Root modal={false}>
-        <Menu.Trigger className={css.strategyTrigger} aria-label={tx('workflows:failure.strategy')}>{tx(`workflows:failure.${STRATEGY_TEXT[strategy]}`)}<IconChevronDownOutline14 /></Menu.Trigger>
-        <Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
-          <Menu.Popup className={css.strategyPopup}>
-            {STRATEGIES.map(type => <Menu.Item key={type} className={css.strategyItem} onClick={() => choose(type)}>
+      <Menu modal={false}>
+        <MenuTrigger className={css.strategyTrigger} aria-label={tx('workflows:failure.strategy')}>{tx(`workflows:failure.${STRATEGY_TEXT[strategy]}`)}<IconChevronDownOutline14 /></MenuTrigger>
+        <MenuPopup side="bottom" align="end" sideOffset={4} className={css.strategyPopup}>
+            {STRATEGIES.map(type => <MenuItem key={type} className={css.strategyItem} onClick={() => choose(type)}>
               <b>{tx(`workflows:failure.${STRATEGY_TEXT[type]}`)}</b><small>{tx(`workflows:failure.${STRATEGY_TEXT[type]}-desc`)}</small>
-            </Menu.Item>)}
-          </Menu.Popup>
-        </Menu.Positioner></Menu.Portal>
-      </Menu.Root>
+            </MenuItem>)}
+          </MenuPopup>
+      </Menu>
     </h3>
     {note && <p className={css.note}>{note}</p>}
     {children}
@@ -152,7 +151,7 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
 export function SliderField({ label, unit, min, max, step, value, onChange, numberFirst = false }: { label: string; unit?: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void; numberFirst?: boolean }) {
   const set = (text: string) => { const next = Number(text); if (Number.isInteger(next) && next >= min && next <= max) onChange(next); };
   const range = <input type="range" min={min} max={max} step={step} value={value} aria-label={label} onChange={event => set(event.target.value)} />;
-  const number = <span className={css.retryNumber}><input type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
+  const number = <span className={css.retryNumber}><TextInput type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
   // As Dify's Loop count: the number, then the slider, under the heading.
   return numberFirst ? <div className={css.sliderRow}>{number}{range}</div>
     : <label className={css.retryField}><span>{label}</span>{range}{number}</label>;
@@ -187,14 +186,12 @@ function PromptMessage(props: PanelProps & { index: number; message: Message }) 
     placeholder={tx(index ? 'workflows:prompt.message-placeholder' : 'workflows:prompt.system-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')}
     onChange={parts => update(current => ({ ...current, messages: current.messages.map((item, at) => at === index ? { ...item, content: parts } : item) }), address, undefined, `${field}:${session}`)}>
     {editable => <PromptCard label={role} hint={tx(`workflows:prompt.${message.role}-hint`)} text={promptText(content)} expanded={expanded} onExpand={() => setExpanded(value => !value)}
-      role={index ? <Menu.Root modal={false}>
-        <Menu.Trigger className={css.promptRole} aria-label={tx('workflows:prompt.role')}>{role}<IconChevronDownOutline14 /></Menu.Trigger>
-        <Menu.Portal><Menu.Positioner side="bottom" align="start" sideOffset={4} className={css.branchOperatorPositioner}>
-          <Menu.Popup className={css.branchOperatorPopup}>
-            {(['user', 'assistant'] as const).map(value => <Menu.Item key={value} className={css.branchOperatorItem} onClick={() => setRole(value)}>{/* i18n-raw: model message role, as Dify shows it */ value.toUpperCase()}</Menu.Item>)}
-          </Menu.Popup>
-        </Menu.Positioner></Menu.Portal>
-      </Menu.Root> : <b className={css.promptRoleFixed}>{role}</b>}
+      role={index ? <Menu modal={false}>
+        <MenuTrigger className={css.promptRole} aria-label={tx('workflows:prompt.role')}>{role}<IconChevronDownOutline14 /></MenuTrigger>
+        <MenuPopup side="bottom" align="start" sideOffset={4} className={css.branchOperatorPopup}>
+            {(['user', 'assistant'] as const).map(value => <MenuItem key={value} className={css.branchOperatorItem} onClick={() => setRole(value)}>{/* i18n-raw: model message role, as Dify shows it */ value.toUpperCase()}</MenuItem>)}
+          </MenuPopup>
+      </Menu> : <b className={css.promptRoleFixed}>{role}</b>}
       tools={<InsertVariable />}
       onRemove={index ? () => props.edit(document => {
         const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
@@ -288,7 +285,7 @@ export function RouteId({ value, address, label, className, rename }: { value: s
   } });
   let shown = field.text;
   if (!key) try { const parsed: unknown = JSON.parse(shown); if (typeof parsed === 'string') shown = parsed; } catch { /* Detached text remains visible. */ }
-  return <><input className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
+  return <><TextInput className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />
     {field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></>;
 }
@@ -356,20 +353,18 @@ function StructuredFields({ schema, document, address }: { schema: unknown; docu
 /** The named profile, chosen from those discovered in this scope. */
 function ProfileSelection(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'agent'), profiles = props.vocabulary?.profiles ?? [];
-  return <Menu.Root modal={false}>
-    <Menu.Trigger className={css.modelTrigger} aria-label={tx('workflows:inspector.agent-profile')} aria-invalid={!node.profile || undefined} title={tx('workflows:inspector.agent-profile-hint')}>
+  return <Menu modal={false}>
+    <MenuTrigger className={css.modelTrigger} aria-label={tx('workflows:inspector.agent-profile')} aria-invalid={!node.profile || undefined} title={tx('workflows:inspector.agent-profile-hint')}>
       <span className={`${css.modelTriggerIcon} ${css.kind_agent}`}><KindIcon kind="agent" size={14} /></span>
       <span className={css.modelTriggerName}>{node.profile || tx('workflows:inspector.agent-profile-choose')}</span>
       <span className={css.modelTriggerSettings} aria-hidden><IconChevronDownOutline14 /></span>
-    </Menu.Trigger>
-    <Menu.Portal><Menu.Positioner side="bottom" align="start" sideOffset={4} className={css.branchOperatorPositioner}>
-      <Menu.Popup className={css.profilePopup}>
-        {profiles.length ? profiles.map(name => <Menu.Item key={name} className={css.strategyItem} aria-checked={name === node.profile} role="menuitemradio"
-          onClick={() => { if (name !== node.profile) update(current => ({ ...current, profile: name }), at('profile')); }}><b>{name}</b></Menu.Item>)
+    </MenuTrigger>
+    <MenuPopup side="bottom" align="start" sideOffset={4} className={css.profilePopup}>
+        {profiles.length ? profiles.map(name => <MenuItem key={name} className={css.strategyItem} aria-checked={name === node.profile} role="menuitemradio"
+          onClick={() => { if (name !== node.profile) update(current => ({ ...current, profile: name }), at('profile')); }}><b>{name}</b></MenuItem>)
           : <p className={css.profileEmpty}>{tx('workflows:inspector.agent-profile-none')}</p>}
-      </Menu.Popup>
-    </Menu.Positioner></Menu.Portal>
-  </Menu.Root>;
+      </MenuPopup>
+  </Menu>;
 }
 
 /** The Agent's task in the prompt editor, with the variables it inserts. */

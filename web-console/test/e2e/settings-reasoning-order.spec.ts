@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { returnHome, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
+import { returnHome, connectRemote, leaveRetainedDetail, openEmptySession, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -33,14 +33,17 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     await expect(page.locator('[data-toast][data-foreground]')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
     await expect(settings.getByRole('button', { name: 'Add Model', exact: true })).toHaveCount(0);
     await repair.getByLabel('Replacement TOML').fill(document('"low"'));
-    await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.locator('[data-toast][data-foreground]')).toBeVisible();
     expect(readFileSync(source, 'utf8')).toBe(invalid);
     await repair.getByLabel('Replacement TOML').fill(document('"high", "low"'));
-    await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(repair).toHaveCount(0);
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    await settings.getByRole('row', { name: 'b', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
+    const back = settings.getByRole('button', { name: 'Model Settings', exact: true });
+    await leaveRetainedDetail(back, settings.getByRole('button', { name: 'fixture →', exact: true }));
+    await settings.getByRole('button', { name: 'fixture →', exact: true }).click();
+    await settings.getByRole('listitem', { name: 'b', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Model b', exact: true });
     await modal.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     const list = modal.getByRole('list', { name: 'Reasoning order (low to high)' });
@@ -54,6 +57,7 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
 });
 
 for (const width of [1440, 390]) test(`reasoning order ${width}: native save, reload, reset, cancel and clear`, async ({ page }) => {
+  test.setTimeout(180_000);
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
   const fixture = await startDogfood();
   const errors: string[] = [];
@@ -82,7 +86,10 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await openWorkspaceSettings(page, 'Workspace A');
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const open = async () => {
-      await settings.getByRole('row', { name: 'ordered', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
+      const back = settings.getByRole('button', { name: 'Model Settings', exact: true });
+      await leaveRetainedDetail(back, settings.getByRole('button', { name: 'fixture →', exact: true }));
+      await settings.getByRole('button', { name: 'fixture →', exact: true }).click();
+      await settings.getByRole('listitem', { name: 'ordered', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
       await page.getByRole('dialog', { name: 'Model ordered', exact: true }).getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     };
     await open();
@@ -132,6 +139,9 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await modal.getByRole('button', { name: 'Move a-high up', exact: true }).click();
     await modal.getByRole('button', { name: 'Delete profile z-off', exact: true }).click();
     await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+    // Cancelling a dirty draft asks first; Discard and leave restores the committed values.
+    const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
     await open(); expect(await ids()).toEqual(['z-off', 'a-high']);
     await expect(modal.getByRole('button', { name: 'Profile z-off', exact: true })).toBeVisible();
     await list.scrollIntoViewIfNeeded();

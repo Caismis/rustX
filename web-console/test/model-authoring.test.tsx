@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import { chooseOption, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
+import { chooseOption, enableWorkspaceCustomization, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { ModelsPage } from '../src/app/settings/models/ModelsPage';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
@@ -14,7 +14,7 @@ async function openModels(subject: ReturnType<typeof cfg3Client>) {
   render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
   await settingsReady();
   await openSettingsPage('Models');
-  fireEvent.click(screen.getByRole('row', { name: 'transport' }));
+  fireEvent.click(screen.getByRole('button', { name: 'transport →' }));
 }
 async function addModel(subject: ReturnType<typeof cfg3Client>) {
   await openModels(subject);
@@ -42,7 +42,7 @@ it('a model is added in one dialog, confirmed by native observation, and listed 
     expect(operation.params.mutation.mutation.authored).not.toHaveProperty('protocol');
   } else throw new Error('Expected a native Model write');
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { id: 'transport/deepseek-flash', authored: { provider: 'transport', id: 'deepseek-flash' } } } } });
-  expect(await screen.findByRole('row', { name: 'transport/deepseek-flash' })).toBeTruthy();
+  expect(await screen.findByRole('listitem', { name: 'transport/deepseek-flash' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '+ Add Model' }));
   const second = within(screen.getByRole('dialog', { name: 'Add Model' }));
   fireEvent.change(second.getByLabelText('Model ID'), { target: { value: 'deepseek-flash' } });
@@ -65,11 +65,12 @@ it('changes API format once on the provider without exposing protocol identifier
   subject.source.user.authored!.models = { one: model, two: { ...model, id: 'two' } };
   await openModels(subject);
   await chooseOption('API format', 'Anthropic Messages (/v1/messages)');
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'anthropic_messages', credential: { kind: 'retain' } } } } } });
   await waitFor(() => {
-    for (const id of ['one', 'two']) expect(within(screen.getByRole('row', { name: id })).queryByText('anthropic_messages')).toBeNull();
-    expect(screen.getByRole('button', { name: /API format$/ }).textContent).toContain('Anthropic Messages');
+    for (const id of ['one', 'two']) expect(within(screen.getByRole('listitem', { name: id })).queryByText('anthropic_messages')).toBeNull();
+    expect(screen.getByRole('combobox', { name: /API format$/ }).textContent).toContain('Anthropic Messages');
   });
   fireEvent.click(screen.getByRole('button', { name: '+ Add Model' }));
   expect(within(screen.getByRole('dialog', { name: 'Add Model' })).queryByLabelText('API format')).toBeNull();
@@ -91,12 +92,14 @@ it('autosaves a newer Provider edit after the previous write is observed', async
   await openModels(subject);
   const url = screen.getByLabelText('Base URL');
   fireEvent.change(url, {target:{value:'https://first.example/v1'}});
-  fireEvent.keyDown(url, {key:'Enter'});
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   fireEvent.change(url, {target:{value:'https://latest.example/v1'}});
-  fireEvent.keyDown(url, {key:'Enter'});
-  expect(writes(subject)).toHaveLength(1);
+  // The newer draft waits while the first write is in flight, then the next
+  // Save submits it against the revision the observed write reported.
   await act(async () => release());
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(2));
   expect(writes(subject)[1][0]).toMatchObject({params:{expected_revision:'user-2', mutation:{mutation:{
     id:'transport', authored:{base_url:'https://latest.example/v1', credential:{kind:'retain'}},
@@ -115,10 +118,11 @@ it('offers a manual Provider retry once an uncertain write is reread at the same
   await openModels(subject);
   const url = screen.getByLabelText('Base URL');
   fireEvent.change(url, { target: { value: 'https://retry.example/v1' } });
-  fireEvent.keyDown(url, { key: 'Enter' });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([request]) => request.method === 'configuration/sourcesRead')).toHaveLength(2));
   expect(writes(subject)).toHaveLength(1);
-  await providerAction('Retry');
+  // The retained draft resubmits through the footer's Save.
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(2));
   expect(writes(subject)[1][0]).toMatchObject({
     params: { expected_revision: 'user-1', mutation: { mutation: { id: 'transport', authored: { base_url: 'https://retry.example/v1' } } } },
@@ -178,12 +182,13 @@ it('invalid token integers are rejected before serialization to native quantitie
 it('an untouched required field is validated on submission, and a new provider cannot add models before saving', async () => {
   const subject = cfg3Client();
   await openModels(subject);
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'new-provider' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   expect((screen.getByRole('button', { name: '+ Add Model' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'fixture-only' } });
-  fireEvent.submit(screen.getByRole('form', { name: 'Provider new-provider' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await screen.findByText(/Use an HTTP or HTTPS URL/);
   expect(writes(subject)).toHaveLength(0);
 });
@@ -192,10 +197,12 @@ it('switching credential modes removes the previous mode and its secret from the
   const subject = cfg3Client();
   await openModels(subject);
   if (!screen.queryByLabelText('API Key')) await providerAction('Use an API Key');
-  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
+  fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
   await providerAction('Use an environment variable');
-  fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
-  fireEvent.keyDown(screen.getByLabelText('Environment variable'), { key: 'Enter' });
+  // The mode selection settles through the menu's close-and-submit gesture:
+  // the replacement field is awaited rather than assumed synchronous.
+  fireEvent.change(await screen.findByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { authored: { credential: { kind: 'environment', variable: 'PROVIDER_KEY' } } } } } });
   expect(JSON.stringify(writes(subject))).not.toContain('DISCARDED_FIXTURE_SECRET');
@@ -223,11 +230,12 @@ it('automatically saves provider icons and retains saved credentials', async () 
   fireEvent.change(dialog.getByRole('searchbox'), { target: { value: 'deepseek' } });
   expect(dialog.getAllByRole('row')).toHaveLength(1);
   fireEvent.click(dialog.getByRole('row', { name: 'DeepSeek' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   const operation = writes(subject)[0][0];
   if (operation.method !== 'configuration/sourceWrite') throw new Error('write required');
   expect(operation.params.mutation).toMatchObject({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { icon: 'deepseek', credential: { kind: 'retain' } } } });
-  await waitFor(() => expect(screen.getByRole('row', { name: 'transport' }).querySelector('[data-provider-icon="deepseek"]')).not.toBeNull());
+  await waitFor(() => expect(screen.getByRole('form', { name: 'Provider transport' }).querySelector('[data-provider-icon="deepseek"]')).not.toBeNull());
   expect(within(form).queryByRole('button', { name: 'Save Provider transport' })).toBeNull();
 });
 
@@ -249,6 +257,8 @@ it('requires a new workspace credential for an inherited provider override and r
   render(<SettingsSurface client={subject.client} host={cfg3Host(subject)} target={workspaceSettingsTarget('A', 'A')} />);
   await settingsReady();
   await openSettingsPage('Models');
+  enableWorkspaceCustomization();
+  fireEvent.click(screen.getByRole('button', { name: 'transport →' }));
   const form = within(screen.getByRole('form', { name: 'Provider transport' }));
   expect((form.getByLabelText('Environment variable') as HTMLInputElement).value).toBe('USER_KEY');
 
@@ -256,14 +266,14 @@ it('requires a new workspace credential for an inherited provider override and r
   const url = form.getByLabelText('Base URL');
   expect((url as HTMLInputElement).value).toBe('https://user.invalid');
   fireEvent.change(url, { target: { value: 'https://workspace.invalid' } });
-  fireEvent.keyDown(url, { key: 'Enter' });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   expect(writes(subject)).toHaveLength(0);
   await screen.findByText('Enter a valid API Key or environment variable name.');
 
   const key = form.getByLabelText('API Key');
   expect((key as HTMLInputElement).value).toBe('');
   fireEvent.change(key, { target: { value: 'workspace-only' } });
-  fireEvent.keyDown(key, { key: 'Enter' });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: {
     target: { kind: 'workspace', directory: '/workspace/A' },
@@ -293,14 +303,13 @@ it('keeps auxiliary model settings editable after the primary model is removed',
   const { writes } = await renderEditor(<ModelsPage client={cfg3Client().client} target={userSettingsTarget}
     source={source} scope="user" revision={source.user.revision} models={['main']} profiles={{}} onFocus={() => {}} />,
   { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const form = within(screen.getByRole('form', { name: 'Default model' }));
   fireEvent.click(form.getByRole('button', { name: 'Auxiliary models' }));
   // Re-assert an explicit auxiliary after a Follow-session detour so Save has a
   // real authored change while the missing primary model stays editable.
   await chooseOption('Auxiliary model', 'Follow selected model', form);
   await chooseOption('Auxiliary model', 'main', form);
-  fireEvent.click(form.getByRole('button', { name: 'Save Default model' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).pop()!);
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: {
       model: 'removed', auxiliary: { mode: 'explicit', model: 'main', profile: { mode: 'lowest' } },
   } } }, source.user.revision));
@@ -325,16 +334,21 @@ it('tests the saved model and revision without opening its editor or writing con
 it('keeps a new provider template as a draft across provider and settings page changes', async () => {
   const subject = cfg3Client();
   await openModels(subject);
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Provider' })).getByRole('button', { name: 'DeepSeek' }));
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
-  fireEvent.click(screen.getByRole('row', { name: 'transport' }));
-  await openSettingsPage('Agent');
-  await openSettingsPage('Models');
-  fireEvent.click(await screen.findByRole('row', { name: 'DeepSeek' }));
+  // Leaving the detail asks; staying keeps the draft.
+  fireEvent.click(screen.getByRole('button', { name: 'Model Settings' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
+  // Leaving the Settings page asks first; staying keeps the draft.
+  fireEvent.click(screen.getByRole('tab', { name: 'Agent' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }));
   await providerAction('Delete', within(screen.getByRole('form', { name: 'Provider DeepSeek' })));
-  expect(screen.queryByRole('row', { name: 'DeepSeek' })).toBeNull();
+  const crumb = screen.queryByRole('button', { name: 'Model Settings' });
+  if (crumb) fireEvent.click(crumb);
+  expect(screen.queryByRole('button', { name: 'DeepSeek →' })).toBeNull();
   expect(writes(subject)).toHaveLength(0);
 });

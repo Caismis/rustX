@@ -2,13 +2,11 @@ import '@xyflow/react/dist/base.css';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 import type {
   CheckpointReadCut,
   RuntimeClientInteractionHeader,
@@ -25,7 +23,7 @@ import { readWorkflowNodeBody } from '../../../client/trace-content';
 import { useTranslation } from '../../../locale/react';
 import { JsonTree, type JsonTreeLabels } from '../../../presentation/primitives/JsonTree';
 import { StateDot, type StateDotState } from '../../../presentation/primitives/StateDot';
-import { useModalFocus } from '../../../presentation/primitives/useModalFocus';
+import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
 import { useSubagents } from '../../agent/subagent-context';
 import { workflowStatus } from '../../agent/workflow-state';
 import { formatDurationMillis, wireCount } from '../../trajectory/timeline';
@@ -260,10 +258,7 @@ export function WorkflowRunCanvas({
 }) {
   const tx = useTranslation();
   const scope = useSubagents();
-  const titleId = useId();
   const dialogRef = useRef<HTMLElement | null>(null);
-  // The conversation owner restores focus only for an explicit, still-owned close.
-  useModalFocus(true, dialogRef, onClose, false);
 
   const [committedTrace, setCommittedTrace] = useState<{
     ownerKey: string;
@@ -1044,21 +1039,20 @@ export function WorkflowRunCanvas({
     ? (target.traceCut ?? coherentTraceCut)
     : coherentTraceCut;
 
-  return createPortal(<div
-    className={css.backdrop}
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby={titleId}
-    data-workflow-run-canvas=""
-    data-workflow-run-id={runKey}
-    onMouseDown={event => {
-      if (event.target === event.currentTarget) onClose();
-    }}
+  return <DialogSurface
+    open
+    onClose={onClose}
+    title={tx('workflows:run-canvas.title', { p0: displayWorkflowId })}
+    overlayClassName={css.backdrop}
+    className={css.dialog}
+    contentRef={dialogRef}
+    finalFocus={() => false}
+    initialFocus={() => dialogRef.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? false}
   >
-    <section ref={dialogRef} tabIndex={-1} className={css.dialog}>
+    <div data-workflow-run-canvas="" data-workflow-run-id={runKey} style={{ display: 'contents' }}>
       <header className={css.header}>
         <div className={css.titleGroup}>
-          <h2 id={titleId} className={css.title}>{tx('workflows:run-canvas.title', { p0: displayWorkflowId })}</h2>
+          <h2 className={css.title}>{tx('workflows:run-canvas.title', { p0: displayWorkflowId })}</h2>
           <span className={css.badge}>{tx('workflows:run-canvas.read-only')}</span>
           <span className={css.badge}>{tx(activeRun && activeRun.state.type !== 'settled' ? 'workflows:run-canvas.source-live' : 'workflows:run-canvas.source-history')}</span>
           {readyHeader && <span className={css.provenance}>
@@ -1319,6 +1313,6 @@ export function WorkflowRunCanvas({
           </div>
         </aside>
       </div>
-    </section>
-  </div>, document.body);
+    </div>
+  </DialogSurface>;
 }

@@ -30,7 +30,8 @@ test('Chinese General switches the resident UI without requests, keeps native id
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await choose(settings, 'Language', '中文');
   await page.getByRole('button', { name: '主页' }).click();
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible();
   await expect(page.locator('button[data-session-id="A"]')).toContainText('Session A');

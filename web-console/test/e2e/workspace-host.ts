@@ -26,7 +26,9 @@ export async function startWorkspaceHost(config: LocalHostConfig, desktop?: Desk
   } };
 }
 export type WorkspaceHostResponse = { status: number; headers: Record<string, string>; body: Buffer };
-const proxies = new WeakMap<Page, { retiring: boolean; pending: Set<Promise<void>> }>();
+type RouteProxy = { retiring: boolean; pending: Set<Promise<void>> };
+const proxies = new WeakMap<Page, RouteProxy>();
+const liveProxies = new Set<RouteProxy>();
 
 /** Keep interception installed until every Node callback has delivered its reply.
  * Playwright 1.63 can update empty patterns after the first callback completes
@@ -40,12 +42,29 @@ export async function drainWorkspaceHostRoutes(page: Page) {
     for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
   }
   proxies.delete(page);
+  liveProxies.delete(proxy);
+  if (failures.length) throw failures[0];
+}
+
+/** Retire every live proxy before the fixture's Product Host closes, so an
+ * in-flight forward finishes against a listening server instead of racing the
+ * shutdown with a refused connection. */
+export async function drainAllWorkspaceHostRoutes() {
+  const failures: unknown[] = [];
+  for (const proxy of liveProxies) {
+    proxy.retiring = true;
+    while (proxy.pending.size) {
+      const settled = await Promise.allSettled([...proxy.pending]);
+      for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
+    }
+  }
+  liveProxies.clear();
   if (failures.length) throw failures[0];
 }
 
 /** Same-origin deployment proxy to the actual isolated Node Product Host fixture. */
 export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }, observeResponse?: (request: Request, response: WorkspaceHostResponse) => void | Promise<void>) {
-  const proxy = { retiring: false, pending: new Set<Promise<void>>() }; proxies.set(page, proxy);
+  const proxy = { retiring: false, pending: new Set<Promise<void>>() }; proxies.set(page, proxy); liveProxies.add(proxy);
   const forward = async (route: Route) => {
     if (proxy.retiring) { await route.fulfill({ status: 503, body: 'Fixture proxy retired' }); return; }
     // Observation is an open NDJSON response. Preserve its streaming transport;
@@ -55,9 +74,22 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
     }
     const write = route.request().url().endsWith('/configuration') && route.request().postDataJSON()?.operation?.kind === 'write';
     if (write) await writeGate?.before();
-    const response = await fetch(`${fixture.workspaceHostUrl}${new URL(route.request().url()).pathname}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${fixture.workspaceHostUrl}${new URL(route.request().url()).pathname}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: route.request().postData(),
+      });
+    } catch (error) {
+      // The fixture's in-process server stops listening only when teardown
+      // closes it, so a refused connection is an in-flight request racing
+      // shutdown — not a test failure. Answer the route quietly instead of
+      // letting a stray 'fetch failed' surface as the test error.
+      if ((error as { cause?: NodeJS.ErrnoException }).cause?.code === 'ECONNREFUSED') {
+        try { await route.fulfill({ status: 503, body: 'Fixture host closed' }); } catch { /* route already gone */ }
+        return;
+      }
+      throw error;
+    }
     if (write) await writeGate?.observed();
     const buffered = { status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) };
     // Observe the same terminal bytes delivered below, without retrieving a

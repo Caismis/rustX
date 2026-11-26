@@ -1,11 +1,10 @@
 import type { ArrayEdit } from '../../document/fields';
 import type { WorkflowNote, WorkflowToolChoice } from '../../../../../../protocol/app-server/v80';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Menu } from '@base-ui/react/menu';
+
 import { Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport, useNodesInitialized, type Connection, type EdgeChange, type NodeChange, type Viewport } from '@xyflow/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
-import { IconCheckOutline16 } from '../../../../presentation/primitives/icons';
 import { ShortcutKeys } from '../../../../presentation/primitives/ShortcutKeys';
 import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import type { FieldDraft } from '../../machines/editor';
@@ -27,6 +26,7 @@ import { WorkflowEdge } from './WorkflowEdge';
 import { viewId, type Duplicate, type Selection } from './selection';
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from './shortcuts';
 import type { NodeRunOverlay } from '../../run-canvas/aggregation';
+import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu';
 import css from './Editor.module.css';
 
 export type { Selection } from './selection';
@@ -441,7 +441,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         </div>;
       })()}
       {search !== undefined && <div className={css.nodeSearch} role="dialog" aria-label={tx('workflows:canvas.find')} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setSearch(undefined); container.current?.focus(); } }}>
-        <input autoFocus className={css.input} aria-label={tx('workflows:canvas.find')} placeholder={tx('workflows:canvas.find')} value={search} onChange={event => setSearch(event.target.value)} />
+        <TextInput autoFocus className={css.input} aria-label={tx('workflows:canvas.find')} placeholder={tx('workflows:canvas.find')} value={search} onChange={event => setSearch(event.target.value)} />
         {found.map(node => <button type="button" key={node.id} onClick={() => { choose(node); setSearch(undefined); }}>{node.data.view === 'start' ? node.data.title || tx(node.data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : node.data.title}<small>{keyOfBlock(node.data.path)}</small></button>)}
         {!found.length && <p className={css.note}>{tx('workflows:palette.none')}</p>}
       </div>}
@@ -450,6 +450,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
 });
 
 import type { ReactNode } from 'react';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 function Tool({ label, active, disabled, onClick, children }: { label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode }) {
   return <button type="button" className={clsx(css.tool, active && css.toolActive)} aria-pressed={active} aria-label={label} title={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
@@ -458,16 +459,16 @@ function Zoom({ minimap, toggleMinimap }: { minimap: boolean; toggleMinimap: () 
   const tx = useTranslation(), flow = useReactFlow(), { zoom } = useViewport();
   return <div className={css.zoom} role="group" aria-label={tx('workflows:canvas.zoom')}>
     <button type="button" aria-label={tx('workflows:canvas.zoom-out')} title={tx('workflows:canvas.zoom-out')} onClick={() => void flow.zoomOut({ duration: 120 })}><IconMinus size={13} /></button>
-    <Menu.Root modal={false}>
-      <Menu.Trigger className={css.zoomLevel} aria-label={tx('workflows:canvas.zoom')}>{Math.round(zoom * 100)}%</Menu.Trigger>
-      <Menu.Portal><Menu.Positioner side="top" align="end" sideOffset={6} className={css.zoomPositioner}><Menu.Popup className={css.zoomMenu}>
-        {[2, 1, 0.75, 0.5, 0.25].map(level => <Menu.Item key={level} className={css.zoomItem} onClick={() => void flow.zoomTo(level, { duration: 120 })}>{`${level * 100}%`}</Menu.Item>)}
-        <Menu.Separator className={css.zoomSeparator} />
-        <Menu.Item className={css.zoomItem} onClick={() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration: 150 })}>{tx('workflows:canvas.fit')}</Menu.Item>
-        <Menu.Separator className={css.zoomSeparator} />
-        <Menu.CheckboxItem className={css.zoomItem} checked={minimap} onCheckedChange={toggleMinimap}>{tx('workflows:canvas.minimap')}<Menu.CheckboxItemIndicator><IconCheckOutline16 /></Menu.CheckboxItemIndicator></Menu.CheckboxItem>
-      </Menu.Popup></Menu.Positioner></Menu.Portal>
-    </Menu.Root>
+    <Menu modal={false}>
+      <MenuTrigger className={css.zoomLevel} aria-label={tx('workflows:canvas.zoom')}>{Math.round(zoom * 100)}%</MenuTrigger>
+      <MenuPopup side="top" align="end" sideOffset={6} className={css.zoomMenu}>
+        {[2, 1, 0.75, 0.5, 0.25].map(level => <MenuItem key={level} className={css.zoomItem} onClick={() => void flow.zoomTo(level, { duration: 120 })}>{`${level * 100}%`}</MenuItem>)}
+        <MenuSeparator className={css.zoomSeparator} />
+        <MenuItem className={css.zoomItem} onClick={() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration: 150 })}>{tx('workflows:canvas.fit')}</MenuItem>
+        <MenuSeparator className={css.zoomSeparator} />
+        <MenuCheckboxItem className={css.zoomItem} checked={minimap} onCheckedChange={toggleMinimap}>{tx('workflows:canvas.minimap')}</MenuCheckboxItem>
+      </MenuPopup>
+    </Menu>
     <button type="button" aria-label={tx('workflows:canvas.zoom-in')} title={tx('workflows:canvas.zoom-in')} onClick={() => void flow.zoomIn({ duration: 120 })}><IconPlus size={13} /></button>
   </div>;
 }

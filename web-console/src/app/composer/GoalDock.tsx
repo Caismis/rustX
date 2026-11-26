@@ -15,6 +15,7 @@ import {
   IconCheckOutline14, IconCloseOutline16, IconEditOutline16, IconGoalOutline16, IconPauseOutline16, IconPlayOutline16,
 } from '../../presentation/primitives/icons';
 import css from './GoalDock.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 type Field = 'objective' | 'budget';
 /** A control outcome not yet followed by a successful authoritative snapshot read. */
@@ -145,7 +146,7 @@ export function GoalDock({ state, observation, disabled, mutate, loadObjective }
     <div className={css.bar} title={goal.phase === 'blocked' ? goal.blocked_reason ?? undefined : undefined}>
       <span className={css.glyph} aria-hidden><IconGoalOutline16 size={14} /></span>
       {editing
-        ? <input className={css.input} autoFocus aria-label={editing.field === 'objective' ? tx('agent:goal-dock.goal-objective') : tx('agent:goal-dock.autonomous-round-budget')}
+        ? <TextInput unstyled className={css.input} autoFocus aria-label={editing.field === 'objective' ? tx('agent:goal-dock.goal-objective') : tx('agent:goal-dock.autonomous-round-budget')}
           {...editing.field === 'budget' ? { type: 'number', min: 1, step: 1, inputMode: 'numeric' as const } : { type: 'text' }}
           value={editing.draft} disabled={pending} onChange={event => setEditing({ field: editing.field, draft: event.target.value })} onKeyDown={onKeyDown} />
         : <><span className={css.label}>{label}</span><span className={css.objective} title={goal.objective}>{goal.objective}</span></>}

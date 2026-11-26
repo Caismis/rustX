@@ -17,6 +17,7 @@ import { InsertVariable } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from './ClassifierPanel.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 type Classifier = Extract<import('../../../document/model').NodeDefinition, {type:'classifier'}>;
 type Topic = Classifier['classes'][number];
@@ -107,7 +108,7 @@ function ClassLabel({label,address,defaultLabel}:{label:string; address:FieldAdd
   const field = useFieldDraft({address,canonical:JSON.stringify(label),command,onApplied:() => setEditing(false)});
   const text = JSON.parse(field.text) as string;
   return <div className={styles.label}>
-    {editing ? <input ref={input} data-workflow-field={encodeField(address)} autoFocus id={id} aria-label={tx('workflows:classifier.label')} maxLength={128} value={text} onFocus={event => event.currentTarget.select()}
+    {editing ? <TextInput ref={input} data-workflow-field={encodeField(address)} autoFocus id={id} aria-label={tx('workflows:classifier.label')} maxLength={128} value={text} onFocus={event => event.currentTarget.select()}
       onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') {event.preventDefault();field.apply();} else if (event.key === 'Escape') {event.preventDefault();event.stopPropagation();field.reset();setEditing(false);} }}/>
       : <button type="button" title={label} aria-label={tx('workflows:classifier.rename',{p0:label})} onDoubleClick={() => setEditing(true)} onPointerUp={event => {if(event.pointerType === 'touch') setEditing(true);}} onKeyDown={event => {if (event.key === 'Enter' || event.key === ' ') {event.preventDefault();setEditing(true);}}}>{label}</button>}
     {field.error && <small role="alert" className={css.hintError}>{describe(field.error)}</small>}<ConflictActions field={field}/>

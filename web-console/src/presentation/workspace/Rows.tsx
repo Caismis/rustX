@@ -401,7 +401,7 @@ export function SessionNodeItem({
   now: number
   onOpen: (id: SessionNode['id']) => void
   /** Open the browser-owned session rename dialog (row menu action). */
-  onRename: (id: SessionNode['id']) => void
+  onRename: (id: SessionNode['id'], returnFocus?: HTMLElement | null) => void
   /** Fork a session at its last completed turn (row menu action). */
   onFork: (id: SessionNode['id']) => void
   /** Open the native revision-checked deletion preview. */
@@ -445,7 +445,7 @@ export function SessionNodeItem({
       onClick={() => { onOpen(node.id) }}
       onPointerEnter={marquee.enter}
       onPointerLeave={marquee.leave}
-      onDoubleClick={event => { if (!(event.target as HTMLElement).closest('button:not([data-session-id])')) onRename(node.id); }}
+      onDoubleClick={event => { if (!(event.target as HTMLElement).closest('button:not([data-session-id])')) onRename(node.id, titleButton.current); }}
 
     >
       {/* Pending interaction and own or descendant activity outrank the
@@ -467,7 +467,7 @@ export function SessionNodeItem({
               setMenuOpen(false)
               // Dialog return focus needs a control that stays visible without hover.
               if (id === 'rename' || id === 'delete') titleButton.current?.focus({ preventScroll: true });
-              if (id === 'rename') onRename(node.id)
+              if (id === 'rename') onRename(node.id, titleButton.current)
               if (id === 'fork') onFork(node.id)
               if (id === 'delete') onDelete(node.id)
               if (id === 'pin') onPin?.(node.id)

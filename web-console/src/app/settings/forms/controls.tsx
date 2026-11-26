@@ -1,5 +1,7 @@
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
+import { Input } from '../../../presentation/primitives/Input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Choice } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
@@ -10,7 +12,7 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
 export function TextField({ label, value, change, required = false, secret = false }: {
   label: string; value?: string | null; change: (value: string) => void; required?: boolean; secret?: boolean;
 }) {
-  return <label>{label}<input type={secret ? 'password' : 'text'} value={value ?? ''} required={required}
+  return <label>{label}<Input type={secret ? 'password' : 'text'} value={value ?? ''} required={required}
     onChange={event => change(event.target.value)} autoComplete={secret ? 'new-password' : undefined} /></label>;
 }
 
@@ -18,7 +20,7 @@ export function Names({ label, value, change }: { label: string; value: string[]
   const tx = useTranslation();
   return <fieldset><legend>{label}</legend>
     {value.map((name, index) => <div className={css.names} key={index}>
-      <input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={name}
+      <Input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={name}
         onChange={event => change(value.map((item, at) => at === index ? event.target.value : item))} />
       <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => change(value.filter((_, at) => at !== index))}>{tx('settings:controls.remove')}</Button>
     </div>)}
@@ -47,8 +49,8 @@ export function CheckboxList({ label, values, selected, change }: {
 }) {
   return <fieldset><legend>{label}</legend>
     {[...new Set([...values, ...selected])].map(name => <label key={name}>
-      <input type="checkbox" checked={selected.includes(name)}
-        onChange={event => change(event.target.checked ? [...selected, name] : selected.filter(id => id !== name))} />{name}
+      <Checkbox checked={selected.includes(name)}
+        onCheckedChange={checked => change(checked ? [...selected, name] : selected.filter(id => id !== name))} />{name}
     </label>)}
   </fieldset>;
 }

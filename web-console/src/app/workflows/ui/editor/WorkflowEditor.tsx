@@ -31,6 +31,7 @@ import { Inspector } from './Inspector';
 import { DraftOwner, FieldCommits } from './forms/drafts';
 import { viewKey } from './view-store';
 import css from './Editor.module.css';
+import { Textarea } from '@/components/ui/textarea';
 
 /** Problems a native diagnostic marks in the block being edited: its own
  * node or edge, or the node owning the nested block it is in. */
@@ -296,7 +297,7 @@ function DetachedText({ draft, discard }: { draft: FieldDraft; discard: () => vo
     <Button size="sm" variant="outline" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>{tx(open ? 'workflows:notice.hide-text' : 'workflows:notice.view-text')}</Button>
     <Button size="sm" variant="outline" onClick={discard}>{tx('workflows:notice.discard-field')}</Button>
     {open && <div id={id} className={css.keptText}>
-      <textarea className={clsx(css.input, css.textarea, css.mono)} readOnly value={draft.text} aria-label={tx('workflows:notice.kept-text', { p0: location })} spellCheck={false} rows={Math.min(8, draft.text.split('\n').length + 1)} />
+      <Textarea className={clsx(css.input, css.textarea, css.mono)} readOnly value={draft.text} aria-label={tx('workflows:notice.kept-text', { p0: location })} spellCheck={false} rows={Math.min(8, draft.text.split('\n').length + 1)} />
       <Button size="sm" variant="outline" onClick={() => { setCopy(undefined); void writeClipboard(draft.text).then(ok => setCopy(ok ? 'copied' : 'failed')); }}>{tx('workflows:notice.copy-text')}</Button>
       <span role="status">{copy && tx(copy === 'copied' ? 'workflows:notice.text-copied' : 'workflows:notice.copy-failed')}</span>
     </div>}

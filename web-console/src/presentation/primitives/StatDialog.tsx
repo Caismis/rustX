@@ -4,7 +4,7 @@
 // its pill, kept 12px inside the viewport and closed by Escape or an outside
 // press. Base UI Popover owns the placement and dismissal that Harness
 // hand-rolls with useAnchoredPosition and useDismissOnOutsidePointer.
-import { Popover } from '@base-ui/react/popover';
+import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
 import type { ReactNode } from 'react';
 import css from './StatDialog.module.css';
 
@@ -22,14 +22,10 @@ export { css as statCss };
 export function StatDialog({ trigger, triggerClassName, label, title, panelClassName, children }: {
   trigger: ReactNode; triggerClassName: string; label?: string; title: string; panelClassName?: string; children: ReactNode;
 }) {
-  return <Popover.Root>
-    <Popover.Trigger className={triggerClassName} aria-label={label}>{trigger}</Popover.Trigger>
-    <Popover.Portal>
-      <Popover.Positioner className={css.positioner} side="top" sideOffset={8} collisionPadding={12}>
-        <Popover.Popup className={panelClassName ?? css.panel} aria-label={title}>{children}</Popover.Popup>
-      </Popover.Positioner>
-    </Popover.Portal>
-  </Popover.Root>;
+  return <Popover>
+    <PopoverTrigger className={triggerClassName} aria-label={label}>{trigger}</PopoverTrigger>
+    <PopoverPopup side="top" sideOffset={8} collisionPadding={12} className={panelClassName ?? css.panel} aria-label={title}>{children}</PopoverPopup>
+  </Popover>;
 }
 
 /** The dialog heading: glyph and section name left, the headline value right, over a rule. */

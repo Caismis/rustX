@@ -10,6 +10,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import type { WorkflowCheckReport } from '../../../protocol/app-server/v80';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 import { rootBlock } from '../workflow-root';
+import { readCossOptions, selectCossOption } from './coss-select';
 
 for (const width of [1440, 390])
   test.describe(`List and Aggregate ${width}`, () => {
@@ -67,8 +68,8 @@ for (const width of [1440, 390])
         await activate('list');
         await panel.getByRole('switch', { name: 'Filter', exact: true }).click();
         const operator = panel.getByRole('combobox', { name: 'Operator', exact: true });
-        await expect(operator.locator('option[value="contains"]')).toHaveCount(0);
-        await operator.selectOption('greater_equal');
+        expect(await readCossOptions(operator)).not.toContain('contains');
+        await selectCossOption(operator, 'greater_equal');
         const comparison = panel.getByRole('textbox', { name: 'Comparison value', exact: true });
         await comparison.fill('');
         await comparison.press('/');
@@ -97,16 +98,16 @@ for (const width of [1440, 390])
         // Switching input resets type-specific conditions; no user-controlled value-type selector.
         await panel.getByRole('button', { name: 'Choose a variable', exact: true }).first().click();
         await picker.getByRole('button', { name: /^args \/ words / }).click();
-        await operator.selectOption('empty');
+        await selectCossOption(operator, 'empty');
         await expect(comparison).toHaveCount(0);
-        await expect(operator.locator('option[value="greater"]')).toHaveCount(0);
+        expect(await readCossOptions(operator)).not.toContain('greater');
         await panel.getByRole('button', { name: 'Choose a variable', exact: true }).first().click();
         await picker.getByRole('button', { name: /^args \/ flags / }).click();
-        await expect(operator.locator('option')).toHaveCount(2);
-        await panel.getByRole('combobox', { name: 'Comparison value', exact: true }).selectOption('true');
+        expect(await readCossOptions(operator)).toHaveLength(2);
+        await selectCossOption(panel.getByRole('combobox', { name: 'Comparison value', exact: true }), 'true');
         await panel.getByRole('button', { name: 'Choose a variable', exact: true }).first().click();
         await picker.getByRole('button', { name: /^args \/ numbers / }).click();
-        await operator.selectOption('greater_equal');
+        await selectCossOption(operator, 'greater_equal');
         await comparison.fill('2');
         await comparison.blur();
         const heights = await panel
@@ -267,8 +268,8 @@ for (const width of [1440, 390]) test(`Boolean List references remain dynamic un
     await expect(comparison.getByRole('combobox')).toHaveCount(0);
     await panel.screenshot({ path: `/tmp/rustx-list-boolean-reference-${width}.png` });
     await comparison.getByRole('radio', { name: 'Constant', exact: true }).click();
-    await expect(comparison.getByRole('combobox', { name: 'Comparison value', exact: true })).toHaveValue('false');
-    await comparison.getByRole('combobox', { name: 'Comparison value', exact: true }).selectOption('true');
+    await expect(comparison.getByRole('combobox', { name: 'Comparison value', exact: true })).toHaveAttribute('data-value', 'false');
+    await selectCossOption(comparison.getByRole('combobox', { name: 'Comparison value', exact: true }), 'true');
     await expect.poll(() => [...checks].reverse().find(check => JSON.stringify(check.value) === JSON.stringify({ type: 'literal', value: true }))?.report)
       .toMatchObject({ structure: { status: 'valid' } });
     await save.click(); await expect(save).toBeDisabled();

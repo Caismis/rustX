@@ -16,6 +16,7 @@ import css from './Trajectory.module.css';
 import { workflowCalls, withWorkflowNodes } from './workflow';
 import { useWorkflowNodes } from './useWorkflowNodes';
 import { useWorkflowRunCanvas } from '../workflows/run-canvas/context';
+import { Input as TextInput } from '@/presentation/primitives/Input';
 
 const DETAILS_MIN_WIDTH = 320;
 const DETAILS_MAX_WIDTH = 720;
@@ -277,7 +278,7 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
       </div>
       <div className={css.search}>
         <IconSearchOutline16 size={11} className={css.searchIcon} />
-        <input type="search" className={css.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
+        <TextInput unstyled type="search" className={css.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
       </div>
     </div>
     {(cache.error || context.error) && <p role="alert" className={css.error}>{cache.error || context.error}</p>}

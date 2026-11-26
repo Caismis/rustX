@@ -16,8 +16,8 @@ function permissionsCleared(permissions: ResourcePermissionSet | null | undefine
 
 /** Source availability plus three-mode MCP server permission overrides.
  *
- * Permissions ride the MCP identity mutation but keep a distinct transaction
- * draft key so this card never shares Save/Remove with the connection editor.
+ * Permissions ride the same MCP unit transaction as the connection editor:
+ * one shared draft means one document write carries both field sets on Save.
  * Remove is disabled: clearing overrides writes `permissions: undefined` while
  * preserving the server definition. */
 export function McpPermissionDetail({
@@ -25,11 +25,15 @@ export function McpPermissionDetail({
   scope,
   revision,
   name,
+  embedded,
 }: {
   source: SourceSettings;
   scope: SourceScope;
   revision?: string;
   name: string;
+  /** Set when rendered inside the connection editor, which owns the shared
+   * unit's outcome and review chrome. */
+  embedded?: boolean;
 }) {
   const tx = useTranslation();
   const mcp = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
@@ -45,12 +49,14 @@ export function McpPermissionDetail({
       {revision !== undefined && (
         <AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={name} />
       )}
-      <UnitForm<McpWrite>
+      {/* Same unit identity as the connection editor's McpWrite mutation:
+          one shared draft, one CAS write per save — a Command+Plan+Automatic
+          batch lands in a single document write. */}
+      <UnitForm<McpWrite> embedded={embedded}
         title={tx('resources:mcp.permissions')}
         authored={authored}
         blank={blank}
         revision={mcp.revision}
-        draftKey={JSON.stringify(['mcp-permissions', name])}
         removable={false}
         mutation={value => ({ kind: 'mcp', id: name, authored: value })}
       >

@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { useRef, useState } from 'react';
 import { ChatViewport } from '../../src/presentation/layout/ChatViewport';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/app/console.css';
 function Fixture() {

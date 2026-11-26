@@ -222,18 +222,26 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.getByRole('button', { name: 'Clear search' }).click();
   // The initial Settings target is General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  // A pointer resting on the just-clicked rail button opens its tooltip once
+  // the hover delay elapses, which is load-dependent: park it before capture.
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'settings-shell-light.png');
   await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-dark.png');
+  // Appearance is a webui-local preference: it applies the moment it is
+  // picked, so navigation needs no save.
   await page.getByRole('button', { name: 'Home' }).click();
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
   expect((await page.locator('main').boundingBox())!.x).toBe(56);
   await expectStableScreenshot(page, 'mobile-rail-dark.png');
   await page.getByRole('button', { name: 'Home' }).click();
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'mobile-expanded-dark.png');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.mouse.move(0, 0);
   await expectStableScreenshot(page, 'mobile-settings-dark.png');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -627,7 +635,11 @@ async function openFixtureSettings(page: Page, workspace: boolean) {
   else await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Settings', exact: true });
   await expect(settings).toBeVisible();
-  await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
+  // User Settings opens on General — a webui-only page with no scope segment;
+  // workspace Settings has no General page and lands on Models.
+  await expect(workspace
+    ? settings.getByRole('button', { name: 'rustX', exact: true })
+    : settings.getByRole('heading', { name: 'General', exact: true })).toBeVisible();
   if (workspace) expect((await page.evaluate(() => window.sessionFixture.settingsTargets())).at(-1)).toBe('project');
   return settings;
 }
@@ -668,7 +680,9 @@ for (const scenario of ['global', 'workspace', 'global-refusal', 'workspace-refu
   expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
   expect(nativeMutations(await page.evaluate(() => window.sessionFixture.requests())).slice(mutations.length).map(request => request.method)).toEqual(['thread/resume']);
   await expect(settings).toBeVisible();
-  await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
+  await expect(workspace
+    ? settings.getByRole('button', { name: 'rustX', exact: true })
+    : settings.getByRole('heading', { name: 'General', exact: true })).toBeVisible();
   if (!refused) await expect(page.getByRole('alert', { includeHidden: true }).filter({ hasText: 'Navigation fixture rejected' })).toHaveCount(0);
   await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', competing ? 'session' : 'session-draft');
   await page.getByRole('button', { name: 'Home', exact: true }).click();

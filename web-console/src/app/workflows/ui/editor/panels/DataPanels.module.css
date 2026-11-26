@@ -49,6 +49,12 @@
   flex: 1;
   min-width: 0;
 }
+/* coss triggers carry their own min-width utility; inside a condition row they
+ * share the line with the value editor instead of squeezing it away. */
+.condition > [data-slot='select-trigger'] {
+  flex: 1;
+  min-width: 0;
+}
 .scalar > div {
   min-height: 32px;
   background: var(--dsw-alias-interactive-bg-hover-solid);

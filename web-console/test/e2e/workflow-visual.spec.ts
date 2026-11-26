@@ -44,6 +44,10 @@ async function chooseFieldType(page: Page, dialog: Locator, type: string) {
   await dialog.getByRole('button', { name: /^Field type/ }).click();
   await page.getByRole('menuitem', { name: new RegExp(`${type}$`) }).click();
 }
+async function chooseEnumOption(page: Page, trigger: Locator, name: RegExp) {
+  await trigger.click();
+  await page.getByRole('option', { name }).click();
+}
 async function capture(page: Page, info: TestInfo, name: string) {
   // Wait for the selected projection and one committed viewport frame, not a timer.
   const selected = canvas(page).locator('.react-flow__node.selected');
@@ -198,16 +202,22 @@ test('renames input fields and edits optional array items through the field dial
     await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input).toEqual(renameCases[0].after);
     await activate(page, 'Workflow Start');
-    await input.getByRole('button', { name: 'Add input field', exact: true }).click();
-    const add = page.getByRole('dialog', { name: 'Add input field', exact: true });
+    const addButton = input.getByRole('button', { name: 'Add input field', exact: true });
+    await addButton.focus(); await expect(addButton).toBeFocused(); await page.keyboard.press('Enter');
+    let add = page.getByRole('dialog', { name: 'Add input field', exact: true });
+    await expect(add.getByLabel('Variable name', { exact: true })).toBeFocused();
+    await add.getByRole('button', { name: 'Cancel', exact: true }).focus(); await page.keyboard.press('Enter');
+    await expect(add).toHaveCount(0); await expect(addButton).toBeFocused();
+    await page.keyboard.press('Enter');
+    add = page.getByRole('dialog', { name: 'Add input field', exact: true });
     await chooseFieldType(page, add, 'array'); await add.getByLabel('Variable name', { exact: true }).fill('list');
-    await add.getByLabel('Item type', { exact: true }).selectOption('');
+    await chooseEnumOption(page, add.getByLabel('Item type', { exact: true }), /^Any$/);
     await add.getByRole('button', { name: 'Save', exact: true }).click();
     await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array' });
     expect(parse(readFileSync(file, 'utf8')).block.input.required).toContain('list');
     await input.getByRole('button', { name: 'Edit list', exact: true }).first().click();
-    await edit.getByLabel('Item type', { exact: true }).selectOption('boolean'); await edit.getByRole('button', { name: 'Save', exact: true }).click();
+    await chooseEnumOption(page, edit.getByLabel('Item type', { exact: true }), /boolean$/); await edit.getByRole('button', { name: 'Save', exact: true }).click();
     await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array', items: { type: 'boolean' } });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
@@ -235,8 +245,10 @@ test('refuses destination-only finite schema collisions without adopting extra p
       await name.fill('after'); await dialog.getByRole('button', { name: 'Save', exact: true }).click();
       await expect(name).toHaveValue('after'); await expect(name).toHaveAttribute('aria-invalid', 'true');
       await expect(dialog.getByRole('alert')).toContainText('That ID is already used');
-      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+      // The modal dialog inerts the editor behind it: the undo state is
+      // verified once the dialog closes and the toolbar rejoins the tree.
       await name.press('Escape'); await expect(dialog).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
       expect(parse(readFileSync(file, 'utf8'))).toEqual(before); expect(before.block.input).toEqual(example.schema);
       await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();

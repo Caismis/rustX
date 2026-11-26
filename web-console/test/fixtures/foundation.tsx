@@ -9,6 +9,7 @@ import { HoverCard } from '../../src/presentation/primitives/HoverCard';
 import { Modal } from '../../src/presentation/primitives/Modal';
 import { DisclosureRow } from '../../src/presentation/primitives/DisclosureRow';
 import { MarkdownText } from '../../src/presentation/markdown/MarkdownText';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

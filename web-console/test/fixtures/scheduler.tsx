@@ -3,6 +3,7 @@ import { App } from '../../src/app/App';
 import { schedulerFixture, task, workflowFixture } from '../scheduler-fixture';
 import { localeController } from '../../src/locale/controller';
 import { sourceReceipt } from '../fixture';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

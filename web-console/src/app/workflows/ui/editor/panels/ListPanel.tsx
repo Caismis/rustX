@@ -12,6 +12,7 @@ import { BooleanInput, DataOutputs, DataSection, ScalarInput } from './DataField
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from './DataPanels.module.css';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
 export function ListPanel(props: PanelProps) {
   const tx = useTranslation(),
@@ -105,45 +106,38 @@ export function ListPanel(props: PanelProps) {
         {filter && (
           <>
             {hasFields && (
-              <select
+              <EnumSelect
                 className={css.input}
-                aria-label={tx('workflows:list.field')}
+                label={tx('workflows:list.field')}
                 value={JSON.stringify(filter.path)}
-                onChange={(event) => {
-                  const path = JSON.parse(event.target.value) as string[],
-                    field = fields.find((field) => JSON.stringify(field.path) === event.target.value);
+                onChange={(next) => {
+                  const path = JSON.parse(next) as string[],
+                    field = fields.find((field) => JSON.stringify(field.path) === next);
                   changeFilter({
                     path,
                     operator: listOperators(field?.kind ?? 'unknown')[0],
                     value: scalarValue(field?.kind ?? 'unknown'),
                   });
                 }}
-              >
-                {fields.map((field) => (
-                  <option key={JSON.stringify(field.path)} value={JSON.stringify(field.path)}>
-                    {field.path.join(' / ')}
-                  </option>
-                ))}
-              </select>
+                options={fields.map((field) => ({ value: JSON.stringify(field.path), label: field.path.join(' / ') }))}
+              />
             )}
             <div className={styles.condition}>
-              <select
-                aria-label={tx('workflows:data.operator')}
+              <EnumSelect
+                label={tx('workflows:data.operator')}
                 value={filter.operator}
-                onChange={(event) =>
-                  changeFilter({ ...filter, operator: event.target.value as WorkflowListFilter['operator'] })
+                onChange={(operator) =>
+                  changeFilter({ ...filter, operator })
                 }
-              >
-                {operators.map((operator) => (
-                  <option key={operator} value={operator}>
-                    {kind === 'number'
-                      ? comparisonSymbols[operator]
-                      : kind === 'boolean'
-                        ? tx(operator === 'equal' ? 'workflows:list.is' : 'workflows:list.is-not')
-                        : tx(`workflows:data.op-${operator}`)}
-                  </option>
-                ))}
-              </select>
+                options={operators.map((operator) => ({
+                  value: operator,
+                  label: kind === 'number'
+                    ? comparisonSymbols[operator]
+                    : kind === 'boolean'
+                      ? tx(operator === 'equal' ? 'workflows:list.is' : 'workflows:list.is-not')
+                      : tx(`workflows:data.op-${operator}`),
+                }))}
+              />
               {!['empty', 'not_empty'].includes(filter.operator) &&
                 (kind === 'boolean' ? (
                   <BooleanInput value={filter.value} address={at('filter', 'value')} edit={props.edit}
@@ -255,18 +249,13 @@ export function ListPanel(props: PanelProps) {
         {sort && (
           <>
             {hasFields && (
-              <select
+              <EnumSelect
                 className={css.input}
-                aria-label={tx('workflows:list.sort-field')}
+                label={tx('workflows:list.sort-field')}
                 value={JSON.stringify(sort.path)}
-                onChange={(event) => changeSort({ ...sort, path: JSON.parse(event.target.value) })}
-              >
-                {fields.map((field) => (
-                  <option key={JSON.stringify(field.path)} value={JSON.stringify(field.path)}>
-                    {field.path.join(' / ')}
-                  </option>
-                ))}
-              </select>
+                onChange={(next) => changeSort({ ...sort, path: JSON.parse(next) })}
+                options={fields.map((field) => ({ value: JSON.stringify(field.path), label: field.path.join(' / ') }))}
+              />
             )}
             <div className={styles.options} role="radiogroup" aria-label={tx('workflows:data.order')}>
               {(['asc', 'desc'] as const).map((order) => (

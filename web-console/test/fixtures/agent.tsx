@@ -19,6 +19,7 @@ import { chatSpacingFixture } from './chat-spacing';
 import { workflowReviewHistoryFixture } from './workflow-review-history';
 import { questionHistoryFixture } from './question-history';
 import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v80';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';

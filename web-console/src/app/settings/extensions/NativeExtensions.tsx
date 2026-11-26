@@ -23,27 +23,27 @@ import { ConfigUnavailable } from '../forms/ConfigUnavailable';
  * holds. */
 export function NativeExtensions({ source, scope, revision }: { source: SourceSettings; scope: SourceScope; revision?: string }) {
   const tx = useTranslation();
-  if (revision === undefined) return <section aria-label={tx('settings:native-extensions.native-extensions')}><h4>{tx('settings:native-extensions.native-extensions')}</h4><ConfigUnavailable /></section>;
+  if (revision === undefined) return <ConfigUnavailable />;
   const plugins = sourceView(source, scope)?.authored?.agent?.plugins;
   return <section aria-label={tx('settings:native-extensions.native-extensions')}>
-    <h4>{tx('settings:native-extensions.native-extensions')}</h4>
 
-    <UnitForm<TodoExtensionDocument> title={tx('settings:native-extensions.todo-extension')} authored={plugins?.todo ?? undefined} blank={{}} revision={revision}
+    <UnitForm<TodoExtensionDocument> immediate title={tx('settings:native-extensions.todo-extension')} authored={plugins?.todo ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'todo', authored } })}>
       {(value, change) => <Toggle label={tx('settings:native-extensions.enable-todo')} checked={value.enabled ?? false} onChange={enabled => change({ enabled })} />}
     </UnitForm>
 
-    <UnitForm<GoalExtensionDocument> title={tx('settings:native-extensions.goal-extension')} authored={plugins?.goal ?? undefined} blank={{}} revision={revision}
+    <UnitForm<GoalExtensionDocument> immediate title={tx('settings:native-extensions.goal-extension')} authored={plugins?.goal ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'goal', authored } })}>
       {(value, change) => <Toggle label={tx('settings:native-extensions.enable-goal')} checked={value.enabled ?? false} onChange={enabled => change({ enabled })} />}
     </UnitForm>
 
-    <UnitForm<AgentStatusExtensionDocument> title={tx('settings:native-extensions.agent-status-extension')} authored={plugins?.agent_status ?? undefined} blank={{}} revision={revision}
+    <UnitForm<AgentStatusExtensionDocument> immediate title={tx('settings:native-extensions.agent-status-extension')} authored={plugins?.agent_status ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'agent_status', authored } })}>
       {(value, change) => <StatusFields value={value} change={change} />}
     </UnitForm>
   </section>;
 }
+// The page provides the group heading; the sections inside are the units.
 
 export function StatusFields({ value, change }: { value: AgentStatusExtensionDocument; change: (value: AgentStatusExtensionDocument) => void }) {
   const tx = useTranslation();

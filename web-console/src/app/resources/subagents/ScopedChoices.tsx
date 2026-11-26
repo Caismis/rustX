@@ -3,6 +3,8 @@ import type { SourceScope } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { IconSearchOutline16 } from '../../../presentation/primitives/icons';
 import css from './Subagents.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Checkbox } from '@/components/ui/checkbox';
 
 export function resourceScopes(scope: SourceScope): readonly SourceScope[] {
   return scope === 'workspace' ? ['workspace', 'user'] : ['user'];
@@ -33,14 +35,14 @@ export function ResourceChoices({ label, options, selected, change }: {
   return <div className={css.resourceList} role="group" aria-label={label}>
     {searchable && <div className={css.filter}>
       <IconSearchOutline16 />
-      <input type="search" aria-label={tx('resources:subagents.filter-choices-for', { p0: label })}
+      <TextInput type="search" aria-label={tx('resources:subagents.filter-choices-for', { p0: label })}
         placeholder={tx('resources:subagents.filter-choices')} value={query} onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter') event.preventDefault(); }} />
     </div>}
     {matching.length ? <div className={css.resourceChoices}>
       {matching.map(({ name, description }) => <label key={name} className={css.resourceChoice} title={description}>
-        <input type="checkbox" aria-label={name} checked={checked.has(name)}
-          onChange={event => change(event.target.checked ? [...selected, name] : selected.filter(id => id !== name))} />
+        <Checkbox aria-label={name} checked={checked.has(name)}
+          onCheckedChange={checkedNow => change(checkedNow ? [...selected, name] : selected.filter(id => id !== name))} />
         <span>
           <span className={css.choiceName}>{name}</span>
           {description && <span className={css.choiceDescription}>{description}</span>}

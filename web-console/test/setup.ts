@@ -15,7 +15,10 @@ vi.mock('@floating-ui/react-dom', async importOriginal => ({
 // Whether a focused control is still rendered is the same layout fact (see
 // `SettingsPanel`'s navigation handoff), and jsdom has no `checkVisibility`;
 // node-environment suites have no DOM at all.
-if (typeof Element !== 'undefined') Element.prototype.checkVisibility = () => true;
+if (typeof Element !== 'undefined') {
+  Element.prototype.checkVisibility = () => true;
+  if (!Element.prototype.getAnimations) Element.prototype.getAnimations = () => [];
+}
 // CodeMirror measures text ranges; jsdom has no layout. Geometry is verified
 // through the connected browser, while unit tests exercise real editor state.
 if (typeof Range !== 'undefined') {

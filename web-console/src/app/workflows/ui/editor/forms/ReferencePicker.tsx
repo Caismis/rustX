@@ -1,6 +1,4 @@
-import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react-dom';
-import { createPortal } from 'react-dom';
-import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useSelector } from '@xstate/react';
 import type { WorkflowAnalysisQuery, WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
@@ -12,6 +10,8 @@ import { IconEntry, IconPlus, KindIcon } from '../../icons';
 import { DraftOwner } from './drafts';
 import { useCandidateAnalysis } from './analysis';
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Popover, PopoverPopup } from '@/components/ui/popover';
 
 /** A bounded native consumer query. Titles decorate the catalog; they never
  * decide availability, compatibility or lexical reference paths. `token`
@@ -25,8 +25,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const document = useSelector(owner.editor, snapshot => snapshot.context.document);
   const [open, setOpen] = useState(initiallyOpen), [search, setSearch] = useState('');
   const popup = useRef<HTMLDivElement>(null);
-  const { refs, floatingStyles } = useFloating({ open, placement: 'bottom-start', strategy: 'fixed', whileElementsMounted: autoUpdate, middleware: [offset(6), flip(), shift({ padding: 12 })] });
-  useEffect(()=>{if(anchor)refs.setReference({getBoundingClientRect:()=>anchor});},[anchor,refs.setReference]);
+  const virtualAnchor = useMemo(() => anchor ? { getBoundingClientRect: () => anchor } : undefined, [anchor]);
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null), searchInput = useRef<HTMLInputElement>(null), id = useId();
   const field = encodeField(address);
   useEffect(() => { setOpen(initiallyOpen); setSearch(''); }, [field, initiallyOpen]);
@@ -34,11 +33,12 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   useEffect(() => { if (wasOpen.current && !open) onClose?.(returnFocus.current); wasOpen.current = open; }, [open]);
   useEffect(() => {
     if (!open) return;
-    searchInput.current?.focus();
+    if (!token) searchInput.current?.focus();
+    if (token) return;
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) { returnFocus.current = false; setOpen(false); } };
     window.document.addEventListener('pointerdown', outside, true);
     return () => window.document.removeEventListener('pointerdown', outside, true);
-  }, [open]);
+  }, [open, token]);
   const titleOf = (choice: WorkflowReferenceChoice) => choice.producer && document ? nodePresentation(document, choice.producer.block, choice.producer.node)?.title || choice.path[0]
     : choice.path[0] === 'args' ? startTitle() : choice.path[0];
   const query = useMemo<WorkflowAnalysisQuery | undefined>(() => {
@@ -71,24 +71,8 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentTitle = producer === 'args' ? startTitle() : document && producerBlock ? nodePresentation(document, producerBlock, producer)?.title || producer : producer;
   const currentNode = document && producerBlock ? nodeAt(blockAt(document, producerBlock)!, producer) : undefined;
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
-  const present = (content: import('react').ReactNode) => token ? createPortal(content, window.document.body) : content;
-  return <div ref={root} className={css.referencePicker}>
-    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={element => { trigger.current = element; if(!anchor)refs.setReference(element); }} data-workflow-field={field} type="button" disabled={disabled} title={path.length?`${currentTitle} / ${currentValue}`:undefined} className={addLabel ? css.iconButton : token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={addLabel??tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
-      {addLabel?<IconPlus size={14}/>:token && path.length ? <span className={css.branchVariableToken}>
-        {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
-        <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>
-      </span> : <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>}
-    </button>
-    {open && present(<div ref={element => { popup.current = element; refs.setFloating(element); }} id={id} className={token ? `${css.referencePopup} ${css.branchVariablePopup}` : css.referencePopup} style={token ? floatingStyles : undefined} role="dialog" aria-label={tx('workflows:value.pick')} onWheel={event => event.stopPropagation()} onKeyDown={event => {
-      if (event.nativeEvent.isComposing) return;
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        const choices = [...popup.current!.querySelectorAll<HTMLButtonElement>('[data-variable]:not(:disabled)')], active = choices.indexOf(window.document.activeElement as HTMLButtonElement);
-        const next = event.key === 'ArrowDown' ? Math.min(active + 1, choices.length - 1) : Math.max(active - 1, 0);
-        if (choices[next]) { event.preventDefault(); choices[next].focus(); }
-      }
-    }}>
-      <input ref={searchInput} className={css.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
+  const panelBody = <>
+      <TextInput ref={searchInput} className={css.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
       {!result && <p role="status" className={css.note}>{tx('workflows:value.analyzing')}</p>}
       {result?.failed && <p role="alert" className={css.note}>{tx('workflows:value.analysis-failed')}</p>}
       {report?.diagnostic && <p className={css.note}>{report.diagnostic}</p>}
@@ -110,6 +94,27 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
       {report && !groups.size && <p className={css.note}>{tx('workflows:value.no-matches')}</p>}
       {report?.truncated && <p className={css.note}>{tx('workflows:value.truncated')}</p>}
       <button type="button" className={css.smallButton} onClick={close}>{tx('workflows:value.close-picker')}</button>
-    </div>)}
-  </div>;
+  </>;
+  const panelKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const choices = [...popup.current!.querySelectorAll<HTMLButtonElement>('[data-variable]:not(:disabled)')], active = choices.indexOf(window.document.activeElement as HTMLButtonElement);
+      const next = event.key === 'ArrowDown' ? Math.min(active + 1, choices.length - 1) : Math.max(active - 1, 0);
+      if (choices[next]) { event.preventDefault(); choices[next].focus(); }
+    }
+  };
+  return <Popover open={token && open} onOpenChange={(next, details) => { if (!next) { returnFocus.current = details.reason === 'escape-key'; setOpen(false); } }}><div ref={root} className={css.referencePicker}>
+    <button style={anchor?{display:'none'}:undefined} hidden={!!anchor} ref={trigger} data-workflow-field={field} type="button" disabled={disabled} title={path.length?`${currentTitle} / ${currentValue}`:undefined} className={addLabel ? css.iconButton : token ? `${css.referenceTrigger} ${css.branchVariableTrigger}` : css.referenceTrigger} aria-label={addLabel??tx('workflows:value.pick')} aria-haspopup="dialog" aria-expanded={open} aria-controls={id} onClick={() => { returnFocus.current = open; setOpen(value => !value); }}>
+      {addLabel?<IconPlus size={14}/>:token && path.length ? <span className={css.branchVariableToken}>
+        {producer === 'args' ? <IconEntry size={13} /> : currentNode ? <KindIcon kind={currentNode.type} size={13} /> : null}
+        <span className={css.branchVariableSource}>{currentTitle}</span><span className={css.branchVariableSlash}>/</span><b><span aria-hidden>{'{x}'}</span> {currentValue}</b>
+      </span> : <span>{currentTitle || placeholder || tx('workflows:value.pick')}{path.length > 1 ? ` / ${path.slice(1).join(' / ')}` : ''}</span>}
+    </button>
+    {open && (token
+      ? <PopoverPopup ref={popup} id={id} className={`${css.referencePopup} ${css.branchVariablePopup}`} role="dialog" aria-label={tx('workflows:value.pick')}
+        anchor={virtualAnchor ?? trigger} positionMethod="fixed" side="bottom" align="start" sideOffset={6} collisionPadding={12} initialFocus={searchInput} finalFocus={() => false}
+        onWheel={event => event.stopPropagation()} onKeyDown={panelKeyDown}>{panelBody}</PopoverPopup>
+      : <div ref={popup} id={id} className={css.referencePopup} role="dialog" aria-label={tx('workflows:value.pick')} onWheel={event => event.stopPropagation()} onKeyDown={panelKeyDown}>{panelBody}</div>)}
+  </div></Popover>;
 }

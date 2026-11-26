@@ -19,6 +19,8 @@ function updateKind<K extends Value['type'] | Predicate['type'], T extends { typ
   });
 }
 import css from '../Editor.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
 type ValueKind = Value['type'];
 const VALUE_KINDS: readonly ValueKind[] = ['reference', 'template', 'literal', 'object', 'array'];
@@ -93,11 +95,11 @@ export function PathEditor({ address, path, edit }: { address: FieldAddress; pat
   }), coalesce);
   return <div className={css.path} aria-label={tx('workflows:value.path')} role="group">
     {path.map((component, index) => <span key={index} className={css.pathComponent}>
-      <input className={clsx(css.input, css.mono, css.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
+      <TextInput className={clsx(css.input, css.mono, css.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
         size={Math.max(4, component.length)} onChange={event => { const text = event.target.value; set(current => current.map((value, at) => at === index ? text : value), encodeField(within(address, [index]))); }} />
       <button type="button" className={css.pathRemove} aria-label={tx('workflows:inspector.remove', { p0: component })} onClick={() => set(current => current.filter((_, at) => at !== index))}>×</button>
     </span>)}
-    <input data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono, css.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
+    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono, css.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
       onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } else if (event.key === 'Escape') adding.reset(); }} />
     <small className={css.hint}>{tx('workflows:value.path-hint')}</small>
   </div>;
@@ -112,7 +114,7 @@ export function AddKey({ existing, address, add, label, action }: { existing: re
   } });
   const valid = field.text !== '' && !existing.includes(field.text);
   return <div className={css.inline}>
-    <input data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
+    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
       onChange={event => field.change(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
     <button type="button" className={css.smallButton} disabled={!valid} onClick={field.apply}>{action ?? tx('workflows:inspector.add-field')}</button>
   </div>;
@@ -155,10 +157,9 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
   }, array);
   return <fieldset className={css.value}>
     <legend className={css.fieldLabel}>{label}</legend>
-    <select className={css.input} aria-label={tx('workflows:predicate.kind')} value={predicate.type}
-      onChange={event => { const kind = event.target.value as PredicateKind; if (kind !== predicate.type) edit(document => updateField<Predicate>(document, address, current => current.type === kind ? current : predicateTemplate(kind, current))); }}>
-      {PREDICATE_KINDS.map(kind => <option key={kind} value={kind}>{tx(`workflows:predicate.${kind}`)}</option>)}
-    </select>
+    <EnumSelect className={css.input} label={tx('workflows:predicate.kind')} value={predicate.type}
+      onChange={kind => { if (kind !== predicate.type) edit(document => updateField<Predicate>(document, address, current => current.type === kind ? current : predicateTemplate(kind, current))); }}
+      options={PREDICATE_KINDS.map(kind => ({ value: kind, label: tx(`workflows:predicate.${kind}`) }))} />
     {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
     {('left' in predicate) && <>
       <ValueEditor label={tx('workflows:predicate.left')} address={within(address, ['left'])} value={predicate.left} edit={edit} />

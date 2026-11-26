@@ -39,7 +39,8 @@ test('workspace primary/menu actions, keyboard, failure, retry and localization 
   expect(await page.evaluate(() => (window as any).desktop.catalogs)).toEqual([false, false, false, false, true, false, false, true]);
   await page.keyboard.press('Escape'); await expect(menu).toBeFocused();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
+  await choose(settings, 'Language', '中文');
   await page.getByRole('button', { name: '主页', exact: true }).click();
   await expect(page.getByRole('button', { name: '打开工作区', exact: true })).toBeVisible();
   for (const width of [1440, 390]) {

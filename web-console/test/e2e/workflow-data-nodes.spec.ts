@@ -7,6 +7,7 @@ import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { selectCossOption } from './coss-select';
 
 const canvas=(page:Page)=>page.getByRole('region',{name:'Workflow canvas'});
 const panel=(page:Page)=>page.getByRole('complementary',{name:'Inspector'});
@@ -43,7 +44,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     // Primitive list filtering needs no field path; operations have fixed order.
     await activate(card(page,'list'));
     await panel(page).getByRole('switch',{name:'Filter',exact:true}).click();
-    await panel(page).getByRole('combobox',{name:'Operator',exact:true}).selectOption('greater_equal');
+    await selectCossOption(panel(page).getByRole('combobox',{name:'Operator',exact:true}), 'greater_equal');
     const comparison=panel(page).getByRole('textbox',{name:'Comparison value',exact:true});await comparison.fill('2');await comparison.blur();
     await panel(page).getByRole('switch',{name:'Sort',exact:true}).click();
     await panel(page).getByRole('radio',{name:'Descending',exact:true}).click();
@@ -82,7 +83,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await chooser.getByRole('option',{name:'Code Execution',exact:true}).click();
     await expect(panel(page)).toContainText('Code runs in the Session workspace');
     const command=panel(page).getByRole('textbox',{name:'Code',exact:true});
-    await expect(panel(page).getByRole('combobox',{name:'Language',exact:true})).toHaveValue('python3');
+    await expect(panel(page).getByRole('combobox',{name:'Language',exact:true})).toHaveAttribute('data-value', 'python3');
     await expect(command).toContainText('def main(arg1: str, arg2: str)');
     await expect(panel(page).getByRole('textbox',{name:'Variable name',exact:true})).toHaveCount(2);
     for(const index of [0,1]){await panel(page).getByRole('button',{name:'Choose a variable',exact:true}).nth(index).click();await page.getByRole('dialog',{name:'Choose a variable',exact:true}).getByRole('button',{name:/^args \/ query /}).click();}
@@ -98,7 +99,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     const palette=(await page.getByRole('dialog').boundingBox())!;expect(palette.y+palette.height).toBeLessThanOrEqual(page.viewportSize()!.height);
     await page.getByRole('dialog').getByRole('option',{name:'Variable Assigner',exact:true}).click();
     await panel(page).getByRole('button',{name:'Add variable',exact:true}).click();
-    await panel(page).getByRole('combobox',{name:'Operation',exact:true}).selectOption('increment');
+    await selectCossOption(panel(page).getByRole('combobox',{name:'Operation',exact:true}), 'increment');
     const save=page.getByRole('button',{name:'Save File',exact:true});await save.click();await expect(save).toBeDisabled({timeout:15_000});
     const saved=parse(readFileSync(file,'utf8'));
     expect(saved.block.nodes.left.variables.question.path).toEqual(['args','query']);

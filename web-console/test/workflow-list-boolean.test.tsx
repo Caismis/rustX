@@ -11,6 +11,7 @@ import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
 import { viewId } from '../src/app/workflows/ui/editor/selection';
 import { rootBlock } from './workflow-root';
 import { statusSource } from './workflow-fixtures';
+import { chooseCossOption } from './coss-select';
 
 const actors: { stop: () => void }[] = [];
 beforeEach(() => {
@@ -88,7 +89,7 @@ it('displays and edits Boolean list references through save and reopen, and crea
   fireEvent.click(reopened.comparison().getByRole('radio', { name: 'Constant' }));
   expect(reopened.node()).toMatchObject({ filter: { value: { type: 'literal', value: false } } });
   const constant = reopened.comparison().getByRole('combobox', { name: 'Comparison value' });
-  fireEvent.change(constant, { target: { value: 'true' } });
+  await chooseCossOption(constant, 'True');
   fireEvent.click(reopened.comparison().getByRole('radio', { name: 'Constant' }));
   expect((await reopened.save()).block.nodes.list).toMatchObject({ filter: { value: { type: 'literal', value: true } } });
 });
@@ -99,7 +100,7 @@ it('changes a Boolean constant into a reference only through the explicit Variab
   list.filter!.value = { type: 'literal', value: true };
   const view = await open(source);
   expect(view.comparison().getByRole('radio', { name: 'Constant', checked: true })).toBeTruthy();
-  expect((view.comparison().getByRole('combobox', { name: 'Comparison value' }) as HTMLSelectElement).value).toBe('true');
+  expect(view.comparison().getByRole('combobox', { name: 'Comparison value' }).textContent).toContain('True');
   fireEvent.click(view.comparison().getByRole('radio', { name: 'Variable' }));
   expect(view.node()).toMatchObject({ filter: { value: { type: 'reference', path: [] } } });
   expect(view.comparison().queryByRole('combobox')).toBeNull();

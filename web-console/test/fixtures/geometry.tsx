@@ -15,6 +15,7 @@ import { applyTheme } from '../../src/app/appearance';
 import { geometryFormat } from '../../src/app/components/documents/geometry/format';
 import { Server } from '../fixture';
 import type { SessionFileReference } from '../../../protocol/app-server/v80';
+import '../../src/components/ui/coss.css';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/reset.css';

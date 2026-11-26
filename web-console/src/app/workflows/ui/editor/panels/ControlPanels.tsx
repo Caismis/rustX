@@ -1,8 +1,9 @@
-import { Menu } from '@base-ui/react/menu';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu';
 import type { WorkflowAssignment, WorkflowLoopVariable, WorkflowVarType, WorkflowWriteMode } from '../../../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14, IconTrashOutline16 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';
+import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 import { setField, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
 import { renameLoopVariable } from '../../../document/commands';
 import { blockAt, nodeAt, type Value } from '../../../document/model';
@@ -33,9 +34,7 @@ function ConstantField({ label, type, value, address, edit }: { label: string; t
   if (value.type !== 'literal') return null;
   if (type === 'string' && typeof value.value === 'string') return <DraftTextField label={label} value={value.value} address={within(address, ['value'])} />;
   if (type === 'boolean') return <label className={css.inlineField}><span>{label}</span>
-    <select className={css.input} aria-label={label} value={String(value.value === true)} onChange={event => edit(document => setField(document, address, { type: 'literal', value: event.target.value === 'true' }))}>
-      <option value="true">{tx('workflows:port.true')}</option><option value="false">{tx('workflows:port.false')}</option>
-    </select></label>;
+    <EnumSelect className={css.input} label={label} value={String(value.value === true)} onChange={next => edit(document => setField(document, address, { type: 'literal', value: next === 'true' }))} options={[{ value: 'true', label: tx('workflows:port.true') }, { value: 'false', label: tx('workflows:port.false') }]} /></label>;
   return <JsonField label={label} value={value.value} rows={3} line={type === 'number'} address={within(address, ['value'])} />;
 }
 
@@ -61,14 +60,12 @@ export function LoopPanel(props: PanelProps) {
         return <div key={index} className={css.loopVariable}>
           <div className={css.loopVariableHead}>
             <div><RouteId label={tx('workflows:loop.variable-name')} value={variable.label} address={within(base, ['label'])} rename={(document, from, to) => renameLoopVariable(document, props.block, props.id, from, to)} /></div>
-            <select className={css.input} aria-label={tx('workflows:loop.variable-type')} value={variable.var_type} onChange={event => { const var_type = event.target.value as WorkflowVarType; set({ var_type, value: variableMode ? unset() : constant(var_type) }); }}>
-              {VAR_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-            </select>
+            <EnumSelect className={css.input} label={tx('workflows:loop.variable-type')} value={variable.var_type} onChange={var_type => set({ var_type, value: variableMode ? unset() : constant(var_type) })}
+              options={VAR_TYPES.map(type => ({ value: type, label: type }))} />
             <button type="button" className={css.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index), { array: at('loop_variables'), removed: index })}><IconTrashOutline16 /></button>
           </div>
-            <select className={css.input} aria-label={tx('workflows:loop.input-mode')} value={variableMode ? 'variable' : 'constant'} onChange={event => set({ value: event.target.value === 'variable' ? unset() : constant(variable.var_type) })}>
-              <option value="variable">{tx('workflows:loop.mode-variable')}</option><option value="constant">{tx('workflows:loop.mode-constant')}</option>
-            </select>
+            <EnumSelect className={css.input} label={tx('workflows:loop.input-mode')} value={variableMode ? 'variable' : 'constant'} onChange={mode => set({ value: mode === 'variable' ? unset() : constant(variable.var_type) })}
+              options={[{ value: 'variable', label: tx('workflows:loop.mode-variable') }, { value: 'constant', label: tx('workflows:loop.mode-constant') }]} />
           {variableMode && variable.value.type === 'reference'
             ? <ReferencePicker address={within(base, ['value'])} path={variable.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
             : <ConstantField label={tx('workflows:loop.value')} type={variable.var_type} value={variable.value} address={within(base, ['value'])} edit={props.edit} />}
@@ -107,16 +104,14 @@ export function IterationPanel(props: PanelProps) {
     </section>
     <section className={css.group} aria-label={tx('workflows:iteration.error-method')}>
       <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.error-method')}</span>
-        <Menu.Root modal={false}>
-          <Menu.Trigger className={css.strategyTrigger} aria-label={tx('workflows:iteration.error-method')}>{tx(`workflows:iteration.error-${mode}`)}<IconChevronDownOutline14 /></Menu.Trigger>
-          <Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={4} className={css.branchOperatorPositioner}>
-            <Menu.Popup className={css.strategyPopup}>
-              {ITERATION_ERRORS.map(type => <Menu.Item key={type} className={css.strategyItem} onClick={() => update(({ error_handle_mode: _, ...current }) => type === 'terminated' ? current : { ...current, error_handle_mode: type }, at('error_handle_mode'))}>
+        <Menu modal={false}>
+          <MenuTrigger className={css.strategyTrigger} aria-label={tx('workflows:iteration.error-method')}>{tx(`workflows:iteration.error-${mode}`)}<IconChevronDownOutline14 /></MenuTrigger>
+          <MenuPopup side="bottom" align="end" sideOffset={4} className={css.strategyPopup}>
+              {ITERATION_ERRORS.map(type => <MenuItem key={type} className={css.strategyItem} onClick={() => update(({ error_handle_mode: _, ...current }) => type === 'terminated' ? current : { ...current, error_handle_mode: type }, at('error_handle_mode'))}>
                 <b>{tx(`workflows:iteration.error-${type}`)}</b>
-              </Menu.Item>)}
-            </Menu.Popup>
-          </Menu.Positioner></Menu.Portal>
-        </Menu.Root>
+              </MenuItem>)}
+            </MenuPopup>
+        </Menu>
       </h3>
     </section>
     <section className={css.group} aria-label={tx('workflows:iteration.flatten')}>
@@ -165,19 +160,13 @@ export function AssignerPanel(props: PanelProps) {
         setItems(node.items.map((current, i) => i === index ? { variable, operation, ...(value ? { value } : {}) } : current));
       return <div key={index} className={css.loopVariable}>
         <div className={css.assignmentHead}>
-          <select className={css.input} aria-label={tx('workflows:assigner.variable')} value={item.variable[1] ?? ''} onChange={event => {
-            const variable = variables.find(entry => entry.label === event.target.value)!;
+          <EnumSelect className={css.input} label={tx('workflows:assigner.variable')} value={item.variable[1] || null} placeholder={tx('workflows:assigner.select')} onChange={next => {
+            const variable = variables.find(entry => entry.label === next)!;
             set([step!.node, variable.label], 'overwrite', unset());
-          }}>
-            {!type && <option value="">{tx('workflows:assigner.select')}</option>}
-            {variables.map(variable => <option key={variable.label} value={variable.label}>{variable.label} · {variable.var_type}</option>)}
-          </select>
-          <select className={css.input} aria-label={tx('workflows:assigner.operation')} value={item.operation} disabled={!type} onChange={event => {
-            const mode = event.target.value as WorkflowWriteMode;
+          }} options={variables.map(variable => ({ value: variable.label, label: `${variable.label} · ${variable.var_type}` }))} />
+          <EnumSelect className={css.input} label={tx('workflows:assigner.operation')} value={item.operation} disabled={!type} onChange={mode => {
             set(item.variable, mode, type && operand(mode, type));
-          }}>
-            {(type ? operations(type) : [item.operation]).map(mode => <option key={mode} value={mode}>{tx(`workflows:assigner.op-${mode}`)}</option>)}
-          </select>
+          }} options={(type ? operations(type) : [item.operation]).map(mode => ({ value: mode, label: tx(`workflows:assigner.op-${mode}`) }))} />
           <button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.remove', { p0: String(index + 1) })} onClick={() => setItems(node.items.filter((_, i) => i !== index), { array: at('items'), removed: index })}><IconTrashOutline16 /></button>
         </div>
         {item.value?.type === 'reference' ? <ReferencePicker address={within(base, ['value'])} path={item.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />

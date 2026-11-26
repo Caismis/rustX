@@ -609,7 +609,8 @@ for (const width of [1440, 390]) test(`overview tooltip names the block and zoom
   const track = timelineTrack(page);
   // As in Harness, a block names its role, recorded range and total after a delay.
   await page.locator('[data-record-id="trace:104"]').hover();
-  const tooltip = page.getByRole('region', { name: 'Trajectory timeline' }).getByRole('tooltip');
+  // coss tooltips portal to the document rather than rendering inside the region.
+  const tooltip = page.getByRole('tooltip');
   await expect(tooltip).toBeVisible();
   await expect(tooltip).toContainText('TOOL');
   await expect(tooltip).toContainText('→');

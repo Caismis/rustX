@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
+import { useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { Icon } from '@iconify/react/offline';
 import { BundledIcon, hasBundledIcon, useBundledIcons } from '../../../presentation/primitives/BundledIcon';
@@ -7,6 +6,8 @@ import { useTranslation } from '../../../locale/react';
 import { ICON_CATEGORIES, type IconCategory } from './iconCategories';
 import { IconWorkflow } from './icons';
 import css from './WorkflowIcon.module.css';
+import { Input as TextInput } from '@/presentation/primitives/Input';
+import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
 
 /** The icon a Workflow shows when its display names none. */
 export const DEFAULT_WORKFLOW_ICON = 'lucide:workflow';
@@ -24,31 +25,31 @@ export function IconPicker({ value, onChange, disabled, className, label }: {
 }) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   const root = useRef<HTMLDivElement>(null);
-  const { refs, floatingStyles } = useFloating({
-    open,
-    placement: 'bottom-start',
-    strategy: 'fixed',
-    whileElementsMounted: autoUpdate,
-    middleware: [offset(6), flip({ padding: 12 }), shift({ padding: 12 }),
-      size({ padding: 12, apply: ({ availableHeight, elements }) => { elements.floating.style.maxHeight = `${Math.max(160, availableHeight)}px`; } })],
-  });
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
-  }, [open]);
-  return <div ref={root} className={css.anchor}
-    // Escape closes the panel first; the enclosing dialog skips a handled key.
-    onKeyDown={event => { if (open && event.key === 'Escape') { event.preventDefault(); setOpen(false); } }}>
-    <button ref={refs.setReference} type="button" className={clsx(!label && css.tile, className)} aria-haspopup="listbox" aria-expanded={open}
-      aria-label={label ?? tx('workflows:icon.choose')} title={label ?? tx('workflows:icon.choose')} disabled={disabled} onClick={() => setOpen(value => !value)}>
-      {label ?? <WorkflowIcon icon={value} size={22} />}
-    </button>
-    {open && <div ref={refs.setFloating} style={floatingStyles} className={css.panel}>
-      <IconGrid value={value} onChange={icon => { onChange(icon); setOpen(false); }} />
-    </div>}
+  return <div ref={root} className={css.anchor}>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger ref={trigger} className={clsx(!label && css.tile, className)} aria-label={label ?? tx('workflows:icon.choose')}
+        title={label ?? tx('workflows:icon.choose')} disabled={disabled}>
+        {label ?? <WorkflowIcon icon={value} size={22} />}
+      </PopoverTrigger>
+      <PopoverPopup
+        className={css.panel}
+        role="group"
+        aria-label={tx('workflows:icon.label')}
+        positionMethod="fixed"
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        collisionPadding={{ left: 68, right: 12, top: 12, bottom: 12 }}
+        finalFocus={() => trigger.current ?? false}
+        portalProps={{ container: root }}
+        aria-hidden={!open}
+        inert={!open}
+      >
+        <IconGrid value={value} onChange={icon => { onChange(icon); setOpen(false); }} />
+      </PopoverPopup>
+    </Popover>
   </div>;
 }
 
@@ -70,7 +71,7 @@ function IconGrid({ value, onChange }: { value: string; onChange: (icon: string)
   }, [set, search, category, value]);
   const chips: (IconCategory | 'all')[] = ['all', ...Object.keys(ICON_CATEGORIES) as IconCategory[]];
   return <>
-    <input type="search" value={query} autoFocus onChange={event => setQuery(event.target.value)}
+    <TextInput type="search" value={query} autoFocus onChange={event => setQuery(event.target.value)}
       placeholder={tx('workflows:icon.search')} aria-label={tx('workflows:icon.search')} />
     <div className={css.categories} role="group" aria-label={tx('workflows:icon.categories')}>
       {chips.map(id => <button key={id} type="button" aria-pressed={!search && id === category}

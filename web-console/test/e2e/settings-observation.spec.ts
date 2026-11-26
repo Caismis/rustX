@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openSettingsPage, settledSave } from './shell-actions';
+import { connectRemote, leaveRetainedDetail, openSettingsPage, settledSetting } from './shell-actions';
 import { readSource } from './source-reading';
 
 /** Observe the real socket and hold selected server responses until the test
@@ -66,22 +66,26 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    // Runtime limits live on Advanced; coordination metadata stays internal.
+    // Context limits live on the Advanced landing itself; a retained detail
+    // (e.g. Connection) can greet the page instead — step back to the list.
     await openSettingsPage(page, 'Advanced');
+    const backToAdvanced = settings.getByRole('button', { name: 'Back to Advanced', exact: true });
+    await leaveRetainedDetail(backToAdvanced, settings.getByLabel('Reserved tokens', { exact: true }));
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     const field = settings.getByLabel('Reserved tokens', { exact: true });
-    const save = settings.getByRole('button', { name: 'Save Context', exact: true });
-    const notice = settledSave(settings, 'Context');
-    // Settle a save whose acknowledgement already landed: release held
-    // authoritative reads one at a time until the post-commit read is adopted.
-    // Each stale or superseded read may owe exactly one more bounded read.
+    const unit = settings.getByRole('form', { name: 'Context', exact: true });
+    // Scalar units commit themselves; the staged-draft marker clears when the
+    // write has settled. Settle a save whose acknowledgement already landed:
+    // release held authoritative reads one at a time until the post-commit
+    // read is adopted. Each stale or superseded read may owe exactly one more
+    // bounded read.
     const settle = async () => {
-      for (let attempt = 0; attempt < 12 && !(await notice.isVisible()); attempt++) {
+      for (let attempt = 0; attempt < 12 && (await unit.getAttribute('data-draft')); attempt++) {
         await expect.poll(() => probe.heldReads.length).toBeGreaterThan(0);
         probe.heldReads.shift()!.release();
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve(undefined))));
       }
-      await expect(notice).toBeVisible();
+      await settledSetting(unit);
     };
 
     // The initial observation must finish before holding post-write reads;
@@ -90,7 +94,6 @@ test('publications and an acknowledgement during outstanding convergence reads c
     // First save: acknowledgements flow, authoritative reads are held.
     probe.armReads();
     await field.fill('19');
-    await save.click();
     await expect.poll(() => probe.readsIssued()).toBeGreaterThan(1);
     await settle();
     expect(probe.writes()).toBe(1);
@@ -99,8 +102,9 @@ test('publications and an acknowledgement during outstanding convergence reads c
     // the acknowledgement neither cancels the reads nor poses as the
     // observation; every obligation converges through the same read owner.
     const changedBefore = probe.changed();
+    probe.releaseReads();
+    await expect(field).toBeEnabled();
     await field.fill('20');
-    await save.click();
     await expect.poll(() => probe.changed()).toBeGreaterThan(changedBefore);
     await settle();
     probe.releaseReads();
@@ -124,6 +128,8 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
+    const backToAdvanced = settings.getByRole('button', { name: 'Back to Advanced', exact: true });
+    await leaveRetainedDetail(backToAdvanced, settings.getByLabel('Reserved tokens', { exact: true }));
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
 
     // The write commits natively, but its acknowledgement is held on the wire.
@@ -131,7 +137,6 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     probe.armWrites();
     probe.armReads();
     await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
-    await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
     await expect.poll(() => probe.heldWrites.length).toBe(1);
     await expect.poll(() => probe.heldReads.length).toBeGreaterThan(0);
 
@@ -154,7 +159,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settledSave(settings, 'Context')).toBeVisible();
+    await settledSetting(settings.getByRole('form', { name: 'Context', exact: true }));
     await expect(timeout).toHaveValue('600001');
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }
