@@ -24,7 +24,7 @@ import { useGesture } from './pointer.ts'
 import { PaneTree, type SizePreview } from './PaneTree.tsx'
 import { TabLayout, type TabRetention } from './TabLayout.tsx'
 import type { PaneCallbacks, SplitBlock } from './render.ts'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 
 /** What the docked surface needs: the layout, its limits, and the outward contracts. */
 export interface DockSurfaceProps {
@@ -291,7 +291,7 @@ function Surface({
   }
 
   return (
-    <div className={css.surface} ref={surface} data-dockkit-surface data-dockkit-drop-zones={dropZones}>
+    <div className={dockkitCss.surface} ref={surface} data-dockkit-surface data-dockkit-drop-zones={dropZones}>
       {draw(callbacks, preview.sizes)}
     </div>
   )

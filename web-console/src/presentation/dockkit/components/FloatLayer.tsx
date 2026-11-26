@@ -25,7 +25,7 @@ import { movedRect, resizedRect } from '../engine/geometry.ts'
 import { floatRect, getPane, getTab, onlyTabId } from '../engine/tree.ts'
 import { useGesture } from './pointer.ts'
 import { TabTitle } from './TabTitle.tsx'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 
 /** The layout whose `floats` this layer draws. */
 export interface FloatLayerProps {
@@ -124,22 +124,22 @@ export function FloatHeader({ paneId, tab, labels, intents, renderTabTitle, canC
   readonly drag: ReturnType<typeof useFloatGestures>['drag']
 }): ReactNode {
   return (
-    <header className={clsx(css.tabStrip, css.floatHeader)} data-dockkit-float-grip={paneId}
+    <header className={clsx(dockkitCss.tabStrip, dockkitCss.floatHeader)} data-dockkit-float-grip={paneId}
       onPointerDown={(event) => { drag('move', paneId, event) }}>
-      <div className={clsx(css.tab, css.floatTitle)} data-dockkit-float-title>
+      <div className={clsx(dockkitCss.tab, dockkitCss.floatTitle)} data-dockkit-float-title>
         <TabTitle>{renderTabTitle?.(tab) ?? tab.title}</TabTitle>
       </div>
-      <div className={css.stripFill} />
+      <div className={dockkitCss.stripFill} />
       <Tooltip label={labels.dockFloat} side="bottom" delayMs={500}>
-        <button type="button" className={css.iconButton} aria-label={labels.dockFloat}
+        <button type="button" className={dockkitCss.iconButton} aria-label={labels.dockFloat}
           data-dockkit-float-dock={paneId} onPointerDown={(event) => { event.stopPropagation() }}
           onClick={() => { intents.unfloatPane(paneId) }}>
-          <IconPanelLeftOutlineRegular className={css.dockGlyph} />
+          <IconPanelLeftOutlineRegular className={dockkitCss.dockGlyph} />
         </button>
       </Tooltip>
       {(canCloseTab?.(tab.id) ?? true) && (
         <Tooltip label={labels.closeTab} shortcutKeys={labels.closeTabKeys} side="bottom" delayMs={500}>
-          <button type="button" className={css.iconButton} aria-label={labels.closeTab}
+          <button type="button" className={dockkitCss.iconButton} aria-label={labels.closeTab}
             data-dockkit-float-close={paneId} onPointerDown={(event) => { event.stopPropagation() }}
             onClick={() => { intents.closeTab(tab.id) }}>
             <IconCloseOutlineRegular />
@@ -166,7 +166,7 @@ export function FloatLayer({ state, intents, labels, renderTab, renderTabTitle, 
         return (
           <div
             key={paneId}
-            className={css.float}
+            className={dockkitCss.float}
             data-dockkit-float={paneId}
             tabIndex={-1}
             data-dockkit-float-active={state.activePaneId === paneId || undefined}
@@ -180,9 +180,9 @@ export function FloatLayer({ state, intents, labels, renderTab, renderTabTitle, 
             onPointerDown={() => { raise(paneId) }}
           >
             <FloatHeader {...{ paneId, tab, labels, intents, renderTabTitle, canCloseTab, drag }} />
-            <div className={css.floatBody}>{renderTab(tab)}</div>
+            <div className={dockkitCss.floatBody}>{renderTab(tab)}</div>
             <div
-              className={css.floatResize}
+              className={dockkitCss.floatResize}
               data-dockkit-float-resize={paneId}
               onPointerDown={(event) => { drag('resize', paneId, event) }}
             />

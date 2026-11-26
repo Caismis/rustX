@@ -10,7 +10,7 @@
  */
 import { useLayoutEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 
 /** Set or clear the span's `data-dockkit-tab-clipped` from its current geometry. */
 function markClipped(element: HTMLElement): void {
@@ -34,5 +34,5 @@ export function TabTitle({ children }: { readonly children: ReactNode }): ReactN
     observer.observe(element)
     return () => { observer.disconnect() }
   }, [])
-  return <span ref={span} className={css.tabTitle} data-dockkit-tab-title>{children}</span>
+  return <span ref={span} className={dockkitCss.tabTitle} data-dockkit-tab-title>{children}</span>
 }

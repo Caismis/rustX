@@ -19,7 +19,7 @@ import { Children, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { focusWithoutRing, modalSelector, observeComposition } from '../primitives'
 import type { DockLabels } from '../contract/adapter.ts'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 import { Popover, PopoverPopup } from '@/components/ui/popover'
 
 /** Gap between the opening control and the menu, and the viewport margin kept clear. */
@@ -74,7 +74,7 @@ export function TabMenu({ labels, anchor, onClose, onDismiss, extras }: TabMenuP
   return (
     <Popover open onOpenChange={(next) => { if (!next) onDismiss() }}>
       <PopoverPopup
-        className={css.menu}
+        className={dockkitCss.menu}
         ref={self}
         role="menu"
         data-dockkit-tab-menu
@@ -109,7 +109,7 @@ export function TabMenu({ labels, anchor, onClose, onDismiss, extras }: TabMenuP
         onClick={(event) => { event.stopPropagation() }}
       >
         {onClose !== undefined && (
-          <button type="button" role="menuitem" className={css.menuItem} data-dockkit-menu-close onClick={onClose}>
+          <button type="button" role="menuitem" className={dockkitCss.menuItem} data-dockkit-menu-close onClick={onClose}>
             {labels.closeTab}
           </button>
         )}

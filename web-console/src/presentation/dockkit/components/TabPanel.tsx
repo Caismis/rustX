@@ -30,7 +30,7 @@ import { getTab } from '../engine/tree.ts'
 import type { PaneCallbacks, SplitBlock } from './render.ts'
 import { TabMenu } from './TabMenu.tsx'
 import { TabTitle } from './TabTitle.tsx'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 
 /**
  * The ic_ds_panel_left_outline_16 frame alone: its outer and inner rounded
@@ -85,10 +85,10 @@ function DockHint({ zone, active, labels }: {
   readonly labels: PaneCallbacks['labels']
 }): ReactNode {
   return (
-    <div className={css.dockHint} data-dockkit-dock-zone={zone} data-dockkit-drop-active={active || undefined}>
-      <div className={css.dockHintCard}>
+    <div className={dockkitCss.dockHint} data-dockkit-dock-zone={zone} data-dockkit-drop-active={active || undefined}>
+      <div className={dockkitCss.dockHintCard}>
         <ZoneGlyph zone={zone} />
-        <span className={css.dockHintLabel}>{labels.dropZone[zone]}</span>
+        <span className={dockkitCss.dockHintLabel}>{labels.dropZone[zone]}</span>
       </div>
     </div>
   )
@@ -243,9 +243,9 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
     // renders among this surface's cells in tab-id order, so one sorted before this
     // row would sit earlier in the document, where this row's drag box overrides the
     // float's own subtraction and swallows the panel's header and controls.
-    <div className={css.tabStrip} role="tablist" data-dockkit-strip={pane.id}
+    <div className={dockkitCss.tabStrip} role="tablist" data-dockkit-strip={pane.id}
       data-window-drag={state.floats.length === 0 ? true : undefined}>
-      <div ref={stripTabs} className={css.stripTabs} role="presentation" data-dockkit-strip-tabs={pane.id}>
+      <div ref={stripTabs} className={dockkitCss.stripTabs} role="presentation" data-dockkit-strip-tabs={pane.id}>
         {pane.tabs.map((tabId, index) => {
           const tab = getTab(state, tabId)
           const selected = tabId === pane.activeTabId
@@ -257,7 +257,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
             <Fragment key={tabId}>
               {(index > 0 || stripIndex === index) && (
                 <div
-                  className={clsx(css.slot, stripIndex === index && css.slotCaret)}
+                  className={clsx(dockkitCss.slot, stripIndex === index && dockkitCss.slotCaret)}
                   data-dockkit-caret={stripIndex === index ? index : undefined}
                 />
               )}
@@ -266,10 +266,10 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
                 aria-selected={selected}
                 tabIndex={selected ? 0 : -1}
                 className={clsx(
-                  css.tab,
-                  selected && css.tabActive,
-                  quiet && css.tabQuiet,
-                  callbacks.draggingTabId === tabId && css.tabDragging,
+                  dockkitCss.tab,
+                  selected && dockkitCss.tabActive,
+                  quiet && dockkitCss.tabQuiet,
+                  callbacks.draggingTabId === tabId && dockkitCss.tabDragging,
                 )}
                 data-dockkit-tab={tabId}
                 data-dockkit-tab-quiet={quiet || undefined}
@@ -317,7 +317,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
                   <Tooltip disabled={menu !== undefined} label={callbacks.labels.closeTab} shortcutKeys={callbacks.labels.closeTabKeys} side="bottom" delayMs={500}>
                     <button
                       type="button"
-                      className={css.tabClose}
+                      className={dockkitCss.tabClose}
                       aria-label={callbacks.labels.closeTab}
                       aria-keyshortcuts={callbacks.labels.closeTabShortcut}
                       data-dockkit-tab-close={tabId}
@@ -346,13 +346,13 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
             </Fragment>
           )
         })}
-        {stripIndex === pane.tabs.length && <div className={clsx(css.slot, css.slotCaret)} data-dockkit-caret={stripIndex} />}
+        {stripIndex === pane.tabs.length && <div className={clsx(dockkitCss.slot, dockkitCss.slotCaret)} data-dockkit-caret={stripIndex} />}
       </div>
       {callbacks.canAddTab(pane.id) && (
         <Tooltip label={callbacks.labels.addTab} side="bottom" delayMs={500}>
           <button
             type="button"
-            className={css.addTab}
+            className={dockkitCss.addTab}
             aria-label={callbacks.labels.addTab}
             data-dockkit-add-tab={pane.id}
             onClick={(event) => {
@@ -364,7 +364,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
           </button>
         </Tooltip>
       )}
-      <div className={css.stripFill} data-dockkit-strip-fill />
+      <div className={dockkitCss.stripFill} data-dockkit-strip-fill />
       {!(callbacks.hideSplitWhenBlocked && block !== undefined) && (
         <Tooltip label={block === undefined ? callbacks.labels.splitPane : splitBlockedTitle(callbacks.labels, block)} shortcutKeys={callbacks.labels.splitPaneKeys} side="bottom" delayMs={500}>
           <span
@@ -373,7 +373,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
           >
             <button
               type="button"
-              className={css.iconButton}
+              className={dockkitCss.iconButton}
               aria-label={callbacks.labels.splitPane}
               aria-keyshortcuts={callbacks.labels.splitPaneShortcut}
               disabled={block !== undefined}
@@ -395,7 +395,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
       // The embedder's controls report their own intents; the pane's
       // click-to-focus must not add a focus entry to each of them.
         <div
-          className={css.stripChrome}
+          className={dockkitCss.stripChrome}
           data-dockkit-strip-chrome
           onClick={(event) => { event.stopPropagation() }}
         >
@@ -412,7 +412,7 @@ export function PaneDropHints({ pane, callbacks }: Pick<TabPanelProps, 'pane' | 
   const zone = target?.kind === 'zone' && target.paneId === pane.id ? target.zone : undefined
   if (zone === undefined) return null
   return <>
-    <div className={css.dockScrim} data-dockkit-dock-scrim />
+    <div className={dockkitCss.dockScrim} data-dockkit-dock-scrim />
     {callbacks.horizontalDrops && zone !== 'center'
       ? <>
         <DockHint zone="left" active={zone === 'left'} labels={callbacks.labels} />
@@ -427,7 +427,7 @@ export function TabPanel({ state, pane, callbacks }: TabPanelProps): ReactNode {
   const active = pane.activeTabId === undefined ? undefined : getTab(state, pane.activeTabId)
   return (
     <section
-      className={css.pane}
+      className={dockkitCss.pane}
       data-dockkit-pane={pane.id}
       tabIndex={-1}
       data-dockkit-pane-active={state.activePaneId === pane.id || undefined}
@@ -436,9 +436,9 @@ export function TabPanel({ state, pane, callbacks }: TabPanelProps): ReactNode {
       }}
     >
       <TabStrip state={state} pane={pane} callbacks={callbacks} />
-      <div className={css.paneBody}>
+      <div className={dockkitCss.paneBody}>
         {active === undefined
-          ? <p className={css.empty}>{callbacks.labels.emptyPane}</p>
+          ? <p className={dockkitCss.empty}>{callbacks.labels.emptyPane}</p>
           : callbacks.renderTab(active)}
         <PaneDropHints pane={pane} callbacks={callbacks} />
       </div>

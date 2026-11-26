@@ -12,7 +12,7 @@ import type { LayoutState, NodeId, SplitId } from '../contract/types.ts'
 import { getNode } from '../engine/tree.ts'
 import type { PaneCallbacks } from './render.ts'
 import { TabPanel } from './TabPanel.tsx'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 
 /** Fractions a live divider drag is previewing for one split. */
 export interface SizePreview {
@@ -35,20 +35,20 @@ export function PaneTree({ state, nodeId, callbacks, preview }: PaneTreeProps): 
   const sizes = preview !== undefined && preview.splitId === node.id ? preview.sizes : node.sizes
   return (
     <div
-      className={clsx(css.split, node.axis === 'row' ? css.splitRow : css.splitColumn)}
+      className={clsx(dockkitCss.split, node.axis === 'row' ? dockkitCss.splitRow : dockkitCss.splitColumn)}
       data-dockkit-split={node.id}
     >
       {node.children.map((childId, index) => (
         <Fragment key={childId}>
           {index > 0 && (
             <div
-              className={css.divider}
+              className={dockkitCss.divider}
               data-dockkit-divider={`${node.id}:${index - 1}`}
               onPointerDown={(event) => { callbacks.onDividerPressed(node.id, index - 1, event) }}
             />
           )}
           <div
-            className={css.splitCell}
+            className={dockkitCss.splitCell}
             data-dockkit-cell={`${node.id}:${index}`}
             style={{ flexGrow: sizes[index] }}
           >

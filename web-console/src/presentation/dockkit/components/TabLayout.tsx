@@ -10,7 +10,7 @@ import type { SizePreview } from './PaneTree.tsx'
 import type { PaneCallbacks } from './render.ts'
 import { FloatHeader, useFloatGestures } from './FloatLayer.tsx'
 import { PaneDropHints, TabPanel, TabStrip } from './TabPanel.tsx'
-import css from './dockkit.module.css'
+import { dockkitCss } from './dockkitCss';
 
 /** Host policy for lazily retaining a tab body without reparenting it. */
 export interface TabRetention {
@@ -77,10 +77,10 @@ function TabHost({ state, callbacks, intents, tab, pane, column, floats, focusRe
   const rect = floating ? lifted ?? floatRect(pane) : undefined
   const depth = lifted === undefined ? state.floats.indexOf(pane.id) + 1 : state.floats.length + 1
   return (
-    <div className={clsx(css.tabCell, floating && css.floatingCell)} hidden={!selected}
+    <div className={clsx(dockkitCss.tabCell, floating && dockkitCss.floatingCell)} hidden={!selected}
       data-dockkit-host={floating ? 'float' : 'dock'} data-dockkit-column={floating ? undefined : column}
       style={{ gridColumn: floating ? 1 : column * 2 + 1, gridRow: 1, order: floating ? depth : 0 }}>
-      <section ref={host} tabIndex={-1} className={clsx(css.tabHost, floating ? css.float : css.pane)}
+      <section ref={host} tabIndex={-1} className={clsx(dockkitCss.tabHost, floating ? dockkitCss.float : dockkitCss.pane)}
         aria-hidden={!visible || undefined}
         data-dockkit-content={tab.id}
         data-dockkit-pane={!floating && selected ? pane.id : undefined}
@@ -93,17 +93,17 @@ function TabHost({ state, callbacks, intents, tab, pane, column, floats, focusRe
         }}
         onPointerDown={() => { if (floating) floats.raise(pane.id) }}
         onClick={() => { if (!floating && state.activePaneId !== pane.id) callbacks.onFocusPane(pane.id) }}>
-        <div className={css.tabHostHeader}>
+        <div className={dockkitCss.tabHostHeader}>
           {selected && (floating
             ? <FloatHeader paneId={pane.id} tab={tab} labels={callbacks.labels} intents={intents}
               renderTabTitle={callbacks.renderTabTitle} canCloseTab={callbacks.canCloseTab} drag={floats.drag} />
             : <TabStrip state={state} pane={pane} callbacks={callbacks} />)}
         </div>
-        <div ref={body} className={clsx(css.tabHostBody, floating ? css.floatBody : css.paneBody)}>
+        <div ref={body} className={clsx(dockkitCss.tabHostBody, floating ? dockkitCss.floatBody : dockkitCss.paneBody)}>
           {visited && (retained || (active && selected)) ? callbacks.renderTab(tab) : null}
           {!floating && <PaneDropHints pane={pane} callbacks={callbacks} />}
         </div>
-        {floating && <div className={css.floatResize} data-dockkit-float-resize={pane.id}
+        {floating && <div className={dockkitCss.floatResize} data-dockkit-float-resize={pane.id}
           onPointerDown={(event) => { floats.drag('resize', pane.id, event) }} />}
       </section>
     </div>
@@ -137,7 +137,7 @@ export function TabLayout(props: LayoutProps): ReactNode {
   const floats = useFloatGestures(state, props.intents)
   const columns = sizes.map(size => `minmax(0, ${size}fr)`).join(' 0px ')
   return (
-    <div className={css.tabLayout} data-dockkit-split={root.kind === 'split' ? root.id : undefined}
+    <div className={dockkitCss.tabLayout} data-dockkit-split={root.kind === 'split' ? root.id : undefined}
       style={{ gridTemplateColumns: columns }}>
       {/* Logical order changes must not make React move a connected webview's ancestor. */}
       {Object.values(state.tabs).sort((a, b) => a.id.localeCompare(b.id)).map((tab) => {
@@ -146,11 +146,11 @@ export function TabLayout(props: LayoutProps): ReactNode {
           column={panes.findIndex(candidate => candidate.id === pane.id)} floats={floats} focusRequest={focusRequest} />
       })}
       {panes.filter(pane => pane.tabs.length === 0).map(pane => (
-        <div key={pane.id} className={css.emptyTabHost} data-dockkit-empty style={{ gridColumn: panes.indexOf(pane) * 2 + 1, gridRow: 1 }}>
+        <div key={pane.id} className={dockkitCss.emptyTabHost} data-dockkit-empty style={{ gridColumn: panes.indexOf(pane) * 2 + 1, gridRow: 1 }}>
           <TabPanel state={state} pane={pane} callbacks={callbacks} />
         </div>
       ))}
-      {root.kind === 'split' && <div className={clsx(css.divider, css.tabLayoutDivider)}
+      {root.kind === 'split' && <div className={clsx(dockkitCss.divider, dockkitCss.tabLayoutDivider)}
         data-dockkit-divider={`${root.id}:0`} style={{ gridColumn: 2, gridRow: 1 }}
         onPointerDown={(event) => { callbacks.onDividerPressed(root.id, 0, event) }} />}
     </div>
