@@ -242,3 +242,7 @@ body[data-ds-dark-theme] {
     border: 0 solid;
   }
 }
+
+@utility session-line-areas-narrow {
+  grid-template-areas: "dot text" ". actions";
+}

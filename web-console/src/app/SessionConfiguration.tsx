@@ -82,7 +82,7 @@ const dots: Record<LineState, StateDotState> = { unavailable: 'idle', waiting: '
 function Line({ state, text, detail, actions }: {
   state: LineState; text: string; detail?: readonly string[]; actions?: ReactNode;
 }) {
-  return <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] [grid-template-areas:'dot_text_actions'] items-center gap-x-[10px] gap-y-[6px] min-w-0 min-h-[40px] box-border pt-[6px] pr-[8px] pb-[6px] pl-[12px] [border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[12px] bg-[var(--dsw-alias-bg-module-platform)] data-[state=failed]:[border-color:color-mix(in_srgb,var(--dsw-alias-state-error-primary)_40%,transparent)] [@container_session-configuration_(max-width:560px)]:grid-cols-[auto_minmax(0,1fr)] [@container_session-configuration_(max-width:560px)]:[grid-template-areas:'dot_text'_'._actions'] [@container_session-configuration_(max-width:560px)]:pr-[10px]" data-state={state}>
+  return <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] [grid-template-areas:'dot_text_actions'] items-center gap-x-[10px] gap-y-[6px] min-w-0 min-h-[40px] box-border pt-[6px] pr-[8px] pb-[6px] pl-[12px] [border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[12px] bg-[var(--dsw-alias-bg-module-platform)] data-[state=failed]:[border-color:color-mix(in_srgb,var(--dsw-alias-state-error-primary)_40%,transparent)] [@container_session-configuration_(max-width:560px)]:grid-cols-[auto_minmax(0,1fr)] [@container_session-configuration_(max-width:560px)]:session-line-areas-narrow [@container_session-configuration_(max-width:560px)]:pr-[10px]" data-state={state}>
     <StateDot state={dots[state]} className="[grid-area:dot] self-start mt-[5px]" />
     <div className="[grid-area:text] min-w-0 wrap-anywhere [&_p]:m-0">
       <p role="status">{text}</p>

@@ -6757,22 +6757,6 @@
       "local_sha256": "af8c33102f2909c91096f5ac3733cb2cb6eacff0ffef589cfe47e5582944f55c"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/ConnectionIndicator.module.css",
-      "destination": "web-console/src/presentation/primitives/ConnectionIndicator.module.css",
-      "treatment": "Shared theme-token warning/success indicator styling with collapsed-rail sizing.",
-      "upstream_sha256": "e48ba1dfdb2baf2e094e338621bb0bf6970f60dc7eefaaef1ddeea5864bf3797",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness request assembly, event history and runtime authority"
-      ],
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "local_sha256": "08a01984657777a358b6e893fd023b451116d4b9584e454502c9ee0e84eaa399"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/ConnectionIndicator.tsx",
       "destination": "web-console/src/presentation/primitives/ConnectionIndicator.tsx",
       "treatment": "Compact reconnect control and recovery confirmation; native connection state and explicit callbacks, with accessible collapsed-rail presentation.",
@@ -6996,7 +6980,6 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../presentation/primitives/icons",
-        "./DatePicker.module.css",
         "./PickerPopover.tsx",
         "./copy",
         "clsx",
@@ -7007,7 +6990,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "9ec12dd9af8ebf8634e63f66004db125230e9b9af61845446f09f9313b9c3ffc"
+      "local_sha256": "91f67de3777b21aaf99b81c7af1414824f6e6f2df4fdb1e89c96d729970d8a4b"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

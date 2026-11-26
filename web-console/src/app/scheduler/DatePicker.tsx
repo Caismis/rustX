@@ -16,7 +16,6 @@ import {
 import type { TaskTranslate } from './copy'
 import { PickerPopover } from './PickerPopover.tsx'
 import type { TaskManagerKey } from './copy'
-import css from './DatePicker.module.css'
 
 /** Row copy of the task manager namespace, as the pickers receive it. */
 type Translate = TaskTranslate
@@ -176,35 +175,35 @@ export function DatePicker({ open, anchorRef, value, onPick, onClose, t }: DateP
     open={open}
     anchorRef={anchorRef}
     label={t('timing.date')}
-    className={css.calendar}
+    className="flex flex-col gap-[4px] w-[232px] p-[8px]"
     onClose={onClose}
   >
-    <div className={css.head}>
+    <div className="flex items-center justify-between gap-[4px]">
       <button
         type="button"
-        className={css.nav}
+        className="inline-flex flex-none items-center justify-center w-[26px] h-[26px] p-0 border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-secondary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:-outline-offset-2"
         aria-label={t('timing.prevMonth')}
         onClick={() => { setView(current => shiftMonth(current, -1)) }}
       ><IconChevronLeftOutlineRegular /></button>
-      <span className={css.title} aria-live="polite">{monthTitle}</span>
+      <span className="flex-auto [color:var(--dsw-alias-label-primary)] text-[13px] leading-[1.6] text-center" aria-live="polite">{monthTitle}</span>
       <button
         type="button"
-        className={css.nav}
+        className="inline-flex flex-none items-center justify-center w-[26px] h-[26px] p-0 border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-secondary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:-outline-offset-2"
         aria-label={t('timing.nextMonth')}
         onClick={() => { setView(current => shiftMonth(current, 1)) }}
       ><IconChevronRightOutlineRegular /></button>
     </div>
-    <div className={css.grid} role="grid" aria-label={monthTitle}>
-      <div role="row" className={css.week}>
+    <div className="flex flex-col gap-[2px]" role="grid" aria-label={monthTitle}>
+      <div role="row" className="grid grid-cols-7 gap-[2px]">
         {WEEKDAY_KEYS.map(key => (
-          <div key={key} role="columnheader" className={css.weekday}>{t(key)}</div>
+          <div key={key} role="columnheader" className="flex items-center justify-center h-[22px] [color:var(--dsw-alias-label-tertiary)] text-[11px] leading-[1.6]">{t(key)}</div>
         ))}
       </div>
       {weeks.map(week => (
-        <div key={week} role="row" className={css.week}>
+        <div key={week} role="row" className="grid grid-cols-7 gap-[2px]">
           {Array.from({ length: 7 }, (_value, column) => week * 7 + column - offset + 1).map(day => (
             day < 1 || day > total
-              ? <div key={day} role="gridcell" aria-hidden="true" className={css.blank} />
+              ? <div key={day} role="gridcell" aria-hidden="true" className="h-[28px]" />
               : <div
                 key={day}
                 ref={(element) => {
@@ -215,7 +214,7 @@ export function DatePicker({ open, anchorRef, value, onPick, onClose, t }: DateP
                 aria-selected={isoOf(view, day) === value}
                 aria-current={isoOf(view, day) === todayIso ? 'date' : undefined}
                 tabIndex={day === view.day ? 0 : -1}
-                className={clsx(css.cell, isoOf(view, day) === value && css.selected)}
+                className={clsx('flex items-center justify-center h-[28px] rounded-[var(--dsw-radius-sm)] [color:var(--dsw-alias-label-primary)] text-[13px] tabular-nums leading-[1.6] cursor-pointer outline-none hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:-outline-offset-2 aria-[current=date]:[box-shadow:inset_0_0_0_0.5px_var(--dsw-alias-border-l3)]!', isoOf(view, day) === value && 'bg-[var(--dsw-alias-button-ghost-active-fill)] [box-shadow:inset_0_0_0_1px_var(--dsw-alias-button-ghost-active-border)]')}
                 onClick={() => { pick(day) }}
                 onKeyDown={(event) => { onCellKeyDown(event, day) }}
               >{day}</div>
