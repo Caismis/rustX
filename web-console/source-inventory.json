@@ -459,7 +459,6 @@
         "../../client/contracts",
         "../../locale/react",
         "../../presentation/primitives/icons",
-        "./GoalDock.module.css",
         "@/presentation/primitives/Input",
         "react"
       ],
@@ -473,7 +472,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9ebad22b07a2fa84e8a5b13c8ed110872f5e73d06d461ed902dc4920faf8b4e8"
+      "local_sha256": "d167fc0a7cb4b46e6a65bb6536d4c2752e450e5d0c4911b08c610f6a82dfb173"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -3439,22 +3438,6 @@
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
       "local_sha256": "2052ef7683a55acc04928ea20391f1e76dc7957d5226ae0794542e2835604bcb"
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-primitives/src/DiffBlock.module.css",
-      "destination": "web-console/src/presentation/primitives/DiffBlock.module.css",
-      "upstream_sha256": "a502d46c003c5f5772955b8eac930c36310fe522a690647207e37426b025a37f",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "3eb0a331c25d462dcfe7a8ee1c477d211e381b2dd3cffb3fe937ec180668ea74"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

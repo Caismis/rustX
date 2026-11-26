@@ -14,7 +14,6 @@ import type { GoalControlOutcome } from '../../client/contracts';
 import {
   IconCheckOutline14, IconCloseOutline16, IconEditOutline16, IconGoalOutline16, IconPauseOutline16, IconPlayOutline16,
 } from '../../presentation/primitives/icons';
-import css from './GoalDock.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 type Field = 'objective' | 'budget';
@@ -142,29 +141,29 @@ export function GoalDock({ state, observation, disabled, mutate, loadObjective }
   // no separate Play control beside it.
   const label = tx('agent:copy.value-goal', { p0: STATUS[goal.phase] });
 
-  return <section data-goal-dock="" className={css.dock} aria-label={tx('agent:goal-dock.goal')} data-goal-phase={goal.phase}>
-    <div className={css.bar} title={goal.phase === 'blocked' ? goal.blocked_reason ?? undefined : undefined}>
-      <span className={css.glyph} aria-hidden><IconGoalOutline16 size={14} /></span>
+  return <section data-goal-dock="" className="box-border flex-none my-0 mx-auto w-[calc(100%-2*var(--dsh-composer-side-clearance)-4*var(--dsh-composer-dock-inset))] max-w-[calc(var(--dsh-composer-card-max-width)-4*var(--dsh-composer-dock-inset))] [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-specific-tip)]" aria-label={tx('agent:goal-dock.goal')} data-goal-phase={goal.phase}>
+    <div className="box-border flex items-center gap-[10px] w-full min-h-[36px] pt-[4px] pr-[5px] pb-[4px] pl-[12px] max-[520px]:flex-wrap" title={goal.phase === 'blocked' ? goal.blocked_reason ?? undefined : undefined}>
+      <span className="inline-flex flex-none [color:var(--dsw-alias-label-tertiary)]" aria-hidden><IconGoalOutline16 size={14} /></span>
       {editing
-        ? <TextInput unstyled className={css.input} autoFocus aria-label={editing.field === 'objective' ? tx('agent:goal-dock.goal-objective') : tx('agent:goal-dock.autonomous-round-budget')}
+        ? <TextInput unstyled className="flex-1 min-w-0 h-[26px] px-[8px] py-0 [border:0.5px_solid_var(--dsw-alias-border-l4)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-base)] text-[13px] leading-[20px] [color:var(--dsw-alias-label-primary)] outline-none focus:[border-color:var(--dsw-alias-state-business-primary)]" autoFocus aria-label={editing.field === 'objective' ? tx('agent:goal-dock.goal-objective') : tx('agent:goal-dock.autonomous-round-budget')}
           {...editing.field === 'budget' ? { type: 'number', min: 1, step: 1, inputMode: 'numeric' as const } : { type: 'text' }}
           value={editing.draft} disabled={pending} onChange={event => setEditing({ field: editing.field, draft: event.target.value })} onKeyDown={onKeyDown} />
-        : <><span className={css.label}>{label}</span><span className={css.objective} title={goal.objective}>{goal.objective}</span></>}
-      <span className={css.meta}>{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} {tx('agent:goal-dock.rounds')}</span>
-      <div className={css.actions}>{editing ? <>
-        <button type="button" className={css.iconButton} aria-label={editing.field === 'objective' ? tx('agent:goal-dock.save-goal-objective') : tx('agent:goal-dock.save-round-budget')} disabled={locked || !draftValid} onClick={save}><IconCheckOutline14 /></button>
-        <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.cancel-goal-edit')} disabled={pending} onClick={cancel}><IconCloseOutline16 size={14} /></button>
+        : <><span className="flex-none text-[13px] leading-[24px] font-medium [color:var(--dsw-alias-label-primary)]">{label}</span><span className="flex-1 min-w-0 overflow-hidden text-[13px] leading-[20px] [color:var(--dsw-alias-label-primary-dimmed)] text-ellipsis whitespace-nowrap max-[520px]:basis-full max-[520px]:order-3 max-[520px]:whitespace-normal" title={goal.objective}>{goal.objective}</span></>}
+      <span className="flex-none text-[12px] leading-[20px] [color:var(--dsw-alias-label-tertiary)] whitespace-nowrap">{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} {tx('agent:goal-dock.rounds')}</span>
+      <div className="flex flex-none items-center gap-[6px] max-[520px]:ml-auto">{editing ? <>
+        <button type="button" className="inline-flex items-center justify-center w-[28px] h-[28px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default" aria-label={editing.field === 'objective' ? tx('agent:goal-dock.save-goal-objective') : tx('agent:goal-dock.save-round-budget')} disabled={locked || !draftValid} onClick={save}><IconCheckOutline14 /></button>
+        <button type="button" className="inline-flex items-center justify-center w-[28px] h-[28px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default" aria-label={tx('agent:goal-dock.cancel-goal-edit')} disabled={pending} onClick={cancel}><IconCloseOutline16 size={14} /></button>
       </> : <>
         {goal.phase === 'active'
-          ? <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.pause-goal')} disabled={locked} onClick={() => void run({ action: 'pause' })}><IconPauseOutline16 size={14} /></button>
-          : <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.resume-goal')} disabled={locked} onClick={() => void run({ action: 'resume' })}><IconPlayOutline16 size={14} /></button>}
-        <button ref={objectiveButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-goal-objective')} disabled={locked || reading || goal.objective_deferred && !loadObjective} onClick={() => void open('objective')}><IconEditOutline16 size={14} /></button>
-        <button ref={budgetButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-round-budget')} disabled={locked} onClick={() => void open('budget')}><BudgetGlyph /></button>
+          ? <button type="button" className="inline-flex items-center justify-center w-[28px] h-[28px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default" aria-label={tx('agent:goal-dock.pause-goal')} disabled={locked} onClick={() => void run({ action: 'pause' })}><IconPauseOutline16 size={14} /></button>
+          : <button type="button" className="inline-flex items-center justify-center w-[28px] h-[28px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default" aria-label={tx('agent:goal-dock.resume-goal')} disabled={locked} onClick={() => void run({ action: 'resume' })}><IconPlayOutline16 size={14} /></button>}
+        <button ref={objectiveButton} type="button" className="inline-flex items-center justify-center w-[28px] h-[28px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default" aria-label={tx('agent:goal-dock.edit-goal-objective')} disabled={locked || reading || goal.objective_deferred && !loadObjective} onClick={() => void open('objective')}><IconEditOutline16 size={14} /></button>
+        <button ref={budgetButton} type="button" className="inline-flex items-center justify-center w-[28px] h-[28px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default" aria-label={tx('agent:goal-dock.edit-round-budget')} disabled={locked} onClick={() => void open('budget')}><BudgetGlyph /></button>
       </>}</div>
     </div>
-    {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>{tx('agent:goal-dock.blocked')}{' '}{goal.blocked_reason}</p>}
-    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className={css.note} role="status">{tx('common:activity.loading')}</p>}
-    {error && <p className={css.error} role="alert">{error}</p>}
-    {locking && <p className={css.note} role="status">{AWAITING[locking.kind]}</p>}
+    {goal.phase === 'blocked' && goal.blocked_reason && <p className="m-0 pt-0 px-[12px] pb-[6px] text-[12px] leading-[18px] wrap-anywhere [color:var(--dsw-alias-label-tertiary)]">{tx('agent:goal-dock.blocked')}{' '}{goal.blocked_reason}</p>}
+    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className="m-0 pt-0 px-[12px] pb-[6px] text-[12px] leading-[18px] wrap-anywhere [color:var(--dsw-alias-label-tertiary)]" role="status">{tx('common:activity.loading')}</p>}
+    {error && <p className="m-0 pt-0 px-[12px] pb-[6px] text-[12px] leading-[18px] wrap-anywhere [color:var(--dsw-alias-label-tertiary)] [color:var(--dsw-alias-state-error-primary)]!" role="alert">{error}</p>}
+    {locking && <p className="m-0 pt-0 px-[12px] pb-[6px] text-[12px] leading-[18px] wrap-anywhere [color:var(--dsw-alias-label-tertiary)]" role="status">{AWAITING[locking.kind]}</p>}
   </section>;
 }
