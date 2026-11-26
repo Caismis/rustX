@@ -79,27 +79,6 @@ export function localDiffHunks(diff: Pick<DiffHunk, 'oldText' | 'newText'>) {
 }
 
 /**
- * Count displayed additions and deletions. Exact patches exclude shared context;
- * comparisons exceeding the edit limit count both complete fragments as replaced.
- * Text follows {@link contentLines}'s terminator rule.
- * @param diffs - the hunks to count.
- * @returns the +/- totals for summaries and the card footer.
- */
-export function diffTotals(diffs: DiffHunk[]): { added: number; removed: number } {
-  let added = 0
-  let removed = 0
-  for (const diff of diffs) {
-    for (const hunk of localDiffHunks(diff)) {
-      for (const line of hunk.lines) {
-        if (line.startsWith('+')) added++
-        if (line.startsWith('-')) removed++
-      }
-    }
-  }
-  return { added, removed }
-}
-
-/**
  * Flatten local patches into rows and count only added and removed lines.
  * A path header opens each new file. A `⋯` gap separates consecutive same-file
  * fragments and distant patches within a fragment. File counts use distinct paths.

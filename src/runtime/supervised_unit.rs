@@ -137,8 +137,7 @@ pub(crate) const INNER_EXIT_CONTAINMENT: i32 = 42;
 /// synchronization mechanism).
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// The `TERM` -> `KILL` grace period, kept in sync with
-/// `crate::tools::limits::BASH_TERM_GRACE`.
+/// The `TERM` -> `KILL` grace period.
 pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
 
 /// The bounded macOS window in which the group-absence probe must reach

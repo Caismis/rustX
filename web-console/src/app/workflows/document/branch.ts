@@ -1,6 +1,5 @@
 import type { NodeDefinition, Predicate } from './model';
 export type Branch = Extract<NodeDefinition, { type: 'branch' }>;
-export type BranchCase = Branch['cases'][number];
 
 export function conditionsOf(condition: Predicate): readonly Predicate[] {
   return condition.type === 'and' || condition.type === 'or' ? condition.predicates : [condition];

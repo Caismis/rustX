@@ -48,12 +48,6 @@ function declaredSchemaPath(document: WorkflowDocument, address: FieldAddress, t
   return target.path.slice(address.node && address.path[0] === 'output' && address.path[1] === 'schema' && blockAt(document, address.block)?.nodes[address.node]?.type === 'model' ? 1 : 0);
 }
 
-export function patchSchema(document: WorkflowDocument, address: FieldAddress, patch: Schema): WorkflowDocument {
-  const value = schemaObject(fieldValue(document, address)?.value);
-  if (!value) throw new CommandRejected('missing_field');
-  return setField(document, address, { ...value, ...patch });
-}
-
 function mappingKey(value: Value, path: readonly string[], from: string, to: string): Value {
   // A whole-value reference may contain unrelated extra properties at runtime.
   // Only an explicit Object construction gives this command movable keys.

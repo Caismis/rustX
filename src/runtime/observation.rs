@@ -337,12 +337,7 @@ pub(crate) enum ConversationObservation {
     /// retry allowance for the current finite admission cycle and schedules a
     /// re-kick; the allowance remains consumed if the cycle advances to the
     /// other durable stage. Accepted pending work remains intact.
-    DurableFailure {
-        /// The human-readable storage failure description.
-        #[allow(dead_code)]
-        // surfaced by tests; the projection folds it without a client event
-        message: String,
-    },
+    DurableFailure,
     /// The durable authority failed persistently — a second failure of either
     /// transient admission stage in the same finite cycle, or an immediately
     /// non-transient durable

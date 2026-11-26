@@ -31,16 +31,11 @@ mod issue_387_profile {
 
     /// Successful Conversation identity reservations in this process.
     static CONVERSATION_RESERVATIONS: AtomicU64 = AtomicU64::new(0);
-    /// Exclusive-create conflicts observed by the reservation primitive.
-    static CONVERSATION_RESERVATION_CONFLICTS: AtomicU64 = AtomicU64::new(0);
     /// Legacy-layout probes performed by the storage owner.
     static LEGACY_LAYOUT_PROBES: AtomicU64 = AtomicU64::new(0);
 
     pub(super) fn record_reservation() {
         CONVERSATION_RESERVATIONS.fetch_add(1, Ordering::Relaxed);
-    }
-    pub(super) fn record_conflict() {
-        CONVERSATION_RESERVATION_CONFLICTS.fetch_add(1, Ordering::Relaxed);
     }
     pub(super) fn record_legacy_layout_probe() {
         LEGACY_LAYOUT_PROBES.fetch_add(1, Ordering::Relaxed);
@@ -48,10 +43,6 @@ mod issue_387_profile {
     #[must_use]
     pub(super) fn reservation_count() -> u64 {
         CONVERSATION_RESERVATIONS.load(Ordering::Relaxed)
-    }
-    #[must_use]
-    pub(super) fn conflict_count() -> u64 {
-        CONVERSATION_RESERVATION_CONFLICTS.load(Ordering::Relaxed)
     }
     #[must_use]
     pub(super) fn legacy_layout_probe_count() -> u64 {
@@ -67,8 +58,6 @@ mod issue_387_profile {
     #[inline(always)]
     pub(super) fn record_reservation() {}
     #[inline(always)]
-    pub(super) fn record_conflict() {}
-    #[inline(always)]
     pub(super) fn record_legacy_layout_probe() {}
 }
 
@@ -80,14 +69,6 @@ mod issue_387_profile {
 #[must_use]
 pub fn conversation_reservation_count() -> u64 {
     issue_387_profile::reservation_count()
-}
-
-/// The number of exclusive-create conflicts this process has observed while
-/// reserving a Conversation identity.
-#[cfg(any(test, feature = "issue-387-profile"))]
-#[must_use]
-pub fn conversation_reservation_conflict_count() -> u64 {
-    issue_387_profile::conflict_count()
 }
 
 /// The number of legacy-layout probes performed by the storage owner.
@@ -561,7 +542,6 @@ impl ProductRoot {
         {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                issue_387_profile::record_conflict();
                 return Err(error);
             }
             Err(error) => return Err(error),

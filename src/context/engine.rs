@@ -403,37 +403,6 @@ impl ContextEngine {
             <= self.admissible_input_limit(max_output_tokens)?)
     }
 
-    /// The exact estimated input of one hypothetical post-compaction
-    /// request: the given post-compaction projection's messages plus the
-    /// non-retirable staged request-scoped context, measured by the same
-    /// estimator over the exact Effective System Prompt and tool definitions
-    /// (Issue #12, M9b).
-    ///
-    /// The staged overlay is never folded into the projection canonically:
-    /// it is transient planning input evaluated here only to decide whether
-    /// the upcoming request fits after a candidate compaction. The result is
-    /// a full request estimate, never a scalar token delta, so the fit
-    /// decision respects the estimator's exact (possibly non-additive,
-    /// non-monotonic) behavior. The estimator sees only the provider-visible
-    /// messages plus the exact Effective System Prompt and tools; the
-    /// projection's `SurfaceRevision` and measurement provenance are outside
-    /// the estimation boundary.
-    #[must_use]
-    pub fn estimate_with_staged_context(
-        &self,
-        projection: &ContextProjection,
-        staged_request_context: &[MessageBlock],
-        tool_definitions: &[ModelToolDefinition],
-    ) -> u64 {
-        self.estimate_with_staged_context_and_carryover(
-            projection,
-            staged_request_context,
-            tool_definitions,
-            None,
-            None,
-        )
-    }
-
     /// Estimates the exact post-compaction request including its frozen
     /// request-only carryover, when one is admitted.
     ///

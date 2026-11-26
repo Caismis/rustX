@@ -549,16 +549,6 @@ impl ModelBackedSummarizer {
     pub const fn instruction() -> &'static str {
         SUMMARY_INSTRUCTION
     }
-
-    /// Renders the request input deterministically for the model.
-    ///
-    /// The rendering is a pure function of the request; see
-    /// [`SummaryRequest::render_transcript`] for why it is a bounded plain
-    /// transcript rather than the canonical JSON encoding.
-    #[must_use]
-    pub fn serialize_input(request: &SummaryRequest) -> String {
-        request.render_transcript()
-    }
 }
 
 impl ContextSummarizer for ModelBackedSummarizer {

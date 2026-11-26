@@ -1,4 +1,4 @@
-import { assign, enqueueActions, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
+import { assign, enqueueActions, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { WorkflowCheckReport } from '../../../../../protocol/app-server/v82';
 import type { WorkflowSource } from '../../../../../protocol/app-server/workflow-documents.ts';
 import type { WorkflowCommit } from '../../../workspaces/host';
@@ -522,4 +522,3 @@ export const workflowEditorMachine = setup({
 });
 
 export type WorkflowEditorActor = ActorRefFrom<typeof workflowEditorMachine>;
-export type WorkflowEditorSnapshot = SnapshotFrom<typeof workflowEditorMachine>;

@@ -1,4 +1,3 @@
-import type { Translate } from '../../locale/translation';
 import type { ResourceFamily } from '../../../../protocol/app-server/v82';
 import type { ExtensionFamily } from './projection';
 
@@ -87,34 +86,9 @@ export function resourceCapability(family: ExtensionFamily): ResourceCapability 
   return capabilities[family];
 }
 
-/** Whether this exact scope may author a complete definition of the family.
- *
- * Scope is a native authority question, so it is answered once here. Every
- * authorable family is authorable at both scopes — a Workspace definition
- * shadows the whole same-name User one — and a family with no native write is
- * authorable at neither. */
-export function admitsAuthoring(family: ExtensionFamily): boolean {
-  return resourceCapability(family).authoring !== 'none';
-}
-
 /** The native `source_tools` identity of one resource, which is the Tool-source
  * identity native itself uses: a Managed Python package is addressed as
  * `python:<name>`, every other source by its bare identity. */
 export function toolSourceId(family: ResourceFamily, name: string): string {
   return family === 'managed_python' ? `python:${name}` : name;
-}
-
-/** The closed set of native extension units, which are configuration semantic
- * units rather than resource documents. */
-export type NativeExtension = 'todo' | 'goal' | 'agent_status';
-export const nativeExtensions: readonly NativeExtension[] = ['todo', 'goal', 'agent_status'];
-export function nativeExtensionLabel(tx: Translate, extension: NativeExtension): string {
-  return extension === 'todo' ? tx('settings:copy.todo') : extension === 'goal' ? tx('settings:copy.goal') : tx('settings:extension-detail.agent-status');
-}
-
-/** The User-only semantic units. App Server process policy is assigned from the
- * User document by native composition and records no Workspace origin, so a
- * Workspace surface must not offer it at all. */
-export function userOnlyUnit(unit: string): boolean {
-  return unit === 'app_server';
 }

@@ -1,7 +1,7 @@
 import { statusIdentity } from '../../../protocol/app-server/projection';
 import { jobStateLabel } from './status-labels';
 import type { Translate } from '../locale/translation';
-import type { AgentStatusView, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v82';
+import type { AgentStatusView, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v82';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
  * current-state authority: current Todo is `snapshot.todos`, current Goal is
@@ -187,6 +187,3 @@ function clip(text: string, limit: number): string {
   const characters = [...flat];
   return characters.length <= limit ? flat : `${characters.slice(0, Math.max(0, limit - 1)).join('')}…`;
 }
-
-/** The authoritative bounded window, oldest first. Never a browser-owned history. */
-export const agentStatusHistory = (snapshot?: RuntimeClientSnapshot): readonly AgentStatusView[] => snapshot?.statuses ?? [];

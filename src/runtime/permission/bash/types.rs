@@ -10,7 +10,6 @@ pub enum BashCommandOperator {
     And,
     Or,
     Pipe,
-    PipeStderr,
     Sequence,
 }
 
@@ -75,7 +74,6 @@ pub enum SafeFlagValue {
     None,
     Number,
     String,
-    OptionalString,
     Char,
     BracePair,
     Eof,

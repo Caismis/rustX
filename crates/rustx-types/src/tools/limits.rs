@@ -71,10 +71,6 @@ pub const MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL: usize = 128;
 /// complete managed-output storage limit.
 pub const FOREGROUND_TOOL_RESULT_PREVIEW_BYTES: usize = 16 * 1024;
 
-/// The grace period between TERM and KILL when terminating a Bash process
-/// group.
-pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
-
 /// The bounded window after a Bash TERMINATE request (cancellation or
 /// timeout) after which missing process terminality becomes failure intent.
 /// It never authorizes settlement without the terminal child-set event. The

@@ -129,36 +129,6 @@ export function NumberField({ label, value, address, min = 0, max = Number.MAX_S
     onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} /><ConflictActions field={field} /></>}</Field>;
 }
 
-/** An authored key at a `key` address (a node ID),
- * renamed explicitly on Enter, blur, Apply, Save or Check through `rename`,
- * never per keystroke. `onRenamed` runs once the editor accepted it. */
-export function KeyField({ label, hint, value, address, rename, onRenamed, error, compact }: {
-  label: string; hint?: ReactNode; value: string; address: FieldAddress; error?: string; compact?: string;
-  rename: (document: Parameters<FieldCommand>[0], from: string, to: string) => ReturnType<typeof setField>; onRenamed?: (to: string) => void;
-}) {
-  const tx = useTranslation();
-  const describe = useFieldError();
-  const field = useFieldDraft({
-    address, canonical: value, onApplied: text => onRenamed?.(text.trim()),
-    command: (document, text) => {
-      const to = text.trim(), from = fieldText(document, address);
-      if (from === undefined) return { status: 'rejected', error: { kind: 'missing' } };
-      if (!to) return { status: 'rejected', error: { kind: 'empty' } };
-      if (to === from) return { status: 'unchanged' };
-      return { status: 'applied', document: rename(document, from, to) };
-    },
-  });
-  const shown = describe(field.error) ?? error;
-  const input = (id?: string, describedBy?: string) => <input id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-label={compact} aria-invalid={!!field.error || !!error || undefined} className={clsx(css.input, css.mono, compact && css.branchKey)} value={field.text} spellCheck={false}
-    onChange={event => field.change(event.target.value)} onBlur={field.apply}
-    onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />;
-  if (compact) return <span className={css.keyField}>{input()}{shown && <small className={clsx(css.hint, css.hintError)} role="alert">{shown}</small>}<ConflictActions field={field} /></span>;
-  return <Field label={label} hint={hint} error={shown}>{(id, describedBy) => <><div className={css.inline}>
-    {input(id, describedBy)}
-    <button type="button" className={css.smallButton} disabled={!field.pending} onClick={field.apply}>{tx('workflows:inspector.rename')}</button>
-  </div><ConflictActions field={field} /></>}</Field>;
-}
-
 export function SelectField<T extends string>({ label, value, options, onChange, hint, disabled, field }: { field?: string; label: string; value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void; hint?: ReactNode; disabled?: boolean }) {
   return <Field label={label} hint={hint}>{(id, describedBy) => <select id={id} data-workflow-field={field} aria-describedby={describedBy} className={css.input} disabled={disabled} value={value} onChange={event => onChange(event.target.value as T)}>
     {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}

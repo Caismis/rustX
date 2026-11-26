@@ -485,13 +485,6 @@ fn bound_error(message: &str) -> String {
     bounded_text_preview(message.as_bytes(), LIMIT).0
 }
 
-/// The serializable provenance carried by a committed MCP binding.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct McpCapabilityBinding {
-    /// Server identity only; credentials and runtime addresses never appear.
-    pub server_id: McpServerId,
-}
-
 #[cfg(test)]
 mod tests {
     use super::{

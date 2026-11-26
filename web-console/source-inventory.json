@@ -1194,7 +1194,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e0db497335e12a864f7462bd66e282cfcacc99398760025508cd926e3769181c",
+      "local_sha256": "44c7e2b466c32fe486c904bd025e3f1a6f8a2284ba80dcb8d15bec9aeffe0e66",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -1802,6 +1802,32 @@
       "local_sha256": "0a87c321ac6bd31fbd9238e25014c0fcaeb3d5ab9cf38e417964b70b8fa55487"
     },
     {
+      "upstream": "packages/client/ui-dockkit/src/index.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b28bc59f5298191b1469c96871ead1bc80a20bc6efec8169f771ce490b55d01f",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/index.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./components/DockSurface.tsx",
+        "./components/FloatLayer.tsx",
+        "./contract/adapter.ts",
+        "./contract/types.ts",
+        "./engine/constraints.ts",
+        "./engine/controller.ts",
+        "./engine/geometry.ts",
+        "./engine/initial.ts",
+        "./engine/operations.ts",
+        "./engine/planner.ts",
+        "./engine/sequence.ts",
+        "./engine/tree.ts"
+      ],
+      "local_sha256": "28592703d3b9a4f9eefa30ca137208281b7c6fe42e6ab800c240cbc370c0dd68"
+    },
+    {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
       "destination": "web-console/src/presentation/layout/AppFrame.module.css",
       "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
@@ -1933,7 +1959,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "689c6fb8fe4e4c25c2181a837bbaff4114d696cfcae18f26d9aa9e0018d043f8",
+      "local_sha256": "f0c131e0ff3e891f5955df7e1376b96cd8ba0e35f6bce17e209139c4b5eec7d9",
       "classification": "A"
     },
     {
@@ -2719,7 +2745,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "bd02987abf1d100ec41d9a80c4ee51c7e68965537851efdc92ce0be02395202e",
+      "local_sha256": "abdb1e5fa3cf68dabbe2e56feb45b84eb76cff617e15df2741f9e9d2db41897c",
       "classification": "A",
       "additional_sources": [
         {
@@ -2850,7 +2876,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "c2f99217bc63d8b85489d983b6b8864a028a55ed7d13bfabaeb10087b2727680",
+      "local_sha256": "baa299cba6d275b173d595e53213d4042978dc2d3b1764b3cb5f520dbb3e4a73",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -3834,7 +3860,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "62a24439659760f574106ade3e4e670d24dc2c12e091fe5d725f38874c54f9bf"
+      "local_sha256": "8b9fa693fabf5714c57acb8c0a8de90c13f5839a76a1ce6e089ed27d5d48d8fe"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4045,7 +4071,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "b267ee7285dd477ab2caea7d2d1ab5f07e6ee5552d31b4a2ab552be151fadd2b"
+      "local_sha256": "9b6bcd6ef960eef2defdab0aa7fb2b415f0a82ffe60ca25f2c2950b6fc62153c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4183,7 +4209,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "dd7333762adde98ecede37e28077f0f90b639756a8ab6b8221736c9dfcd986aa"
+      "local_sha256": "ec4bdc5309e54a8005b819812b1bbafc5994b35f344bfbc205309b2d0260f2b6"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5102,32 +5128,6 @@
       ],
       "retained_dependencies": [],
       "local_sha256": "14f037846a156e2d7d6e34612afb7a61ba71df78f32f8ecdeda5f25cea10be8b"
-    },
-    {
-      "upstream": "packages/client/ui-dockkit/src/index.ts",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "b28bc59f5298191b1469c96871ead1bc80a20bc6efec8169f771ce490b55d01f",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
-      "destination": "web-console/src/presentation/dockkit/index.ts",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Cordis runtime, slots and resource transport"
-      ],
-      "retained_dependencies": [
-        "./components/DockSurface.tsx",
-        "./components/FloatLayer.tsx",
-        "./contract/adapter.ts",
-        "./contract/types.ts",
-        "./engine/constraints.ts",
-        "./engine/controller.ts",
-        "./engine/geometry.ts",
-        "./engine/initial.ts",
-        "./engine/operations.ts",
-        "./engine/planner.ts",
-        "./engine/sequence.ts",
-        "./engine/tree.ts"
-      ],
-      "local_sha256": "28592703d3b9a4f9eefa30ca137208281b7c6fe42e6ab800c240cbc370c0dd68"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/components/DockSurface.tsx",
@@ -6341,7 +6341,7 @@
         "./icons/props.ts",
         "react"
       ],
-      "local_sha256": "afb6eccc3273a1c87bfb2334091acf8e79590c99ace6d7c210be5f60aaae3d02",
+      "local_sha256": "478d996aee93ba8de29fa48c22b8c13c9e0c79b901d21c449fa24f9a5a828ac9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/icons/shared-artwork.tsx",
@@ -7864,7 +7864,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "187b8f8b4ddfd9dab29593404a6aed648abb4319ee4460fc0177c64e3f3a63cf"
+      "local_sha256": "e5743b29205d414da06bedd61e0042c8d27acb8ae69175488ae35c2c30c3b32d"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

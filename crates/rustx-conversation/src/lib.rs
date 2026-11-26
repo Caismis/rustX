@@ -549,23 +549,6 @@ impl ConversationState {
         Ok(self.surface.reconstruct(revision)?)
     }
 
-    /// Reconstructs the exact canonical messages of a hot Surface revision.
-    /// The durable store is the historical read path for revisions older than
-    /// a bounded bootstrap. Surface history supplies identities and order
-    /// first; the hot Ledger is then queried only for those identities.
-    ///
-    /// # Errors
-    ///
-    /// Returns a conversation error when the revision is unavailable or a
-    /// referenced message cannot be hydrated.
-    pub fn reconstruct_messages(
-        &self,
-        revision: SurfaceRevision,
-    ) -> Result<Vec<MessageBlock>, ConversationError> {
-        let ids = self.reconstruct(revision)?;
-        self.hydrate(&ids)
-    }
-
     /// Allocates a core-owned context `MessageId`. Transient contributors do
     /// not receive this allocator and therefore cannot choose canonical ids.
     #[must_use]

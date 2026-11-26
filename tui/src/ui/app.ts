@@ -61,7 +61,6 @@ import { SlashCommandAutocompleteProvider } from "../commands/autocomplete.ts";
 import { CommandDispatcher } from "../commands/dispatcher.ts";
 import type { ExpandTarget, PreferenceChange } from "../commands/outcome.ts";
 import type { DebugDiagnostics } from "../commands/presentation.ts";
-import { sessionLabel } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { AppServerHost } from "../app-server/host.ts";
@@ -71,7 +70,6 @@ import type {
   SessionDeleteResult,
   SessionView,
   ToolCallId,
-  InteractionRef,
   UserInputBlock,
 } from "../protocol/app-server.ts";
 import { launchOpener, systemOpener, type Opener } from "../app-server/delivery-files.ts";
@@ -1667,12 +1665,6 @@ export class RustxTuiApp {
     }
     resolve(code);
   }
-}
-
-function sameSessionLineage(expected: SessionView, actual: SessionView): boolean {
-  return expected.id === actual.id &&
-    expected.active_node === actual.active_node &&
-    expected.active_conversation_id === actual.active_conversation_id;
 }
 
 function nextTick(): Promise<void> {

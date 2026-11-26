@@ -657,21 +657,6 @@ impl ContextAssembly {
         Ok(())
     }
 
-    /// Returns the registered extension identities in canonical logical order.
-    #[must_use]
-    pub fn extension_identities(&self) -> Vec<CertifiedExtensionIdentity> {
-        let mut identities = self
-            .extensions
-            .iter()
-            .filter_map(|extension| match &extension.identity {
-                ContextContributorIdentity::CertifiedExtension(identity) => Some(identity.clone()),
-                ContextContributorIdentity::Native(_) => None,
-            })
-            .collect::<Vec<_>>();
-        identities.sort();
-        identities
-    }
-
     /// The mechanically derived native compatibility manifest.
     #[must_use]
     pub fn compatibility_manifest() -> ContextCompatibilityManifest {

@@ -918,7 +918,7 @@ impl RuntimeClientProjection {
                 self.snapshot.shutting_down = true;
                 vec![RuntimeClientEvent::RuntimeShutdown]
             }
-            ConversationObservation::DurableFailure { .. } => {
+            ConversationObservation::DurableFailure => {
                 // A transient durable-authority failure is recorded and
                 // re-kicked; it does not yet change the externally visible
                 // runtime health.

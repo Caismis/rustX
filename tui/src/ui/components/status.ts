@@ -25,6 +25,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
  */
 
 import type { PresentationState } from "../../presentation/state.ts";
+import { compactionNoticeKey } from "../../presentation/projection.ts";
 import type {
   ConfigurationApplication,
   ModelInvocationView,
@@ -36,7 +37,7 @@ import {
   sessionLabel,
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
-import { role, style, plainText, plainWidth } from "../theme.ts";
+import { role, plainWidth } from "../theme.ts";
 import { sanitizeField } from "../../sanitize.ts";
 
 /**
@@ -69,7 +70,7 @@ export function backgroundCompactionStatus(state: PresentationState): string | u
 /** Readiness and terminal outcomes are static facts, not a working spinner. */
 export function compactionNotice(state: PresentationState): string | undefined {
   const operation = state.context.compaction_operations?.findLast(({status, live}) =>
-    !state.dismissedCompactionNotices?.includes(status.operation_id)
+    status.phase !== 'committed' && !state.dismissedCompactionNotices?.includes(compactionNoticeKey(status))
       && (!live || !['generating', 'retrying', 'foreground_waiting'].includes(status.phase)));
   if (!operation) return undefined;
   const { status, live } = operation;

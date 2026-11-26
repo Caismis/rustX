@@ -570,13 +570,6 @@ export class AppServerClient {
   }
 }
 
-/** Whether an error ended the connection rather than answering a request. */
-export function isConnectionClosed(error: unknown): boolean {
-  return (
-    error instanceof TransportClosedError || error instanceof UncertainOutcomeError
-  );
-}
-
 /** Whether a delivery request answered that its cancellation won. */
 export function isDeliveryCancelled(error: unknown): boolean {
   return error instanceof AppServerRequestError && error.kind === "delivery_cancelled";

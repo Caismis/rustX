@@ -140,19 +140,6 @@ export interface TranscriptContext {
   foreground?: ForegroundToolExecution[];
 }
 
-/** Builds the render context for one state. */
-export function transcriptContext(
-  state: PresentationState,
-  preferences: PresentationPreferences,
-): TranscriptContext {
-  return {
-    preferences,
-    correlation: correlateTools(state),
-    statuses: agentStatusPlacement(state),
-    foreground:state.attempt?.foreground,
-  };
-}
-
 /** The whole transcript, including durable messages and historical audits. */
 export function renderTranscript(
   state: PresentationState,

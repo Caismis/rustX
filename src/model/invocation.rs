@@ -56,7 +56,6 @@
 //! to own fields such as `thinking`, `reasoning`, `temperature`, or
 //! `output_config`.
 
-use rustx_types::model::request_params::append_content_modalities;
 pub use rustx_types::model::session::ModelSelection;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1361,25 +1360,6 @@ fn protocol_name(protocol: ModelProtocol) -> String {
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| format!("{protocol:?}"))
-}
-
-/// Whether every canonical modality present in a message list is supported.
-///
-/// This is the early rejection boundary: the runtime refuses content its
-/// effective capabilities cannot represent *before* a provider request is
-/// opened, so the provider is never the first validator of a known rustX
-/// capability mismatch.
-///
-/// # Errors
-///
-/// Returns [`ModelErrorKind::Unsupported`] naming the unsupported modality.
-pub fn validate_content_modalities<'a>(
-    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
-    capabilities: &ModelCapabilities,
-) -> Result<(), ModelError> {
-    let mut required = Vec::new();
-    append_content_modalities(messages, &mut required);
-    validate_required_modalities(&required, capabilities)
 }
 
 pub(crate) fn validate_required_modalities(

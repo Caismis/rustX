@@ -71,10 +71,6 @@ pub fn is_argv_allowed_by_policy(
                         index += 1;
                         continue;
                     }
-                    SafeFlagValue::OptionalString => {
-                        index += 1;
-                        continue;
-                    }
                     other => {
                         let value = inline.or_else(|| argv.get(index + 1).map(String::as_str));
                         let Some(value) = value else {
@@ -150,7 +146,7 @@ fn matches_kind(value: &str, kind: SafeFlagValue) -> bool {
     match kind {
         SafeFlagValue::None => false,
         SafeFlagValue::Number => !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()),
-        SafeFlagValue::OptionalString | SafeFlagValue::String => true,
+        SafeFlagValue::String => true,
         SafeFlagValue::Char => value.chars().count() == 1,
         SafeFlagValue::BracePair => value == "{}",
         SafeFlagValue::Eof => value == "EOF",
