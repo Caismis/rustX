@@ -23,7 +23,7 @@ import {
 } from './render.tsx'
 import type { MarkdownLabels, MarkdownRenderContext, ReferenceTargets } from './render.tsx'
 import 'katex/dist/katex.min.css'
-import css from './MarkdownText.module.css'
+import { markdownTextCss } from './markdownTextCss';
 
 export type { MarkdownCodeLabels, MarkdownLabels } from './render.tsx'
 
@@ -173,5 +173,5 @@ export const MarkdownText = memo(function MarkdownText({ text, streaming = false
     }
     return streamRef.current.render(text)
   }, [text, streaming, labels])
-  return <div className={`${css.markdown} ${variant === 'compact' ? css.compact : ''}`} data-markdown-variant={variant}>{children}</div>
+  return <div className={`${markdownTextCss.markdown} ${variant === 'compact' ? markdownTextCss.compact : ''}`} data-markdown-variant={variant}>{children}</div>
 })

@@ -15,7 +15,7 @@ import { normalizeUri } from 'micromark-util-sanitize-uri'
 import { CodeBlock } from './CodeBlock.tsx'
 import { renderTexToReact } from './katex.tsx'
 import type { PositionedBlock } from './incremental.ts'
-import css from './MarkdownText.module.css'
+import { markdownTextCss } from './markdownTextCss';
 import { Checkbox } from '@/components/ui/checkbox';
 
 /** Copy-button labels forwarded to fence CodeBlocks (this package is cordis-free, so copy arrives via props). */
@@ -368,7 +368,7 @@ function renderTable(node: Md.Table, key: Key, context: MarkdownRenderContext): 
     // and :focus-visible restores scrolling.
     <div
       key={key}
-      className={clsx(css.tableScroll, wide ? 'md-table-wide' : css.tableFill)}
+      className={clsx(markdownTextCss.tableScroll, wide ? 'md-table-wide' : markdownTextCss.tableFill)}
       tabIndex={wide ? 0 : undefined}
     >
       <table>
