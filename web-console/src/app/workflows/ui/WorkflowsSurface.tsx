@@ -7,7 +7,6 @@ import { Modal } from '../../../presentation/primitives/Modal';
 import type { WorkspaceAuthority } from '../../../workspaces/authority';
 import type { WorkflowSurfaceActor } from '../machines/surface';
 import { WorkflowLibrary } from './library/Library';
-import css from './Workflows.module.css';
 
 // React Flow and the editor load only when a file is opened.
 const WorkflowEditor = lazy(() => import('./editor/WorkflowEditor'));
@@ -30,6 +29,6 @@ export function WorkflowsSurface({ surface, authority }: { surface: WorkflowSurf
     <Modal open={confirming} onClose={() => surface.send({ type: 'CANCEL' })} title={tx('workflows:editor.leave-title')} closeLabel={tx('workflows:dialog.close')}
       description={tx('workflows:editor.leave-body', { p0: target?.id ?? '' })}
       footer={<><Button variant="outline" onClick={() => surface.send({ type: 'CANCEL' })}>{tx('workflows:editor.leave-cancel')}</Button>
-        <Button variant="primary" className={css.danger} onClick={() => surface.send({ type: 'CONFIRM' })}>{tx('workflows:editor.leave-confirm')}</Button></>} />
+        <Button variant="primary" className={"bg-[var(--dsw-alias-state-error-primary)]! [color:var(--dsw-alias-label-primary-inverted)]!"} onClick={() => surface.send({ type: 'CONFIRM' })}>{tx('workflows:editor.leave-confirm')}</Button></>} />
   </div>;
 }

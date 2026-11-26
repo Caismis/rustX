@@ -2418,23 +2418,6 @@
       "classification": "B"
     },
     {
-      "destination": "web-console/src/presentation/right-panel/SidebarRight.module.css",
-      "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
-      "upstream_sha256": "faa7ed08b9e57e8e97bb5f5f728b0e7f172daf6fe0a72432c001b3345038330e",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "local_sha256": "b8f66c755cbbf8b7c47cfec94d58ea26241c30d44a9ddf201f8553aec2c86302",
-      "retained_dependencies": [],
-      "classification": "B"
-    },
-    {
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -5365,19 +5348,6 @@
         "vitest"
       ],
       "local_sha256": "6c34fafad4e6e41c61d13446491bb51568e8485ee7d01ef6d1710870a40c4565"
-    },
-    {
-      "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "2062ebe9808edbaf4f9c197859140b6881a8b531493605a6f07dd77dd8c2f25f",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
-      "destination": "web-console/src/presentation/right-panel/PreviewPanel.module.css",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Cordis runtime, slots and resource transport"
-      ],
-      "retained_dependencies": [],
-      "local_sha256": "06d0305b136995c6acfcb251111b16093f6a40c7f9c67c368144928afd9aef36"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/bootstrap.ts",
