@@ -4,8 +4,7 @@
  * the suites supply their own content families — exactly as an embedder does.
  */
 import type { NodeId, PaneId, PaneNode, SplitId, SplitNode, TabId, TabRecord } from '../../src/presentation/dockkit/contract/types.ts'
-import { DockController } from '../../src/presentation/dockkit/engine/controller.ts'
-import { createIdMinter, createInitialState, type IdMinter } from '../../src/presentation/dockkit/engine/initial.ts'
+import { createIdMinter, createInitialState, DockController, type IdMinter } from '../../src/presentation/dockkit/index.ts'
 import type { DockLabels } from '../../src/presentation/dockkit/contract/adapter.ts'
 import type { LayoutState } from '../../src/presentation/dockkit/contract/types.ts'
 

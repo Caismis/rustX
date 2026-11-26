@@ -1789,6 +1789,32 @@
       "local_sha256": "0a87c321ac6bd31fbd9238e25014c0fcaeb3d5ab9cf38e417964b70b8fa55487"
     },
     {
+      "upstream": "packages/client/ui-dockkit/src/index.ts",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "upstream_sha256": "b28bc59f5298191b1469c96871ead1bc80a20bc6efec8169f771ce490b55d01f",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "destination": "web-console/src/presentation/dockkit/index.ts",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Cordis runtime, slots and resource transport"
+      ],
+      "retained_dependencies": [
+        "./components/DockSurface.tsx",
+        "./components/FloatLayer.tsx",
+        "./contract/adapter.ts",
+        "./contract/types.ts",
+        "./engine/constraints.ts",
+        "./engine/controller.ts",
+        "./engine/geometry.ts",
+        "./engine/initial.ts",
+        "./engine/operations.ts",
+        "./engine/planner.ts",
+        "./engine/sequence.ts",
+        "./engine/tree.ts"
+      ],
+      "local_sha256": "28592703d3b9a4f9eefa30ca137208281b7c6fe42e6ab800c240cbc370c0dd68"
+    },
+    {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
       "destination": "web-console/src/presentation/layout/AppFrame.module.css",
       "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
@@ -4170,7 +4196,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "15c02716182e606cc9eeb63b72df276ce829003934d040e293ea28952aeacf0f"
+      "local_sha256": "c8eb094b96035f0bc92b5fe232bb8ea6ca4be000e182bbf3064bca5a2700c4a1"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6073,10 +6099,9 @@
       "retained_dependencies": [
         "../../src/presentation/dockkit/contract/adapter.ts",
         "../../src/presentation/dockkit/contract/types.ts",
-        "../../src/presentation/dockkit/engine/controller.ts",
-        "../../src/presentation/dockkit/engine/initial.ts"
+        "../../src/presentation/dockkit/index.ts"
       ],
-      "local_sha256": "9dd8dda6661acdb15bc69911a91f567345b686cf46e2af9ecb009d8c1f084f3c"
+      "local_sha256": "3f1c38282fc54ebb6f2f549c8a82ac9ab207eae092e818ed2fb52b2e2fb1a56b"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/geometry.client.spec.ts",
@@ -6089,11 +6114,11 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [
-        "../../src/presentation/dockkit/engine/constraints.ts",
         "../../src/presentation/dockkit/engine/geometry.ts",
+        "../../src/presentation/dockkit/index.ts",
         "vitest"
       ],
-      "local_sha256": "1fc1811984030c6e26be4f0b69738f6d4eb6eefaff8e92b9cfdff845c8be424f"
+      "local_sha256": "7fb37c6cbc193c9259c2efdcf0b97aa52fc71ff886bc449a0da464768d10a319"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/planner.client.spec.ts",

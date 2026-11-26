@@ -17,7 +17,6 @@ import { readGeometrySource } from './geometry-source';
 
 export const SESSION_FILE_MAX_BYTES = FILE_PREVIEW_LIMITS.fileBytes;
 export const SESSION_FILE_MAX_TRANSFERS = 2;
-
 type PreviewOwnership = { owned?: () => boolean; subscribeOwned?: (listener: () => void) => () => void };
 export type PreviewSource = PreviewOwnership & ({ kind: 'artifact'; id: string; agentId?: string } | { kind: 'session_file'; conversationId:string; locator: CanonicalContentLocator; index: number; file: SessionFileReference; agentId?: string });
 export type LoadedFile = { url: string; bytes?: Uint8Array<ArrayBuffer>; text?: string; error?: string };

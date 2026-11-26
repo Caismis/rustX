@@ -26,7 +26,6 @@ export const IconFolder = glyph(<path d="M3.5 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 
 export const IconArrowLeft = glyph(<path d="m14 5-7 7 7 7M8 12h13" />);
 export const IconCursor = glyph(<path d="M4 3 18 12l-7 1.5L8 21z" />);
 export const IconHand = glyph(<path d="M9 13V6a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v5m0-2a2 2 0 0 1 4 0v4a7 7 0 0 1-7 7h-2c-2 0-3.5-.5-5-2l-3-3c-1-1-1-2.7 0-3.5s2-1 3 0l2 1" />);
-
 export const IconMinus = glyph(<path d="M5 12h14" />);
 export const IconPlus = glyph(<path d="M12 5v14M5 12h14" />);
 export const IconUndo = glyph(<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3" />);
