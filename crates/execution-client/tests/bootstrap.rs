@@ -162,6 +162,29 @@ fn expect_terminal_refusal(rig: &Rig, child: &mut Child) {
     expect_success(child);
 }
 
+#[test]
+fn client_admits_a_workspace_when_its_home_is_still_absent() {
+    let rig = rig();
+    let (_owner, existing) = private_dir();
+    let (_links, links) = private_dir();
+    let alias = links.join("alias");
+    std::os::unix::fs::symlink(&existing, &alias).unwrap();
+    let missing_home = alias.join("not-created/home");
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &missing_home)
+        .spawn()
+        .unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
+    assert_eq!(
+        connection.user_root(),
+        existing.join("not-created/home/rustx")
+    );
+    connection.ping().unwrap();
+    assert!(!missing_home.exists());
+    connection.control().unwrap().request_revoke().unwrap();
+    expect_success(&mut child);
+}
+
 fn assert_never_connected(rig: &Rig) {
     rig.listener.set_nonblocking(true).unwrap();
     assert_eq!(

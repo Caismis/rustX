@@ -89,26 +89,28 @@ pub(crate) fn client_home_directory() -> Option<PathBuf> {
 /// physical spelling which the Client's no-follow file tools can open.
 fn resolve_user_root(home: &Path) -> io::Result<PathBuf> {
     let configured = home.join("rustx");
-    match configured.canonicalize() {
-        Ok(path) if path.is_dir() => Ok(path),
-        Ok(_) => Err(io::ErrorKind::NotADirectory.into()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // A dangling `rustx` symlink is not an absent directory that the
-            // Client may create; preserve it and fail closed.
-            match fs::symlink_metadata(&configured) {
-                Err(missing) if missing.kind() == io::ErrorKind::NotFound => {
-                    let physical_home = home.canonicalize()?;
-                    if !physical_home.is_dir() {
-                        return Err(io::ErrorKind::NotADirectory.into());
-                    }
-                    Ok(physical_home.join("rustx"))
+    for prefix in configured.ancestors() {
+        match fs::symlink_metadata(prefix) {
+            Ok(_) => {
+                // A dangling link is an existing entry. Canonicalization must
+                // succeed before any missing descendants can be appended.
+                let mut physical = prefix.canonicalize()?;
+                if !physical.is_dir() {
+                    return Err(io::ErrorKind::NotADirectory.into());
                 }
-                Ok(_) => Err(io::ErrorKind::NotFound.into()),
-                Err(other) => Err(other),
+                physical.extend(
+                    configured
+                        .strip_prefix(prefix)
+                        .map_err(io::Error::other)?
+                        .iter(),
+                );
+                return Ok(physical);
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
         }
-        Err(error) => Err(error),
     }
+    Err(io::ErrorKind::NotFound.into())
 }
 
 /// Official User tree in this Client's filesystem namespace.
