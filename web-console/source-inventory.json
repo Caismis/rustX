@@ -1815,7 +1815,6 @@
       "upstream_sha256": "bb7d7f9d71aaaa8f4a8bedc7b8167b0d8ed00c6d302cd16534d5acff776b4502",
       "retained_dependencies": [
         "../primitives/clipboard.ts",
-        "./CodeBlock.module.css",
         "./CodeToolbar",
         "./highlight.ts",
         "./useViewportHighlighting.ts",
@@ -1828,7 +1827,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "688bceb47d407169131914bf5b5d81936657e87d2708a0957721b28ccb659eae"
+      "local_sha256": "afbc2eab93807e5b9c698c0f26c7ce36a1afe3bfafb9253d39002b625bc3aa45"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",

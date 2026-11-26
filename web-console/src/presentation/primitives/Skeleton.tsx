@@ -40,14 +40,14 @@ export function SettingsPageSkeleton({
         <div key={groupIndex} className="flex flex-col gap-[10px]">
           <SkeletonBar width={groupIndex === 0 ? 104 : 132} height={13} />
           <div className="overflow-hidden bg-[var(--settings-card-bg,var(--dsw-alias-bg-layer-1))] [border:1px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-lg)]">
-            <div className="flex items-center justify-between gap-[24px] px-[16px] py-[15px] [border-top:1px_solid_var(--dsw-alias-border-l3)] first:border-t-0">
+            <div className="flex items-center justify-between gap-[24px] px-[16px] py-[15px] [border-top:1px_solid_var(--dsw-alias-border-l3)] first:border-t-0!">
               <div className="flex flex-auto flex-col gap-[7px] min-w-0">
                 <SkeletonBar width={144} height={14} />
                 <SkeletonBar width="64%" height={12} />
               </div>
               <SkeletonBar width={36} height={20} shape="pill" />
             </div>
-            <div className="flex items-center justify-between gap-[24px] px-[16px] py-[15px] [border-top:1px_solid_var(--dsw-alias-border-l3)] first:border-t-0">
+            <div className="flex items-center justify-between gap-[24px] px-[16px] py-[15px] [border-top:1px_solid_var(--dsw-alias-border-l3)] first:border-t-0!">
               <div className="flex flex-auto flex-col gap-[7px] min-w-0">
                 <SkeletonBar width={128} height={14} />
                 <SkeletonBar width="52%" height={12} />
@@ -55,7 +55,7 @@ export function SettingsPageSkeleton({
               <SkeletonBar width={148} height={32} shape="control" />
             </div>
             {groupIndex === 0 && (
-              <div className="flex items-center justify-between gap-[24px] px-[16px] py-[15px] [border-top:1px_solid_var(--dsw-alias-border-l3)] first:border-t-0">
+              <div className="flex items-center justify-between gap-[24px] px-[16px] py-[15px] [border-top:1px_solid_var(--dsw-alias-border-l3)] first:border-t-0!">
                 <div className="flex flex-auto flex-col gap-[7px] min-w-0">
                   <SkeletonBar width={162} height={14} />
                   <SkeletonBar width="70%" height={12} />

@@ -9,7 +9,6 @@ import {
 } from './highlight.ts'
 import type { HighlightSpan, StreamingHighlightFrame } from './highlight.ts'
 import { useViewportHighlighting } from './useViewportHighlighting.ts'
-import css from './CodeBlock.module.css'
 
 export interface CodeBlockProps {
   /** The source text, rendered verbatim (trailing newline trimmed for display). */
@@ -153,7 +152,7 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
     ? streamedBody
     : html === undefined
       ? (
-        <pre className={css.plain}><code>{sourceLines === undefined ? trimmed : sourceLines.map((line, index) => (
+        <pre className="[color:var(--dsw-alias-label-primary)]"><code>{sourceLines === undefined ? trimmed : sourceLines.map((line, index) => (
           <Fragment key={index}>{index > 0 && '\n'}<span className="line">{line}</span></Fragment>
         ))}</code></pre>
       )
@@ -162,23 +161,23 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
       )
 
   return (
-    <div ref={rootRef} className={clsx(css.block, 'md-code-block', lineNumbers && css.numbered, className)}
+    <div ref={rootRef} className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsl-code-block-background)] rounded-[12px] [--dsl-code-block-banner-background-color:var(--dsw-alias-markdown-code-block-banner)] [--dsl-code-block-border-radius:12px] [--dsl-code-block-banner-font:11px/18px_var(--dsw-font-family)] [--dsl-code-block-content-font:var(--dsw-font-markdown-code-block)] [--dsl-code-block-background:var(--dsw-alias-markdown-code-block)] [&:not(:last-child)]:mb-[11px] [&_pre]:[font:var(--dsl-code-block-content-font)] [&_pre]:p-[16px] [&_pre]:m-0! [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_pre]:bg-[var(--dsl-code-block-background)] [&_pre]:rounded-b-[12px] [&_pre.shiki]:bg-[var(--dsl-code-block-background)]! [&_pre_code]:[font:inherit] [&_pre_code]:bg-none [&_pre_code]:p-0', 'md-code-block', lineNumbers && '[&_pre_code]:block [&_pre_code]:[counter-reset:source-line] [&_pre_code]:whitespace-normal [&_pre_code_.line]:relative [&_pre_code_.line]:block [&_pre_code_.line]:min-h-[1lh] [&_pre_code_.line]:ps-[calc(var(--dsl-code-block-line-number-width)+12px)] [&_pre_code_.line]:[counter-increment:source-line] [&_pre_code_.line]:whitespace-[var(--dsl-code-block-line-white-space,pre-wrap)] [&_pre_code_.line]:before:absolute [&_pre_code_.line]:before:start-0 [&_pre_code_.line]:before:w-[var(--dsl-code-block-line-number-width)] [&_pre_code_.line]:before:[color:var(--dsw-alias-label-tertiary)] [&_pre_code_.line]:before:text-end [&_pre_code_.line]:before:content-[counter(source-line)] [&_pre_code_.line]:before:select-none', className)}
       data-line-numbers={lineNumbers || undefined}
       style={sourceLines === undefined ? undefined : {
         '--dsl-code-block-line-number-width': `${Math.max(2, String(sourceLines.length).length)}ch`,
       } as CSSProperties}>
       {/* These paired attributes are stable semantic hooks for owner styling and DOM tests. */}
-      <div className={css.bannerWrap}>
-        <>{toolbarLabel !== undefined ? <CodeToolbar lang={lang} label={toolbarLabel} copied={copied} copyLabel={copyLabel} copiedLabel={copiedLabel} onCopy={onCopy}/> : <div className={css.banner} data-code-block-banner>
-          <div className={css.infostring}>{lang ?? ''}</div>
-          <div className={css.action}>
-            <button type="button" className={css.copyButton} onClick={onCopy} aria-label={copied ? copiedLabel : copyLabel} title={copied ? copiedLabel : copyLabel}>
+      <div className="sticky top-0 z-[6] bg-[var(--dsw-alias-bg-base)] rounded-t-[12px]">
+        <>{toolbarLabel !== undefined ? <CodeToolbar lang={lang} label={toolbarLabel} copied={copied} copyLabel={copyLabel} copiedLabel={copiedLabel} onCopy={onCopy}/> : <div className="bg-[var(--dsl-code-block-banner-background-color)] px-[14px] py-[9px] flex justify-between items-center gap-[12px] [font:var(--dsl-code-block-banner-font)] rounded-t-[12px]" data-code-block-banner>
+          <div className="[color:var(--dsw-alias-label-primary)] [font-family:var(--ds-font-family-code),monospace] text-[11px] leading-[18px] min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{lang ?? ''}</div>
+          <div className="flex items-center shrink-0">
+            <button type="button" className="bg-transparent border-none p-0 m-0 [color:inherit] cursor-pointer [font:inherit]" onClick={onCopy} aria-label={copied ? copiedLabel : copyLabel} title={copied ? copiedLabel : copyLabel}>
               {copied ? copiedLabel : copyLabel}
             </button>
           </div>
         </div>}</>
       </div>
-      <div ref={contentRef} className={css.content} data-code-block-content>{body}</div>
+      <div ref={contentRef} className="contents" data-code-block-content>{body}</div>
     </div>
   )
 }
