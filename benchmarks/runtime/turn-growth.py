@@ -34,7 +34,7 @@ SPEC.loader.exec_module(CAPACITY)
 VERSION = int(re.search(r'APP_SERVER_PROTOCOL_VERSION: u16 = (\d+)',
                        (REPO / 'src/app_server/protocol.rs').read_text())[1])
 CAPACITY.PROTOCOL_VERSION = VERSION
-from turn_growth_oracle import PROMPT, RESPONSE, tool_call, verify_request
+from turn_growth_oracle import PERMISSION_REMINDER, PROMPT, RESPONSE, text_content, tool_call, verify_request
 
 
 def write(path, value):
@@ -437,7 +437,8 @@ shutdown_deadline_ms = 30000
             assert connection.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
             messages = [json.loads(r[0]) for r in connection.execute('SELECT message_json FROM message_ledger ORDER BY position')]
             counts = collections.Counter(m['role'] for m in messages)
-            assert counts['user'] == a.turns, counts
+            assert counts['user'] == a.turns + 1, counts
+            assert sum(m['role'] == 'user' and text_content(m['content']) == PERMISSION_REMINDER for m in messages) == 1, counts
             assert counts['tool'] == (a.turns if kind == 'tool' else 0), counts
             for turn, message in enumerate(m for m in messages if m['role'] == 'tool'):
                 call_id, name, _ = tool_call(turn, a.git_workspace_mutations)
