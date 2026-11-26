@@ -1,13 +1,13 @@
 import { useTranslation } from '../../locale/react';
 import type { ReactNode } from 'react';
-import css from './SettingsContent.module.css';
+import { settingsContentCss } from './settingsContentCss';
 
 /** Product-neutral seats using the Harness Settings card and row vocabulary. */
 export function SettingsCard({ title, meta, actions, children }: { title: string; meta?: ReactNode; actions?: ReactNode; children?: ReactNode }) {
-  return <article className={css.card}><div className={css.rowHead}><strong>{title}</strong>{meta}{actions}</div>{children}</article>;
+  return <article className={settingsContentCss.card}><div className={settingsContentCss.rowHead}><strong>{title}</strong>{meta}{actions}</div>{children}</article>;
 }
 export function Badge({ children, tone }: { children: ReactNode; tone?: 'error' | 'success' }) {
-  return <span className={css.badge} data-tone={tone}>{children}</span>;
+  return <span className={settingsContentCss.badge} data-tone={tone}>{children}</span>;
 }
 export function Facts({ rows }: { rows: readonly (readonly [string, ReactNode])[] }) {
   const tx = useTranslation();

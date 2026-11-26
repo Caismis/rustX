@@ -14,7 +14,7 @@ import { AutoRepairSection } from './AutoRepair';
 import { SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** User-adjustable runtime limits and environment values. Source revisions,
@@ -55,7 +55,7 @@ export function AdvancedPage({
   const actor = useSettingsActor();
   return (
     <SettingsPageShell
-      className={`${css.settings} ${css.page}`}
+      className={`${settingsContentCss.settings} ${settingsContentCss.page}`}
       title={tx('settings:advanced-page.advanced')}
       description={tx('settings:advanced-page.runtime-limits-environment-process-policy-and-the-native-diagnos')}
       bodyDisabled={bodyDisabled}
@@ -186,7 +186,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           mutation={authored => ({ kind: 'config', mutation: { unit: 'context', authored } })}
         >
           {(value, change, restore) => (
-            <div className={css.grid}>
+            <div className={settingsContentCss.grid}>
               {(['reserve_tokens', 'keep_recent_tokens'] as const).map(key => (
                 <TextField
                   key={key}
@@ -218,7 +218,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           mutation={authored => ({ kind: 'config', mutation: { unit: 'model_timeout', authored } })}
         >
           {(value, change) => (
-            <div className={css.grid}>
+            <div className={settingsContentCss.grid}>
               {(['response_start_timeout_ms', 'stream_idle_timeout_ms'] as const).map(key => (
                 <TextField
                   key={key}
@@ -239,7 +239,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
           mutation={authored => ({ kind: 'config', mutation: { unit: 'tool_deadline', authored } })}
         >
           {(value, change) => (
-            <div className={css.grid}>
+            <div className={settingsContentCss.grid}>
               <TextField
                 label={tx('settings:advanced-page.hard-deadline-ms')}
                 value={value.hard_deadline_ms}
@@ -285,7 +285,7 @@ function AdvancedEditors({ source, scope, document, revision }: {
 
       <SettingsGroup title={tx('settings:advanced-page.environment')}>
         <div style={{ padding: '14px 16px' }}>
-          <div className={css.actions} style={{ marginTop: 0 }}>
+          <div className={settingsContentCss.actions} style={{ marginTop: 0 }}>
             <TextField label={tx('settings:advanced-page.environment-variable-identity')} value={environment} change={setEnvironment} />
             <Button size="sm" variant="outline" disabled={!environment} onClick={() => selectEnvironment(environment)}>
               {tx('settings:advanced-page.edit-environment-variable')}

@@ -21,7 +21,7 @@ import { Input } from '../../../presentation/primitives/Input';
 import { Menu } from '../../../presentation/primitives/Menu';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { settingsWorkflowCss } from '../../../presentation/settings/settingsWorkflowCss';
-import contentCss from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 /** coss ui owns interaction and accessibility semantics here and nothing else:
  * keyboard navigation, menu/list/select interaction, accessible tabs,
@@ -55,7 +55,7 @@ export function Choice<T extends string>({ label, value, onChange, options, disa
         {options.map(([key, text]) => <SelectItem key={key} value={key} disabled={disabledSet.has(key)}>{text}</SelectItem>)}
       </SelectPopup>
     </CossSelect>
-    {description && <span className={contentCss.hint}>{description}</span>}
+    {description && <span className={settingsContentCss.hint}>{description}</span>}
   </div>;
 }
 /** A resource search box. Filtering is presentation; the identities it filters

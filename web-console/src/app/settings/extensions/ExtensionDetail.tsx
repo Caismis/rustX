@@ -6,7 +6,7 @@ import { AvailabilityDetail } from '../../resources/shared/AvailabilityDetail';
 import type { PageFocus } from '../machines/navigation';
 import { extensionEntries } from '../../resources/shared/inventory';
 import { SettingsBackButton, SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 export function ExtensionDetail({ source, scope, revision, name, onFocus, bodyDisabled = false }: {
   source: SourceSettings; scope: SourceScope; revision?: string; name: string;
@@ -17,7 +17,7 @@ export function ExtensionDetail({ source, scope, revision, name, onFocus, bodyDi
   const entry = extensionEntries(source, scope, 'managed_python').find(row => row.name === name);
   return (
     <SettingsPageShell
-      className={`${css.settings} ${css.page}`}
+      className={`${settingsContentCss.settings} ${settingsContentCss.page}`}
       title={name}
       bodyDisabled={bodyDisabled}
       breadcrumb={

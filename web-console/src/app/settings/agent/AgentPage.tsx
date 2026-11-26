@@ -7,7 +7,7 @@ import { SettingsNotice } from '../SettingsFeedback';
 import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
-import settings from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { Textarea } from '@/components/ui/textarea';
 
 /** The Agent product page: the AGENTS.md instruction document and the
@@ -31,7 +31,7 @@ export function AgentPage({ scope = 'user', config, globalGuidance, closed, body
 
   return (
     <SettingsPageShell
-      className={`${settings.settings} ${settings.page}`}
+      className={`${settingsContentCss.settings} ${settingsContentCss.page}`}
       title={tx('settings:agent-page.agent')}
       bodyDisabled={bodyDisabled}
       toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}

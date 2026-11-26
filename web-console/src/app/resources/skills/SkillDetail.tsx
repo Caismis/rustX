@@ -7,7 +7,7 @@ import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
 import { DocumentLinesSkeleton } from '../../../presentation/primitives/Skeleton';
 import { SettingsBackButton, SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
-import settings from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { splitFrontmatter } from '../../components/workbench-documents/frontmatter';
 import { PageTransactionFooter, usePageTransaction } from '../../settings/forms/bridge';
 import { useNavigationGuard } from '../../settings/forms/guard';
@@ -176,7 +176,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
 
   const title = display?.authored.display_name ?? name;
   const editable = !!write && !!display?.revision;
-  return <SettingsPageShell title={title} className={`${settings.settings} ${settings.page} min-w-0 [&_input:not([type=checkbox])]:min-w-[180px]`}
+  return <SettingsPageShell title={title} className={`${settingsContentCss.settings} ${settingsContentCss.page} min-w-0 [&_input:not([type=checkbox])]:min-w-[180px]`}
     bodyDisabled={bodyDisabled}
     breadcrumb={<SettingsBackButton label={tx('resources:skills.title')} current={title} onClick={() => guard.guard(close)} />}
     footer={editable ? <PageTransactionFooter /> : null}>

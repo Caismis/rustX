@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from '../../../locale/react';
 import type { Translate } from '../../../locale/translation';
 import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v80';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 /** One redacted native repair change, worded. Never an authored key, identity
  * or value: native receipts carry schema paths (`*` for an identity),
@@ -69,7 +69,7 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
         <ul aria-label={receipt.status === 'unresolved' ? tx('settings:auto-repair.not-applied') : tx('settings:auto-repair.changes')}>
           {receipt.changes.map((change, index) => <li key={index}>{repairChangeLabel(tx, change)}</li>)}
         </ul>
-        {receipt.truncated && <p className={css.hint}>{tx('settings:auto-repair.truncated', { shown: receipt.changes.length, total: receipt.changed_count })}</p>}
+        {receipt.truncated && <p className={settingsContentCss.hint}>{tx('settings:auto-repair.truncated', { shown: receipt.changes.length, total: receipt.changed_count })}</p>}
       </>}
       <p>{receipt.backup_available ? tx('settings:auto-repair.backup-kept') : tx('settings:auto-repair.backup-none')}</p>
       {receipt.status !== 'repaired' && malformed && <p>{tx('settings:auto-repair.manual-repair')}</p>}

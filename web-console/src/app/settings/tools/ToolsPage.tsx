@@ -14,7 +14,7 @@ import { reachableIdentities, sourceView } from '../projection';
 import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 /** The Tools & Permissions product page. */
 export function ToolsPage({ source, document, scope, revision, bodyDisabled = false }: {
@@ -44,7 +44,7 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
 
   return (
     <SettingsPageShell
-      className={`${css.settings} ${css.page}`}
+      className={`${settingsContentCss.settings} ${settingsContentCss.page}`}
       title={tx('settings:tools-page.tools-amp-permissions')}
       bodyDisabled={bodyDisabled}
       toolbar={<><PageScopeToolbar /><PageRefreshButton /></>}

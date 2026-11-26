@@ -9,7 +9,7 @@ import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor'
 import { Choice, Toggle } from '../primitives/aria';
 import { UnitReset, type TypedUnitForm } from './bridge';
 import { formatRequestParams, parseRequestParams, sameJson, type RequestParams } from './request-params';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 /** The typed field layer over one unit's TanStack Form instance.
  *
@@ -50,7 +50,7 @@ function Errors({ field, label }: { field: BoundField; label: string }) {
   const errors = field.state.meta.errors.filter(Boolean);
   if (!field.state.meta.isTouched || !errors.length) return null;
   const message = [...new Set(errors.map(error => displayText(tx, ((error as { message?: DisplayText })?.message ?? error) as DisplayText)))].join(' ');
-  return <SettingsNotice text={message.startsWith(label) ? message : `${label} · ${message}`} fallback={<span role="alert" className={css.error}>{message}</span>}/>;
+  return <SettingsNotice text={message.startsWith(label) ? message : `${label} · ${message}`} fallback={<span role="alert" className={settingsContentCss.error}>{message}</span>}/>;
 }
 
 /** Syntactic checks a browser can make truthfully. Each returns a message or
@@ -162,13 +162,13 @@ export function Strings<T>({ form, name, label }: { form: TypedUnitForm<T>; name
   return <Field name={name as string} mode="array">{field => {
     const value = (field.state.value as string[] | null | undefined) ?? [];
     return <fieldset><legend>{label}</legend>
-      {value.map((entry, index) => <div className={css.names} key={index}>
+      {value.map((entry, index) => <div className={settingsContentCss.names} key={index}>
         <Input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={entry}
           onChange={event => field.handleChange(value.map((item, at) => at === index ? event.target.value : item) as never)} />
         <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => field.removeValue(index)}>{tx('settings:controls.remove')}{' '}</Button>
       </div>)}
       <Button onClick={() => field.pushValue('' as never)}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
-      {!value.length && <p className={css.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
+      {!value.length && <p className={settingsContentCss.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
     </fieldset>;
   }}</Field>;
 }
@@ -276,6 +276,6 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
             : message(failure.kind === 'duplicate_key' ? 'settings:fields.request-params-duplicate-key' : 'settings:fields.request-params-inexact-number',
               { p0: failure.line, p1: failure.column }));
       }} />
-    <p className={css.hint}>{hint ?? tx('settings:fields.request-params-hint')}</p>
+    <p className={settingsContentCss.hint}>{hint ?? tx('settings:fields.request-params-hint')}</p>
   </div>;
 }

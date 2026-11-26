@@ -7,7 +7,7 @@ import { IconCopyOutline16, IconFolderClose16 } from '../../../presentation/prim
 import type { CardMenuItems } from '../../../presentation/catalog/CardMenu';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import type { TransferResource } from '../../../workspaces/resource-transfer';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export interface TransferIntent {
@@ -95,7 +95,7 @@ export function TransferDialog({ intent, close, refresh }: { intent: TransferInt
       <Button variant="primary" onClick={() => void submit()} disabled={busy || reopen || invalid || taken}>
         {tx(moving ? 'resources:transfer.move' : 'resources:transfer.copy')}
       </Button></>}>
-    <form className={css.settings} onSubmit={event => { event.preventDefault(); void submit(); }}>
+    <form className={settingsContentCss.settings} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label htmlFor={input}>{tx('resources:transfer.destination-name')}</label>
       <TextInput id={input} value={name} data-modal-autofocus spellCheck={false} disabled={busy || reopen}
         aria-invalid={invalid || taken} aria-describedby={intent.family === 'skill' ? `${input}-hint` : undefined}

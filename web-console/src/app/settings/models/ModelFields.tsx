@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
 import { Bool, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { modelsCss } from './modelsCss';
 
 const inputModalities: readonly Modality[] = ['text', 'image'];
@@ -145,7 +145,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
         onChange={id => fallback.handleChange((id || undefined) as never)} />}
       <ReasoningOrder identities={identities} order={order ?? undefined} appended={appended}
         change={next => { ranking.handleChange(next as never); setAppended(undefined); }} />
-      {!identities.length && <p className={css.hint}>{tx('settings:models-page.no-profiles')}</p>}
+      {!identities.length && <p className={settingsContentCss.hint}>{tx('settings:models-page.no-profiles')}</p>}
     </fieldset>;
   }}</Bound>}</Bound>}</Bound>}</Bound>;
 }
@@ -179,8 +179,8 @@ function ReasoningOrder({ identities, order, appended, change }: {
         ? <Button size="sm" onClick={() => change(undefined)}>{tx('settings:models-page.clear-reasoning-order')}</Button>
         : <Button size="sm" variant="outline" onClick={() => change([...identities].sort())}>{tx('settings:models-page.configure-reasoning-order')}</Button>)}
     </div>
-    {!identities.length ? <p className={css.hint}>{tx('settings:models-page.reasoning-requires-profiles')}</p>
-      : !order ? <p className={css.hint}>{tx('settings:models-page.reasoning-not-configured')}</p>
+    {!identities.length ? <p className={settingsContentCss.hint}>{tx('settings:models-page.reasoning-requires-profiles')}</p>
+      : !order ? <p className={settingsContentCss.hint}>{tx('settings:models-page.reasoning-not-configured')}</p>
       : <>
         <ol ref={list} className={modelsCss.reasoningList} aria-label={tx('settings:models-page.reasoning-order')}>
           {order.map((id, index) => <li key={id} data-profile-order={id}>
@@ -191,10 +191,10 @@ function ReasoningOrder({ identities, order, appended, change }: {
               aria-disabled={index === order.length - 1} onClick={() => move(index, index + 1, 'down')}>↓</Button>
           </li>)}
         </ol>
-        <p className={css.hint}>{tx('settings:models-page.reasoning-draft-help')}</p>
+        <p className={settingsContentCss.hint}>{tx('settings:models-page.reasoning-draft-help')}</p>
         <SettingsNotice tone="success" text={appended ? tx('settings:models-page.reasoning-appended', { p0: appended }) : undefined}/>
       </>}
-    <p className={css.hint}>{tx('settings:models-page.reasoning-help')}</p>
+    <p className={settingsContentCss.hint}>{tx('settings:models-page.reasoning-help')}</p>
   </section>;
 }
 

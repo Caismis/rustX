@@ -19,7 +19,7 @@ import { McpEditor } from './McpEditor';
 import { useNavigationGuard } from '../../settings/forms/guard';
 import { PageTransactionFooter } from '../../settings/forms/bridge';
 import { SettingsBackButton, SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
-import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { mcpCss } from './mcpCss';
 
 export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: (focus: McpFocus) => void }) {
@@ -44,7 +44,7 @@ export function McpDetail({ source, scope, revision, focus, scopeControl, bodyDi
   const guard = useNavigationGuard();
   const entry = extensionEntries(source, scope, 'mcp', 'owned').find(entry => entry.name === focus.name);
   const title = focus.name ?? tx('settings:mcp.new');
-  return <SettingsPageShell title={title} className={`${settingsCss.settings} ${settingsCss.page}`} data-mcp-page=""
+  return <SettingsPageShell title={title} className={`${settingsContentCss.settings} ${settingsContentCss.page}`} data-mcp-page=""
     bodyDisabled={bodyDisabled}
     breadcrumb={<SettingsBackButton label={tx('settings:mcp.back')} current={title} onClick={() => guard.guard(onClose)} />}
     toolbar={scopeControl} footer={<PageTransactionFooter cancelAlwaysEnabled={!focus.name} />}>

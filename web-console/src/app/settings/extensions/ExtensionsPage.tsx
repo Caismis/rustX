@@ -11,7 +11,7 @@ import { FilterTabs, Search } from '../primitives/aria';
 import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings/SettingsPageShell';
 import { sourceView } from '../projection';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 export type ExtensionFilter = 'all' | 'managed_python' | 'native';
 
@@ -72,7 +72,7 @@ export function ExtensionsPage({
 
   return (
     <SettingsPageShell
-      className={`${css.settings} ${css.page}`}
+      className={`${settingsContentCss.settings} ${settingsContentCss.page}`}
       title={tx('settings:extensions-page.extensions')}
       bodyDisabled={bodyDisabled}
       toolbar={
@@ -111,11 +111,11 @@ export function ExtensionsPage({
           <SettingsGroup plain title={tx('settings:extensions.managed-python')}>
             <Search label={tx('settings:extensions-page.find-an-extension')} value={query} onChange={setQuery} placeholder={tx('settings:extensions-page.find-an-extension')} />
             {entries.map(entry => (
-              <section key={entry.name} className={css.card}>
-                <div className={css.rowHead}>
+              <section key={entry.name} className={settingsContentCss.card}>
+                <div className={settingsContentCss.rowHead}>
                   <strong>{entry.name}</strong>
                   <span
-                    className={css.badge}
+                    className={settingsContentCss.badge}
                     data-tone={entry.diagnostics.length ? 'error' : entry.relationship === 'inherited' ? 'success' : undefined}
                   >
                     {entry.relationship}
@@ -127,7 +127,7 @@ export function ExtensionsPage({
                 {!!entry.diagnostics.length && <SettingsNotice text={entry.diagnostics[0]} />}
               </section>
             ))}
-            {!entries.length && <p className={css.hint}>{tx('settings:catalog.empty')}</p>}
+            {!entries.length && <p className={settingsContentCss.hint}>{tx('settings:catalog.empty')}</p>}
           </SettingsGroup>
         )}
       </FilterTabs>

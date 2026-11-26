@@ -7,7 +7,7 @@ import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
 import { IconCloseOutline16 } from '../../../presentation/primitives/icons';
 import { useUnitEditing } from '../forms/bridge';
 import { ProviderIcon } from './ProviderIcon';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { modelsCss } from './modelsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
@@ -48,7 +48,7 @@ export function ProviderNameDialog({ exists, revision, onCreate, onClose }: {
   };
   const unit = useUnitEditing({ blank, revision, mutation: value => providerMutation(name, value) });
   const title = tx('settings:models-page.add-provider');
-  return <DialogSurface open onClose={onClose} title={title} overlayClassName={modelsCss.overlay} className={`${css.settings} ${modelsCss.nameDialog}`} initialFocus={input}>
+  return <DialogSurface open onClose={onClose} title={title} overlayClassName={modelsCss.overlay} className={`${settingsContentCss.settings} ${modelsCss.nameDialog}`} initialFocus={input}>
     <div className={modelsCss.dialogHeader}><h2>{title}</h2><Button aria-label={tx('settings:models.close')} onClick={onClose}><IconCloseOutline16/></Button></div>
     <form onSubmit={event => { event.preventDefault(); if (name && !duplicate && !invalid) { unit.edit(blank); onCreate(name); } }}>
       <div className={modelsCss.templates} aria-label={tx('settings:models.templates')} role="group">

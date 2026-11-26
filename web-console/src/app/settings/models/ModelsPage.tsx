@@ -28,7 +28,7 @@ import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { useModelProbe } from './useModelProbe';
 import { ProviderConnection } from './ProviderConnection';
 import { ProviderNameDialog } from './ProviderTemplates';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { modelsCss } from './modelsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
@@ -134,7 +134,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
     ...wsProviders.map(id => providerMutation(id, null, !!source.user.authored?.providers?.[id])),
   ] : [];
 
-  if (focus?.kind === 'provider' && providerEntry) return <SettingsPageShell className={`${css.settings} ${css.page}`} title={providerName ?? ''}
+  if (focus?.kind === 'provider' && providerEntry) return <SettingsPageShell className={`${settingsContentCss.settings} ${settingsContentCss.page}`} title={providerName ?? ''}
     bodyDisabled={bodyDisabled}
     breadcrumb={<SettingsBackButton label={tx('settings:models-page.models')} current={providerName} onClick={() => focusWithGuard(undefined)} />}
     toolbar={listToolbar} footer={<PageTransactionFooter leading={undefined}/>}>
@@ -158,7 +158,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
     {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
   </SettingsPageShell>;
 
-  return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:models-page.models')}
+  return <SettingsPageShell className={`${settingsContentCss.settings} ${settingsContentCss.page}`} title={tx('settings:models-page.models')}
     description={tx('settings:models.description')} bodyDisabled={bodyDisabled} toolbar={listToolbar}>
     <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={modelsCss.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
@@ -167,7 +167,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           <UnitForm<ModelLayer> immediate title={tx('settings:models-page.default-model')} legendHidden authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
             blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
             removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
-            {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
+            {(value, change) => <><p className={settingsContentCss.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
               <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
           </UnitForm>
         </SettingsGroup>
@@ -179,7 +179,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
               modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
               onOpen={() => focusWithGuard({ kind: 'provider', id: entry.id })}/>)}
           </div>
-          {!navigation.length && <p className={css.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
+          {!navigation.length && <p className={settingsContentCss.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
         </SettingsGroup>
       </WorkspaceFollowGlobal>
     </section>
@@ -211,12 +211,12 @@ function ProviderCard({ entry, revision, scope, modelCount, onOpen }: {
     mutation: value => providerMutation(entry.id, value, scope === 'workspace' && !!entry.effective && !entry.authored),
   });
   const name = provider?.display_name ?? entry.id;
-  return <section className={css.card}>
-    <div className={css.rowHead}>
+  return <section className={settingsContentCss.card}>
+    <div className={settingsContentCss.rowHead}>
       <ProviderIcon icon={provider?.icon} size={16}/>
       <strong>{name}</strong>
       {provider && <Badge>{provider.protocol}</Badge>}
-      <span className={css.hint}>{modelCount ? String(modelCount) : ''}</span>
+      <span className={settingsContentCss.hint}>{modelCount ? String(modelCount) : ''}</span>
       {provider && <Switch checked={!provider.hidden} label={tx('settings:models.show-provider', { p0: name })}
         disabled={!unit.admitted || unit.busy || unit.awaitingObservation || unit.draft || !entry.authored}
         onChange={checked => unit.apply({ ...unit.displayed, hidden: !checked })}/>}
@@ -293,7 +293,7 @@ function ModelDialog({ source, scope, revision, id, provider, suggestDeepSeek, o
   });
   // Model metadata from the matching DeepSeek template in ZCode's catalog.
   const suggestions = creating && suggestDeepSeek ? ['deepseek-flash', 'deepseek-v4-pro'].filter(id => !duplicate(provider ?? '', id)) : [];
-  return <DialogSurface open title={title} onClose={close} overlayClassName={modelsCss.overlay} className={`${css.settings} ${modelsCss.modelDialog}`} contentRef={dialog}
+  return <DialogSurface open title={title} onClose={close} overlayClassName={modelsCss.overlay} className={`${settingsContentCss.settings} ${modelsCss.modelDialog}`} contentRef={dialog}
     initialFocus={() => {
       const input = dialog.current?.querySelector<HTMLInputElement>(authored ? 'input[type="number"]' : 'input');
       if (input && !input.matches(':disabled')) { input.focus(); input.select(); return false; }
@@ -386,7 +386,7 @@ function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSele
           else setProfile({ mode: 'model_default' });
         }
       }} />
-    <p className={css.hint}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
+    <p className={settingsContentCss.hint}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
     <fieldset><legend>{tx('settings:models-page.auxiliary-model-settings')}</legend>
       {profileMode === 'explicit' && modelId && <ModelProfileChoice label={tx('settings:models-page.auxiliary-profile')} profile={auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined}
         profiles={profiles[modelId] ?? []}

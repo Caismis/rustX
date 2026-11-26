@@ -7,7 +7,7 @@ import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { SettingsBackButton, SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
-import settings from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 import { DefinitionNotice, PageTransactionFooter, UnitOutcomeNotice, UnitReset, usePageTransaction, useUnitEditing } from '../../settings/forms/bridge';
 import { useNavigationGuard } from '../../settings/forms/guard';
 import { Choice, ConfirmAction } from '../../settings/primitives/aria';
@@ -176,7 +176,7 @@ export function AgentEditor({
             tabIndex={-1}
             aria-label={formName}
             aria-busy={busy}
-            className={clsx(settings.settings, subagentsCss.form)}
+            className={clsx(settingsContentCss.settings, subagentsCss.form)}
             data-definition={unit.definition}
             data-authored-value={unit.authoredPresent ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
             onSubmit={event => event.preventDefault()}

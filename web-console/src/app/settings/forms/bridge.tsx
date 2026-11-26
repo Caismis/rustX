@@ -16,7 +16,7 @@ import {
   type RevisionSelector, type ShadowedDefinition,
 } from '../projection';
 import { ConfirmAction } from '../primitives/aria';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../../presentation/settings/settingsContentCss';
 
 /** The typed form instance of one semantic unit's editor.
  *
@@ -936,30 +936,30 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             title={tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: owner })} confirm={tx('settings:bridge.remove-value', { p0: title })}
             description={removalNotice ?? tx('settings:forms.delete-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>);
-  return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={`${css.unit}${presentation ? ` ${presentation === 'dialog' ? css.unitDialog : css.unitResource}` : ''}`} data-definition={unit.definition} data-draft={unit.draft || undefined}
+  return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={`${settingsContentCss.unit}${presentation ? ` ${presentation === 'dialog' ? settingsContentCss.unitDialog : settingsContentCss.unitResource}` : ''}`} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     // Only a dialog keeps its own submit affordance; on a page the footer
     // is the single commit and Enter inside a field must not bypass staging.
     onSubmit={event => { event.preventDefault(); if (presentation === 'dialog') { if (onSubmit) onSubmit(); else unit.submit(); } }}>
-    <fieldset disabled={unit.busy || unavailable}><legend className={legendHidden ? css.visuallyHidden : undefined}>{title}</legend>
-      <div className={presentation === 'dialog' ? css.unitBody : undefined}>
+    <fieldset disabled={unit.busy || unavailable}><legend className={legendHidden ? settingsContentCss.visuallyHidden : undefined}>{title}</legend>
+      <div className={presentation === 'dialog' ? settingsContentCss.unitBody : undefined}>
       {presentation === 'dialog' && availability && <SettingsNotice text={tx(`settings:models.authority-${availability}`)}/>}
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
         <SettingsNotice text={unit.facts.authored.state === 'invalid' ? `${tx('settings:bridge.authored-source-is-invalid')} ${unit.facts.authored.diagnostic}`
           : unit.facts.effective.state === 'invalid' ? `${tx('settings:bridge.native-effective-resolution-failed')} ${unit.facts.effective.diagnostic}` : undefined}/>
       </>}
-      {redacted && <p className={css.hint}>{tx('settings:forms.secret-replacement')}</p>}
+      {redacted && <p className={settingsContentCss.hint}>{tx('settings:forms.secret-replacement')}</p>}
       {unit.definition && (!presentation || unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} />}
       {/* Inspecting an inherited definition shows its safe native facts in the
           same fields, and none of them is writable until the explicit
           override transition. */}
-      <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
+      <fieldset className={settingsContentCss.fields} disabled={!unit.writable}>{children}</fieldset>
       {!unit.embedded && <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' && unit.outcome.kind !== 'uncertain' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}
-        fallback={<div className={css.review}><p role="status">{tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere')}</p></div>}/>}
+        fallback={<div className={settingsContentCss.review}><p role="status">{tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere')}</p></div>}/>}
       {!unit.embedded && <UnitOutcomeNotice title={title} outcome={unit.outcome} />}
       </div>
-      {(presentation === 'dialog' || !!unit.override || (removable && (!presentation ? !workspace && unit.authoredPresent : false)) || (unit.reviewNeeded && !unit.embedded) || !!onCancel || !!explicitSave) && <div className={css.actions}>
+      {(presentation === 'dialog' || !!unit.override || (removable && (!presentation ? !workspace && unit.authoredPresent : false)) || (unit.reviewNeeded && !unit.embedded) || !!onCancel || !!explicitSave) && <div className={settingsContentCss.actions}>
         {explicitSave && <Button type="button" variant="primary" aria-label={`${tx('settings:bridge.save')} ${title}`} aria-busy={saving}
           disabled={!unit.draft || !unit.admitted || unit.busy || unit.awaitingObservation} onClick={explicitSave}>
           {saving ? tx('settings:catalog.saving') : tx('settings:bridge.save')}
@@ -990,7 +990,7 @@ export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
     {unit.definition === 'inherited' && <p role="status" data-definition-state="inherited">{tx('settings:forms.using-global')}</p>}
     <SettingsNotice text={unit.definition === 'inherited' ? shadowed?.diagnostic : undefined}/>
     {unit.definition === 'overriding' && <p role="status" data-definition-state="overriding">{tx('settings:forms.workspace-customization')}</p>}
-    {!!shadowed?.withheld.length && <p className={css.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
+    {!!shadowed?.withheld.length && <p className={settingsContentCss.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
     {unit.unparsed && <p role="status" data-definition-state="authored">{tx('settings:forms.unreadable')}</p>}
   </>;
 }
@@ -1001,7 +1001,7 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
   const text = outcome.kind === 'conflict' ? `${title} ${tx('settings:bridge.was-not-saved-the-source-changed-your-draft-and-base-revision-ar')}`
     : outcome.kind === 'rejected' ? `${title} ${tx('settings:bridge.was-not-saved')} ${outcome.detail}`
     : outcome.kind === 'uncertain' ? `${title} · ${tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re')}` : undefined;
-  return <SettingsNotice text={text} fallback={<p role="alert" className={css.error}>{text}</p>}/>;
+  return <SettingsNotice text={text} fallback={<p role="alert" className={settingsContentCss.error}>{text}</p>}/>;
 }
 
 /** Auto-save flush for `immediate` forms: a change stages the draft and a

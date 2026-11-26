@@ -12,7 +12,7 @@ import type { SourceScope } from '../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
-import css from '../../presentation/settings/SettingsContent.module.css';
+import { settingsContentCss } from '../../presentation/settings/settingsContentCss';
 import { SourceContext } from './source-context';
 import { SettingsActorContext, useSettingsTarget } from './machines/react';
 import { mutationOutcome } from './machines/settings-target';
@@ -233,13 +233,13 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   const pageTitle = loadedTitles[current] ?? tx(`settings:page.${current}`);
   return <SettingsFeedback active={visible}><SettingsPanel pages={pages} activeId={current} visible={visible}
     onSelect={id => guard.guard(() => navigation.send({ type: 'SELECT', page: id as SettingsPage }))}>
-    <section className={css.surface} data-settings-section={current} data-lifecycle={lifecycle} aria-busy={busy}>
+    <section className={settingsContentCss.surface} data-settings-section={current} data-lifecycle={lifecycle} aria-busy={busy}>
       <SettingsActorContext value={actor}><SourceContext value={source}><ScopeNavContext value={scopeNav}>
         {current === 'general'
           ? <PageTransactionProvider><GeneralPage theme={theme} setTheme={setTheme} /></PageTransactionProvider>
           : connectionFocused
             ? <SettingsPageShell
-                className={`${css.settings} ${css.page}`}
+                className={`${settingsContentCss.settings} ${settingsContentCss.page}`}
                 title={tx('settings:connection-settings.connection')}
                 breadcrumb={
                   <SettingsBackButton
@@ -253,7 +253,7 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
               >
                 <ConnectionSettings connection={connection} client={client} />
               </SettingsPageShell>
-            : !source ? <SettingsPageShell className={`${css.settings} ${css.page}`} title={pageTitle} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
+            : !source ? <SettingsPageShell className={`${settingsContentCss.settings} ${settingsContentCss.page}`} title={pageTitle} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} footer={null}>
                 {/* Connection is client-owned global configuration: it never
                     waits for a source read, unlike every unit editor. */}
                 {connectionReachable && <SettingsGroup title={tx('settings:connection-settings.connection')}>
@@ -263,9 +263,9 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
                   ? <SettingsPageSkeleton bodyOnly lifecycle={lifecycle} label={tx(lifecycle === 'connecting' ? 'settings:copy.configuration-is-shown-once-the-app-server-connection-is-established' : 'settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers')} />
                   : <SourcePending lifecycle={lifecycle} retry={lifecycle === 'failed' ? () => actor.send({ type: 'REFRESH' }) : undefined} />}
               </SettingsPageShell>
-            : <div key={editorKey} className={css.editorFrame}><PageTransactionProvider>{body}</PageTransactionProvider>
+            : <div key={editorKey} className={settingsContentCss.editorFrame}><PageTransactionProvider>{body}</PageTransactionProvider>
             </div>}
-        <div className={css.surfaceNotices}>
+        <div className={settingsContentCss.surfaceNotices}>
           <SettingsNotice text={convergenceError || maintenanceError}/>
           <SettingsNotice text={outcome.kind === 'uncertain' ? tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re') : undefined}/>
           <SettingsNotice text={readError ? `${tx('settings:settings.source-read-failed')} ${readError}` : undefined}/>
@@ -283,7 +283,7 @@ function SourcePending({ lifecycle, retry }: { lifecycle: ReturnType<typeof sett
   const text = lifecycle === 'failed' ? tx('settings:copy.no-configuration-can-be-shown-until-the-source-is-read-reload-configuration-to-try-again')
     : lifecycle === 'connecting' ? tx('settings:copy.configuration-is-shown-once-the-app-server-connection-is-established')
       : tx('settings:copy.reading-this-source-from-the-app-server-nothing-is-shown-until-native-answers');
-  return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}>
+  return <div className={settingsContentCss.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}>
     <p>{text}</p>
     {retry && <Button variant="outline" size="sm" onClick={retry}>{tx('common:session-configuration.retry')}</Button>}
   </div>;
@@ -299,7 +299,7 @@ function MalformedPage({ title, config, bodyDisabled = false }: {
 }) {
   if (config.state !== 'malformed') return null;
   return <SettingsPageShell title={title} toolbar={<><PageScopeToolbar /><PageRefreshButton /></>} bodyDisabled={bodyDisabled} footer={null}>
-    <div className={css.page}>
+    <div className={settingsContentCss.page}>
       <MalformedNotice config={config} />
       <RepairSourceForm revision={config.revision} />
     </div>
