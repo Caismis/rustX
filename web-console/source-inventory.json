@@ -3469,7 +3469,6 @@
         "../markdown/highlight.ts",
         "../markdown/useViewportHighlighting.ts",
         "./FoldToggle.tsx",
-        "./ReadBlock.module.css",
         "./clipboard.ts",
         "clsx",
         "react"
@@ -3479,7 +3478,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "21b570b4f8d44eaf139bd412726eaf2c1dee9c6c4c8af29dc07501e585a6adac"
+      "local_sha256": "b7758a5ead5586db405d2c6c916167bafc80c4546c13845eed748679733d30c9"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -6991,22 +6990,6 @@
         "Harness schedule mutation and delivery authority"
       ],
       "local_sha256": "91f67de3777b21aaf99b81c7af1414824f6e6f2df4fdb1e89c96d729970d8a4b"
-    },
-    {
-      "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
-      "upstream": "packages/client/ui-schedule/src/client/DatePicker.module.css",
-      "destination": "web-console/src/app/scheduler/DatePicker.module.css",
-      "upstream_sha256": "668f93e53593f3472c04ca6523e6336a9ea581dee4b7794c9e2c75f8c0f0dca0",
-      "classification": "B",
-      "treatment": "Harness task layout, pickers, cron descriptions and bilingual copy adapted to exact native task bindings and bounded reads. rustX owns CAS edits, pause/resume, Workflow results and cancellation; original Host stores, RPCs and runtime authority are excluded.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Host and Peer services",
-        "Cordis slots and stores",
-        "Harness schedule mutation and delivery authority"
-      ],
-      "local_sha256": "e6464e6316485061d8e47f83e46b1127d331d612a2dbee177505a3fdc3b79234"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

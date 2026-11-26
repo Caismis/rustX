@@ -10,7 +10,6 @@ import {
   type HighlightSpan,
 } from '../markdown/highlight.ts'
 import { useViewportHighlighting } from '../markdown/useViewportHighlighting.ts'
-import css from './ReadBlock.module.css'
 
 /**
  * Content lines shown before the height cap collapses the middle. Matches
@@ -111,9 +110,9 @@ export function ReadBlock({
 
   const rows = (slice: readonly (readonly [ReadBlockLine, readonly HighlightSpan[] | undefined])[]) =>
     slice.map(([line, spans], index) => (
-      <div key={line.number ?? index} className={css.line}>
-        {line.number !== undefined && <span className={css.gutter} aria-hidden>{line.number}</span>}
-        <span className={css.content}>{spans === undefined ? line.text : renderSpans(spans)}</span>
+      <div key={line.number ?? index} className="flex min-h-[var(--dsl-read-line-height)] leading-[var(--dsl-read-line-height)] whitespace-pre">
+        {line.number !== undefined && <span className="flex-none w-[var(--dsl-read-gutter)] pr-[14px] text-right [color:var(--dsw-alias-label-tertiary)] select-none" aria-hidden>{line.number}</span>}
+        <span className="[color:var(--dsw-alias-label-primary)]">{spans === undefined ? line.text : renderSpans(spans)}</span>
       </div>
     ))
 
@@ -121,27 +120,27 @@ export function ReadBlock({
     [line, highlighted?.[index]])
 
   return (
-    <div ref={rootRef} className={clsx(css.block, className)} data-read="">
-      <div className={css.banner}>
-        <div className={css.label}>{label ?? ''}</div>
-        <div className={css.action}>
+    <div ref={rootRef} className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-read-radius:12px] [--dsl-read-line-height:22px] [--dsl-read-gutter:48px]', className)} data-read="">
+      <div className="flex justify-between items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]">
+        <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-primary)] [font-family:var(--ds-font-family-code),monospace] text-[12px] leading-[18px]">{label ?? ''}</div>
+        <div className="flex items-center shrink-0 gap-[12px]">
           {windowed && (
-            <span className={css.count}>{labels.window(lines.length, totalLines!)}</span>
+            <span className="[color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)]">{labels.window(lines.length, totalLines!)}</span>
           )}
-          <span className={css.lang}>{lang ?? ''}</span>
+          <span className="[color:var(--dsw-alias-label-tertiary)] [font-family:var(--ds-font-family-code),monospace] text-[12px] leading-[18px]">{lang ?? ''}</span>
           {/* Empty files omit Copy to avoid replacing the clipboard with an empty string. */}
           {lines.length > 0 && (
-            <button type="button" className={css.copyButton} onClick={onCopy}>
+            <button type="button" className="bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
               {copied ? labels.copied : labels.copy}
             </button>
           )}
         </div>
       </div>
-      <div className={css.body}>
+      <div className="px-0 py-[12px] [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
         {rows(capped ? paired.slice(0, headLines) : paired)}
         {hidden > 0 && (
           <FoldToggle
-            className={css.expand}
+            className="block w-full pt-0 pr-0 pb-0 pl-[var(--dsl-read-gutter)] border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]"
             expanded={expanded}
             hidden={hidden}
             labels={labels}
