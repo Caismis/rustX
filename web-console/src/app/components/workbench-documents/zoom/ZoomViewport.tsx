@@ -4,7 +4,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
   type ReactNode, type RefCallback } from 'react'
 import { ZoomControls, type ZoomControlsHandle } from './ZoomControls.tsx'
 import { FIT_WIDTH, MAX_FIXED_ZOOM, MIN_FIXED_ZOOM, type ZoomLabels, type ZoomPreference } from './types.ts'
-import css from './ZoomViewport.module.css'
 
 const PINCH_SETTLE_DELAY_MS = 120
 const CONTROLS_HIDE_DELAY_MS = 420
@@ -200,12 +199,12 @@ export function ZoomViewport(props: ZoomViewportProps): ReactNode {
     }
   }, [clearControlsHide, props.onPreference, props.signal, scheduleControlsHide, showControls, showZoom])
 
-  return <section ref={attachFrame} className={css.frame} data-document-zoom-frame
+  return <section ref={attachFrame} className="relative h-full min-h-0 overflow-hidden [&[data-document-zoom-mode=fit-width]_.zoom-surface]:w-[min(var(--document-zoom-width),100%)] [&[data-document-zoom-mode=fixed]_.zoom-surface]:w-[calc(var(--document-zoom-width)*var(--document-zoom))]" data-document-zoom-frame
     data-document-zoom-mode={modeRef.current} style={{ '--document-zoom': zoomRef.current,
       '--document-zoom-reveal-height': `${String(CONTROLS_REVEAL_HEIGHT_PX)}px` } as CSSProperties}
     onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
-    <div ref={attachScrollport} className={css.scrollport} data-document-zoom-scrollport>{props.children}</div>
-    <div className={css.revealZone} data-document-zoom-reveal-zone aria-hidden="true" />
+    <div ref={attachScrollport} className="h-full overflow-auto" data-document-zoom-scrollport>{props.children}</div>
+    <div className="absolute inset-x-0 bottom-0 h-[var(--document-zoom-reveal-height)] pointer-events-none" data-document-zoom-reveal-zone aria-hidden="true" />
     {props.intrinsicWidth !== undefined && <ZoomControls ref={controls} zoom={zoomRef.current}
       fitWidth={modeRef.current === 'fit-width'} labels={props.labels} visible={controlsVisible}
       onZoom={setZoom} onFitWidth={fitWidth} onActiveChange={handleControlsActive} />}
@@ -213,4 +212,4 @@ export function ZoomViewport(props: ZoomViewportProps): ReactNode {
 }
 
 /** Shared surface class for actual-size and fit-width layout. */
-export const zoomSurfaceClass = css.surface as string
+export const zoomSurfaceClass = 'zoom-surface max-w-none'
