@@ -5,7 +5,6 @@ import { Tabs, TabsContent, TabsList, TabsTab } from '@/components/ui/tabs';
 import clsx from 'clsx';
 import { Menu } from '../primitives/Menu';
 import { IconChevronDownOutline14 } from '../primitives/icons';
-import css from './SettingsRoot.module.css';
 import workflow from './SettingsWorkflow.module.css';
 
 /** One primary Settings page as the panel presents it. The icon is a
@@ -34,34 +33,34 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
   useEffect(() => { if (!visible) setSections(false); }, [visible]);
   const active = pages.find(page => page.id === activeId)!;
   return (
-    <section ref={attachPanel} className={css.panel} aria-label={tx('settings:settings.settings')} tabIndex={-1} data-settings-page>
-      <div className={css.page}>
-          <header data-settings-header="" className={css.header}>
-            <div className={css.sections}>
+    <section ref={attachPanel} className="flex-1 min-w-0 min-h-0 h-full flex overflow-hidden bg-[var(--dsw-alias-bg-base)] [container:settings/inline-size]" aria-label={tx('settings:settings.settings')} tabIndex={-1} data-settings-page>
+      <div className="flex-1 min-w-0 min-h-0 grid grid-cols-[216px_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] [grid-template-areas:'nav_header'_'nav_options'] w-full outline-none [@container_settings_(max-width:680px)]:grid-cols-[minmax(0,1fr)] [@container_settings_(max-width:680px)]:[grid-template-areas:'header'_'options']">
+          <header data-settings-header="" className="[grid-area:header] hidden grid-cols-[minmax(0,1fr)] items-center gap-x-[12px] gap-y-[8px] min-h-[60px] pt-[14px] pr-[16px] pb-[10px] pl-[28px] box-border [@container_settings_(max-width:680px)]:grid [@container_settings_(max-width:680px)]:grid-cols-[minmax(0,1fr)] [@container_settings_(max-width:680px)]:pt-[12px] [@container_settings_(max-width:680px)]:pr-[12px] [@container_settings_(max-width:680px)]:pb-[10px] [@container_settings_(max-width:680px)]:pl-[16px]">
+            <div className="min-w-0 [@container_settings_(max-width:680px)]:block">
               <Menu open={sections} onClose={() => setSections(false)} autoFocus focusOwner={panelRef}
                 items={pages.map(page => ({ id: page.id, label: page.label, icon: page.icon }))} selectedId={activeId}
                 onSelect={id => { setSections(false); onSelect(id); }}
-                anchor={<button ref={sectionTriggerRef} type="button" data-settings-section-trigger="" className={css.sectionTrigger} aria-haspopup="menu" aria-expanded={sections}
+                anchor={<button ref={sectionTriggerRef} type="button" data-settings-section-trigger="" className="flex items-center gap-[8px] max-w-full h-[40px] py-[9px] px-[12px] box-border [border:0.5px_solid_var(--dsw-alias-border-l3)] rounded-[12px] bg-transparent cursor-pointer [font-family:inherit] text-[14px] leading-[22px] font-medium [color:var(--dsw-alias-label-primary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-2" aria-haspopup="menu" aria-expanded={sections}
                   aria-label={tx('settings:settings-root.settings-page-value', { p0: active.label })} onClick={() => setSections(open => !open)}>
-                  <span className={css.navIcon} aria-hidden="true">{active.icon}</span>
-                  <span className={css.sectionLabel}>{active.label}</span>
-                  <IconChevronDownOutline14 className={css.sectionChevron} />
+                  <span className="flex-none inline-flex w-[16px] h-[16px] items-center justify-center [color:var(--dsw-alias-label-secondary)]" aria-hidden="true">{active.icon}</span>
+                  <span className="min-w-0 overflow-hidden whitespace-nowrap text-ellipsis">{active.label}</span>
+                  <IconChevronDownOutline14 className="flex-none [color:var(--dsw-alias-label-tertiary)]" />
                 </button>} />
             </div>
           </header>
-          <Tabs className={css.tabsRoot} orientation="vertical" value={activeId} onValueChange={key => { onSelect(String(key)); }}>
-            <nav className={css.nav} aria-label={tx('settings:navigation.rail')} data-settings-navigation="">
-              <div className={css.navTitle}>{tx('settings:settings.settings')}</div>
-              <TabsList activateOnFocus className={clsx(css.navList, workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
+          <Tabs className="contents" orientation="vertical" value={activeId} onValueChange={key => { onSelect(String(key)); }}>
+            <nav className="[border-right:1px_solid_var(--dsw-alias-border-l3)] flex-none flex flex-col gap-[18px] [grid-area:nav] min-h-0 pt-[22px] px-[12px] pb-0 box-border [@container_settings_(max-width:680px)]:hidden" aria-label={tx('settings:navigation.rail')} data-settings-navigation="">
+              <div className="px-[12px] py-0 text-[16px] leading-[24px] font-medium [color:var(--dsw-alias-label-primary)]">{tx('settings:settings.settings')}</div>
+              <TabsList activateOnFocus className={clsx('flex flex-col gap-[4px] overflow-y-auto min-h-0 pb-[20px]', workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
                 {pages.map(page => (
-                  <TabsTab key={page.id} value={page.id} className={clsx(css.navCell, workflow.pageTab)}>
-                    <span className={css.navIcon} aria-hidden="true">{page.icon}</span>
-                    <span className={clsx(css.navLabel, workflow.pageTabLabel)}>{page.label}</span>
+                  <TabsTab key={page.id} value={page.id} className={clsx('flex items-center gap-[8px] h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font-family:inherit] text-[14px] leading-[22px] font-normal [color:var(--dsw-alias-label-primary)] text-left', workflow.pageTab)}>
+                    <span className="flex-none inline-flex w-[16px] h-[16px] items-center justify-center [color:var(--dsw-alias-label-secondary)]" aria-hidden="true">{page.icon}</span>
+                    <span className={clsx('flex-1 min-w-0 overflow-hidden whitespace-nowrap text-ellipsis', workflow.pageTabLabel)}>{page.label}</span>
                   </TabsTab>
                 ))}
               </TabsList>
             </nav>
-            <div className={css.options}>
+            <div className="[grid-area:options] min-w-0 min-h-0 flex overflow-hidden [@container_settings_(max-width:680px)]:mb-0 [&_[role=tabpanel]]:flex-1 [&_[role=tabpanel]]:min-w-0 [&_[role=tabpanel]]:min-h-0 [&_[role=tabpanel]]:flex [&_[role=tabpanel]]:flex-col [&_[role=tabpanel]]:overflow-hidden">
               <TabsContent key={activeId} value={activeId} className={workflow.pageTabPanel}>{children}</TabsContent>
             </div>
           </Tabs>

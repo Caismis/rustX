@@ -1789,26 +1789,6 @@
       "classification": "A"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.module.css",
-      "destination": "web-console/src/presentation/markdown/CodeBlock.module.css",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "5a7ed14f12cb63ebf3f77d57e67340f7e9a399b0b07a90bec773fad3ddfa312f",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "6bd229d5d95947696e0ee3f10c6ee77ed9dc4a07319c06ea6f18b1960b60a701",
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
       "destination": "web-console/src/presentation/markdown/CodeBlock.tsx",
       "treatment": "Harness code-fence presentation adapted to local Shiki token rendering, native language discovery and incremental streaming. One pre/code pair retains focus and reading identity through plain, streaming and highlighted states. Streaming-only render state is discarded at completion; settled rendering remains independent of lazy grammar timing.",
@@ -2592,13 +2572,12 @@
         "../../locale/react",
         "../primitives/Menu",
         "../primitives/icons",
-        "./SettingsRoot.module.css",
         "./SettingsWorkflow.module.css",
         "@/components/ui/tabs",
         "clsx",
         "react"
       ],
-      "local_sha256": "6ba0252234432d17d242f7d75236f0cd83692fc4c6e6acb7cf553e7859876976",
+      "local_sha256": "025e2dfe9f99f25b567b4912fc27303e3a6f02c2c5f336748b9bbb8934ab4a52",
       "classification": "B"
     },
     {
@@ -6193,7 +6172,6 @@
         "../../../../protocol/app-server/v80",
         "../../bindings/workflow-children",
         "../../locale/react",
-        "../../presentation/agent/WorkflowRunPanel.module.css",
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
@@ -6208,7 +6186,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "579ae87d4b1b4a6c094faaeeee5d9ad5011fdc0791b0479175065a898d4a656e",
+      "local_sha256": "f2657a3de405b9d3ec1ba0d52f3ce284ff6298b93655f11dca0a6270f89dafe5",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",
