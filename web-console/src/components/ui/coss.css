@@ -136,6 +136,9 @@
     from { background-position: 100% 50%; }
     to { background-position: 0 50%; }
   }
+  @keyframes wide-in {
+    from { opacity: 0; }
+  }
   @keyframes input-pending {
     from { opacity: 0.35; }
     to { opacity: 1; }

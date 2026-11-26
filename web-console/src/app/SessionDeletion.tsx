@@ -7,7 +7,7 @@ import { useClientSelector, transportSelection, sameValue } from '../client/sele
 import { sessionDeletionNotice } from '../bindings/session-deletion';
 import { Modal } from '../presentation/primitives/Modal';
 import { Button } from '../presentation/primitives/Button';
-import css from '../presentation/workspace/WorkspaceBrowser.module.css';
+import { workspaceBrowserCss } from '../presentation/workspace/workspaceBrowserCss';
 
 /** One action owns its confirmation, pending state, and rejection. Durable
  * cleanup/uncertainty remains in the native/client projection after it closes. */
@@ -53,9 +53,9 @@ export function SessionDeletion({ client, sessionId, title, close, deleted }: {
   return <Modal open title={tx('common:session-deletion.confirm-session-deletion')} closeLabel={tx('common:session-deletion.close-deletion-confirmation')} onClose={dismiss}
     description={tx('common:session-deletion.description', { title })}
     footer={<><Button variant="outline" disabled={busy && guard.current} onClick={dismiss}>{tx('common:session-deletion.keep-session')}</Button>
-      <Button variant="outline" className={css.deleteAction} disabled={busy || uncertain || !preview || lifecycle?.delete === false || transport.connection !== 'connected'} onClick={() => void confirm()}>{tx('common:session-deletion.confirm-delete')}</Button></>}>
-    {busy && <div className={css.deleteStatus} role="status">{tx(guard.current ? 'common:session-deletion.deleting' : 'common:session-deletion.reading')}</div>}
-    {error && <div className={css.renameError} role="alert">{error}</div>}
-    {uncertain && <div className={css.renameError} role="alert">{tx('common:session-deletion.deletion-outcome-uncertain-inspect-native-recovery-before-anothe')}</div>}
+      <Button variant="outline" className={workspaceBrowserCss.deleteAction} disabled={busy || uncertain || !preview || lifecycle?.delete === false || transport.connection !== 'connected'} onClick={() => void confirm()}>{tx('common:session-deletion.confirm-delete')}</Button></>}>
+    {busy && <div className={workspaceBrowserCss.deleteStatus} role="status">{tx(guard.current ? 'common:session-deletion.deleting' : 'common:session-deletion.reading')}</div>}
+    {error && <div className={workspaceBrowserCss.renameError} role="alert">{error}</div>}
+    {uncertain && <div className={workspaceBrowserCss.renameError} role="alert">{tx('common:session-deletion.deletion-outcome-uncertain-inspect-native-recovery-before-anothe')}</div>}
   </Modal>;
 }
