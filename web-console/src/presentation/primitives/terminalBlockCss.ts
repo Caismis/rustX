@@ -1,0 +1,17 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness; see PROVENANCE.md. */
+export const terminalBlockCss = {
+  block: 'relative my-[16px] pl-(--dsl-terminal-gutter) [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-(--dsl-terminal-radius) overflow-hidden [--dsl-terminal-radius:var(--dsw-radius-lg)] [--dsl-terminal-line-height:22px] [--dsl-terminal-font:var(--dsw-font-markdown-code-block)] [--dsl-terminal-gutter:30px] data-[body]:[&_.tb-header]:[border-bottom:0.5px_solid_var(--dsw-alias-border-l2)]',
+  header: 'tb-header flex items-start gap-[12px] ml-[calc(-1*var(--dsl-terminal-gutter))] pt-[9px] pr-[14px] pb-[9px] pl-(--dsl-terminal-gutter) rounded-tl-(--dsl-terminal-radius) rounded-tr-(--dsl-terminal-radius) max-h-[150px] overflow-y-auto [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-clip-padding [&::-webkit-scrollbar-thumb]:rounded-[6px] [&::-webkit-scrollbar-track]:m-[6px]',
+  prompt: 'flex flex-col min-w-0 flex-1 [font:var(--dsl-terminal-font)]',
+  promptLine: 'relative flex items-baseline gap-[8px] min-w-0 [line-height:var(--dsl-terminal-line-height)]',
+  runState: 'absolute left-[calc(-1*var(--dsl-terminal-gutter)+8px)] top-1/2 -translate-y-1/2',
+  runStateLabel: 'absolute w-[1px] h-[1px] overflow-hidden [clip-path:inset(50%)] whitespace-nowrap',
+  cwd: 'flex-none [color:var(--dsw-alias-label-tertiary)]',
+  command: 'min-w-0 [color:var(--dsw-alias-label-primary)] overflow-hidden text-ellipsis whitespace-(--dsl-terminal-command-whitespace,pre) wrap-anywhere',
+  status: 'flex-none sticky top-0 h-(--dsl-terminal-line-height) [color:var(--dsw-alias-state-error-primary)]',
+  copyButton: 'flex-none sticky top-0 bg-[var(--dsw-alias-markdown-code-block)] border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)] [line-height:var(--dsl-terminal-line-height)]',
+  output: 'max-h-(--dsl-terminal-output-max-height,none) pt-[12px] pr-[14px] pb-[12px] pl-0 [font:var(--dsl-terminal-font)] overflow-auto [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-clip-padding [&::-webkit-scrollbar-thumb]:rounded-[6px] [&::-webkit-scrollbar-track]:m-[6px]',
+  line: 'min-h-(--dsl-terminal-line-height) whitespace-(--dsl-terminal-line-whitespace,pre) wrap-anywhere',
+  expand: 'block w-full p-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]',
+  empty: 'pt-[12px] pr-[14px] pb-[12px] pl-0 [font:var(--dsl-terminal-font)] [color:var(--dsw-alias-label-tertiary)]',
+};

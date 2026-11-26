@@ -122,6 +122,11 @@
     from { transform: translateX(-70%); }
     to { transform: translateX(220%); }
   }
+  @keyframes hero-fish-swim {
+    0%, 100% { transform: none; }
+    35% { transform: rotate(-4deg) translate(-0.4px, -0.9px); }
+    70% { transform: rotate(1.6deg) translate(0.3px, 0.2px); }
+  }
   @keyframes input-pending {
     from { opacity: 0.35; }
     to { opacity: 1; }

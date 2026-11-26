@@ -15,7 +15,7 @@ import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
 import { DialogSurface } from '../../presentation/primitives/DialogSurface';
 import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/primitives/icons';
-import hero from '../../presentation/agent/HeroShell.module.css';
+import { heroShellCss } from '../../presentation/agent/heroShellCss';
 import { modalCss } from '../../presentation/primitives/modalCss';
 import { useModelPreference } from '../model-preference';
 import { ComposerDraft } from '../composer/draft';
@@ -106,9 +106,9 @@ export function ConversationComposer({ visible = true, client, host, authority, 
       if (!selected) { setError(message('common:copy.choose-a-host-authorized-registered-workspace-before-submitting')); return false; }
       return submissions.submit(binding, { preparation: draftPreparations(client)?.seal(binding, selected.id, catalog!.authorityId), workspaceId: selected.id, text, files, attachmentIds, submission, model: requestedModel }, firstSubmitPort(client, host, current, preparePublication), () => intake.clear(), (files, ids) => intake.restoreDraft(files, ids));
     }} {...active} busy={pending || !!active?.busy} disabled={active ? !pending && !connecting && active.disabled : !live || owner !== binding} binding={binding}/>;
-  return <div className={hero.body} data-resident-composer="" role="region" aria-label={active ? tx('common:conversation-composer.conversation-composer') : tx('common:conversation-composer.new-conversation')}>
-    {!active && <div className={hero.headline}><h1 className={hero.titleGroup}>{tx('common:conversation-composer.what-would-you-like-to-build')}</h1></div>}
-    {!active && <div className={hero.workspaceRow}>
+  return <div className={heroShellCss.body} data-resident-composer="" role="region" aria-label={active ? tx('common:conversation-composer.conversation-composer') : tx('common:conversation-composer.new-conversation')}>
+    {!active && <div className={heroShellCss.headline}><h1 className={heroShellCss.titleGroup}>{tx('common:conversation-composer.what-would-you-like-to-build')}</h1></div>}
+    {!active && <div className={heroShellCss.workspaceRow}>
       <Menu open={menu} autoFocus selectedId={selected?.id} onClose={() => setMenu(false)}
         items={[...(bound ? catalog?.workspaces ?? [] : []).map(w => ({ id: w.id, label: w.displayName, icon: <IconFolderClose16 size={16}/> })), ...(bound && (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser' && host.browseWorkspace && host.registerWorkspaceFolder
           || catalog?.picker.kind === 'native' && host.pickWorkspace) ? [{ id: '::add-workspace', label: tx('common:conversation-composer.add-workspace') }] : [])]}
@@ -120,7 +120,7 @@ export function ConversationComposer({ visible = true, client, host, authority, 
           if (catalog?.picker.kind === 'configured' || catalog?.picker.kind === 'browser') setAdd({ mutation, picker: catalog.picker });
           else if (catalog?.picker.kind === 'native') void adopt(mutation);
         }}
-        anchor={<button type="button" className={hero.workspace} aria-label={tx('common:conversation-composer.choose-workspace')} aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={hero.workspaceLabel}>{selected?.displayName ?? tx('common:conversation-composer.choose-workspace')}</span><IconChevronDownOutline14 size={12}/></button>}/>
+        anchor={<button type="button" className={heroShellCss.workspace} aria-label={tx('common:conversation-composer.choose-workspace')} aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={heroShellCss.workspaceLabel}>{selected?.displayName ?? tx('common:conversation-composer.choose-workspace')}</span><IconChevronDownOutline14 size={12}/></button>}/>
     </div>}
     <ComposerContextStack todo={context} goal={null} queue={null} composer={<WorkspaceControls visible={visible} presentationKey={binding} client={client} host={host} workspaceId={active ? initialWorkspace : workspaceId}>{(source, approval) => {
       // Recent models seed new conversations only while still offered in this

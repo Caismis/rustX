@@ -12,7 +12,7 @@ import type {
 import { IconCheckOutline16, IconCopyOutline16, IconWrapLinesOutline16 } from './icons';
 import { Menu } from './Menu';
 import type { MenuEntry } from './Menu';
-import css from './JsonTree.module.css';
+import { jsonTreeCss } from './jsonTreeCss';
 
 const OBJECT_PREVIEW_LIMIT = 4
 const ARRAY_PREVIEW_LIMIT = 5
@@ -128,7 +128,7 @@ function JsonCopyAction({ store, target, persistent, labels, focusOwner, onCopy,
       ? labels.copyFailed
       : object ? labels.copyPrettyJson : labels.copyValue
   return (
-    <span className={css.copySlot}>
+    <span className={jsonTreeCss.copySlot}>
       {(persistent || snapshot !== undefined) && (
         <Menu
           open={snapshot?.menuOpen === true}
@@ -138,7 +138,7 @@ function JsonCopyAction({ store, target, persistent, labels, focusOwner, onCopy,
             <button
               ref={buttonRef}
               type="button"
-              className={css.actionButton}
+              className={jsonTreeCss.actionButton}
               data-json-copy-button
               data-state={state}
               aria-label={copyTitle}
@@ -187,28 +187,28 @@ function bracketOf(value: object | unknown[]): readonly [string, string] {
 }
 
 function previewPrimitive(value: unknown): ReactNode {
-  if (isJsonNumber(value)) return <span className={css.numberValue}>{value.rawJSON}</span>
-  if (value === null) return <span className={css.keywordValue}>null</span>
+  if (isJsonNumber(value)) return <span className={jsonTreeCss.numberValue}>{value.rawJSON}</span>
+  if (value === null) return <span className={jsonTreeCss.keywordValue}>null</span>
   if (typeof value === 'string') {
-    return <span className={css.stringValue}>{JSON.stringify(value)}</span>
+    return <span className={jsonTreeCss.stringValue}>{JSON.stringify(value)}</span>
   }
   if (typeof value === 'number') {
-    return <span className={css.numberValue}>{String(value)}</span>
+    return <span className={jsonTreeCss.numberValue}>{String(value)}</span>
   }
   if (typeof value === 'boolean') {
-    return <span className={css.keywordValue}>{String(value)}</span>
+    return <span className={jsonTreeCss.keywordValue}>{String(value)}</span>
   }
   if (typeof value === 'bigint') {
-    return <span className={css.otherValue}>{value.toString()}</span>
+    return <span className={jsonTreeCss.otherValue}>{value.toString()}</span>
   }
   if (typeof value === 'undefined') {
-    return <span className={css.otherValue}>undefined</span>
+    return <span className={jsonTreeCss.otherValue}>undefined</span>
   }
   if (typeof value === 'symbol') {
-    return <span className={css.otherValue}>{value.description ?? 'Symbol'}</span>
+    return <span className={jsonTreeCss.otherValue}>{value.description ?? 'Symbol'}</span>
   }
   if (typeof value === 'function') {
-    return <span className={css.otherValue}>{value.name || 'Function'}</span>
+    return <span className={jsonTreeCss.otherValue}>{value.name || 'Function'}</span>
   }
   return null
 }
@@ -224,54 +224,54 @@ function previewValue(value: unknown, depth: number): ReactNode {
 
   return (
     <>
-      <span className={css.punctuation}>{open}</span>
+      <span className={jsonTreeCss.punctuation}>{open}</span>
       {depth >= PREVIEW_DEPTH_LIMIT
-        ? <span className={css.previewEllipsis}>…</span>
+        ? <span className={jsonTreeCss.previewEllipsis}>…</span>
         : visible.map(([key, item], index) => (
           <span key={key}>
-            {index > 0 && <span className={css.punctuation}>, </span>}
+            {index > 0 && <span className={jsonTreeCss.punctuation}>, </span>}
             {!array && (
               <>
-                <span className={css.previewProperty}>{key}</span>
-                <span className={css.punctuation}>: </span>
+                <span className={jsonTreeCss.previewProperty}>{key}</span>
+                <span className={jsonTreeCss.punctuation}>: </span>
               </>
             )}
             {previewValue(item, depth + 1)}
           </span>
         ))}
       {depth < PREVIEW_DEPTH_LIMIT && entries.length > limit && (
-        <span className={css.previewEllipsis}>, …</span>
+        <span className={jsonTreeCss.previewEllipsis}>, …</span>
       )}
-      <span className={css.punctuation}>{close}</span>
+      <span className={jsonTreeCss.punctuation}>{close}</span>
     </>
   )
 }
 
 function primitiveValue(value: unknown): ReactNode {
-  if (isJsonNumber(value)) return <span className={css.numberValue}>{value.rawJSON}</span>
-  if (value === null) return <span className={css.keywordValue}>null</span>
+  if (isJsonNumber(value)) return <span className={jsonTreeCss.numberValue}>{value.rawJSON}</span>
+  if (value === null) return <span className={jsonTreeCss.keywordValue}>null</span>
   if (typeof value === 'string') {
-    return <span className={css.stringValue}>{JSON.stringify(value)}</span>
+    return <span className={jsonTreeCss.stringValue}>{JSON.stringify(value)}</span>
   }
   if (typeof value === 'boolean') {
-    return <span className={css.keywordValue}>{String(value)}</span>
+    return <span className={jsonTreeCss.keywordValue}>{String(value)}</span>
   }
   if (typeof value === 'number') {
-    return <span className={css.numberValue}>{String(value)}</span>
+    return <span className={jsonTreeCss.numberValue}>{String(value)}</span>
   }
   if (typeof value === 'bigint') {
-    return <span className={css.numberValue}>{/* i18n-raw: JavaScript bigint syntax */ `${value.toString()}n`}</span>
+    return <span className={jsonTreeCss.numberValue}>{/* i18n-raw: JavaScript bigint syntax */ `${value.toString()}n`}</span>
   }
   if (value instanceof Date) {
-    return <span className={css.otherValue}>{value.toISOString()}</span>
+    return <span className={jsonTreeCss.otherValue}>{value.toISOString()}</span>
   }
   if (typeof value === 'function') {
-    return <span className={css.otherValue}>function() {'{ }'}</span>
+    return <span className={jsonTreeCss.otherValue}>function() {'{ }'}</span>
   }
   if (typeof value === 'undefined') {
-    return <span className={css.otherValue}>undefined</span>
+    return <span className={jsonTreeCss.otherValue}>undefined</span>
   }
-  return <span className={css.otherValue}>{(value as symbol).toString()}</span>
+  return <span className={jsonTreeCss.otherValue}>{(value as symbol).toString()}</span>
 }
 
 function fieldText(field: string): string {
@@ -314,7 +314,7 @@ function NodeField({
   if (field === undefined) return null
   return (
     <span
-      className={clsx(css.label, expandable && css.clickableLabel)}
+      className={clsx(jsonTreeCss.label, expandable && jsonTreeCss.clickableLabel)}
       onClick={expandable ? onToggle : undefined}
     >
       {fieldText(field)}:
@@ -381,7 +381,7 @@ function JsonString({
     // Keep raw text within the window and clipping ancestors outside the tree.
     // Capture scrolling because an ancestor can move the string without resizing it.
     const clips: HTMLElement[] = []
-    const tree = raw.closest<HTMLElement>(`.${css.root}`) as HTMLElement
+    const tree = raw.closest<HTMLElement>(`.${jsonTreeCss.root}`) as HTMLElement
     for (let parent = tree.parentElement; parent !== null; parent = parent.parentElement) {
       if (/auto|scroll|hidden|clip/.test(getComputedStyle(parent).overflowY)) clips.push(parent)
     }
@@ -414,24 +414,24 @@ function JsonString({
   if (expanded) {
     const fieldId = `${contentsId}-field`
     return (
-      <div className={css.stringField} data-expanded>
-        {field !== undefined && <span id={fieldId} className={css.label}>{fieldText(field)}:</span>}
+      <div className={jsonTreeCss.stringField} data-expanded>
+        {field !== undefined && <span id={fieldId} className={jsonTreeCss.label}>{fieldText(field)}:</span>}
         <pre
           ref={rawRef}
           id={contentsId}
-          className={css.stringRaw}
+          className={jsonTreeCss.stringRaw}
           data-wrap={wrapped}
           tabIndex={0}
           aria-labelledby={field === undefined ? undefined : fieldId}
         >
           {value}
         </pre>
-        {!lastElement && <span className={css.punctuation}>,</span>}
-        <div className={css.stringActions}>
+        {!lastElement && <span className={jsonTreeCss.punctuation}>,</span>}
+        <div className={jsonTreeCss.stringActions}>
           {stringWrapping !== undefined && (
             <button
               type="button"
-              className={css.actionButton}
+              className={jsonTreeCss.actionButton}
               aria-label={stringWrapping.label}
               title={stringWrapping.label}
               aria-pressed={wrapped}
@@ -447,7 +447,7 @@ function JsonString({
           )}
           <button
             type="button"
-            className={css.actionButton}
+            className={jsonTreeCss.actionButton}
             aria-label={labels.collapseNode}
             title={labels.collapseNode}
             aria-expanded
@@ -475,13 +475,13 @@ function JsonString({
   return (
     <>
       {renderCopy?.()}
-      <span className={css.stringField} data-expanded={expanded}>
-        <span ref={contentRef} id={contentsId} className={css.stringText}>
+      <span className={jsonTreeCss.stringField} data-expanded={expanded}>
+        <span ref={contentRef} id={contentsId} className={jsonTreeCss.stringText}>
           {truncated && (
-            <span className={css.stringToggleSlot}>
+            <span className={jsonTreeCss.stringToggleSlot}>
               <button
                 type="button"
-                className={css.stringToggle}
+                className={jsonTreeCss.stringToggle}
                 aria-label={labels.expandNode}
                 aria-expanded={false}
                 aria-controls={contentsId}
@@ -494,9 +494,9 @@ function JsonString({
               </button>
             </span>
           )}
-          {field !== undefined && <span className={css.label}>{fieldText(field)}:</span>}
+          {field !== undefined && <span className={jsonTreeCss.label}>{fieldText(field)}:</span>}
           {primitiveValue(value)}
-          {!lastElement && <span className={css.punctuation}>,</span>}
+          {!lastElement && <span className={jsonTreeCss.punctuation}>,</span>}
         </span>
       </span>
     </>
@@ -544,7 +544,7 @@ function JsonTreeNode({
 
   const row = (children: ReactNode, ariaExpanded?: boolean) => (
     <div
-      className={css.row}
+      className={jsonTreeCss.row}
       role="treeitem"
       aria-expanded={ariaExpanded}
       onMouseOver={(event) => {
@@ -576,7 +576,7 @@ function JsonTreeNode({
       <>
         <NodeField field={field} expandable={false} onToggle={toggle} />
         {primitiveValue(value)}
-        {!lastElement && <span className={css.punctuation}>,</span>}
+        {!lastElement && <span className={jsonTreeCss.punctuation}>,</span>}
       </>
     ))
   }
@@ -586,9 +586,9 @@ function JsonTreeNode({
     return row((
       <>
         <NodeField field={field} expandable={false} onToggle={toggle} />
-        <span className={css.punctuation}>{open}</span>
-        <span className={css.punctuation}>{close}</span>
-        {!lastElement && <span className={css.punctuation}>,</span>}
+        <span className={jsonTreeCss.punctuation}>{open}</span>
+        <span className={jsonTreeCss.punctuation}>{close}</span>
+        {!lastElement && <span className={jsonTreeCss.punctuation}>,</span>}
       </>
     ))
   }
@@ -597,7 +597,7 @@ function JsonTreeNode({
     <>
       <span
         ref={expanderRef}
-        className={clsx(css.expander, expanded ? css.collapseIcon : css.expandIcon)}
+        className={clsx(jsonTreeCss.expander, expanded ? jsonTreeCss.collapseIcon : jsonTreeCss.expandIcon)}
         data-json-expander
         role="button"
         aria-label={expanded ? labels.collapseNode : labels.expandNode}
@@ -608,13 +608,13 @@ function JsonTreeNode({
         onClick={toggle}
         onKeyDown={onExpanderKeyDown}
       />
-      <span className={css.summary}>
+      <span className={jsonTreeCss.summary}>
         <NodeField field={field} expandable onToggle={toggle} />
-        <span className={css.preview}>{previewValue(value, 0)}</span>
-        {!lastElement && <span className={css.punctuation}>,</span>}
+        <span className={jsonTreeCss.preview}>{previewValue(value, 0)}</span>
+        {!lastElement && <span className={jsonTreeCss.punctuation}>,</span>}
       </span>
       {expanded && (
-        <ul id={contentsId} role="group" className={css.children}>
+        <ul id={contentsId} role="group" className={jsonTreeCss.children}>
           {entries.map(([key, item], index) => (
             <JsonTreeNode
               key={key}
@@ -791,7 +791,7 @@ export function JsonTree({
 
   return (
     <div
-      className={clsx(css.root, className)}
+      className={clsx(jsonTreeCss.root, className)}
       style={{ '--json-tree-collapsed-lines': collapsedStringLines } as CSSProperties}
       onMouseOver={handleRootMouseOver}
       onMouseLeave={() => {
@@ -800,9 +800,9 @@ export function JsonTree({
     >
       {expandTopLevel
         ? (
-          <div className={css.expandedTopLevel}>
+          <div className={jsonTreeCss.expandedTopLevel}>
             <div
-              className={clsx(css.row, css.topLevelBracket)}
+              className={clsx(jsonTreeCss.row, jsonTreeCss.topLevelBracket)}
               data-json-root-row
               onMouseOver={(event) => {
                 event.stopPropagation()
@@ -810,11 +810,11 @@ export function JsonTree({
               }}
             >
               {renderCopy?.({ path: [], value: data })}
-              <span className={css.punctuation}>{rootOpen}</span>
+              <span className={jsonTreeCss.punctuation}>{rootOpen}</span>
             </div>
             <div
               aria-label={label}
-              className={clsx(css.container, css.expandedTopLevelContainer)}
+              className={clsx(jsonTreeCss.container, jsonTreeCss.expandedTopLevelContainer)}
               role="tree"
             >
               {rootEntries.map(([key, value], index) => (
@@ -835,13 +835,13 @@ export function JsonTree({
                 />
               ))}
             </div>
-            <div className={clsx(css.row, css.topLevelBracket)}>
-              <span className={css.punctuation}>{rootClose}</span>
+            <div className={clsx(jsonTreeCss.row, jsonTreeCss.topLevelBracket)}>
+              <span className={jsonTreeCss.punctuation}>{rootClose}</span>
             </div>
           </div>
         )
         : (
-          <div aria-label={label} className={css.container} role="tree">
+          <div aria-label={label} className={jsonTreeCss.container} role="tree">
             <JsonTreeNode
               collapsedStringLines={collapsedStringLines}
               stringWrapping={stringWrapping}

@@ -6,7 +6,7 @@ import { headTailCap } from './head-tail-cap.ts'
 import { useCopyFeedback } from './use-copy-feedback.ts'
 import { Pill } from './Pill.tsx'
 import { StateDot, type StateDotState } from './StateDot.tsx'
-import css from './TerminalBlock.module.css'
+import { terminalBlockCss } from './terminalBlockCss';
 
 /** Output lines shown before the height cap collapses the middle. */
 export const DEFAULT_TERMINAL_MAX_LINES = 16
@@ -207,53 +207,53 @@ export function TerminalBlock({
 
   return (
     <div
-      className={clsx(css.block, className)}
+      className={clsx(terminalBlockCss.block, className)}
       data-terminal=""
       data-running={running ? '' : undefined}
       data-background={background ? '' : undefined}
       data-body={body ? '' : undefined}
     >
-      <div className={css.header}>
-        <div className={css.prompt}>
-          {runStateDot && (!background || running) && <span className={css.runStateLabel}>{state.label}</span>}
+      <div className={terminalBlockCss.header}>
+        <div className={terminalBlockCss.prompt}>
+          {runStateDot && (!background || running) && <span className={terminalBlockCss.runStateLabel}>{state.label}</span>}
           {commandLines.map((line, index) => (
-            <div key={index} className={css.promptLine}>
+            <div key={index} className={terminalBlockCss.promptLine}>
               {/* One dot for the card, on the first row: the exit status the
                   view carries is the whole call's, and bash reports no
                   per-command status, so a dot per row would assert a
                   per-line outcome nothing here knows. */}
-              {index === 0 && runStateDot && (!background || running) && <StateDot state={state.state} className={css.runState} />}
+              {index === 0 && runStateDot && (!background || running) && <StateDot state={state.state} className={terminalBlockCss.runState} />}
               {/* The cwd labels the CALL, so only its first row carries it. The
                   view knows one working directory — where the call started —
                   and a later line may well run somewhere else (a `cd` in the
                   command is enough), so repeating the label down the rows would
                   assert a directory per line that nothing here knows. Later
                   rows keep a bare `$` to stay aligned as prompts. */}
-              <span className={css.cwd}>
+              <span className={terminalBlockCss.cwd}>
                 {index > 0 || cwd === undefined ? '$' : promptLabel(cwd, home)}
               </span>
-              <span className={css.command}>{line}</span>
+              <span className={terminalBlockCss.command}>{line}</span>
             </div>
           ))}
         </div>
-        {status !== undefined && <Pill className={css.status}>{status}</Pill>}
+        {status !== undefined && <Pill className={terminalBlockCss.status}>{status}</Pill>}
         {(copyText !== undefined || !running && (background ? command !== '' : !empty)) && (
-          <button type="button" className={css.copyButton} onClick={onCopy}>
+          <button type="button" className={terminalBlockCss.copyButton} onClick={onCopy}>
             {copied ? copy.copied : copy.copy}
           </button>
         )}
       </div>
       {body && (empty
-        ? <div className={css.empty}>{copy.noOutput}</div>
+        ? <div className={terminalBlockCss.empty}>{copy.noOutput}</div>
         : (
-          <div className={css.output}>
+          <div className={terminalBlockCss.output}>
             {(capped ? lines.slice(0, headLines) : lines).map((line, index) => (
-              <div key={index} className={css.line}>{renderLine(line)}</div>
+              <div key={index} className={terminalBlockCss.line}>{renderLine(line)}</div>
             ))}
             {hidden > 0 && (
               <button
                 type="button"
-                className={css.expand}
+                className={terminalBlockCss.expand}
                 aria-expanded={expanded}
                 aria-label={expanded ? copy.collapseAria : copy.expandAria(hidden)}
                 onClick={onToggle}
@@ -262,7 +262,7 @@ export function TerminalBlock({
               </button>
             )}
             {capped && lines.slice(lines.length - tailLines).map((line, index) => (
-              <div key={index} className={css.line}>{renderLine(line)}</div>
+              <div key={index} className={terminalBlockCss.line}>{renderLine(line)}</div>
             ))}
           </div>
         ))}

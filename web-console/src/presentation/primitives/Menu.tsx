@@ -20,7 +20,7 @@ import {
   MenuSubTrigger,
 } from '@/components/ui/menu'
 import { IconCheckOutline16 } from './icons/index.tsx'
-import css from './Menu.module.css'
+import { menuCss } from './menuCss';
 
 /** Selectable row (optionally with a nested submenu). */
 export interface MenuItem {
@@ -233,9 +233,9 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
   }, [submenuOpen, ownership, entry.id, subPopupElement])
 
   const content = <>
-    {entry.icon !== undefined && <span className={css.itemIcon}>{entry.icon}</span>}
-    <span className={css.itemLabel}>{entry.label}</span>
-    {selection === 'check' && selected(entry.id) && <IconCheckOutline16 className={css.check} />}
+    {entry.icon !== undefined && <span className={menuCss.itemIcon}>{entry.icon}</span>}
+    <span className={menuCss.itemLabel}>{entry.label}</span>
+    {selection === 'check' && selected(entry.id) && <IconCheckOutline16 className={menuCss.check} />}
   </>
   return <MenuSub highlightItemOnHover={false} open={submenuOpen} onOpenChange={(next, details) => {
     if (next && ownership.owner !== null && ownership.owner !== entry.id) return
@@ -252,7 +252,7 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
     <MenuSubTrigger
       ref={triggerRef}
       render={<NativeMenuButton type="button" />}
-      className={clsx(css.item, entry.danger && css.danger, selected(entry.id) && (selection === 'fill' ? css.selectedFill : css.selected))}
+      className={clsx(menuCss.item, entry.danger && menuCss.danger, selected(entry.id) && (selection === 'fill' ? menuCss.selectedFill : menuCss.selected))}
       disabled={entry.disabled}
       delay={0}
       openOnHover={false}
@@ -321,21 +321,21 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
     >
       {content}
     </MenuSubTrigger>
-    <MenuSubPopup ref={node => { node?.removeAttribute('tabindex'); setSubPopupElement(node) }} className={css.submenu} align="end" alignOffset={-4} sideOffset={10} collisionPadding={12} style={{ visibility: submenuOpen ? undefined : 'hidden' }} onPointerEnter={cancelHoverClose} onPointerLeave={armHoverClose} onKeyDownCapture={navigateRows}>
+    <MenuSubPopup ref={node => { node?.removeAttribute('tabindex'); setSubPopupElement(node) }} className={menuCss.submenu} align="end" alignOffset={-4} sideOffset={10} collisionPadding={12} style={{ visibility: submenuOpen ? undefined : 'hidden' }} onPointerEnter={cancelHoverClose} onPointerLeave={armHoverClose} onKeyDownCapture={navigateRows}>
       {entry.submenu?.map(item => {
         const control = itemControl(item, press, select)
         return <CossMenuItem
           key={item.id}
-          className={clsx(css.item, item.danger && css.danger, selected(item.id) && (selection === 'fill' ? css.selectedFill : css.selected))}
+          className={clsx(menuCss.item, item.danger && menuCss.danger, selected(item.id) && (selection === 'fill' ? menuCss.selectedFill : menuCss.selected))}
           variant={item.danger ? 'destructive' : 'default'}
           closeOnClick={false}
           data-menu-item-id={item.id}
           aria-current={selected(item.id) ? 'true' : undefined}
           {...control}
         >
-          {item.icon !== undefined && <span className={css.itemIcon}>{item.icon}</span>}
-          <span className={css.itemLabel}>{item.label}</span>
-          {selection === 'check' && selected(item.id) && <IconCheckOutline16 className={css.check} />}
+          {item.icon !== undefined && <span className={menuCss.itemIcon}>{item.icon}</span>}
+          <span className={menuCss.itemLabel}>{item.label}</span>
+          {selection === 'check' && selected(item.id) && <IconCheckOutline16 className={menuCss.check} />}
         </CossMenuItem>
       })}
     </MenuSubPopup>
@@ -345,9 +345,9 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
 function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boolean, select: (id: string) => void, selection: 'check' | 'fill', press: PressControl, parentOpen: boolean, ownership: SubmenuOwnership) {
   const renderItem = (entry: MenuItem) => {
     const content = <>
-      {entry.icon !== undefined && <span className={css.itemIcon}>{entry.icon}</span>}
-      <span className={css.itemLabel}>{entry.label}</span>
-      {selection === 'check' && selected(entry.id) && <IconCheckOutline16 className={css.check} />}
+      {entry.icon !== undefined && <span className={menuCss.itemIcon}>{entry.icon}</span>}
+      <span className={menuCss.itemLabel}>{entry.label}</span>
+      {selection === 'check' && selected(entry.id) && <IconCheckOutline16 className={menuCss.check} />}
     </>
     if (entry.submenu?.length) {
       return <SubmenuRow key={entry.id} entry={entry} parentOpen={parentOpen} selected={selected} select={select} selection={selection} press={press} />
@@ -355,7 +355,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
     const control = itemControl(entry, press, select)
     return <CossMenuItem
       key={entry.id}
-      className={clsx(css.item, entry.danger && css.danger, selected(entry.id) && (selection === 'fill' ? css.selectedFill : css.selected))}
+      className={clsx(menuCss.item, entry.danger && menuCss.danger, selected(entry.id) && (selection === 'fill' ? menuCss.selectedFill : menuCss.selected))}
       variant={entry.danger ? 'destructive' : 'default'}
       closeOnClick={false}
       data-menu-item-id={entry.id}
@@ -372,7 +372,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
   const flush = () => {
     if (!group) return
     rows.push(<MenuGroup key={group.id}>
-      <MenuGroupLabel className={css.label}>{group.label}</MenuGroupLabel>
+      <MenuGroupLabel className={menuCss.label}>{group.label}</MenuGroupLabel>
       {group.items}
     </MenuGroup>)
     group = null
@@ -383,7 +383,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
       group = { id: entry.id, label: entry.text, items: [] }
     } else if (isSeparator(entry)) {
       flush()
-      rows.push(<MenuSeparator key={entry.id} className={css.separator} />)
+      rows.push(<MenuSeparator key={entry.id} className={menuCss.separator} />)
     } else {
       const item = renderItem(entry)
       if (group) group.items.push(item)
@@ -708,7 +708,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
           sideOffset={4}
           portalProps={{ container: portalContainer }}
           collisionPadding={12}
-          className={clsx(css.list, dense && css.denseList, compact && css.compactList, listClassName)}
+          className={clsx(menuCss.list, dense && menuCss.denseList, compact && menuCss.compactList, listClassName)}
           data-autofocus={autoFocus || undefined}
           aria-hidden={!open}
           inert={!open}
@@ -731,7 +731,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
           }}
         >
           {renderRows(items, selected, select, selection, pressControl, open, submenuOwnership)}
-          {!!footer?.length && <MenuSeparator className={css.separator} />}
+          {!!footer?.length && <MenuSeparator className={menuCss.separator} />}
           {!!footer?.length && renderRows(footer, selected, select, selection, pressControl, open, submenuOwnership)}
         </MenuPopup>
         </SubmenuOwnershipContext.Provider>

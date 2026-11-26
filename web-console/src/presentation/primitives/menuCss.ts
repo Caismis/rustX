@@ -1,0 +1,19 @@
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
+export const menuCss = {
+  root: 'relative inline-flex',
+  list: 'box-border p-0 flex flex-col gap-0 border-0 rounded-[20px] bg-[var(--dsw-specific-menu)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] min-w-[min(var(--menu-min-width),var(--available-width,var(--menu-min-width)))] max-w-[min(360px,var(--available-width,360px))] max-h-(--available-height,none) z-[1100] [--menu-min-width:218px]',
+  submenu: 'box-border p-0 flex flex-col gap-0 border-0 rounded-[20px] bg-[var(--dsw-specific-menu)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] min-w-[min(var(--menu-min-width),var(--available-width,var(--menu-min-width)))] max-w-[min(360px,var(--available-width,360px))] max-h-(--available-height,none) z-[1100] [--menu-min-width:163px] [--menu-submenu-gap:10px] before:content-[""] before:absolute before:top-0 before:bottom-0 before:right-full before:w-(--menu-submenu-gap) data-[side=left]:before:right-auto data-[side=left]:before:left-full',
+  compactList: 'mn-compact rounded-[7px]! [--menu-min-width:164px] [&>div]:p-[2px]',
+  denseList: 'mn-dense',
+  viewport: 'flex flex-col min-h-0 overflow-y-auto',
+  footer: 'flex-none flex flex-col mt-[4px] pt-[4px] [border-top:0.5px_solid_var(--dsw-alias-border-l2)]',
+  item: 'mn-item flex items-center gap-[8px] w-full min-h-[40px] px-[10px] py-[8px] border-none rounded-[10px] bg-transparent cursor-pointer text-[14px] leading-[22px] [color:var(--dsw-alias-label-primary)] text-left hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:not-disabled:outline-none disabled:opacity-40 disabled:cursor-not-allowed [.mn-dense_&]:min-h-[34px] [.mn-dense_&]:py-[5px] [.mn-compact_&]:min-h-[26px] [.mn-compact_&]:gap-[6px] [.mn-compact_&]:px-[7px] [.mn-compact_&]:py-[3px] [.mn-compact_&]:rounded-[5px] [.mn-compact_&]:text-[12px] [.mn-compact_&]:leading-[18px]',
+  itemIcon: 'mn-item-icon inline-flex flex-none w-[16px] h-[16px] items-center justify-center [color:var(--dsw-alias-label-tertiary)] [.mn-compact_&]:w-[14px] [.mn-compact_&]:h-[14px] [.mn-danger_&]:[color:var(--dsw-alias-state-error-primary)]',
+  itemLabel: 'flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
+  check: 'flex-none [color:var(--dsw-alias-label-primary)]',
+  selected: 'bg-transparent',
+  selectedFill: 'bg-[var(--dsw-alias-interactive-bg-hover)]',
+  danger: 'mn-danger [color:var(--dsw-alias-state-error-primary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover-danger)] focus-visible:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover-danger)] focus-visible:not-disabled:outline-none',
+  label: 'px-[10px] py-[8px] text-[12px] leading-[16px] [color:var(--dsw-alias-label-tertiary)] [.mn-dense_&]:py-[4px] [.mn-compact_&]:px-[7px] [.mn-compact_&]:py-[4px] [.mn-compact_&]:text-[11px] [.mn-compact_&]:leading-[16px]',
+  separator: 'h-[0.5px] my-[4px] mx-[2px] bg-[var(--dsw-alias-border-l1)] [.mn-compact_&]:m-[2px]',
+};
