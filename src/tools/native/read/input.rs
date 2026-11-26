@@ -13,7 +13,7 @@ const DEFAULT_OFFSET: u64 = 1;
 #[serde(deny_unknown_fields)]
 pub(super) struct ReadInput {
     /// A relative path resolved against the execution cwd, or an absolute
-    /// path inside the Session's admitted Client workspace.
+    /// path on the Client filesystem.
     pub path: String,
     /// The 1-based line to start reading from. Zero is normalized to one.
     #[schemars(range(min = 0))]

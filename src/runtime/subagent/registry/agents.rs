@@ -1182,7 +1182,9 @@ fn load_durable_agent_authority(
             )
         })?;
     for binding in authority.resolved.materialization.sources.values_mut() {
-        binding.credentials.capture(credentials.clone());
+        if !binding.credentials.client_owned {
+            binding.credentials.capture(credentials.clone());
+        }
     }
     Ok(authority)
 }

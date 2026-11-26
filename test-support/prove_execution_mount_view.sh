@@ -48,6 +48,9 @@
 #  - The background Bash continuation test runs native Write, Read, Bash and
 #    Grep in the Client view. A FIFO holds the operation while Read/Grep
 #    inspect the committed prefix. The final output uses the same locator.
+#  - Native Read, Write, Edit, Grep and Glob target an absolute path outside
+#    the workspace in the Client's private tmpfs; a Server file at the same
+#    path stays unchanged throughout.
 #  - Workspace Python resolves and runs the interpreter from a Client-only
 #    overlay, using an actual uv and the existing supervisor.
 #  - Stdio MCP reads the Client-only source declaration and launches the peer
@@ -64,7 +67,7 @@ if ! command -v bwrap >/dev/null 2>&1; then
     exit 2
 fi
 python3 test-support/prepare_native_tests.py -- \
-    cargo test --all-features --locked --no-run --lib --test process --test subagent
+    cargo test --all-features --locked --no-run --lib --test process --test subagent --test tools
 python3 test-support/prepare_native_tests.py -- \
     cargo test -p rustx-execution-client --locked --no-run --test bootstrap
 export RUSTX_MOUNT_VIEW_PROOF=1
@@ -89,6 +92,9 @@ cargo test -p rustx --all-features --locked \
 cargo test -p rustx --all-features --locked --lib \
     tools::background::tests::background_live_output_is_readable_while_running_and_reused_at_settlement \
     -- --exact --nocapture
+cargo test -p rustx --all-features --locked --test tools \
+    tool_plane::file_tools_use_the_client_only_external_mount \
+    -- --exact --ignored --nocapture
 cargo test -p rustx --all-features --locked --test subagent \
     a_real_child_executes_native_tools_in_the_frozen_nested_workspace -- --nocapture
 cargo test -p rustx --all-features --locked --lib \
@@ -116,7 +122,10 @@ cargo test -p rustx --all-features --locked --lib \
     a_bound_source_rechecks_after_its_final_document_read_fails \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
-    bound_workspace_mcp_catalog_uses_client_definitions_and_server_network \
+    bound_workspace_mcp_catalog_uses_client_definitions_and_rejects_server_loopback \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    bound_workspace_http_uses_scoped_client_environment \
     -- --ignored --nocapture
 retirement_client=$(cargo build -p rustx-execution-client --features test-support --locked \
     --bin rustx-execution-client --message-format=json | python3 -c '

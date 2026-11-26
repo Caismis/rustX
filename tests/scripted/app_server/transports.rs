@@ -185,9 +185,8 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario(uv: std::path::Pat
         let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() };
         let scope = fixture.manager.execution_scope(&session);
         let endpoint = scope.endpoint().unwrap();
-        let user = sandbox.path().join("rustx/.agents");
         let frozen = tokio::task::spawn_blocking(move || crate::local_runtime::managed_python_resources::discover_bound(
-            &endpoint, &user, &crate::runtime::CancellationSignal::new(),
+            &endpoint, &crate::runtime::CancellationSignal::new(),
         )).await.unwrap().unwrap();
         let (_, package) = frozen.packages().iter().next().unwrap();
         package.as_ref().unwrap().prepare_on_client(&crate::runtime::CancellationSignal::new()).await.unwrap().unwrap();

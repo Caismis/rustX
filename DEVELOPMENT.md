@@ -102,7 +102,7 @@ rustx app-server \
   --execution-session ses_01900000-0000-7000-8000-000000000001 \
   --execution-ws-listen 127.0.0.1:0 \
   --execution-bootstrap-out /private/dir/bootstrap
-# Optionally add --execution-public-url wss://IP:PORT/execution/v9 when a
+# Optionally add --execution-public-url wss://IP:PORT/execution/v10 when a
 # trusted ingress terminates TLS and forwards to the loopback listener.
 
 # On the Client host, out of band:
@@ -119,7 +119,7 @@ in the `0600` bundle. The Client uses that certificate as its only trust
 anchor. With `--execution-public-url`, the operator provides and secures
 the ingress and its cleartext loopback hop. The Client may use
 `--tls-ca-file` for that ingress. It validates the numeric IP and the
-exact `/execution/v9` path and completes TLS before sending a credential.
+exact `/execution/v10` path and completes TLS before sending a credential.
 
 
 **TUI** — existing TUI composition root and `AppServerHost.spawnLocal`:

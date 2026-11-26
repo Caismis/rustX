@@ -80,6 +80,16 @@ enum Status {
 }
 
 impl Sessions {
+    /// A detached transport must not leave Client-owned MCP process groups
+    /// running while the binding waits for a possible reconnection.
+    pub(crate) fn cancel_all(&self) {
+        for entry in self.entries.values() {
+            if let Entry::Session(session) = entry {
+                session.signal.cancel();
+            }
+        }
+    }
+
     pub(crate) fn exchange(
         &mut self,
         request: Request,
@@ -205,6 +215,12 @@ impl Sessions {
             return Reply::Failed(Failure::Unavailable);
         }
         Reply::Opening
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.signal.cancel();
     }
 }
 
@@ -386,11 +402,17 @@ fn launch_parameters(
         &launch.cwd,
         launch.program,
     )?;
+    let args = client_arguments(
+        operations.workspace_root(),
+        operations.workspace(),
+        &program,
+        launch.args,
+    )?;
     Some((
         InteractiveProcessSpec {
             cwd,
             program,
-            args: launch.args,
+            args,
             environment: launch.environment.into_iter().collect(),
         },
         lifecycle,
@@ -411,6 +433,9 @@ fn client_program(
     if bytes.is_empty()
         || bytes.contains(&0)
         || program
+            .to_str()
+            .is_some_and(rustx_execution_protocol::mcp::foreign_stdio_path)
+        || program
             .components()
             .any(|part| part == Component::ParentDir)
     {
@@ -418,7 +443,10 @@ fn client_program(
     }
     let relative = if program.is_absolute() {
         let Ok(path) = program.strip_prefix(workspace) else {
-            return Some(program);
+            return std::fs::metadata(&program)
+                .ok()?
+                .is_file()
+                .then_some(program);
         };
         path.to_path_buf()
     } else if bytes.contains(&b'/') || program.starts_with(".") {
@@ -438,6 +466,40 @@ fn client_program(
         .metadata
         .is_file
         .then(|| workspace.join(resolved.relative_path))
+}
+
+/// Path operands are proved on the Client before any child can start.
+fn client_arguments(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &std::path::Path,
+    program: &std::path::Path,
+    args: Vec<String>,
+) -> Option<Vec<String>> {
+    let interpreter = rustx_execution_protocol::mcp::stdio_interpreter(program, &args);
+    let mut script_next = false;
+    for arg in &args {
+        if script_next {
+            script_next = false;
+            continue;
+        }
+        if rustx_execution_protocol::mcp::stdio_inline_script(interpreter, arg) {
+            script_next = true;
+            continue;
+        }
+        let Some((_, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg) else {
+            continue;
+        };
+        let path = std::path::Path::new(value);
+        if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+            return None;
+        }
+        if let Ok(relative) = path.strip_prefix(workspace) {
+            root.resolve_resource(workspace, relative).ok()?.entry?;
+        } else {
+            std::fs::metadata(path).ok()?;
+        }
+    }
+    Some(args)
 }
 
 struct Negotiator(ClientInfo);
@@ -682,7 +744,7 @@ mod launch_tests {
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
-    use super::client_program;
+    use super::{client_arguments, client_program};
 
     #[test]
     fn path_valued_programs_stay_in_the_client_workspace() {
@@ -708,5 +770,56 @@ mod launch_tests {
         assert_eq!(resolve(workspace.join("../external")), None);
         assert_eq!(resolve("/bin/sh".into()), Some("/bin/sh".into()));
         assert_eq!(resolve("sh".into()), Some("sh".into()));
+        assert_eq!(resolve(base.join("missing")), None);
+        let args = vec![format!("--config={}", commands.join("peer").display())];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("fixture"), args.clone()),
+            Some(args)
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec![base.join("missing.py").display().to_string()]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec!["relative.py".into()]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("/bin/sh"),
+                vec!["-c".into(), "printf 'x/y'".into()]
+            )
+            .is_some()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("python3"),
+                vec!["-m".into(), "package.server".into()]
+            )
+            .is_some()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("/usr/bin/env"),
+                vec!["python3".into(), "-c".into(), "print('x/y')".into()]
+            )
+            .is_some()
+        );
     }
 }

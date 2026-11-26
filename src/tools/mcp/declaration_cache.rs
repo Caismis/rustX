@@ -48,7 +48,11 @@ impl DeclarationKey {
         let credentials = binding.credentials.resolve().ok()?;
         let mut fingerprint = Fingerprint::new();
         fingerprint.add(&serde_json::to_vec(binding).ok()?);
-        for secrets in [&credentials.environment, &credentials.headers] {
+        for secrets in [
+            &credentials.environment,
+            &credentials.headers,
+            &credentials.templates,
+        ] {
             fingerprint.add(&secrets.len().to_le_bytes());
             for (name, secret) in secrets {
                 fingerprint.add(name.as_bytes());

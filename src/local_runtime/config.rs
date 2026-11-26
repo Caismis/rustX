@@ -674,14 +674,31 @@ pub(super) fn resolve_mcp_bindings(
         .iter()
         .map(|(server_id, document)| {
             let transport = resolve_mcp_entry(server_id, document)?;
+            let mut credentials = crate::credentials::SourceCredentials {
+                environment: document.sensitive_env.clone(),
+                headers: document.sensitive_headers.clone(),
+                client_owned: document.client_owned,
+                workspace_source: document.workspace_source,
+                ..Default::default()
+            };
+            if document.client_owned
+                && let Some(endpoint) = &document.url
+            {
+                for name in std::iter::once(endpoint.as_str())
+                    .chain(document.headers.values().map(String::as_str))
+                    .flat_map(crate::credentials::referenced_environment_names)
+                {
+                    credentials.templates.insert(
+                        name.clone(),
+                        crate::credentials::EnvironmentReference::from_name(name),
+                    );
+                }
+                credentials.capture(document.client_environment.clone());
+            }
             Ok((
                 server_id.clone(),
                 McpServerBinding {
-                    credentials: crate::credentials::SourceCredentials {
-                        environment: document.sensitive_env.clone(),
-                        headers: document.sensitive_headers.clone(),
-                        ..Default::default()
-                    },
+                    credentials,
                     transport,
                     // Issue #544: MCP invocation policy is product-default
                     // ForegroundOnly; tool-level execution overlays are gone.
@@ -825,6 +842,16 @@ impl Default for ContextPolicyDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct McpServerDocument {
+    /// Runtime-only authority supplied by the winning source's owner.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) client_owned: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) workspace_source: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) client_environment: crate::credentials::CredentialSnapshot,
     /// Explicit references owned by the complete winning User/Workspace definition;
     /// ordinary `env` is literal. Resolution happens only for admitted demand.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

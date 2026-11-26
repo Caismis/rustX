@@ -118,9 +118,13 @@ pub fn private_authority(
             .model
             .export_process_credentials(&mut credentials);
         for binding in authority.resolved.materialization.sources.values_mut() {
-            binding
-                .credentials
-                .export_process_credentials(&mut credentials);
+            if binding.credentials.client_owned {
+                binding.credentials.omit_client_values_from_journal();
+            } else {
+                binding
+                    .credentials
+                    .export_process_credentials(&mut credentials);
+            }
         }
         rustx_durable::PrivateAgentAuthority {
             authority: serde_json::to_value(authority)

@@ -1675,6 +1675,7 @@ mod tests {
             for origin in [
                 crate::tools::types::ToolOrigin::Mcp {
                     server_id: crate::runtime::identity::McpServerId::new("remote"),
+                    source: None,
                 },
                 crate::tools::types::ToolOrigin::ManagedPython {
                     package: "package".into(),
@@ -1766,6 +1767,7 @@ mod tests {
             ToolOrigin::Builtin,
             ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("server-1"),
+                source: None,
             },
         ];
         for (index, origin) in origins.into_iter().enumerate() {

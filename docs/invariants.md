@@ -11,6 +11,17 @@
   observers release watch borrows before acquiring State. Notification hints do
   not replace exact command identity or physical process settlement.
 
+## Bound Session resources
+
+- The Workspace definition wins a same-name MCP or valid Skill override.
+  The Server keeps Host secrets out of Workspace service credentials.
+- A Workspace HTTP connection uses a permitted dial address on every hop.
+  Client environment values are scoped to the explicitly granted service,
+  destination origin and variable.
+- Native file tools resolve paths in the Client filesystem and deny writes
+  to the official global Skill collection. Stdio starts and settles on that
+  same Client. A lost mutation receipt retains its unknown outcome.
+
 ## Environment service ownership (#533)
 
 1. Every authenticated, initialized ordinary client has equal command/file/management API eligibility; common native source, OS, state, secret and capacity restrictions remain effective.

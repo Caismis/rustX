@@ -370,7 +370,8 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
         assert_eq!(
             definition.origin,
             ToolOrigin::Mcp {
-                server_id: python_server_id("calc")
+                server_id: python_server_id("calc"),
+                source: None
             },
             "managed Python tools carry generic MCP provenance"
         );
@@ -1162,6 +1163,7 @@ def greet(name: str) -> str:
         definition.origin,
         ToolOrigin::Mcp {
             server_id: server.server_id.clone(),
+            source: None
         },
         "the managed tool keeps canonical generic MCP provenance"
     );

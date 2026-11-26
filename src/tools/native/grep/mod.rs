@@ -2,7 +2,7 @@
 //!
 //! Grep's physical engine lives on the Session's admitted Execution
 //! Client: the shared file universe is enumerated descriptor-relative
-//! inside the workspace, each selected file is whole-source UTF-8
+//! on the Client, each selected file is whole-source UTF-8
 //! validated and streamed through the bounded `grep-searcher` engine
 //! there, and the Server owns only admission, input validation, and the
 //! model-facing projection of the verified record page — the exact
@@ -15,7 +15,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search_failure::search_failure;
 use crate::tools::native::support::{
-    cancelled_result, failed_result, interpret_path, success_text,
+    cancelled_result, failed_result, interpret_file_path, success_text,
 };
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
@@ -31,7 +31,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<GrepInput>(
         "tool-grep",
         NAME,
-        "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+        "Search UTF-8 text files for matching lines through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths refer to the Client filesystem. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
         policy,
     )
 }
@@ -108,10 +108,13 @@ async fn run_grep(
     {
         return failed_result(format!("invalid glob {glob:?}: {error}"));
     }
-    let root = interpret_path(
+    let root = match interpret_file_path(
         context.workspace.root(),
         input.path.as_deref().unwrap_or("."),
-    );
+    ) {
+        Ok(root) => root,
+        Err(error) => return failed_result(error),
+    };
     // Cancellation observable before the exchange is admitted means the
     // dispatch never starts: no request frame is ever written for a
     // cancelled search.

@@ -1,11 +1,74 @@
 //! Execution transport for an admitted Client-owned stdio MCP session.
 //! The application peer's protocol is distinct from the `RustX` binding.
 
-use std::{collections::BTreeMap, fmt, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{DecimalU64, process::ProcessOperationKey};
+
+/// Reject Windows drive and UNC syntax in this Unix Client protocol.
+#[must_use]
+pub fn foreign_stdio_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || value.starts_with("\\\\")
+}
+
+/// Recognize path-shaped stdio operands without treating URLs or package names as files.
+/// The optional prefix is the option name of a `--option=PATH` argument.
+#[must_use]
+pub fn stdio_path_operand(arg: &str) -> Option<(Option<&str>, &str)> {
+    let (prefix, value) = if arg.starts_with('-') {
+        let (name, value) = arg.split_once('=')?;
+        (Some(name), value)
+    } else {
+        (None, arg)
+    };
+    let path = Path::new(value);
+    let filename_like = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.bytes().any(|byte| byte.is_ascii_alphabetic()));
+    (!value.contains("://")
+        && !value.starts_with('@')
+        && (value.contains('/')
+            || value.starts_with('.')
+            || filename_like
+            || foreign_stdio_path(value)))
+    .then_some((prefix, value))
+}
+
+/// Whether this interpreter flag is followed by program text or a module name.
+#[must_use]
+pub fn stdio_inline_script(program: &Path, argument: &str) -> bool {
+    let executable = program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    ((matches!(
+        executable,
+        "sh" | "bash" | "dash" | "zsh" | "node" | "nodejs"
+    ) || executable.starts_with("python"))
+        && matches!(argument, "-c" | "-e" | "--eval"))
+        || (executable.starts_with("python") && argument == "-m")
+}
+
+/// Find an interpreter explicitly launched through `env` without executing it.
+#[must_use]
+pub fn stdio_interpreter<'a>(program: &'a Path, args: &'a [String]) -> &'a Path {
+    if program.file_name().is_some_and(|name| name == "env") {
+        args.iter()
+            .find(|arg| !arg.starts_with('-') && !arg.contains('='))
+            .map_or(program, |arg| Path::new(arg))
+    } else {
+        program
+    }
+}
 
 /// Maximum demanded Client-owned sources in one capability generation.
 pub const MAX_GENERATION_SESSIONS: usize = 8;

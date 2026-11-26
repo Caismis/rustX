@@ -800,6 +800,7 @@ async fn task_input_uses_the_existing_questionnaire_owner() {
         requester.origin,
         crate::tools::types::ToolOrigin::Mcp {
             server_id: McpServerId::new(&harness.server),
+            source: None
         }
     );
     assert_eq!(requester.tool_name, harness.tool(TASK_INPUT_TOOL));

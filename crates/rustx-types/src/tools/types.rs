@@ -153,7 +153,12 @@ pub enum ToolOrigin {
     /// future Fleet messaging are represented as built-in tools as well.
     Builtin,
     /// A configured MCP source, independent of its current connection.
-    Mcp { server_id: McpServerId },
+    Mcp {
+        server_id: McpServerId,
+        /// Workspace origin for a workspace-authored MCP definition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
     /// A canonical package prepared by the Managed Python owner.
     ManagedPython { package: String },
 }
@@ -165,7 +170,7 @@ impl ToolOrigin {
         use crate::capabilities::ToolSourceId;
         match self {
             Self::Builtin | Self::Host { .. } => None,
-            Self::Mcp { server_id } => Some(ToolSourceId::Mcp(server_id.clone())),
+            Self::Mcp { server_id, .. } => Some(ToolSourceId::Mcp(server_id.clone())),
             Self::ManagedPython { package } => Some(ToolSourceId::ManagedPython(package.clone())),
         }
     }
@@ -1195,6 +1200,7 @@ mod tests {
             replay_policy: ToolReplayPolicy::Never,
             origin: crate::tools::types::ToolOrigin::Mcp {
                 server_id: McpServerId::new("mcp-fs"),
+                source: None,
             },
         };
         let json = serde_json::to_string(&definition).expect("serialize definition");

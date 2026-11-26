@@ -12,7 +12,7 @@
 //! reported as `CommitUnknown`, never as a pre-commit denial.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rustx_confined_fs::{CommitUnknown, Expectation, PackageDirectory, WriteTarget};
@@ -284,6 +284,130 @@ pub(super) struct Writes {
     payload_bytes: usize,
     /// The per-ticket publish arbitration shared with the control lane.
     arbitration: std::sync::Arc<Arbitration>,
+    policy: Option<FileWritePolicy>,
+}
+
+/// Client-owned official global skill locations. The lexical check covers a
+/// not-yet-created tree; the descriptor check also catches alternate names
+/// or mounts of an existing tree.
+pub(super) struct FileWritePolicy {
+    workspace: PathBuf,
+    protected_roots: Vec<PathBuf>,
+}
+
+impl FileWritePolicy {
+    pub(super) fn for_workspace(workspace: &Path) -> Self {
+        let mut protected_roots = Vec::new();
+        if let Some(user_root) = crate::client_user_root() {
+            protected_roots.push(user_root.join(".agents/skills"));
+            if let Some(parent) = user_root.parent()
+                && let Ok(canonical) = parent.canonicalize()
+            {
+                let root = canonical.join("rustx/.agents/skills");
+                if !protected_roots.contains(&root) {
+                    protected_roots.push(root);
+                }
+            }
+        }
+        Self {
+            workspace: workspace.to_path_buf(),
+            protected_roots,
+        }
+    }
+
+    fn permits(
+        &self,
+        path: &Path,
+        parent: &PackageDirectory,
+        missing: &[std::ffi::OsString],
+        leaf: &std::ffi::OsStr,
+    ) -> Result<bool, ReadError> {
+        if self.protected_roots.is_empty() {
+            return Err(ReadError::Denied);
+        }
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.workspace.join(path)
+        };
+        for protected in &self.protected_roots {
+            // A missing ancestor must not be replaced by a regular file:
+            // that would prevent the official collection from being created.
+            if absolute.starts_with(protected) || protected.starts_with(&absolute) {
+                return Ok(false);
+            }
+            // Resolve the official location only to identify what must be
+            // protected, including an aliased User root. File operations
+            // themselves still traverse their requested path without links.
+            let mut existing = protected.as_path();
+            let resolved = loop {
+                match existing.canonicalize() {
+                    Ok(resolved) => break resolved,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                        ) =>
+                    {
+                        existing = existing.parent().ok_or(ReadError::Denied)?;
+                    }
+                    Err(error) => return Err(crate::read_error(&error)),
+                }
+            };
+            let protected_tail = protected
+                .strip_prefix(existing)
+                .map_err(|_| ReadError::Denied)?;
+            if !protected_tail.as_os_str().is_empty() {
+                let directory = match PackageDirectory::open(&resolved) {
+                    Ok(directory) => directory,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => continue,
+                    Err(error) => return Err(crate::read_error(&error)),
+                };
+                let protected_stat = rustix::fs::fstat(directory.descriptor())
+                    .map_err(|error| crate::read_error(&std::io::Error::from(error)))?;
+                let target_stat = rustix::fs::fstat(parent.descriptor())
+                    .map_err(|error| crate::read_error(&std::io::Error::from(error)))?;
+                let target_tail: PathBuf = missing
+                    .iter()
+                    .map(std::ffi::OsString::as_os_str)
+                    .chain(std::iter::once(leaf))
+                    .collect();
+                if (protected_stat.st_dev, protected_stat.st_ino)
+                    == (target_stat.st_dev, target_stat.st_ino)
+                    && protected_tail.starts_with(&target_tail)
+                {
+                    return Ok(false);
+                }
+                continue;
+            }
+            if absolute.starts_with(&resolved) || resolved.starts_with(&absolute) {
+                return Ok(false);
+            }
+            match PackageDirectory::open(&resolved) {
+                Ok(directory) => {
+                    let descriptor = std::fs::File::from(
+                        directory
+                            .descriptor()
+                            .try_clone()
+                            .map_err(|error| crate::read_error(&error))?,
+                    );
+                    if parent
+                        .contains(&descriptor)
+                        .map_err(|error| crate::read_error(&error))?
+                    {
+                        return Ok(false);
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) => {}
+                Err(error) => return Err(crate::read_error(&error)),
+            }
+        }
+        Ok(true)
+    }
 }
 
 /// One live ticketed preparation: the retained target plus the planned
@@ -297,12 +421,16 @@ struct Preparation {
 }
 
 impl Writes {
-    pub(super) fn new(arbitration: std::sync::Arc<Arbitration>) -> Self {
+    pub(super) fn new(
+        arbitration: std::sync::Arc<Arbitration>,
+        policy: Option<FileWritePolicy>,
+    ) -> Self {
         Self {
             next: 1,
             prepared: std::collections::BTreeMap::new(),
             payload_bytes: 0,
             arbitration,
+            policy,
         }
     }
 
@@ -320,23 +448,53 @@ impl Writes {
     /// interior names are carried for the commit's staged subtree;
     /// nothing physical is created.
     fn retain(
+        &self,
         root: &PackageDirectory,
         relative_path: &Path,
         expectation: &WriteExpectation,
     ) -> Result<WriteTarget, ReadError> {
         // A write names one file leaf; unlike the query operations an
         // empty path is invalid — the workspace root is never a target.
-        if relative_path.as_os_str().is_empty() || crate::relative_entry(relative_path).is_err() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = relative_path.as_os_str().as_bytes();
+        if raw.is_empty()
+            || raw.contains(&0)
+            || raw
+                .split(|byte| *byte == b'/')
+                .any(|part| part == b"." || part == b"..")
+        {
             return Err(ReadError::Invalid);
         }
-        let Some(leaf) = relative_path.file_name() else {
+        root.verify().map_err(|error| crate::read_error(&error))?;
+        let absolute_root;
+        let (root, path) = if relative_path.is_absolute() {
+            absolute_root = PackageDirectory::open(Path::new("/"))
+                .map_err(|error| crate::read_error(&error))?;
+            (
+                &absolute_root,
+                relative_path
+                    .strip_prefix("/")
+                    .map_err(|_| ReadError::Invalid)?,
+            )
+        } else {
+            (root, relative_path)
+        };
+        if path.as_os_str().is_empty() || crate::relative_entry(path).is_err() {
+            return Err(ReadError::Invalid);
+        }
+        let Some(leaf) = path.file_name() else {
             return Err(ReadError::Invalid);
         };
         let (parent, missing) =
-            match root.descend_deepest(relative_path.parent().unwrap_or_else(|| Path::new(""))) {
+            match root.descend_deepest(path.parent().unwrap_or_else(|| Path::new(""))) {
                 Ok(found) => found,
                 Err(source) => return Err(crate::read_error(&source)),
             };
+        if let Some(policy) = &self.policy
+            && !policy.permits(relative_path, &parent, &missing, leaf)?
+        {
+            return Err(ReadError::Denied);
+        }
         let expected = match expectation {
             WriteExpectation::Current => Expectation::Current,
             WriteExpectation::Absent => Expectation::Absent,
@@ -402,7 +560,7 @@ impl Writes {
             Ok(bytes) if bytes.len() <= MAX_RAW_CHUNK_BYTES => bytes,
             _ => return error(ReadError::Invalid),
         };
-        let target = match Self::retain(root, relative_path, expectation) {
+        let target = match self.retain(root, relative_path, expectation) {
             Ok(target) => target,
             Err(kind) => return error(kind),
         };
@@ -429,7 +587,7 @@ impl Writes {
         if expected == 0 || expected > MAX_WRITE_BYTES {
             return error(ReadError::Invalid);
         }
-        let target = match Self::retain(root, relative_path, expectation) {
+        let target = match self.retain(root, relative_path, expectation) {
             Ok(target) => target,
             Err(kind) => return error(kind),
         };
@@ -497,7 +655,7 @@ impl Writes {
         {
             return error(ReadError::Invalid);
         }
-        let target = match Self::retain(root, relative_path, expectation) {
+        let target = match self.retain(root, relative_path, expectation) {
             Ok(target) => target,
             Err(kind) => return error(kind),
         };
@@ -716,9 +874,135 @@ mod tests {
     }
 
     #[test]
+    fn skill_write_policy_checks_physical_directory_identity_and_missing_paths() {
+        let (dir, workspace) = fixture();
+        let base = dir.path().canonicalize().unwrap();
+        let protected = base.join("official/skills");
+        fs::create_dir_all(protected.join("package")).unwrap();
+        let policy = FileWritePolicy {
+            workspace: base.clone(),
+            protected_roots: vec![protected.clone()],
+        };
+        let parent = PackageDirectory::open(&protected.join("package")).unwrap();
+        // A different logical path cannot hide the protected directory's
+        // identity in the retained descriptor chain.
+        let leaf = std::ffi::OsStr::new("file");
+        assert!(
+            !policy
+                .permits(Path::new("/alternate/package/file"), &parent, &[], leaf)
+                .unwrap()
+        );
+        assert!(
+            !policy
+                .permits(Path::new("official/skills/new/file"), &workspace, &[], leaf)
+                .unwrap()
+        );
+        assert!(
+            !policy
+                .permits(Path::new("official"), &workspace, &[], leaf)
+                .unwrap()
+        );
+        assert!(
+            policy
+                .permits(Path::new("ordinary/file"), &workspace, &[], leaf)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn writes_cannot_replace_an_ancestor_of_a_missing_skill_collection() {
+        let (dir, root) = fixture();
+        let base = dir.path().canonicalize().unwrap();
+        let policy = FileWritePolicy {
+            workspace: base.clone(),
+            protected_roots: vec![base.join("user/rustx/.agents/skills")],
+        };
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), Some(policy));
+        assert_eq!(
+            writes.prepare(
+                &root,
+                Path::new("user/rustx"),
+                &WriteExpectation::Current,
+                &encode(b"blocked")
+            ),
+            ClientReply::Error {
+                kind: ReadError::Denied
+            }
+        );
+        assert!(!base.join("user").exists());
+    }
+
+    #[test]
+    fn aliased_official_collection_is_protected_at_its_physical_location() {
+        let (dir, _root) = fixture();
+        let base = dir.path().canonicalize().unwrap();
+        let real = base.join("real-skills");
+        fs::create_dir_all(real.join("package")).unwrap();
+        let alias = base.join("official-skills");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let policy = FileWritePolicy {
+            workspace: base,
+            protected_roots: vec![alias],
+        };
+        let parent = PackageDirectory::open(&real.join("package")).unwrap();
+        assert!(
+            !policy
+                .permits(
+                    &real.join("package/SKILL.md"),
+                    &parent,
+                    &[],
+                    std::ffi::OsStr::new("SKILL.md")
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_official_ancestors_are_protected_through_an_alternate_mount() {
+        let (dir, parent) = fixture();
+        let base = dir.path().canonicalize().unwrap();
+        let policy = FileWritePolicy {
+            workspace: base.clone(),
+            protected_roots: vec![base.join("rustx/.agents/skills")],
+        };
+        // The retained parent is the real directory that an alternate mount
+        // would name; only the request's logical spelling differs.
+        assert!(
+            !policy
+                .permits(
+                    Path::new("/alternate/rustx"),
+                    &parent,
+                    &[],
+                    std::ffi::OsStr::new("rustx")
+                )
+                .unwrap()
+        );
+        assert!(
+            !policy
+                .permits(
+                    Path::new("/alternate/rustx/.agents"),
+                    &parent,
+                    &["rustx".into()],
+                    std::ffi::OsStr::new(".agents")
+                )
+                .unwrap()
+        );
+        assert!(
+            policy
+                .permits(
+                    Path::new("/alternate/other"),
+                    &parent,
+                    &[],
+                    std::ffi::OsStr::new("other")
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn a_prepared_write_commits_and_the_same_ticket_never_commits_twice() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         fs::write(dir.path().join("file"), b"before").unwrap();
         let original = root.entry_metadata(std::path::Path::new("file")).unwrap();
 
@@ -764,7 +1048,7 @@ mod tests {
     #[test]
     fn abort_after_clean_commit_refusal_settles_only_the_consumed_ticket() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         let prepare = |writes: &mut Writes, leaf| {
             let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
                 &root,
@@ -815,7 +1099,7 @@ mod tests {
     #[test]
     fn a_foreign_or_stale_ticket_leaves_the_live_preparation_intact() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
             &root,
             std::path::Path::new("file"),
@@ -853,7 +1137,7 @@ mod tests {
     #[test]
     fn concurrent_approvals_share_the_bounded_ticket_budget() {
         let (_dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         // Multiple preparations stay live independently — approvals are
         // no longer serialized through one outstanding slot.
         let mut tickets = Vec::new();
@@ -891,7 +1175,7 @@ mod tests {
     #[test]
     fn a_leaf_replaced_between_prepare_and_commit_is_rejected_at_the_target() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         fs::write(dir.path().join("file"), b"before").unwrap();
         let original = root.entry_metadata(std::path::Path::new("file")).unwrap();
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
@@ -922,7 +1206,7 @@ mod tests {
     fn dropping_the_owner_never_publishes_and_leaves_no_stage() {
         let (dir, root) = fixture();
         {
-            let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+            let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
             let ClientReply::WritePrepared { .. } = writes.prepare(
                 &root,
                 std::path::Path::new("file"),
@@ -945,7 +1229,7 @@ mod tests {
         let (dir, root) = fixture();
         fs::create_dir(dir.path().join("dir")).unwrap();
         fs::write(dir.path().join("dir").join("file"), b"before").unwrap();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         // `components()` would silently elide the interior `.` — the raw
         // spelling is what the gate must refuse.
         let reply = writes.prepare(
@@ -986,7 +1270,7 @@ mod tests {
     #[test]
     fn oversized_or_malformed_payloads_are_refused_before_staging() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         for encoded in [
             // Valid base64 that decodes past the decoded cap.
             encode(&vec![b'x'; MAX_RAW_CHUNK_BYTES + 1]),
@@ -1020,7 +1304,7 @@ mod tests {
     fn a_cancelled_commit_publishes_nothing_and_leaves_no_stage() {
         let (dir, root) = fixture();
         let arbitration = std::sync::Arc::new(Arbitration::new());
-        let mut writes = Writes::new(arbitration.clone());
+        let mut writes = Writes::new(arbitration.clone(), None);
         fs::write(dir.path().join("competitor"), b"untouched").unwrap();
 
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
@@ -1069,7 +1353,7 @@ mod tests {
     fn a_revocation_fences_a_commit_at_the_gate_itself() {
         let (dir, root) = fixture();
         let arbitration = std::sync::Arc::new(Arbitration::new());
-        let mut writes = Writes::new(arbitration.clone());
+        let mut writes = Writes::new(arbitration.clone(), None);
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
             &root,
             std::path::Path::new("file"),
@@ -1267,7 +1551,7 @@ mod tests {
     #[test]
     fn an_incomplete_commit_refuses_without_disturbing_the_ticket() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()), None);
         let ClientReply::WritePrepared { ticket, .. } = writes.begin(
             &root,
             std::path::Path::new("file"),

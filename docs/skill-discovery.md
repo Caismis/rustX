@@ -34,7 +34,7 @@ uninterpreted text.
 `SkillSnapshot` publishes immutable catalog metadata, bindings, provenance and
 diagnostics. `all`, `exact` and `none` remain visibility choices, never filesystem
 ACLs. During agent execution, normal Tools read or execute bodies and resource
-files at their host paths under the existing authorization rules.
+files at the Client-visible catalog paths under the existing authorization rules.
 
 ## Skill display information
 

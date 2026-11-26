@@ -2,8 +2,8 @@
 //!
 //! Write resolves relative paths against the execution cwd, creates missing
 //! parent directories, and commits a complete UTF-8 snapshot atomically.
-//! Absolute paths must stay within the Session's admitted Client workspace;
-//! managed tool-output roots remain outside it. Runtime-owned `ManagedToolOutput` paths
+//! Absolute paths refer to the Client filesystem; official global skill
+//! directories are read-only. Runtime-owned `ManagedToolOutput` paths
 //! remain read-only to model-originated mutation.
 
 mod input;
@@ -32,7 +32,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<WriteInput>(
         TOOL_ID,
         NAME,
-        "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
+        "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths refer to the Client filesystem. Official global skill directories are read-only. Missing parent directories are created automatically.",
         policy,
     )
 }

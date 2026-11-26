@@ -34,7 +34,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<EditInput>(
         TOOL_ID,
         NAME,
-        "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+        "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths refer to the Client filesystem. Official global skill directories are read-only. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
         policy,
     )
 }

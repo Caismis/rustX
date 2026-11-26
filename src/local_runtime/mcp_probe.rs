@@ -272,6 +272,13 @@ fn capture(
         super::mcp_resources::load_with_workspace(None, Some(endpoint.workspace()), move |_| {
             Ok(document)
         })
+    } else if let Some(workspace) = target.workspace() {
+        target.validate()?;
+        super::mcp_resources::load_with_workspace(
+            None,
+            Some(workspace),
+            super::settings::read_document,
+        )
     } else {
         target.validate()?;
         super::mcp_resources::load(&root, None)
@@ -292,15 +299,24 @@ fn capture(
         .get(id)
         .and_then(|value| value.as_ref().ok())
         .ok_or(SettingsError::Invalid)?;
-    let mut bindings = super::config::resolve_mcp_bindings(&BTreeMap::from([(
-        id.clone(),
-        definition.clone().resolve(),
-    )]))
-    .map_err(|_| SettingsError::Invalid)?;
+    let mut definition = definition.clone().resolve();
+    if target.workspace().is_some() {
+        let endpoint = bound_workspace
+            .as_ref()
+            .map(SessionExecutionScope::endpoint)
+            .transpose()
+            .map_err(|_| SettingsError::ExecutionUnavailable)?;
+        super::configuration::capture::bind_workspace_mcp(&mut definition, id, endpoint.as_deref());
+    }
+    let mut bindings =
+        super::config::resolve_mcp_bindings(&BTreeMap::from([(id.clone(), definition)]))
+            .map_err(|_| SettingsError::Invalid)?;
     let mut binding = bindings.remove(id).ok_or(SettingsError::Invalid)?;
-    binding
-        .credentials
-        .capture(crate::credentials::CredentialSnapshot::capture());
+    if !binding.credentials.client_owned {
+        binding
+            .credentials
+            .capture(crate::credentials::CredentialSnapshot::capture());
+    }
     let scope = if let Some(scope) = bound_workspace {
         Some(scope)
     } else if matches!(binding.transport, McpTransportConfig::Stdio { .. }) {

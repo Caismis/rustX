@@ -296,7 +296,9 @@ pub(crate) fn captured_mcp_bindings(
 ) -> Result<crate::tools::mcp::McpServerBindings, CurrentRuntimeConfigError> {
     let mut bindings = config.mcp_bindings()?;
     for binding in bindings.values_mut() {
-        binding.credentials.capture(credentials.clone());
+        if !binding.credentials.client_owned {
+            binding.credentials.capture(credentials.clone());
+        }
     }
     Ok(bindings)
 }

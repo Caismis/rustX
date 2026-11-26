@@ -48,6 +48,7 @@ fn declaration(schema: &Value) -> ToolDefinition {
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: McpServerId::new("remote"),
+            source: None,
         },
     }
 }

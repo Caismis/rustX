@@ -28,7 +28,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::limits::NATIVE_FILE_TOOL_MAX_BYTES;
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
-    cancelled_result, failed_result, interpret_path, success_text,
+    cancelled_result, failed_result, interpret_file_path, success_text,
 };
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
@@ -49,7 +49,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<ReadInput>(
         TOOL_ID,
         NAME,
-        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
+        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths refer to the Client filesystem. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. For a saved output locator, byte_offset reads a UTF-8 page starting at a zero-based byte position. Use the continuation shown in the result to read more.",
         policy,
     )
 }
@@ -87,7 +87,10 @@ async fn run_read(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let target = interpret_path(context.workspace.root(), &input.path);
+    let target = match interpret_file_path(context.workspace.root(), &input.path) {
+        Ok(target) => target,
+        Err(error) => return failed_result(error),
+    };
     // The shared whitelist picks the wire operation: a whitelisted
     // extension dispatches the document-page exchange, everything else
     // the plain text page. The same classification runs Client-side —
@@ -364,15 +367,11 @@ mod tests {
     }
 
     #[test]
-    fn description_states_the_admitted_workspace_contract() {
+    fn description_states_the_client_filesystem_contract() {
         let description = super::registration(ToolInvocationPolicy::default())
             .definition
             .description;
-        assert!(
-            description.contains(
-                "absolute paths must stay within the Session's admitted Client workspace"
-            )
-        );
+        assert!(description.contains("absolute paths refer to the Client filesystem"));
     }
 
     #[test]
@@ -577,14 +576,11 @@ mod tests {
         ));
     }
 
-    /// A Skill package whose published location escapes the Session's
-    /// admitted workspace root is honestly refused: discovery canonicalizes
-    /// the instruction link to the external file it names, and Read —
-    /// confined to the admitted root with no Server-local fallback —
-    /// reports the denial without leaking a byte of either linked file.
+    /// Symlinked Skill instructions and references remain unreadable through
+    /// their link paths, even though absolute Client paths are supported.
     #[cfg(unix)]
     #[tokio::test]
-    async fn skill_locations_escaping_the_admitted_root_are_denied() {
+    async fn symlinked_skill_locations_are_denied() {
         let reader = TestRead::new();
         let skill_root = reader.workspace.root().join(".agents/skills");
         let skill = skill_root.join("linked-guide");
@@ -1172,37 +1168,38 @@ mod tests {
         );
     }
 
-    /// Document reads and text reads share one confinement contract: both
-    /// dispatch only inside the Session's admitted workspace root. An
-    /// absolute host path outside that root — spelled directly or reached
-    /// through a symlink inside the root — is refused by the Execution
-    /// Client, the tool reports the denial, and no body bytes can leak.
-    /// There is no Server-local read to fall back to.
+    /// Text and document reads can use absolute Client paths outside the
+    /// workspace, while a symlink remains forbidden during traversal.
     #[cfg(unix)]
     #[tokio::test]
-    async fn reads_outside_the_admitted_workspace_are_denied() {
+    async fn reads_absolute_client_paths_outside_the_workspace() {
         let read = TestRead::new();
         let external = tempfile::tempdir().expect("external directory");
-        let document_path = external.path().join("briefing.docx");
+        let external_path = external.path().canonicalize().unwrap();
+        let document_path = external_path.join("briefing.docx");
         std::fs::write(&document_path, testdata::docx()).expect("document fixture");
-        let text_path = external.path().join("notes.txt");
+        let text_path = external_path.join("notes.txt");
         std::fs::write(&text_path, "ordinary text\n").expect("text fixture");
         let escape_link = read.workspace.root().join("escape.txt");
         std::os::unix::fs::symlink(&text_path, &escape_link).expect("escape symlink");
 
-        for target in [&document_path, &text_path, &escape_link] {
-            let result = read
-                .read(
-                    "outside",
-                    serde_json::json!({ "path": target.to_str().expect("UTF-8 path") }),
-                )
-                .await;
-            let error = failure_of(result);
-            assert!(
-                !error.contains("Quarterly Report") && !error.contains("ordinary text"),
-                "no out-of-root body may leak: {error}"
-            );
-        }
+        let document = read
+            .read(
+                "outside-document",
+                serde_json::json!({ "path": document_path }),
+            )
+            .await;
+        assert_eq!(document.status, ToolExecutionStatus::Success);
+        assert!(text_of(&document).contains("Quarterly Report"));
+        let text = read
+            .read("outside-text", serde_json::json!({ "path": text_path }))
+            .await;
+        assert_eq!(text.status, ToolExecutionStatus::Success);
+        assert!(text_of(&text).contains("ordinary text"));
+        let linked = read
+            .read("outside-link", serde_json::json!({ "path": escape_link }))
+            .await;
+        assert!(!failure_of(linked).contains("ordinary text"));
     }
 
     /// The rustX-owned source-size bound rejects an oversized document

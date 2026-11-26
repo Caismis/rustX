@@ -1,4 +1,4 @@
-//! Single wire definition for the rustX execution protocol (v4).
+//! Single wire definition for the rustX execution protocol.
 //!
 //! The execution protocol is the physical environment/output channel between
 //! the Agent Server (package `rustx`) and the physical Execution Client
@@ -21,6 +21,7 @@ use thiserror::Error;
 
 pub mod changes;
 pub mod mcp;
+pub mod mcp_environment;
 pub mod process;
 pub mod save;
 pub mod transport;
@@ -28,10 +29,10 @@ pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v9";
+pub const EXECUTION_PATH: &str = "/execution/v10";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -707,6 +708,8 @@ pub struct Hello {
     pub generation: Generation,
     /// The exact normalized absolute workspace the Client claims.
     pub workspace: PathBuf,
+    /// The official Client-local `~/rustx` path used to publish resource locations.
+    pub user_root: PathBuf,
     /// The capabilities the Client claims to physically own.
     pub capabilities: BTreeSet<Capability>,
     /// The binding credential issued to this reservation.
@@ -722,6 +725,7 @@ impl fmt::Debug for Hello {
             .field("instance", &self.instance)
             .field("generation", &self.generation)
             .field("workspace", &self.workspace)
+            .field("user_root", &self.user_root)
             .field("capabilities", &self.capabilities)
             .field("credential", &self.credential)
             .finish()
@@ -792,6 +796,9 @@ pub enum Reject {
     /// The workspace is not exactly the reserved normalized absolute path.
     #[error("workspace mismatch")]
     WorkspaceMismatch,
+    /// The Client User root is malformed or differs from the admitted root on recovery.
+    #[error("Client User root mismatch")]
+    UserRootMismatch,
     /// A required capability is absent from the Hello.
     #[error("missing required capability")]
     MissingCapabilities,
@@ -1077,6 +1084,8 @@ pub enum ClientRequest {
     Process(crate::process::ProcessRequest),
     /// One operation on a Client-owned stdio MCP session.
     Mcp(crate::mcp::Request),
+    /// Client-granted environment names for one Workspace HTTP MCP source.
+    McpEnvironment(crate::mcp_environment::Request),
     /// Observe and retain a frozen Managed Python source in the Client view.
     PythonSource(crate::mcp::PythonSourceRequest),
     /// Read lines of a Client-owned Bash continuation.
@@ -1178,13 +1187,12 @@ pub enum ClientRequest {
     /// Register a native observer or receive its bounded coalesced hints.
     Watch(crate::watch::WatchRequest),
     /// First phase of one conditional write: retain the exact named target
-    /// under the binding workspace, verify the expected original, and stage
+    /// on the Client filesystem, verify the expected original, and stage
     /// the payload privately. Nothing named by `relative_path` mutates until
     /// the matching `CommitWrite` — the base64 payload decodes to at most
     /// [`MAX_RAW_CHUNK_BYTES`].
     PrepareWrite {
-        /// The exact named target: strictly normalized relative path below
-        /// the binding workspace whose leaf is the file to write. Missing
+        /// A normalized Client absolute or workspace-relative file path. Missing
         /// parents are created under a private staging subtree at commit.
         relative_path: PathBuf,
         /// What the named leaf must be at retain time.
@@ -1238,8 +1246,7 @@ pub enum ClientRequest {
     /// `CommitWrite`; the same one-live-ticket budget as `PrepareWrite`
     /// applies and a semantic failure is `EditRefused`, never a stage.
     PrepareEdit {
-        /// The exact named target: strictly normalized relative path below
-        /// the binding workspace whose leaf is the file to edit.
+        /// A normalized Client absolute or workspace-relative file path.
         relative_path: PathBuf,
         /// What the named leaf must be at retain time. An edit always
         /// names an existing original: `Absent` is malformed.
@@ -1248,12 +1255,11 @@ pub enum ClientRequest {
         /// old+new bytes stay under [`MAX_EDIT_REQUEST_BYTES`].
         replacements: Vec<TextReplacement>,
     },
-    /// One bounded logical-text page of a file under the binding
-    /// workspace: the complete-line page contract the native Read tool
+    /// One bounded logical-text page of a Client file, using the contract the native Read tool
     /// projects, carried out by the streaming scanner. The whole source is
     /// validated and counted even past the returned window.
     ReadLines {
-        /// The workspace-relative file path: normal components only.
+        /// A normalized Client absolute or workspace-relative file path.
         relative_path: PathBuf,
         /// The 1-based line the page starts at; must be nonzero.
         offset: DecimalU64,
@@ -1263,14 +1269,14 @@ pub enum ClientRequest {
         expected_revision: Option<String>,
     },
     /// One bounded logical-text page of a whitelisted structured document
-    /// under the binding workspace: the Client decodes the source with
+    /// on the Client filesystem. The Client decodes the source with
     /// the shared rustX parser policy — never a caller-supplied MIME type
     /// or URI — and serves the complete-line projection of the decoded
     /// Markdown. The document format is chosen by the Client from the
     /// path's extension against the rustX whitelist; every other source
     /// is [`ReadError::UnsupportedDocument`].
     ReadDocument {
-        /// The workspace-relative document path: normal components only.
+        /// A normalized Client absolute or workspace-relative document path.
         relative_path: PathBuf,
         /// The 1-based line the page starts at; must be nonzero.
         offset: DecimalU64,
@@ -1279,15 +1285,14 @@ pub enum ClientRequest {
         /// The revision the file must still hold, when checked.
         expected_revision: Option<String>,
     },
-    /// One bounded workspace search: the shared file-universe traversal
+    /// One bounded Client file search using the shared file-universe traversal
     /// rooted at `relative_root` — the workspace root itself when empty —
     /// narrowed by `spec` into one selected-records page. The universe is
     /// descriptor-relative the whole way: hidden and ignored files are
     /// visible, symlinks and special entries are never part of it, and no
     /// unselected file body ever crosses the wire.
     Search {
-        /// The workspace-relative search root: normal components only, or
-        /// empty for the workspace root itself.
+        /// A Client absolute or workspace-relative search root. Empty selects the workspace.
         relative_root: PathBuf,
         /// The kind of search and its bounds.
         spec: SearchSpec,
@@ -1409,6 +1414,8 @@ pub enum ClientReply {
     Process(crate::process::ProcessReply),
     /// A reply from the Client-owned stdio MCP session.
     Mcp(crate::mcp::Response),
+    /// Values explicitly granted to the requested Workspace HTTP MCP source.
+    McpEnvironment(crate::mcp_environment::Reply),
     /// Result of a bounded Managed Python source request.
     PythonSource(crate::mcp::PythonSourceReply),
     /// The reply to a `Save` request.
@@ -1722,7 +1729,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v9` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v10` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.
@@ -1800,6 +1807,7 @@ mod tests {
             instance: ClientInstanceId::new("instance-1"),
             generation: Generation::try_from(1).unwrap(),
             workspace: PathBuf::from("/work/root"),
+            user_root: "/client/rustx".into(),
             capabilities: BTreeSet::from([Capability::Files, Capability::Process]),
             credential: credential(),
         }

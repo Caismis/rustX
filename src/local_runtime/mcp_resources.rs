@@ -79,8 +79,26 @@ fn resolve_stdio_paths(
     workspace: Option<&Path>,
 ) -> Result<(), &'static str> {
     let resolve = |path: &Path| -> Result<PathBuf, &'static str> {
-        let Some(workspace) = workspace.filter(|_| path.is_relative()) else {
+        if path
+            .to_str()
+            .is_some_and(rustx_execution_protocol::mcp::foreign_stdio_path)
+        {
+            return Err("stdio path is not a Client path");
+        }
+        if path.is_absolute() {
+            // Absolute names are interpreted only by the Client. Reject
+            // lexical escapes and platform-specific prefixes rather than
+            // silently treating them as usable Client paths.
+            if path
+                .components()
+                .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+            {
+                return Err("stdio path is not a normalized Client path");
+            }
             return Ok(path.to_path_buf());
+        }
+        let Some(workspace) = workspace else {
+            return Err("relative stdio path has no authorized Client Workspace");
         };
         let mut resolved = base
             .strip_prefix(workspace)
@@ -99,13 +117,40 @@ fn resolve_stdio_paths(
     if let Some(cwd) = &mut definition.cwd {
         *cwd = resolve(cwd)?;
     }
-    if let Some(command) = &mut definition.command
-        && command.contains('/')
-    {
-        *command = resolve(Path::new(command))?
+    if let Some(command) = &mut definition.command {
+        if rustx_execution_protocol::mcp::foreign_stdio_path(command) {
+            return Err("stdio command is not a Client path");
+        }
+        if command.contains('/') {
+            *command = resolve(Path::new(command))?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "stdio command requires a UTF-8 Client path")?;
+        }
+    }
+    let program = definition.command.as_deref().unwrap_or_default();
+    let interpreter =
+        rustx_execution_protocol::mcp::stdio_interpreter(Path::new(program), &definition.args)
+            .to_path_buf();
+    let mut script_next = false;
+    for arg in &mut definition.args {
+        if script_next {
+            script_next = false;
+            continue;
+        }
+        if rustx_execution_protocol::mcp::stdio_inline_script(&interpreter, arg) {
+            script_next = true;
+            continue;
+        }
+        let Some((prefix, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg) else {
+            continue;
+        };
+        let prefix = prefix.map(str::to_owned);
+        let resolved = resolve(Path::new(value))?
             .into_os_string()
             .into_string()
-            .map_err(|_| "stdio command requires a UTF-8 Client path")?;
+            .map_err(|_| "stdio argument requires a UTF-8 Client path")?;
+        *arg = prefix.map_or(resolved.clone(), |name| format!("{name}={resolved}"));
     }
     Ok(())
 }
@@ -178,6 +223,9 @@ pub(super) fn load_with_workspace(
         };
         for (id, definition) in entries {
             let shadowed = catalog.locations.remove(&id).map(|lower| lower.path);
+            if shadowed.is_some() && !user {
+                tracing::warn!(server = %id, "Workspace MCP definition overrides User definition");
+            }
             catalog.locations.insert(
                 id.clone(),
                 crate::runtime::resources::ResourceLocation {
@@ -276,6 +324,7 @@ mod tests {
 [mcp_servers.allowed]
 command = "../fixture-server"
 cwd = ".."
+args = ["../fixture.py", "server.py", "dir/my tool.py", "--config=../settings.toml", "--flag", "https://example.com/a"]
 [mcp_servers.unavailable]
 command = "../../unexpected-server"
 [mcp_servers.system]
@@ -293,6 +342,17 @@ command = "fixture-server"
             Some("/logical/client/fixture-server")
         );
         assert_eq!(allowed.cwd.as_deref(), Some(workspace));
+        assert_eq!(
+            allowed.args,
+            [
+                "/logical/client/fixture.py",
+                "/logical/client/.agents/server.py",
+                "/logical/client/.agents/dir/my tool.py",
+                "--config=/logical/client/settings.toml",
+                "--flag",
+                "https://example.com/a"
+            ]
+        );
         assert!(definition("unavailable").is_err());
         assert_eq!(
             definition("system").as_ref().unwrap().command.as_deref(),
@@ -305,8 +365,32 @@ command = "fixture-server"
         let mut local = allowed.clone();
         local.command = Some("./tool".into());
         assert!(resolve_stdio_paths(&mut local, user, Some(workspace)).is_err());
-        resolve_stdio_paths(&mut local, user, None).unwrap();
-        assert_eq!(local.command.as_deref(), Some("./tool"));
+        assert!(resolve_stdio_paths(&mut local, user, None).is_err());
+
+        let mut script = allowed.clone();
+        script.command = Some("/bin/sh".into());
+        script.args = vec!["-c".into(), "printf 'x/y'".into()];
+        resolve_stdio_paths(&mut script, user, None).unwrap();
+        assert_eq!(script.args, ["-c", "printf 'x/y'"]);
+
+        let mut escaped = allowed.clone();
+        escaped.args = vec!["--config=../../outside.toml".into()];
+        assert!(
+            resolve_stdio_paths(
+                &mut escaped,
+                workspace.join(".agents").as_path(),
+                Some(workspace)
+            )
+            .is_err()
+        );
+        let mut host_relative = allowed.clone();
+        host_relative.command = Some("python3".into());
+        host_relative.cwd = None;
+        host_relative.args = vec!["server.py".into()];
+        assert!(resolve_stdio_paths(&mut host_relative, user, None).is_err());
+        host_relative.command = Some(r"C:\host\server.exe".into());
+        host_relative.args.clear();
+        assert!(resolve_stdio_paths(&mut host_relative, user, Some(workspace)).is_err());
     }
 
     #[test]

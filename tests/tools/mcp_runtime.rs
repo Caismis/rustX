@@ -878,7 +878,7 @@ chat_reasoning_replay = "omit"
             .filter(|definition| {
                 matches!(
                     &definition.origin,
-                    rustx::tools::types::ToolOrigin::Mcp { server_id }
+                    rustx::tools::types::ToolOrigin::Mcp { server_id , .. }
                         if server_id.as_str() == "exa-local"
                 )
             })

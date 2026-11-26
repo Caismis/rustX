@@ -14,6 +14,16 @@ binding. Session Controller operations and Workflow compilation/catalog modules
 retain their original native authorities and public paths. See the
 [engineering report](evidence/issue-560-final-report.md) and its disposition maps.
 
+## Bound Session resource ownership
+
+The authenticated Client reports its User root at admission. The Server
+retains that path through recovery and child delegation for publishing
+Client-visible Skill and Managed Python locations. It discovers User Skill
+definitions from the standing Host root. The Client owns Workspace
+discovery, file operations, Python source capture and stdio processes.
+Workspace HTTP MCP connects from the Server using the winning service's
+credential and network policy. See [the execution protocol](execution-protocol.md#bound-session-resource-policy).
+
 ## Workspace crate boundary (#560)
 
 `rustx` is a Cargo workspace whose `crates/rustx-*` members own shared
@@ -3048,25 +3058,21 @@ read_image { path }                          static PNG, effective Image input r
 
 For Read, Write, Edit, Grep, and Glob, a relative model path is interpreted
 against and lexically normalized from the authoritative execution cwd
-(`Workspace::root()` in the current runtime). `.` and `..` are
-resolved before filesystem existence or symlink behavior, so missing
-intermediate components cannot change path meaning. Read — like `read_image` —
-then requires the interpreted path to stay inside the Session's admitted
-Client workspace, since its physical read crosses the Execution Client
-boundary; Glob and Grep require the interpreted search root to stay inside
-the same admitted Client workspace because their physical traversal crosses
-the Execution Client boundary too. Write and Edit cross the same
-boundary: the interpreted path must resolve inside the Session's admitted
-Client workspace, the preflight binds a ticketed Client-side mutation
+(`Workspace::root()` in the current runtime). `.` and `..` are resolved
+before filesystem access, but a relative path cannot traverse above that
+cwd, even if it would later return. An absolute path can name a location
+outside the workspace in the admitted Client's filesystem. `read_image`
+remains workspace-scoped. Every physical file-tool operation crosses the
+Session's Client boundary. Write and Edit bind a ticketed Client-side mutation
 claim — the logical path plus the `PreparedMutation` owner — *before*
-permission classification, and the executor consumes exactly one commit
-or abort decision on that ticket. `Workspace` remains the
-runtime/Bash cwd authority. `tools/locator.rs` resolves runtime-advertised
-managed-output paths for reads, while `ManagedToolOutput` owns the narrow
-model-mutation rejection; neither is a hidden second policy for ordinary
-native file paths. The Client's no-follow descriptor-relative kernel
-refuses a symlinked final component or ancestor — a link is never
-followed into a mutation target, and a path crossing it is denied.
+permission classification, and the executor consumes exactly one commit or
+abort decision. The Client permits reading its official global skill tree but
+denies file-tool writes there and to an ancestor of that tree. `Workspace`
+remains the runtime/Bash cwd authority. `tools/locator.rs` resolves
+runtime-advertised managed-output paths for reads, while `ManagedToolOutput`
+owns their model-mutation rejection. The Client opens components relative to
+retained descriptors without following symlinks, whether the selected root is
+the workspace or the Client filesystem root.
 
 Adopting those conventions is a *schema* decision only. It does not import
 Pi's runtime, subprocess model, permission system, ignore behavior, result
@@ -3088,10 +3094,8 @@ Three consequences are load-bearing:
 - **Glob and Grep share one search substrate on the Execution Client.**
   `crates/execution-client/src/search.rs` owns
   the single file-universe policy both observe, enumerated
-  descriptor-relative below the binding's retained `PackageDirectory`:
-  the root is confined to the Session's admitted Client workspace, a
-  single file is a legal Grep
-  root, hidden files are visible,
+  descriptor-relative below the Client's retained workspace or filesystem
+  root. A single file is a legal Grep root, hidden files are visible,
   ignore files (`.gitignore`, `.ignore`, git global excludes,
   `.git/info/exclude`) deliberately *not* applied, symlinks never followed
   (so neither a directory symlink recursion nor a file symlink target can
@@ -3102,7 +3106,7 @@ Three consequences are load-bearing:
   `grep-regex`, and `grep-searcher` crates are implementation dependencies
   of that substrate and of the Grep engine; no `rg` executable is ever
   spawned, none of those crates' defaults are part of the tool contract, and
-  `grep-searcher` never owns workspace traversal.
+  `grep-searcher` never owns directory traversal.
 - **Bash converts its unit at the tool boundary.** The model-facing
   `timeout` is measured in seconds and is converted to the internal
   `Duration` in the Bash input contract. Nothing below that boundary — the

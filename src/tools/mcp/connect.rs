@@ -378,6 +378,24 @@ impl McpServerRuntime {
                         "HTTP endpoint must be non-empty".to_owned(),
                     ));
                 }
+                let endpoint = if binding.credentials.client_owned {
+                    let resolved = binding
+                        .credentials
+                        .interpolate(endpoint)
+                        .map_err(McpError::Configuration)?;
+                    let before = url::Url::parse(endpoint).map_err(|_| {
+                        McpError::Configuration("invalid Workspace MCP endpoint".into())
+                    })?;
+                    let after = url::Url::parse(&resolved).map_err(|_| {
+                        McpError::Configuration("invalid Workspace MCP endpoint".into())
+                    })?;
+                    if before.origin() != after.origin() {
+                        return Err(McpError::Configuration("Workspace MCP environment references cannot change the destination origin".into()));
+                    }
+                    resolved
+                } else {
+                    endpoint.clone()
+                };
                 let mut transport_config = rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(endpoint.clone());
                 transport_config.custom_headers = headers
                     .iter()
@@ -385,9 +403,20 @@ impl McpServerRuntime {
                         let name = http::HeaderName::try_from(name).map_err(|_| {
                             McpError::Configuration("invalid HTTP header name".to_owned())
                         })?;
-                        let value = http::HeaderValue::try_from(value).map_err(|_| {
+                        let value = if binding.credentials.client_owned {
+                            binding
+                                .credentials
+                                .interpolate(value)
+                                .map_err(McpError::Configuration)?
+                        } else {
+                            value.clone()
+                        };
+                        let mut value = http::HeaderValue::try_from(value).map_err(|_| {
                             McpError::Configuration("invalid HTTP header value".to_owned())
                         })?;
+                        if binding.credentials.client_owned {
+                            value.set_sensitive(true);
+                        }
                         Ok((name, value))
                     })
                     .collect::<Result<_, McpError>>()?;
@@ -401,6 +430,15 @@ impl McpServerRuntime {
                     value.set_sensitive(true);
                     transport_config.custom_headers.insert(name, value);
                 }
+                if binding.credentials.client_owned
+                    && transport_config
+                        .custom_headers
+                        .contains_key(http::header::HOST)
+                {
+                    return Err(McpError::Configuration(
+                        "Workspace MCP requests must use the HTTP authority of their configured origin".into(),
+                    ));
+                }
                 transport_config.reinit_on_expired_session = false;
                 transport_config.allow_stateless = true;
                 // rustX supplies the HTTP client rather than taking rmcp's
@@ -409,7 +447,18 @@ impl McpServerRuntime {
                 // call has to terminate and prove released. The registry
                 // returned here is that authority; it belongs to exactly
                 // this connection generation.
-                let (client, ownership) = streamable_http::McpHttpClient::new()?;
+                let (client, ownership) = if binding.credentials.client_owned {
+                    let no_configured_credentials = headers.is_empty()
+                        && binding.credentials.headers.is_empty()
+                        && binding.credentials.templates.is_empty()
+                        && url::Url::parse(&endpoint).is_ok_and(|url| url.query().is_none());
+                    streamable_http::McpHttpClient::for_workspace(
+                        &endpoint,
+                        no_configured_credentials,
+                    )?
+                } else {
+                    streamable_http::McpHttpClient::new()?
+                };
                 request_ownership = Some(Arc::clone(&ownership));
                 let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
                     client,

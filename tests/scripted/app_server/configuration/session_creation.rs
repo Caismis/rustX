@@ -2930,7 +2930,7 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}"
 #[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
-async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network() {
+async fn bound_workspace_mcp_catalog_uses_client_definitions_and_rejects_server_loopback() {
     use super::super::protocol::{call, initialize};
     use crate::app_server::{
         connection::AppServerConnection,
@@ -3047,9 +3047,9 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         else {
             panic!("Client revision probe");
         };
-        assert_eq!(probe.outcome, McpProbeOutcome::Reachable);
+        assert_eq!(probe.outcome, McpProbeOutcome::ConnectionFailed);
         assert_eq!(probe.revision, revision);
-        assert_eq!(control.catalog_reads(), 1);
+        assert_eq!(control.catalog_reads(), 0);
         let MethodResult::McpProbe { result } = call(
             &connection,
             99,
@@ -3067,10 +3067,10 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         else {
             panic!("bounded Workspace MCP inventory");
         };
-        assert_eq!(result.outcome, McpProbeOutcome::Reachable);
+        assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
         assert_eq!(result.revision, revision);
-        assert_eq!(result.page.unwrap().tools.len(), 5);
-        assert_eq!(control.catalog_reads(), 2);
+        assert!(result.page.is_none());
+        assert_eq!(control.catalog_reads(), 0);
         assert_eq!(control.accepted_calls(), 0);
         assert_eq!(
             std::fs::read(workspace.join(".agents/mcp.toml")).unwrap(),
@@ -3081,6 +3081,161 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_server_network(
         service.shutdown().await;
     }))
     .await;
+}
+
+#[cfg(all(target_os = "linux", feature = "mcp-fixture"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; requires a private local interface"]
+async fn bound_workspace_http_uses_scoped_client_environment() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::{
+        connection::AppServerConnection,
+        protocol::{Method, MethodResult},
+    };
+    use crate::local_runtime::{configuration::settings::SourceTarget, mcp_probe::McpProbeOutcome};
+    use crate::tools::mcp::catalog::CatalogKind;
+    use crate::tools::mcp::fixture::streamable_http::{HttpFixtureControl, HttpFixtureServer};
+    use axum::response::IntoResponse as _;
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+    };
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let ip = nix::ifaddrs::getifaddrs().unwrap()
+            .filter(|interface| !interface.flags.contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK))
+            .filter_map(|interface| interface.address.and_then(|address| address.as_sockaddr_in().map(nix::sys::socket::SockaddrIn::ip)))
+            .find(|ip| ip.is_private() && !ip.is_loopback() && !ip.is_link_local())
+            .expect("a private test interface is required for this proof");
+        let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let sentinel = format!("client{}", uuid::Uuid::new_v4().simple());
+        let expected = Arc::new(format!("Bearer {sentinel}"));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let denied = Arc::new(AtomicUsize::new(0));
+        let control = HttpFixtureControl::default();
+        let handler = HttpFixtureServer::new(control.clone());
+        let mut config = StreamableHttpServerConfig::default();
+        config.sse_keep_alive = None;
+        config.allowed_hosts = vec![listener.local_addr().unwrap().to_string()];
+        let service = StreamableHttpService::<HttpFixtureServer, LocalSessionManager>::new(
+            move || Ok(handler.clone()), Arc::default(), config,
+        );
+        let app = axum::Router::new().nest_service("/mcp", service).layer(axum::middleware::from_fn({
+            let expected = expected.clone();
+            let accepted = accepted.clone();
+            let denied = denied.clone();
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let expected = expected.clone();
+                let accepted = accepted.clone();
+                let denied = denied.clone();
+                async move {
+                    if request.headers().get(http::header::AUTHORIZATION).and_then(|value| value.to_str().ok()) == Some(expected.as_str()) {
+                        accepted.fetch_add(1, Ordering::SeqCst);
+                        next.run(request).await
+                    } else {
+                        denied.fetch_add(1, Ordering::SeqCst);
+                        http::StatusCode::UNAUTHORIZED.into_response()
+                    }
+                }
+            }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let workspace = &fixture.workspaces[0];
+        let physical = tempfile::tempdir().unwrap();
+        let overlay = physical.path().join("physical");
+        std::fs::rename(workspace, &overlay).unwrap();
+        std::fs::create_dir_all(overlay.join(".agents")).unwrap();
+        let source_document = format!(
+            "[mcp_servers.inventory]\nurl = '{origin}/mcp'\nheaders = {{ Authorization = 'Bearer $RUSTX_612_CLIENT_TOKEN' }}\n"
+        );
+        std::fs::write(overlay.join(".agents/mcp.toml"), &source_document).unwrap();
+        let config_path = overlay.join("rustx.toml");
+        let mut config = std::fs::read_to_string(&config_path).unwrap();
+        config.push_str("\n[agent.tools.sources]\ninventory = 'all'\n");
+        std::fs::write(config_path, config).unwrap();
+        let host_mcp = fixture.manager.configuration.source_bindings().home_directory.join("rustx/.agents/mcp.toml");
+        std::fs::create_dir_all(host_mcp.parent().unwrap()).unwrap();
+        std::fs::write(host_mcp, "[mcp_servers.inventory]\nurl = 'http://127.0.0.1:9/mcp'\nsensitive_headers = { Authorization = '$RUSTX_612_HOST_TOKEN' }\n").unwrap();
+        let launcher = workspace_overlay_launcher(physical.path());
+        std::fs::write(&launcher, format!(r#"#!/bin/sh
+set -eu
+bin=${{0%/*}}
+export RUSTX_612_CLIENT_TOKEN='{sentinel}'
+export RUSTX_612_UNREFERENCED='unused-client-value'
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${{4%/*}}" --bind "$bin/physical" "$4" -- "$bin/client-real" "$@" --mcp-env inventory '{origin}' RUSTX_612_CLIENT_TOKEN
+"#)).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        let endpoint = fixture.manager.execution_endpoint(&fixture.sessions[0].id).unwrap();
+        let grant_request = rustx_execution_protocol::mcp_environment::Request {
+            service: "inventory".into(), origin: origin.clone(),
+            names: std::collections::BTreeSet::from(["RUSTX_612_CLIENT_TOKEN".into()]),
+        };
+        let granted = tokio::task::spawn_blocking(move || endpoint.mcp_environment(&grant_request))
+            .await.unwrap().unwrap_or_else(|error| panic!("Client grant failed: {:?}", error.kind()));
+        assert!(granted.len() == 1 && granted.get("RUSTX_612_CLIENT_TOKEN") == Some(&sentinel));
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let revision = crate::local_runtime::settings::revision(Some(source_document.as_bytes()));
+        let target = SourceTarget::Workspace { directory: workspace.clone() };
+        let MethodResult::McpProbe { result: probe } = call(&connection, 701, Method::McpProbe {
+            target: target.clone(), execution_session: Some(fixture.sessions[0].id.clone()),
+            id: crate::runtime::identity::McpServerId::new("inventory"), expected_revision: revision.clone(),
+        }).await else { panic!("Client-scoped workspace MCP probe"); };
+        assert_eq!(probe.outcome, McpProbeOutcome::Reachable,
+            "authorized requests: {}; unauthorized requests: {}", accepted.load(Ordering::SeqCst), denied.load(Ordering::SeqCst));
+        let MethodResult::McpProbe { result: catalog } = call(&connection, 702, Method::McpCatalog {
+            target, execution_session: Some(fixture.sessions[0].id.clone()),
+            id: crate::runtime::identity::McpServerId::new("inventory"), expected_revision: revision,
+            kind: CatalogKind::Tools,
+        }).await else { panic!("Client-scoped workspace MCP catalog"); };
+        assert_eq!(catalog.outcome, McpProbeOutcome::Reachable);
+        assert_eq!(catalog.page.unwrap().tools.len(), 5);
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let tools = runtime.runtime_resources().capability().tool_registry().definitions();
+        let tool = tools.iter().find(|tool| matches!(&tool.origin,
+            crate::tools::types::ToolOrigin::Mcp { server_id, source: Some(source) }
+                if server_id.as_str() == "inventory" && source == "workspace")).unwrap();
+        let encoded = serde_json::to_string(tool).unwrap();
+        assert!(!encoded.contains(&sentinel));
+        assert_eq!(serde_json::from_str::<crate::tools::types::ToolDefinition>(&encoded).unwrap(), *tool);
+        assert_eq!(serde_json::to_value(&tool.origin).unwrap()["mcp"]["source"], "workspace");
+        let exported = crate::observation::capability_source::CapabilityReadSource::new(
+            Arc::clone(runtime.runtime_resources().capability()), runtime.capability().availability(), None,
+        );
+        exported.prepare();
+        assert!(exported.header().tools.iter().any(|tool| matches!(&tool.origin,
+            crate::tools::types::ToolOrigin::Mcp { server_id, source: Some(source) }
+                if server_id.as_str() == "inventory" && source == "workspace")));
+
+        // Reconciliation records the changed Tool definitions in the real
+        // journal. Read the retained catalog back through its bounded content API.
+        std::fs::write(overlay.join(".agents/mcp.toml"), format!(
+            "[mcp_servers.inventory]\nurl = '{origin}/mcp'\nheaders = {{ Authorization = 'Bearer $RUSTX_612_CLIENT_TOKEN', X-Fixture = 'changed' }}\n"
+        )).unwrap();
+        fixture.manager.reconcile_configuration(&crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: workspace.clone(),
+        }).await.unwrap();
+        applied(&fixture, 0).await;
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store()).pop().unwrap();
+        assert!(catalog["tools"].as_array().unwrap().iter().any(|entry|
+            entry["after"]["definition"]["origin"]["mcp"]["source"] == "workspace"));
+        assert!(!catalog.to_string().contains(&sentinel));
+        assert!(accepted.load(Ordering::SeqCst) > 0);
+        assert_eq!(denied.load(Ordering::SeqCst), 0);
+        assert!(!workspace.exists());
+        assert_eq!(fixture.host.drain().await, [] as [String; 0]);
+        assert!(client.wait().await.unwrap().success());
+        server.abort();
+        let _ = server.await;
+    })).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

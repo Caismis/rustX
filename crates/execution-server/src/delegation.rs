@@ -133,6 +133,7 @@ impl LocalConnection {
         admission: Admission,
         connection: ConnectionId,
         capabilities: BTreeSet<Capability>,
+        user_root: std::path::PathBuf,
         data: UnixStream,
         control: UnixStream,
     ) -> io::Result<Self> {
@@ -173,6 +174,7 @@ impl LocalConnection {
             usable: true,
             closed: false,
             capabilities,
+            user_root,
             connection,
             admission,
         })
@@ -370,6 +372,7 @@ mod tests {
                 },
                 ConnectionId::new("live"),
                 BTreeSet::from([Capability::ConditionalWrite]),
+                "/client/rustx".into(),
                 data,
                 control,
             )

@@ -1055,6 +1055,15 @@ pub struct NativeFixture {
 }
 
 impl NativeFixture {
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mount_scratch(&self) -> std::path::PathBuf {
+        self._execution
+            .as_ref()
+            .and_then(session_execution::ExecutionFixture::mount_scratch)
+            .expect("the fixture owns a Client scratch mount")
+    }
+
     /// Reaps the real Client while the native runtime and artifacts remain pinned.
     pub fn disconnect_execution(&mut self) {
         drop(self._execution.take().expect("live Execution Client"));
@@ -1168,11 +1177,34 @@ pub fn native_fixture_with_execution(environment: Vec<(String, String)>) -> Nati
     )
 }
 
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn native_fixture_with_mount_view(physical: &std::path::Path) -> NativeFixture {
+    native_fixture_inner_with_mount(
+        Vec::new(),
+        rustx::tools::native::NativeToolPolicies::default(),
+        &rustx::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(rustx::context::AgentStatusConfig::default()),
+        true,
+        Some(physical),
+    )
+}
+
 pub(crate) fn native_fixture_inner(
     environment: Vec<(String, String)>,
     policies: rustx::tools::native::NativeToolPolicies,
     extensions: &rustx::extensions::NativeAgentExtensions,
     execution: bool,
+) -> NativeFixture {
+    native_fixture_inner_with_mount(environment, policies, extensions, execution, None)
+}
+
+fn native_fixture_inner_with_mount(
+    environment: Vec<(String, String)>,
+    policies: rustx::tools::native::NativeToolPolicies,
+    extensions: &rustx::extensions::NativeAgentExtensions,
+    execution: bool,
+    mount: Option<&std::path::Path>,
 ) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
@@ -1197,7 +1229,8 @@ pub(crate) fn native_fixture_inner(
     // The execution route is reserved for exactly the Session's workspace
     // before the runtime is composed — the same order production
     // composition binds it.
-    let execution = execution.then(|| session_execution::ExecutionFixture::new(&workspace_root));
+    let execution = execution
+        .then(|| session_execution::ExecutionFixture::with_mount_view(&workspace_root, mount));
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
         ConversationRuntimeConfig {

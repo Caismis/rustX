@@ -36,6 +36,7 @@ fn valid_hello(credential: &BindingCredential) -> Hello {
         instance: ClientInstanceId::new("instance-1"),
         generation: Generation::new(NonZeroU64::MIN),
         workspace: PathBuf::from("/work/root"),
+        user_root: "/client/rustx".into(),
         capabilities: required(),
         credential: credential.clone(),
     }
@@ -135,6 +136,11 @@ fn wrong_hello_fields_never_consume_a_reservation() {
                 h.workspace = PathBuf::from("/work/./root");
             }),
             Reject::WorkspaceMismatch,
+        ),
+        (
+            "relative User root",
+            Box::new(|h: &mut Hello| h.user_root = "rustx".into()),
+            Reject::UserRootMismatch,
         ),
         (
             "required capability",
@@ -535,7 +541,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v10"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -691,11 +697,11 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(PROTOCOL_VERSION, 10);
     let (binding, credential) = Binding::reserve(reservation()).unwrap();
     let hello = valid_hello(&credential);
     let mut old = hello.clone();
-    old.version = 8;
+    old.version = 9;
     let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
     write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
     write_record(
@@ -3315,7 +3321,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v10"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {

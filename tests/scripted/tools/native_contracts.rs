@@ -587,6 +587,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             "external",
             rustx::tools::types::ToolOrigin::Mcp {
                 server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
+                source: None,
             },
         ),
         (

@@ -292,6 +292,7 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
         requester.origin,
         crate::tools::types::ToolOrigin::Mcp {
             server_id: server_id.clone(),
+            source: None
         }
     );
     // One form, two typed questions: a bounded enum and a free-form string.

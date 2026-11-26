@@ -1,8 +1,8 @@
-//! The bounded workspace search behind `ClientRequest::Search`.
+//! The bounded Client filesystem search behind `ClientRequest::Search`.
 //!
 //! One shared file universe — identical for the `Glob` and `Grep` spec
 //! variants — is enumerated descriptor-relative below the retained
-//! workspace [`PackageDirectory`]: every component opens no-follow, hidden
+//! workspace or filesystem-root [`PackageDirectory`]: every component opens no-follow, hidden
 //! and ignored files are ordinary members, symlinked and special entries
 //! are never part of the universe, and a symlinked root is refused
 //! outright. Traversal is fail-closed under the wire budgets — depth,
@@ -109,7 +109,7 @@ impl<R: Read> Read for DeadlineReader<R> {
 }
 
 /// `Search`: validates the wire spec, resolves `relative_root` against
-/// the retained workspace, enumerates the shared universe, and selects
+/// the selected retained root, enumerates the shared universe, and selects
 /// the spec's bounded records.
 pub fn search(
     root: &PackageDirectory,
@@ -186,7 +186,7 @@ fn run(
         visited: 0,
         path_bytes: 0,
     };
-    // `root_prefix` is the single authorized workspace-relative prefix
+    // `root_prefix` is the single descriptor-root-relative prefix
     // every retained file reopens beneath — the directory itself for a
     // directory root, the parent for a single-file root — so no file
     // stores a second copy of it.

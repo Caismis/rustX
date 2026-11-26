@@ -3720,6 +3720,7 @@ body
                                 origin: match &source {
                                     ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
                                         server_id: id.clone(),
+                                        source: None,
                                     },
                                     ToolSourceId::ManagedPython(package) => {
                                         ToolOrigin::ManagedPython {
@@ -5067,7 +5068,7 @@ mod mcp_race_tests {
         assert_eq!(v1_snapshot.revision().get(), 1);
 
         let frozen_registration = v1_snapshot.available_tools().registrations().iter()
-            .find(|entry| matches!(&entry.definition.origin, crate::tools::types::ToolOrigin::Mcp { server_id: id } if id == &server_id))
+            .find(|entry| matches!(&entry.definition.origin, crate::tools::types::ToolOrigin::Mcp { server_id: id , .. } if id == &server_id))
             .expect("available MCP registration").clone();
 
         // The old execution is admitted before the source/runtime change:

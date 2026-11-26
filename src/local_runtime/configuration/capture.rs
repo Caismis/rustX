@@ -790,7 +790,16 @@ impl UserConfigManager {
         for (id, definition) in mcp.definitions {
             match definition {
                 Ok(definition) => {
-                    config.mcp_servers.insert(id.clone(), definition.resolve());
+                    let mut definition = definition.resolve();
+                    if matches!(
+                        mcp.origins.get(&id),
+                        Some(Origin::Workspace { .. } | Origin::Session { .. })
+                    ) {
+                        bind_workspace_mcp(&mut definition, &id, workspace_endpoint);
+                        definition.workspace_source =
+                            matches!(mcp.origins.get(&id), Some(Origin::Workspace { .. }));
+                    }
+                    config.mcp_servers.insert(id.clone(), definition);
                 }
                 Err(error) => {
                     diagnostics.push(
@@ -1020,12 +1029,8 @@ impl UserConfigManager {
         let managed_python = if let Some(catalog) = prefetched_python {
             catalog
         } else if let Some(endpoint) = workspace_endpoint {
-            super::super::managed_python_resources::discover_bound(
-                endpoint,
-                &python_user,
-                &self.resource_io,
-            )
-            .map_err(LaunchFailure::resource)?
+            super::super::managed_python_resources::discover_bound(endpoint, &self.resource_io)
+                .map_err(LaunchFailure::resource)?
         } else {
             super::super::managed_python_resources::discover_controlled(
                 authored_workspace,
@@ -1445,6 +1450,41 @@ fn read_bound_document(
     endpoint
         .workspace_document(Path::new(name))
         .map_err(|error| unavailable(path, format!("Execution Client: {error}")))
+}
+
+pub(crate) fn bind_workspace_mcp(
+    definition: &mut super::super::config::McpServerDocument,
+    id: &crate::runtime::identity::McpServerId,
+    workspace_endpoint: Option<&LocalExecutionEndpoint>,
+) {
+    definition.client_owned = true;
+    definition.workspace_source = true;
+    let Some(url) = &definition.url else {
+        return;
+    };
+    let mut names = std::iter::once(url.as_str())
+        .chain(definition.headers.values().map(String::as_str))
+        .flat_map(crate::credentials::referenced_environment_names)
+        .collect::<std::collections::BTreeSet<_>>();
+    names.extend(
+        definition
+            .sensitive_headers
+            .values()
+            .map(|reference| reference.name().to_owned()),
+    );
+    if !names.is_empty()
+        && let Some(endpoint) = workspace_endpoint
+        && let Ok(parsed) = url::Url::parse(url)
+    {
+        let request = rustx_execution_protocol::mcp_environment::Request {
+            service: id.to_string(),
+            origin: parsed.origin().ascii_serialization(),
+            names,
+        };
+        if let Ok(values) = endpoint.mcp_environment(&request) {
+            definition.client_environment = crate::credentials::CredentialSnapshot::new(values);
+        }
+    }
 }
 
 pub(crate) fn read_bound_mcp(

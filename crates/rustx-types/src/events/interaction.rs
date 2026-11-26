@@ -176,7 +176,7 @@ impl InteractionRequester {
     #[must_use]
     pub fn mcp_server(&self) -> Option<&crate::runtime::identity::McpServerId> {
         match &self.origin {
-            ToolOrigin::Mcp { server_id } => Some(server_id),
+            ToolOrigin::Mcp { server_id, .. } => Some(server_id),
             ToolOrigin::Builtin | ToolOrigin::Host { .. } | ToolOrigin::ManagedPython { .. } => {
                 None
             }
@@ -2563,6 +2563,7 @@ mod tests {
                 tool_name: "create_issue".to_owned(),
                 origin: ToolOrigin::Mcp {
                     server_id: crate::runtime::identity::McpServerId::new("github"),
+                    source: None,
                 },
             },
             questionnaire,

@@ -2312,7 +2312,7 @@ fn published_mcp_tools(
         .filter(|definition| {
             matches!(
                 &definition.origin,
-                rustx::tools::types::ToolOrigin::Mcp { server_id: owner } if owner == server_id
+                rustx::tools::types::ToolOrigin::Mcp { server_id: owner , .. } if owner == server_id
             )
         })
         .map(|definition| definition.name)

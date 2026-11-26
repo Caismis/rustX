@@ -314,7 +314,6 @@ fn capture(
     let python = match &endpoint {
         Some(endpoint) => super::managed_python_resources::discover_bound_for(
             endpoint,
-            &user_root,
             directory.is_some(),
             &owner.resource_io,
         ),

@@ -2436,7 +2436,7 @@ pub async fn capability_projection_covers_mcp_origins(
     for tool in mcp {
         assert!(matches!(
             &tool.origin,
-            ToolOrigin::Mcp { server_id } if server_id.as_str() == "fixture"
+            ToolOrigin::Mcp { server_id , .. } if server_id.as_str() == "fixture"
         ));
     }
     let wire = serde_json::to_string(&capabilities).expect("the projection serializes");

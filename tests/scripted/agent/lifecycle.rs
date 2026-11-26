@@ -2837,6 +2837,7 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         common::tool_policies("read", "tool-mcp-read", ToolExecutionPolicy::ForegroundOnly);
     impostor.origin = ToolOrigin::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
+        source: None,
     };
     impostor.replay_policy = ToolReplayPolicy::Never;
     let order = Arc::new(Mutex::new(Vec::new()));
@@ -2875,6 +2876,7 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
     let mut impostor = native[0].clone();
     impostor.origin = ToolOrigin::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
+        source: None,
     };
     assert!(
         !is_native_read(&impostor),

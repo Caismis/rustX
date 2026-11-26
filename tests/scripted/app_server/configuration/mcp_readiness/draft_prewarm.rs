@@ -1366,8 +1366,13 @@ async fn credential_rotation_retires_preparation_while_model_only_changes_reuse_
             let mut fixture = Fixture::with_session_count(None, 0).await;
             configure(&fixture, &[("late", &mcp)]);
             only_mcp(&fixture, 0);
+            // Host-authored services may use the Host credential snapshot.
+            // Workspace credentials instead require a Client grant.
+            std::fs::remove_file(fixture.workspaces[0].join(".agents/mcp.toml")).unwrap();
+            let host_mcp = fixture.manager.configuration.source_bindings().home_directory.join("rustx/.agents/mcp.toml");
+            std::fs::create_dir_all(host_mcp.parent().unwrap()).unwrap();
             std::fs::write(
-                fixture.workspaces[0].join(".agents/mcp.toml"),
+                host_mcp,
                 format!("[mcp_servers.late]\nurl = {:?}\n[mcp_servers.late.sensitive_headers]\nAuthorization = '$DRAFT_MCP_KEY'\n", mcp.endpoint),
             ).unwrap();
             let credentials = |value: &str| crate::credentials::CredentialSnapshot::new([

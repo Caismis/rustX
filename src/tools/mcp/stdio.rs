@@ -95,6 +95,11 @@ pub(crate) fn launch_spec(
             "stdio program must be non-empty".into(),
         ));
     }
+    if !binding.credentials.client_owned && !binding.credentials.environment.is_empty() {
+        return Err(McpError::Configuration(
+            "Host credentials cannot be sent to a Client stdio MCP process".into(),
+        ));
+    }
     let cwd = client_relative_cwd(workspace, cwd.as_deref())?;
     let credentials = binding
         .credentials

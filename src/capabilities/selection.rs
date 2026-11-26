@@ -476,6 +476,7 @@ mod tests {
         let server_id = McpServerId::new("python:check");
         let mcp = definition(ToolOrigin::Mcp {
             server_id: server_id.clone(),
+            source: None,
         });
         let catalog = AvailableToolCatalog::new(
             [builtin.clone(), mcp.clone()]
@@ -586,6 +587,7 @@ mod tests {
         let origin = match source {
             ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
                 server_id: id.clone(),
+                source: None,
             },
             ToolSourceId::ManagedPython(package) => ToolOrigin::ManagedPython {
                 package: package.clone(),

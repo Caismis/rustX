@@ -644,6 +644,25 @@ explicitly supplied members.
 
 ## Resources and admission
 
+For a bound Session the Server loads its standing User configuration from
+`~/rustx/`. The admitted Client supplies the Workspace view, including its
+`.agents/mcp.toml`. A Workspace Skill or MCP service which overrides the
+same User identity emits a warning. MCP replacement selects one complete
+service before resolving credentials.
+
+A Workspace HTTP MCP service connects from the Server. Ordinary literal
+headers are allowed. To use a Client environment reference, the Client
+operator grants the service, HTTP origin and variable at startup. For example,
+`--mcp-env search https://search.example.com SEARCH_TOKEN` permits the
+`search` service to reference `$SEARCH_TOKEN` on that origin. Repeat the flag
+for each required variable. Each lookup returns only the requested granted
+values and lives with its service binding. An HTTP `sensitive_headers`
+reference in the Workspace also requires a matching Client grant. The local
+sibling starts with a minimal environment. To grant variables on the same
+machine, start the Client explicitly with its own environment and grants.
+Host-authored HTTP services use the Host credential snapshot. Workspace
+stdio runs on the Client with its declared literal environment.
+
 For every Agent, Workflow, Python package and MCP identity, the Workspace
 definition shadows the complete User definition. Shadow selection occurs before
 validation. An invalid Workspace duplicate never restores a valid User duplicate.

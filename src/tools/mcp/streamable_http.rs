@@ -1108,10 +1108,98 @@ impl<S: Stream + Unpin> Stream for OwnedResponseStream<S> {
 #[derive(Clone)]
 pub(crate) struct McpHttpClient {
     inner: reqwest::Client,
+    anonymous_inner: Option<reqwest::Client>,
     ownership: Arc<McpHttpRequestOwnership>,
     ordinary_posts: Arc<Semaphore>,
     sse_posts: Arc<Semaphore>,
     sse_gets: Arc<Semaphore>,
+}
+
+/// Resolve every hostname to a set of addresses that are safe to dial. The
+/// HTTP connector receives only these concrete addresses, so a later fallback
+/// cannot connect to a forbidden member of a mixed DNS answer.
+struct WorkspaceResolver;
+
+impl reqwest::dns::Resolve for WorkspaceResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let hostname = name.as_str().to_owned();
+        Box::pin(async move {
+            if is_localhost_name(&hostname) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Workspace MCP destination is local",
+                )
+                .into());
+            }
+            let addresses =
+                permitted_addresses(tokio::net::lookup_host((hostname.as_str(), 0)).await?);
+            if addresses.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Workspace MCP has no permitted destination",
+                )
+                .into());
+            }
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn permitted_addresses(
+    addresses: impl Iterator<Item = std::net::SocketAddr>,
+) -> Vec<std::net::SocketAddr> {
+    addresses
+        .filter(|address| workspace_address_allowed(address.ip()))
+        .collect()
+}
+
+fn is_localhost_name(name: &str) -> bool {
+    let name = name.trim_end_matches('.');
+    name.eq_ignore_ascii_case("localhost") || name.to_ascii_lowercase().ends_with(".localhost")
+}
+
+fn workspace_address_allowed(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(ip) => {
+            !ip.is_unspecified()
+                && !ip.is_loopback()
+                && !ip.is_link_local()
+                && ip != std::net::Ipv4Addr::new(100, 100, 100, 200)
+        }
+        IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return v4.octets()[0] != 0 && workspace_address_allowed(IpAddr::V4(v4));
+            }
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_unicast_link_local()
+                && ip != std::net::Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)
+        }
+    }
+}
+
+fn workspace_endpoint_allowed(endpoint: &str) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Domain(name)) => !is_localhost_name(name),
+        Some(url::Host::Ipv4(ip)) => workspace_address_allowed(ip.into()),
+        Some(url::Host::Ipv6(ip)) => workspace_address_allowed(ip.into()),
+        None => false,
+    }
+}
+
+fn workspace_redirect_allowed(origin: &url::Origin, target: &url::Url, anonymous: bool) -> bool {
+    (anonymous || target.origin() == *origin) && workspace_endpoint_allowed(target.as_str())
 }
 
 impl McpHttpClient {
@@ -1124,8 +1212,9 @@ impl McpHttpClient {
     /// to this client, never to another Conversation or credential binding.
     /// Request cancellation still drops the exact tracked POST or SSE body;
     /// reqwest does not return an unfinished response to its idle pool.
-    /// Redirects remain disabled so configured headers, including credentials,
-    /// can never be replayed to a redirect target.
+    /// Host-authored sources do not follow redirects. Workspace requests
+    /// with credentials stay within their origin; anonymous requests can
+    /// follow a bounded, address-checked cross-origin chain.
     /// # Errors
     ///
     /// Returns an error when the HTTP client cannot be built. This is a
@@ -1134,19 +1223,42 @@ impl McpHttpClient {
     /// client must fail that one dispatch rather than take the runtime down.
     pub(crate) fn new() -> Result<(Self, Arc<McpHttpRequestOwnership>), crate::tools::mcp::McpError>
     {
+        Self::build(None)
+    }
+
+    pub(crate) fn for_workspace(
+        endpoint: &str,
+        allow_anonymous_redirect: bool,
+    ) -> Result<(Self, Arc<McpHttpRequestOwnership>), crate::tools::mcp::McpError> {
+        if !workspace_endpoint_allowed(endpoint) {
+            return Err(crate::tools::mcp::McpError::Configuration(
+                "Workspace MCP destination is not permitted".into(),
+            ));
+        }
+        Self::build_with_anonymous(Some(endpoint), allow_anonymous_redirect)
+    }
+
+    fn build(
+        workspace_endpoint: Option<&str>,
+    ) -> Result<(Self, Arc<McpHttpRequestOwnership>), crate::tools::mcp::McpError> {
+        Self::build_with_anonymous(workspace_endpoint, false)
+    }
+
+    fn build_with_anonymous(
+        workspace_endpoint: Option<&str>,
+        allow_anonymous_redirect: bool,
+    ) -> Result<(Self, Arc<McpHttpRequestOwnership>), crate::tools::mcp::McpError> {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
-        let inner = reqwest::Client::builder()
-            .pool_max_idle_per_host(1)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| {
-                crate::tools::mcp::McpError::Configuration(format!(
-                    "the MCP HTTP client could not be built: {error}"
-                ))
-            })?;
+        let inner = Self::build_http_client(workspace_endpoint, false)?;
+        let anonymous_inner = if allow_anonymous_redirect {
+            Some(Self::build_http_client(workspace_endpoint, true)?)
+        } else {
+            None
+        };
         Ok((
             Self {
                 inner,
+                anonymous_inner,
                 ownership: Arc::clone(&ownership),
                 ordinary_posts: ORDINARY_POST_SLOTS
                     .get_or_init(|| Arc::new(Semaphore::new(MAX_ORDINARY_POSTS)))
@@ -1160,6 +1272,47 @@ impl McpHttpClient {
             },
             ownership,
         ))
+    }
+
+    fn build_http_client(
+        workspace_endpoint: Option<&str>,
+        anonymous: bool,
+    ) -> Result<reqwest::Client, crate::tools::mcp::McpError> {
+        let mut builder = reqwest::Client::builder()
+            .pool_max_idle_per_host(1)
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(endpoint) = workspace_endpoint {
+            // A proxy could bypass the checked destination; Workspace MCP
+            // connects directly through this resolver instead.
+            let origin = url::Url::parse(endpoint)
+                .expect("validated Workspace endpoint")
+                .origin();
+            builder = builder
+                .no_proxy()
+                .dns_resolver(Arc::new(WorkspaceResolver))
+                .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                    if attempt.previous().len() > 10 {
+                        attempt.error("Workspace MCP exceeded the redirect limit")
+                    } else if !workspace_redirect_allowed(&origin, attempt.url(), anonymous) {
+                        attempt.error("Workspace MCP redirect destination is not permitted")
+                    } else {
+                        attempt.follow()
+                    }
+                }));
+        }
+        builder.build().map_err(|error| {
+            crate::tools::mcp::McpError::Configuration(format!(
+                "the MCP HTTP client could not be built: {error}"
+            ))
+        })
+    }
+
+    fn route(&self, session: bool, auth: bool, headers: &CustomHeaders) -> &reqwest::Client {
+        if !session && !auth && headers.is_empty() {
+            self.anonymous_inner.as_ref().unwrap_or(&self.inner)
+        } else {
+            &self.inner
+        }
     }
 }
 
@@ -1183,6 +1336,15 @@ fn locally_terminated() -> StreamableHttpError<reqwest::Error> {
     StreamableHttpError::Io(std::io::Error::other(
         "the MCP HTTP request was terminated by rustX because its tool call was cancelled",
     ))
+}
+
+fn without_request_url(
+    error: StreamableHttpError<reqwest::Error>,
+) -> StreamableHttpError<reqwest::Error> {
+    match error {
+        StreamableHttpError::Client(error) => StreamableHttpError::Client(error.without_url()),
+        other => other,
+    }
 }
 
 impl McpHttpClient {
@@ -1211,7 +1373,7 @@ impl McpHttpClient {
         >,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
         let Some(id) = request_id(message) else {
-            return self.bound_post_stream(post.await?);
+            return self.bound_post_stream(post.await.map_err(without_request_url)?);
         };
         // Initialization has no tool-invocation admission. Own its HTTP
         // request here so cancelling a handshake can terminate rmcp's startup
@@ -1237,7 +1399,7 @@ impl McpHttpClient {
                 .acquire()
                 .await
                 .expect("ordinary MCP HTTP budget remains open");
-            post.await
+            post.await.map_err(without_request_url)
         };
         let response = tokio::select! {
             biased;
@@ -1299,13 +1461,14 @@ impl StreamableHttpClient for McpHttpClient {
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         self.owned_post(
             &message,
-            self.inner.post_message(
-                uri,
-                message.clone(),
-                session_id,
-                auth_header,
-                custom_headers,
-            ),
+            self.route(session_id.is_some(), auth_header.is_some(), &custom_headers)
+                .post_message(
+                    uri,
+                    message.clone(),
+                    session_id,
+                    auth_header,
+                    custom_headers,
+                ),
         )
         .await
     }
@@ -1321,14 +1484,15 @@ impl StreamableHttpClient for McpHttpClient {
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         self.owned_post(
             &message,
-            self.inner.post_message_with_max_sse_event_size(
-                uri,
-                message.clone(),
-                session_id,
-                auth_header,
-                custom_headers,
-                max_sse_event_size,
-            ),
+            self.route(session_id.is_some(), auth_header.is_some(), &custom_headers)
+                .post_message_with_max_sse_event_size(
+                    uri,
+                    message.clone(),
+                    session_id,
+                    auth_header,
+                    custom_headers,
+                    max_sse_event_size,
+                ),
         )
         .await
     }
@@ -1350,7 +1514,7 @@ impl StreamableHttpClient for McpHttpClient {
         )
         .await
         {
-            Ok(result) => result,
+            Ok(result) => result.map_err(without_request_url),
             Err(_) => Err(StreamableHttpError::Io(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "MCP remote session cleanup exceeded one second",
@@ -1367,9 +1531,14 @@ impl StreamableHttpClient for McpHttpClient {
         custom_headers: CustomHeaders,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
         let stream = self
-            .inner
+            .route(
+                session_id.is_some() || last_event_id.is_some(),
+                auth_header.is_some(),
+                &custom_headers,
+            )
             .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
-            .await?;
+            .await
+            .map_err(without_request_url)?;
         bound_sse(stream, &self.sse_gets)
     }
 
@@ -1383,7 +1552,11 @@ impl StreamableHttpClient for McpHttpClient {
         max_sse_event_size: usize,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
         let stream = self
-            .inner
+            .route(
+                session_id.is_some() || last_event_id.is_some(),
+                auth_header.is_some(),
+                &custom_headers,
+            )
             .get_stream_with_max_sse_event_size(
                 uri,
                 session_id,
@@ -1392,7 +1565,8 @@ impl StreamableHttpClient for McpHttpClient {
                 custom_headers,
                 max_sse_event_size,
             )
-            .await?;
+            .await
+            .map_err(without_request_url)?;
         // The SDK checks the status and media type before it returns a lazy
         // event parser. A 405 probe never consumes a body slot.
         bound_sse(stream, &self.sse_gets)
@@ -1414,6 +1588,249 @@ mod tests {
     use rmcp::model::RequestId;
 
     use super::{LocalRequestTermination, McpHttpRequestOwnership, OutboundDispatch, RequestPhase};
+
+    fn private_test_ip() -> Option<std::net::Ipv4Addr> {
+        nix::ifaddrs::getifaddrs()
+            .ok()?
+            .filter(|interface| {
+                !interface
+                    .flags
+                    .contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK)
+            })
+            .filter_map(|interface| {
+                interface.address.and_then(|address| {
+                    address
+                        .as_sockaddr_in()
+                        .map(nix::sys::socket::SockaddrIn::ip)
+                })
+            })
+            .find(|ip| ip.is_private() && !ip.is_loopback() && !ip.is_link_local())
+    }
+
+    #[test]
+    fn workspace_addresses_cover_mapped_and_link_local_without_banning_private_networks() {
+        for blocked in [
+            "127.0.0.1",
+            "127.2.3.4",
+            "0.0.0.0",
+            "169.254.169.254",
+            "100.100.100.200",
+            "::",
+            "::1",
+            "fe80::1",
+            "fd00:ec2::254",
+            "::ffff:100.100.100.200",
+            "::ffff:127.2.3.4",
+            "::ffff:0.1.2.3",
+            "::ffff:169.254.3.4",
+        ] {
+            assert!(
+                !super::workspace_address_allowed(blocked.parse().unwrap()),
+                "{blocked}"
+            );
+        }
+        for allowed in [
+            "10.0.0.2",
+            "172.17.0.2",
+            "192.168.0.2",
+            "100.64.0.1",
+            "100.100.100.201",
+            "fd00:ec2::255",
+            "8.8.8.8",
+            "::ffff:8.8.8.8",
+        ] {
+            assert!(
+                super::workspace_address_allowed(allowed.parse().unwrap()),
+                "{allowed}"
+            );
+        }
+        for blocked in [
+            "http://localhost/mcp",
+            "http://127.0.0.1/mcp",
+            "http://0.0.0.0/mcp",
+            "http://[::1]/mcp",
+            "http://[::]/mcp",
+            "http://[::ffff:127.0.0.1]/mcp",
+            "http://169.254.169.254/mcp",
+        ] {
+            assert!(!super::workspace_endpoint_allowed(blocked), "{blocked}");
+        }
+    }
+
+    #[test]
+    fn workspace_dns_and_redirects_check_each_selected_destination() {
+        let addresses = ["8.8.8.8:80", "127.0.0.1:80", "[::1]:80", "10.0.0.1:80"]
+            .into_iter()
+            .map(|value| value.parse().unwrap());
+        let allowed = super::permitted_addresses(addresses);
+        assert_eq!(
+            allowed,
+            [
+                "8.8.8.8:80".parse::<std::net::SocketAddr>().unwrap(),
+                "10.0.0.1:80".parse::<std::net::SocketAddr>().unwrap()
+            ]
+        );
+        let origin = url::Url::parse("https://public.example/mcp")
+            .unwrap()
+            .origin();
+        let target = |url| url::Url::parse(url).unwrap();
+        assert!(super::workspace_redirect_allowed(
+            &origin,
+            &target("https://public.example/next"),
+            false
+        ));
+        assert!(!super::workspace_redirect_allowed(
+            &origin,
+            &target("https://other.example/next"),
+            false
+        ));
+        assert!(super::workspace_redirect_allowed(
+            &origin,
+            &target("https://other.example/next"),
+            true
+        ));
+        assert!(!super::workspace_redirect_allowed(
+            &origin,
+            &target("http://127.0.0.1/next"),
+            true
+        ));
+    }
+
+    #[tokio::test]
+    async fn workspace_localhost_is_refused_before_any_connection() {
+        use reqwest::dns::Resolve;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        assert!(super::McpHttpClient::for_workspace(&endpoint, true).is_err());
+        assert!(
+            super::WorkspaceResolver
+                .resolve("localhost".parse().unwrap())
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_redirect_rechecks_a_real_local_destination() {
+        let Some(ip) = private_test_ip() else {
+            eprintln!("private interface unavailable; local redirect proof not run");
+            return;
+        };
+        let forbidden = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("http://{}/forbidden", forbidden.local_addr().unwrap());
+        let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new()
+            .route(
+                "/bad",
+                axum::routing::get(move || async move {
+                    (http::StatusCode::FOUND, [(http::header::LOCATION, target)])
+                }),
+            )
+            .route(
+                "/same",
+                axum::routing::get(|| async {
+                    (http::StatusCode::FOUND, [(http::header::LOCATION, "/ok")])
+                }),
+            )
+            .route("/ok", axum::routing::get(|| async { http::StatusCode::OK }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let (client, _) = super::McpHttpClient::for_workspace(&origin, true).unwrap();
+        let anonymous = client.anonymous_inner.as_ref().unwrap();
+        assert_eq!(
+            anonymous
+                .get(format!("{origin}/same"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            http::StatusCode::OK
+        );
+        assert!(anonymous.get(format!("{origin}/bad")).send().await.is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), forbidden.accept())
+                .await
+                .is_err()
+        );
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn mixed_dns_fallback_never_reaches_the_forbidden_socket() {
+        use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+        struct FixtureResolver(Vec<std::net::SocketAddr>);
+        impl Resolve for FixtureResolver {
+            fn resolve(&self, _: Name) -> Resolving {
+                let addresses = super::permitted_addresses(self.0.iter().copied());
+                Box::pin(async move { Ok(Box::new(addresses.into_iter()) as Addrs) })
+            }
+        }
+        let Some(ip) = private_test_ip() else {
+            eprintln!("private interface unavailable; local DNS fallback proof not run");
+            return;
+        };
+        let forbidden = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = forbidden.local_addr().unwrap().port();
+        // Prove the permitted local address has no listener at this port;
+        // the connector therefore exercises its fallback list.
+        drop(tokio::net::TcpListener::bind((ip, port)).await.unwrap());
+        let allowed = std::net::SocketAddr::from((ip, port));
+        let denied = forbidden.local_addr().unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(Arc::new(FixtureResolver(vec![allowed, denied])))
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+        assert!(
+            client
+                .get(format!("http://fixture.invalid:{port}/mcp"))
+                .send()
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), forbidden.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn anonymous_redirect_client_is_never_used_with_session_or_headers() {
+        let (client, _) =
+            super::McpHttpClient::for_workspace("https://public.example/mcp", true).unwrap();
+        let empty = super::CustomHeaders::new();
+        assert!(std::ptr::eq(
+            client.route(false, false, &empty),
+            client.anonymous_inner.as_ref().unwrap()
+        ));
+        assert!(std::ptr::eq(
+            client.route(true, false, &empty),
+            std::ptr::from_ref(&client.inner)
+        ));
+        assert!(std::ptr::eq(
+            client.route(false, true, &empty),
+            std::ptr::from_ref(&client.inner)
+        ));
+        let mut headers = empty;
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("x"),
+        );
+        assert!(std::ptr::eq(
+            client.route(false, false, &headers),
+            std::ptr::from_ref(&client.inner)
+        ));
+    }
 
     fn id(value: i64) -> RequestId {
         RequestId::Number(value)

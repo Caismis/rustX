@@ -997,6 +997,7 @@ mod tests {
                         "get_issue",
                         ToolOrigin::Mcp {
                             server_id: McpServerId::new("github"),
+                            source: None,
                         },
                     ))
                     .expect("an MCP definition has an MCP identity"),
@@ -1004,6 +1005,7 @@ mod tests {
                         "get_issue",
                         ToolOrigin::Mcp {
                             server_id: McpServerId::new("github"),
+                            source: None,
                         },
                     ),
                 },

@@ -98,6 +98,7 @@ pub struct LocalExecutionEndpoint {
     /// connection lands; the operation-identity source for every
     /// managed process this endpoint dispatches.
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
+    user_root: std::sync::OnceLock<PathBuf>,
     managed_output: std::sync::OnceLock<bool>,
     stdio_mcp: std::sync::OnceLock<bool>,
     recovery_fence: Option<rustx_execution_server::RecoveryFence>,
@@ -336,6 +337,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            user_root: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
             recovery_fence: None,
@@ -349,7 +351,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v9`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v10`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -397,6 +399,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            user_root: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
             recovery_fence: None,
@@ -558,6 +561,7 @@ impl LocalExecutionEndpoint {
                 let _ = self
                     .stdio_mcp
                     .set(connection.supports(Capability::StdioMcp));
+                let _ = self.user_root.set(connection.user_root().to_owned());
                 let _ = self.admission.set(connection.admission().clone());
                 let retired = slot.replace(connection);
                 drop(slot);
@@ -828,6 +832,23 @@ impl LocalExecutionEndpoint {
         self.with_bounded_data_connection(deadline, |connection| {
             let relative = workspace_entry(self.workspace(), path)?;
             read(connection, &relative)
+        })
+    }
+
+    pub(crate) fn client_user_root(&self) -> io::Result<&Path> {
+        self.user_root
+            .get()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| io::ErrorKind::NotConnected.into())
+    }
+
+    pub(crate) fn mcp_environment(
+        &self,
+        request: &rustx_execution_protocol::mcp_environment::Request,
+    ) -> io::Result<std::collections::BTreeMap<String, String>> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        self.with_bounded_data_connection(deadline, |connection| {
+            connection.mcp_environment(request, deadline)
         })
     }
 
@@ -1276,7 +1297,7 @@ impl LocalExecutionEndpoint {
         sent: impl FnOnce(),
     ) -> io::Result<rustx_confined_fs::TextPage> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, false)?;
             if document {
                 connection
                     .read_document_admitted(&relative, offset, limit, None, deadline, admit, sent)
@@ -1295,10 +1316,9 @@ impl LocalExecutionEndpoint {
     /// traversal rooted at `path` narrowed by `spec` — for a caller that
     /// already holds the shared `data` budget and the `writer` permit,
     /// under the same contract as
-    /// [`read_page_admitted`](Self::read_page_admitted). `path` resolves
-    /// through [`workspace_entry`]: the workspace root itself is a legal
-    /// search root — the empty relative path the Client reads as "the
-    /// root itself" — unlike the page operations, which require a leaf.
+    /// [`read_page_admitted`](Self::read_page_admitted). `path` may name
+    /// an absolute Client location outside the workspace; the workspace
+    /// root itself is a legal search root, unlike page operations.
     ///
     /// # Errors
     ///
@@ -1316,7 +1336,7 @@ impl LocalExecutionEndpoint {
         sent: impl FnOnce(),
     ) -> io::Result<SearchResult> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_entry(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, true)?;
             connection.search_admitted(&relative, spec, deadline, admit, sent)
         })
     }
@@ -1352,8 +1372,8 @@ impl LocalExecutionEndpoint {
     }
 
     /// The admitted prepare half of one Agent write: resolves the
-    /// already-interpreted absolute `path` once through the lexical
-    /// workspace gate, then dispatches `PrepareWrite` — or
+    /// already-interpreted `path` once for the Client, then dispatches
+    /// `PrepareWrite` — or
     /// `BeginWrite`/`WriteChunk` for an over-chunk payload — with the
     /// caller's `WriteExpectation` under the shared deadline and
     /// per-request `with_active` cancellation grant. The returned
@@ -1373,7 +1393,7 @@ impl LocalExecutionEndpoint {
         sent: impl Fn(),
     ) -> io::Result<rustx_execution_server::PreparedMutation> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, false)?;
             connection.prepare_write(&relative, expectation, bytes, Some(deadline), &admit, &sent)
         })
     }
@@ -1395,7 +1415,7 @@ impl LocalExecutionEndpoint {
         sent: impl Fn(),
     ) -> io::Result<rustx_execution_server::PreparedMutation> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, false)?;
             connection.prepare_edit(
                 &relative,
                 expectation,
@@ -2244,6 +2264,42 @@ impl LocalExecutionEndpoint {
 /// root itself, an empty path, and any control or NUL byte are refused.
 fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
     confined_relative(workspace, path, u8::is_ascii_control)
+}
+
+/// File tools can also name absolute Client paths outside the workspace.
+/// Keep workspace paths relative to preserve the retained workspace anchor;
+/// an external absolute path is passed to the Client without consulting the
+/// Server filesystem. The Client opens it component by component from `/`.
+fn client_file_path(workspace: &Path, path: &Path, allow_root: bool) -> io::Result<PathBuf> {
+    let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "invalid Client file path");
+    let raw = path.as_os_str().as_bytes();
+    if raw.is_empty()
+        || raw.contains(&0)
+        || raw
+            .split(|byte| *byte == b'/')
+            .any(|segment| segment == b"." || segment == b"..")
+    {
+        return Err(denied());
+    }
+    if path.is_absolute() {
+        if let Ok(relative) = path.strip_prefix(workspace) {
+            if relative.as_os_str().is_empty() && !allow_root {
+                return Err(denied());
+            }
+            return Ok(relative.to_path_buf());
+        }
+        if path == Path::new("/") && !allow_root {
+            return Err(denied());
+        }
+        return Ok(path.to_path_buf());
+    }
+    if path
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Ok(path.to_path_buf());
+    }
+    Err(denied())
 }
 
 fn confined_relative(
@@ -4459,6 +4515,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
+            user_root: "/client/rustx".into(),
             capabilities: BTreeSet::from([
                 Capability::Connection,
                 Capability::ReadRange,
@@ -4817,6 +4874,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
+            user_root: "/client/rustx".into(),
             capabilities,
             credential: published.credential.clone(),
         };
@@ -5371,6 +5429,7 @@ mod tests {
                 instance: published.instance.clone(),
                 generation: published.generation,
                 workspace: published.workspace.clone(),
+                user_root: "/client/rustx".into(),
                 capabilities: BTreeSet::from([Capability::Connection]),
                 credential: published.credential.clone(),
             }),
@@ -5467,6 +5526,52 @@ mod tests {
         assert_eq!(relative_path, expected);
         write_record(&mut client, &lines_reply(&relative_path)).unwrap();
         client
+    }
+
+    #[test]
+    fn client_file_paths_allow_absolute_external_names_without_host_io() {
+        let workspace = Path::new("/client/workspace");
+        assert_eq!(
+            client_file_path(workspace, Path::new("/client/workspace/a"), false).unwrap(),
+            Path::new("a")
+        );
+        assert_eq!(
+            client_file_path(workspace, Path::new("/client/elsewhere/a"), false).unwrap(),
+            Path::new("/client/elsewhere/a")
+        );
+        assert_eq!(
+            client_file_path(workspace, workspace, true).unwrap(),
+            Path::new("")
+        );
+        assert_eq!(
+            client_file_path(workspace, Path::new("/"), true).unwrap(),
+            Path::new("/")
+        );
+        for path in [
+            "/client/elsewhere/../a",
+            "/client/elsewhere/./a",
+            "../outside",
+            "",
+        ] {
+            assert!(
+                client_file_path(workspace, Path::new(path), false).is_err(),
+                "{path:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn external_file_tool_path_is_sent_to_the_admitted_client() {
+        let (registry, session, _endpoint, client, _workspace, _dir) = admitted_lines_endpoint();
+        let path = PathBuf::from("/client-only/outside.txt");
+        let expected = path.clone();
+        let peer = std::thread::spawn(move || answer_lines(client, &expected));
+        let page = scope_for(&registry, &session)
+            .read_page(&path, 1, None, false, &detached_cancellation())
+            .await
+            .unwrap();
+        assert_eq!(page.text, "/client-only/outside.txt\n");
+        drop(peer.join().unwrap());
     }
 
     /// The shared data budget and the single writer permit are per

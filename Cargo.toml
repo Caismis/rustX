@@ -170,6 +170,7 @@ pep440_rs = "0.7.3"
 workspace = true
 
 [dev-dependencies]
+nix = { version = "0.31.3", features = ["net"] }
 rustx-execution-client = { path = "crates/execution-client", features = ["test-support"] }
 rustx-process-supervisor = { path = "crates/process-supervisor", features = ["test-support"] }
 

@@ -15,15 +15,13 @@ use std::path::Path;
 #[doc(hidden)]
 pub fn discover_bound(
     endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
-    user_root: &Path,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
-    discover_bound_for(endpoint, user_root, true, cancellation)
+    discover_bound_for(endpoint, true, cancellation)
 }
 
 pub(super) fn discover_bound_for(
     endpoint: &std::sync::Arc<super::session_runtime_manager::LocalExecutionEndpoint>,
-    user_root: &Path,
     include_workspace: bool,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
@@ -33,6 +31,9 @@ pub(super) fn discover_bound_for(
     };
     use std::time::{Duration, Instant};
 
+    let user_root = endpoint
+        .client_user_root()
+        .map_err(|_| RuntimeResourceLoadError::new("Client User resource root is unavailable"))?;
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut candidates = BTreeMap::new();
     let mut locations = BTreeMap::new();
@@ -41,7 +42,7 @@ pub(super) fn discover_bound_for(
         (
             SourceScope::User,
             PythonSourceScope::User,
-            user_root.join("tools"),
+            user_root.join(".agents/tools"),
         ),
         (
             SourceScope::Workspace,
