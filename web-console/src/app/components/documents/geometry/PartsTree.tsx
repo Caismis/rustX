@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
+import clsx from 'clsx';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Input } from '../../../../presentation/primitives/Input';
 import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChevronRightOutline14, IconCloseOutline16, IconFolderClose16, IconSearchOutline16 } from '../../../../presentation/primitives/icons';
 import type { Part } from './structure';
-import css from './PartsTree.module.css';
 
 export interface PartsTreeLabels {
   parts: string; part: string; expand: string; collapse: string; visible: string;
@@ -38,24 +38,24 @@ export function PartsTree({ parts, selected, hidden, expanded, onExpandedChange,
     const name = partName(part, ordinal, labels.part), visible = !hidden?.includes(part.id);
     const inherited = hidden?.some(id => part.id.startsWith(`${id}.`)), open = filtering || expanded.has(part.id);
     return <li key={part.id}>
-      <div className={css.partRow} data-hidden={!visible || inherited || undefined}>
-        {children.length ? <Button size="sm" className={css.disclosure} aria-label={`${open ? labels.collapse : labels.expand}: ${name}`} aria-expanded={open} disabled={filtering} onClick={() => {
+      <div className="flex items-center gap-[2px] min-w-0 rounded-[var(--dsw-radius-sm)] hover:bg-[var(--dsw-alias-interactive-bg-hover)]" data-hidden={!visible || inherited || undefined}>
+        {children.length ? <Button size="sm" className="w-[20px] flex-none p-0! [color:var(--dsw-alias-label-tertiary)] [&_svg]:transition-transform [&_svg]:duration-[140ms] motion-reduce:[&_svg]:transition-none" aria-label={`${open ? labels.collapse : labels.expand}: ${name}`} aria-expanded={open} disabled={filtering} onClick={() => {
           const next = new Set(expanded); if (open) next.delete(part.id); else next.add(part.id); onExpandedChange(next);
-        }}><IconChevronRightOutline14 className={open ? css.expanded : undefined}/></Button> : <span className={css.branchSpace}/>}
-        <Button size="sm" className={css.partButton} title={name} icon={part.kind === 'group' ? <IconFolderClose16/> : <ModelGlyph/>} aria-pressed={selected === part.id} onClick={() => onSelect(selected === part.id ? undefined : part.id)}><span>{name}</span></Button>
-        <Tooltip label={`${inherited ? labels.hiddenParent : visible ? labels.hide : labels.show}: ${name}`} side="top" delayMs={500}><span className={css.visibilityAnchor}><Button size="sm" className={css.visibility} role="checkbox" aria-label={`${labels.visible}: ${name}`} aria-description={inherited ? labels.hiddenParent : undefined} aria-checked={visible} onClick={() => onVisibility(part.id, !visible)}><VisibilityGlyph visible={visible}/></Button></span></Tooltip>
+        }}><IconChevronRightOutline14 className={open ? 'rotate-90' : undefined}/></Button> : <span className="w-[20px] flex-none"/>}
+        <Button size="sm" className={clsx('justify-start min-w-0 flex-1 px-[6px] rounded-[var(--dsw-radius-sm)] text-start text-[12px] [&>span:last-child]:overflow-hidden [&>span:last-child]:text-ellipsis [&>span:last-child]:whitespace-nowrap [&>span:first-child]:flex-none [&>span:first-child]:[color:var(--dsw-alias-label-tertiary)] aria-pressed:bg-[var(--dsw-alias-interactive-bg-active)]', (!visible || inherited) && 'opacity-50')} title={name} icon={part.kind === 'group' ? <IconFolderClose16/> : <ModelGlyph/>} aria-pressed={selected === part.id} onClick={() => onSelect(selected === part.id ? undefined : part.id)}><span>{name}</span></Button>
+        <Tooltip label={`${inherited ? labels.hiddenParent : visible ? labels.hide : labels.show}: ${name}`} side="top" delayMs={500}><span className="flex flex-none"><Button size="sm" className="flex-none w-[28px] p-0! [color:var(--dsw-alias-label-secondary)]" role="checkbox" aria-label={`${labels.visible}: ${name}`} aria-description={inherited ? labels.hiddenParent : undefined} aria-checked={visible} onClick={() => onVisibility(part.id, !visible)}><VisibilityGlyph visible={visible}/></Button></span></Tooltip>
       </div>
       {children.length > 0 && open && <ul>{children.map(renderPart)}</ul>}
     </li>;
   };
-  return <div className={css.root}>
-    <div className={css.search} ref={search}>
+  return <div className="flex flex-1 flex-col min-h-0 min-w-0">
+    <div className="flex flex-none items-center gap-[4px] p-[6px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l3)] [&>span]:flex-1 [&>span]:min-w-0 [&>span]:h-[28px] [&_input]:w-full [&_input]:text-[12px] [&_input]:leading-[18px] [&_input::-webkit-search-cancel-button]:hidden" ref={search}>
       <Input type="search" icon={<IconSearchOutline16/>} aria-label={labels.searchParts} placeholder={labels.searchParts} maxLength={256} value={query} onChange={event => setQuery(event.target.value.slice(0, 256))}/>
-      {query && <Button size="sm" className={css.clear} aria-label={labels.clearPartsSearch} onClick={() => { setQuery(''); search.current?.querySelector('input')?.focus({ preventScroll: true }); }}><IconCloseOutline16/></Button>}
+      {query && <Button size="sm" className="flex-none w-[24px] h-[24px] p-0! [color:var(--dsw-alias-label-secondary)]" aria-label={labels.clearPartsSearch} onClick={() => { setQuery(''); search.current?.querySelector('input')?.focus({ preventScroll: true }); }}><IconCloseOutline16/></Button>}
     </div>
-    <div className={css.scroll}>
-      <ul className={css.parts} aria-label={labels.parts}>{shown.map(renderPart)}</ul>
-      {filtering && !shown.length && <p className={css.empty} role="status">{labels.noPartsMatch}</p>}
+    <div className="flex-1 min-h-0 overflow-auto overscroll-contain [scrollbar-gutter:stable]">
+      <ul className="list-none p-[6px] m-0 [&_ul]:list-none [&_ul]:pl-[12px] [&_ul]:m-0" aria-label={labels.parts}>{shown.map(renderPart)}</ul>
+      {filtering && !shown.length && <p className="m-0 px-[12px] pt-[8px] pb-[14px] [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]" role="status">{labels.noPartsMatch}</p>}
     </div>
   </div>;
 }
