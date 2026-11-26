@@ -595,7 +595,7 @@ impl AgentExecution<'_> {
             .as_ref()
             .filter(|_| anchor.is_some())
             .and_then(FrozenCarryover::admitted);
-        let (complete, _) = crate::model::input::assemble_selected_model_input(
+        let (complete, _) = rustx_types::model::selected_input::assemble_selected_model_input(
             &self.request.conversation_id,
             &history.messages,
             &history.input_manifest,
@@ -681,7 +681,7 @@ impl AgentExecution<'_> {
             &effective_system_prompt,
         );
         let (mut request_messages, mut input_manifest) =
-            crate::model::input::assemble_selected_model_input(
+            rustx_types::model::selected_input::assemble_selected_model_input(
                 &self.request.conversation_id,
                 active,
                 &history.input_manifest,

@@ -2016,6 +2016,28 @@ mod case_insensitive_tests {
     /// whose canonical paths keep `RustX` or `.Agents` keep owning their
     /// documents; a renamed-away root invalidates the watches beneath the
     /// loaders' spelling.
+    fn case_variant_files<'a>(
+        entry: &'a PathBuf,
+        root: &'a PathBuf,
+        digits: &'a PathBuf,
+        nested: &'a PathBuf,
+    ) -> [(PathBuf, PathBuf, &'a PathBuf); 4] {
+        [
+            (
+                entry.join(".agents/Skills/guide/SKILL.md"),
+                entry.join(".agents/skills/guide/SKILL.md"),
+                entry,
+            ),
+            (
+                root.join(".Agents/skills/guide/SKILL.md"),
+                root.join(".agents/skills/guide/SKILL.md"),
+                root,
+            ),
+            (digits.join("RustX.toml"), digits.join("rustx.toml"), digits),
+            (nested.join("RustX.toml"), nested.join("rustx.toml"), nested),
+        ]
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)] // The case aliases share one real volume and owner inventory.
     fn a_case_variant_the_loaders_read_routes_to_its_workspace() {
@@ -2025,28 +2047,7 @@ mod case_insensitive_tests {
         let digits = volume.path().join("2026");
         let nested = entry.join(".agents/project");
         let home = volume.path().join("home");
-        let files = [
-            (
-                entry.join(".agents/Skills/guide/SKILL.md"),
-                entry.join(".agents/skills/guide/SKILL.md"),
-                &entry,
-            ),
-            (
-                root.join(".Agents/skills/guide/SKILL.md"),
-                root.join(".agents/skills/guide/SKILL.md"),
-                &root,
-            ),
-            (
-                digits.join("RustX.toml"),
-                digits.join("rustx.toml"),
-                &digits,
-            ),
-            (
-                nested.join("RustX.toml"),
-                nested.join("rustx.toml"),
-                &nested,
-            ),
-        ];
+        let files = case_variant_files(&entry, &root, &digits, &nested);
         let user = UserSourceRoots {
             document: volume.path().join("config/rustx.toml"),
             resources: USER_RESOURCES

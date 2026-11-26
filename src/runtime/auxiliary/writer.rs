@@ -518,7 +518,7 @@ impl AuxiliaryWriterClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable::{AuxiliaryStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryFingerprint,
         AuxiliaryInputEvidence,

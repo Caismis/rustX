@@ -341,6 +341,10 @@ impl Drop for Settlement {
         };
         if let Some(transfer) = removed {
             transfer.revoked.cancel();
+            // `settled` must mean fully released: drop the transfer (and its
+            // capacity permit and session access) before waking waiters, or a
+            // racing prepare observes the still-held permit as exhausted.
+            drop(transfer);
         }
         #[cfg(test)]
         self.host.uploads().settled.notify_one();

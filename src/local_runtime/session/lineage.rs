@@ -3,6 +3,31 @@
 //! publication of the prepared destination.
 
 use super::CatalogDocument;
+
+use rustx_durable::lineage_remap;
+
+/// Session-owned wrapper mapping durable remap errors into `SessionError`.
+pub(crate) fn remap_seed(
+    destination: &ConversationId,
+    canonical: &[MessageBlock],
+    surface_history: &[SurfaceOp],
+    completed_responses: &[crate::durable::response::CompletedResponseProvenance],
+    turns: &[crate::durable::reading::TurnReadingProvenance],
+    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
+) -> Result<LineageSeed, SessionError> {
+    lineage_remap::remap_seed(
+        destination,
+        canonical,
+        surface_history,
+        completed_responses,
+        turns,
+        raw_tool_arguments,
+    )
+    .map_err(|error| SessionError::Seed {
+        detail: error.to_string(),
+    })
+}
+
 use super::LineageSide;
 use super::SessionCatalog;
 use super::SessionError;
@@ -20,10 +45,8 @@ use crate::conversation::SurfaceOp;
 use crate::conversation::message_id_of;
 use crate::durable::LineageSeed;
 use crate::durable::reading::LineageReadCut;
-use crate::message::types::AssistantMessageBlock;
 use crate::message::types::InboundKind;
 use crate::message::types::MessageBlock;
-use crate::message::types::ToolMessageBlock;
 use crate::message::types::UserContentBlock;
 use crate::message::types::UserMessageBlock;
 use crate::runtime::identity::ConversationId;
@@ -682,163 +705,4 @@ pub(crate) fn retain_summary_generation_audits(
         );
     }
     Ok(retained)
-}
-
-/// Reconstructs a destination seed with destination-owned canonical message/occurrence
-/// identities. Provider correlation strings remain unchanged. Response origins
-/// retain their original execution owner as provenance, never destination execution state.
-///
-/// `canonical` is the destination's whole Ledger cut and `surface_history` is
-/// the operation log that projects it, so the one identity map remaps both:
-/// a `Replace` and the retired messages it names receive destination
-/// identities that still agree.
-pub(crate) fn remap_seed(
-    destination: &ConversationId,
-    canonical: &[MessageBlock],
-    surface_history: &[SurfaceOp],
-    completed_responses: &[crate::durable::response::CompletedResponseProvenance],
-    turns: &[crate::durable::reading::TurnReadingProvenance],
-    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
-) -> Result<LineageSeed, SessionError> {
-    let messages = canonical;
-    let mut message_ids = BTreeMap::new();
-    for (index, message) in messages.iter().enumerate() {
-        let old = message_id_of(message);
-        let new = MessageId::new(format!("{destination}-message-{}", index + 1));
-        if message_ids.insert(old.clone(), new).is_some() {
-            return Err(SessionError::Seed {
-                detail: format!("source seed repeats MessageId {old}"),
-            });
-        }
-    }
-
-    let canonical = messages
-        .iter()
-        .map(|message| remap_message(message, &message_ids))
-        .collect::<Result<Vec<_>, SessionError>>()?;
-    let seeded = |id: &MessageId| {
-        message_ids
-            .get(id)
-            .cloned()
-            .ok_or_else(|| SessionError::Seed {
-                detail: format!(
-                    "the seeded Surface history names {id}, which the seeded Ledger does not carry"
-                ),
-            })
-    };
-    let surface_history = surface_history
-        .iter()
-        .map(|operation| match operation {
-            SurfaceOp::Append { message_id } => Ok(SurfaceOp::Append {
-                message_id: seeded(message_id)?,
-            }),
-        })
-        .collect::<Result<Vec<_>, SessionError>>()?;
-    let responses = completed_responses
-        .iter()
-        .filter_map(|response| {
-            let closing = message_ids.get(&response.closing_message_id)?;
-            let mut response = response.clone();
-            response.closing_message_id = closing.clone();
-            response.process_message_ids = response
-                .process_message_ids
-                .iter()
-                .filter_map(|id| message_ids.get(id).cloned())
-                .collect();
-            response.retry_message_id = response
-                .retry_message_id
-                .as_ref()
-                .and_then(|input| message_ids.get(input).cloned());
-            Some(response)
-        })
-        .collect();
-    let turns = turns
-        .iter()
-        .filter_map(|turn| {
-            let mut copied = turn.clone();
-            copied.process_message_ids = turn
-                .process_message_ids
-                .iter()
-                .filter_map(|id| message_ids.get(id).cloned())
-                .collect();
-            if !turn.process_message_ids.is_empty() && copied.process_message_ids.is_empty() {
-                return None;
-            }
-            copied.preceding_message_id = turn
-                .preceding_message_id
-                .as_ref()
-                .and_then(|id| message_ids.get(id).cloned());
-            copied.prompt_message_id = turn
-                .prompt_message_id
-                .as_ref()
-                .and_then(|id| message_ids.get(id).cloned());
-            Some(copied)
-        })
-        .collect();
-    let raw = remap_raw_tool_arguments(raw_tool_arguments, &message_ids);
-    LineageSeed::replayed(canonical, surface_history)
-        .and_then(|seed| seed.with_completed_responses(responses))
-        .and_then(|seed| seed.with_turns(turns))
-        .and_then(|seed| seed.with_raw_tool_arguments(raw))
-        .map_err(|error| SessionError::Seed {
-            detail: error.to_string(),
-        })
-}
-
-fn remap_raw_tool_arguments(
-    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
-    message_ids: &BTreeMap<MessageId, MessageId>,
-) -> Vec<crate::durable::CanonicalRawToolArguments> {
-    raw_tool_arguments
-        .iter()
-        .filter_map(|item| {
-            message_ids
-                .get(&item.message_id)
-                .map(|id| crate::durable::CanonicalRawToolArguments {
-                    message_id: id.clone(),
-                    block_index: item.block_index,
-                    bytes: item.bytes.clone(),
-                })
-        })
-        .collect()
-}
-
-fn remap_message(
-    message: &MessageBlock,
-    message_ids: &BTreeMap<MessageId, MessageId>,
-) -> Result<MessageBlock, SessionError> {
-    let message_id = |id: &MessageId| {
-        message_ids
-            .get(id)
-            .cloned()
-            .ok_or_else(|| SessionError::Seed {
-                detail: format!("source seed references unknown MessageId {id}"),
-            })
-    };
-
-    match message {
-        MessageBlock::User(user) => Ok(MessageBlock::User(UserMessageBlock {
-            id: message_id(&user.id)?,
-            content: user.content.clone(),
-            source: user.source.clone(),
-            kind: user.kind.clone(),
-            timestamp: user.timestamp,
-        })),
-        MessageBlock::Assistant(assistant) => Ok(MessageBlock::Assistant(AssistantMessageBlock {
-            id: message_id(&assistant.id)?,
-            // Copied calls are history, not newly issued provider invocations.
-            // Preserve the provider correlation on both sides of each occurrence.
-            content: assistant.content.clone(),
-        })),
-        MessageBlock::Tool(tool) => Ok(MessageBlock::Tool(ToolMessageBlock {
-            id: message_id(&tool.id)?,
-            occurrence: crate::message::types::ToolCallOccurrenceRef {
-                assistant_message_id: message_id(&tool.occurrence.assistant_message_id)?,
-                block_index: tool.occurrence.block_index,
-            },
-            tool_call_id: tool.tool_call_id.clone(),
-            tool_id: tool.tool_id.clone(),
-            result: tool.result.clone(),
-        })),
-    }
 }

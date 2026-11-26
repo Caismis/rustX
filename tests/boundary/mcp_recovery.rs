@@ -307,7 +307,9 @@ struct Controls {
     /// lifecycle's winner arbitration for this call, and releases it again.
     /// Cancellation issued while parked here is provably too late to reclaim
     /// settlement authority.
+    #[cfg(target_os = "linux")]
     physical_won: watch::Receiver<bool>,
+    #[cfg(target_os = "linux")]
     release_physical: std::sync::mpsc::Sender<()>,
     clock: Arc<ManualMonotonicClock>,
     cancellation: AgentCancellation,
@@ -329,6 +331,7 @@ impl Controls {
     }
 
     /// Waits until the executor's physical result provably won arbitration.
+    #[cfg(target_os = "linux")]
     async fn wait_physical_won(&mut self) {
         self.physical_won
             .wait_for(|won| *won)
@@ -506,15 +509,19 @@ where
     let (armed_signal, armed) =
         crate::agent::execution::test_sync::ToolDeadlineArmedSignal::install();
     execution.install_tool_deadline_armed_signal(armed_signal);
+    #[cfg(target_os = "linux")]
     let (physical_pause, physical_won, release_physical) =
         crate::agent::execution::test_sync::ToolPhysicalSettlementPause::install();
+    #[cfg(target_os = "linux")]
     execution.install_tool_physical_settlement_pause(physical_pause);
 
     let controls = Controls {
         started,
         progress,
         armed,
+        #[cfg(target_os = "linux")]
         physical_won,
+        #[cfg(target_os = "linux")]
         release_physical,
         clock,
         cancellation: cancellation.clone(),
@@ -1308,6 +1315,7 @@ async fn cancellation_without_a_remote_response_is_exactly_one_outcome_unknown()
 /// The canonical result is the proven remote `Success`, no deadline or
 /// cancellation fact is journaled for the call, and the server accepted the
 /// request exactly once.
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_response_that_won_arbitration_survives_a_later_cancellation() {
     if recovery::serve_if_recovery_fixture_mode().await {
@@ -2189,6 +2197,7 @@ async fn repeated_ambiguous_http_calls_release_progress_on_one_live_generation()
 /// therefore provably post-arbitration, not a timing guess. The server
 /// produced the response exactly once and never observed a client
 /// disconnect for it.
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_streamable_http_response_that_won_arbitration_survives_a_later_cancellation() {
     let fixture = common::native_fixture_without_extensions();

@@ -22,14 +22,14 @@
 
 pub mod agent_profile;
 pub mod auxiliary;
-pub mod cancellation;
+pub use rustx_types::runtime::cancellation;
 pub mod capability_inspection;
 /// Native configuration-adoption contracts: prepared candidates, adoption
 /// eligibility/refusal, admitted Attempt configuration, and cache impact.
 pub mod configuration_commit;
 pub mod continuation;
 pub mod conversation_runtime;
-pub mod identity;
+pub use rustx_identity as identity;
 pub mod inbound;
 /// The native provider-independent human interaction rendezvous and pending
 /// interaction projection facts (Issue #100). Internal ownership primitives
@@ -40,11 +40,10 @@ pub(crate) mod interaction;
 /// servers), owning physical settlement of the interactive supervisor unit.
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
-pub mod monotonic;
+pub use rustx_types::runtime::monotonic;
 /// Fixed execution-permission modes, resource overrides, and the built-in
 /// permission matrix (Issue #544).
 pub mod permission;
-pub(crate) mod read_layout;
 
 /// The runtime-owned semantic observation contract (Issue #61): the
 /// observation vocabulary and the leaf pending-observation queue. Runtime
@@ -54,8 +53,10 @@ pub(crate) mod observation;
 /// The `cfg(test)`-only real-process-death seam (Issue #111, FND-06): the
 /// named durable boundaries a conformance child parks at, and the control
 /// channel back to the owning parent test. Outside this crate's test build
-/// its two entry points are empty `const fn`s.
-pub(crate) mod process_death;
+/// its two entry points are empty `const fn`s. Implemented in `rustx_durable`
+/// so the durable crate's own gate call sites and the monolith's share a
+/// single control connection per process.
+pub(crate) use rustx_durable::process_death;
 /// Durable startup recovery (Issue #12, M9a): the reconstruct → classify →
 /// reconcile → resume pipeline the conversation runtime owns. Recovery policy
 /// lives here, above the durable store and below nothing: no client, no
@@ -74,7 +75,7 @@ pub mod resources;
 /// owner is the driver task; the message bus is always the destination
 /// conversation's ordinary durable inbound path.
 pub mod subagent;
-pub mod types;
+pub use rustx_types::runtime::types;
 /// Native bounded Workflow definitions, immutable compiled programs, and
 /// catalog admission (Issue #83).
 pub mod workflow;

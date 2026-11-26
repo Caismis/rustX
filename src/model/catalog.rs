@@ -48,146 +48,19 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde::de::{MapAccess, Visitor};
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::invocation::{
     ModelSelection, RequestParams, RequestParamsLayer, analyze_selection,
     validate_request_params_layer, validate_request_params_numbers,
 };
 use crate::model::types::ModelProtocol;
+pub use rustx_types::model::catalog::{
+    ModelCatalogError, ModelId, ModelProfileId, ModelRef, ProviderId,
+};
 
 /// The only model-catalog schema version this runtime accepts.
 pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 2;
-
-/// The identity of one catalog provider.
-///
-/// A provider identity is an opaque local name. It never implies an
-/// endpoint, a protocol, a credential store, or a vendor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ProviderId(Arc<str>);
-
-/// The identity of one catalog model within its provider.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ModelId(Arc<str>);
-
-/// The identity of one Model Profile declared by a model.
-///
-/// The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
-/// `thinking-32k`, and `deep` are all just names whose behaviour is exactly
-/// the profile's output default and
-/// `request_params`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-#[derive(schemars::JsonSchema)]
-pub struct ModelProfileId(Arc<str>);
-
-impl<'de> Deserialize<'de> for ModelProfileId {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
-    }
-}
-
-macro_rules! catalog_identity {
-    ($name:ident, $what:literal, $reject_slash:literal, $require_non_empty_segments:literal) => {
-        impl $name {
-            /// Creates the identity without validation.
-            ///
-            /// Catalog loading always goes through the validating
-            /// constructor; this exists for tests and for identities the
-            /// runtime already validated.
-            #[must_use]
-            pub fn new(value: impl Into<String>) -> Self {
-                Self(Arc::from(value.into()))
-            }
-
-            /// Validates and creates the identity.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`ModelCatalogError::InvalidIdentity`] when the value
-            /// is empty, contains whitespace, or contains the `/` reference
-            /// separator when this identity type reserves it. Model IDs may
-            /// use `/`, but every segment must be non-empty.
-            pub fn parse(value: impl Into<String>) -> Result<Self, ModelCatalogError> {
-                let value = value.into();
-                if value.is_empty()
-                    || ($reject_slash && value.contains('/'))
-                    || ($require_non_empty_segments && value.split('/').any(str::is_empty))
-                    || value.chars().any(char::is_whitespace)
-                {
-                    return Err(ModelCatalogError::InvalidIdentity { kind: $what, value });
-                }
-                Ok(Self(Arc::from(value)))
-            }
-
-            /// The identity as a string slice.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-    };
-}
-
-catalog_identity!(ProviderId, "provider", true, false);
-catalog_identity!(ModelId, "model", false, true);
-catalog_identity!(ModelProfileId, "model profile", true, false);
-
-/// An authored Model identity. Its spelling has no provider or wire semantics.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
-#[schemars(with = "String")]
-pub struct ModelRef(Arc<str>);
-
-impl ModelRef {
-    /// Borrow the validated native identity without formatting an owned String.
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Constructs an explicitly qualified name; qualification is naming only.
-    #[must_use]
-    #[allow(clippy::needless_pass_by_value)] // Own both explicit naming components at construction.
-    pub fn new(provider: ProviderId, model: ModelId) -> Self {
-        Self(Arc::from(format!("{provider}/{model}")))
-    }
-
-    /// Parses a nonempty catalog identity, independently of Provider bindings.
-    /// # Errors
-    /// Rejects invalid identity segments.
-    pub fn parse(value: &str) -> Result<Self, ModelCatalogError> {
-        ModelId::parse(value).map_err(|_| ModelCatalogError::InvalidModelRef {
-            value: value.to_owned(),
-        })?;
-        Ok(Self(Arc::from(value)))
-    }
-}
-impl fmt::Display for ModelRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl Serialize for ModelRef {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for ModelRef {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(serde::de::Error::custom)
-    }
-}
 
 /// The declared source of one provider credential.
 ///
@@ -326,296 +199,13 @@ impl fmt::Display for ResolvedCredential {
     }
 }
 
-/// One semantic content modality of a model capability set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum Modality {
-    /// Textual content.
-    Text,
-    /// Image content.
-    Image,
-    /// File/document content.
-    File,
-}
+pub use rustx_types::model::capabilities::{
+    ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol, Modality,
+    ModelCapabilities, ModelCompat, ResponsesStorageMode,
+};
 
-/// The semantic capability set of a model, an adapter/protocol, or the
-/// runtime.
-///
-/// Modalities are structured sets rather than one boolean per modality, so
-/// adding a modality never reshapes the contract. The client-visible
-/// capability is always an [`intersection`](ModelCapabilities::intersect) of
-/// the model claim, the adapter/protocol capability, and the current runtime
-/// capability — a raw catalog claim is never advertised.
-/// Tool calls are supported by every model and are not a configurable capability.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct ModelCapabilities {
-    /// The accepted input modalities.
-    pub input_modalities: BTreeSet<Modality>,
-    /// The produced output modalities.
-    pub output_modalities: BTreeSet<Modality>,
-    /// Native API-enforced JSON Schema output for this model, endpoint and protocol.
-    /// An omitted claim is conservative; ordinary text requests never opt in implicitly.
-    #[serde(default)]
-    pub json_schema_output: bool,
-}
-
-impl ModelCapabilities {
-    /// The capability set of a text-only model.
-    #[must_use]
-    pub fn text_only() -> Self {
-        Self {
-            input_modalities: BTreeSet::from([Modality::Text]),
-            output_modalities: BTreeSet::from([Modality::Text]),
-            json_schema_output: false,
-        }
-    }
-
-    /// The pointwise intersection of two capability sets.
-    #[must_use]
-    pub fn intersect(&self, other: &Self) -> Self {
-        Self {
-            input_modalities: self
-                .input_modalities
-                .intersection(&other.input_modalities)
-                .copied()
-                .collect(),
-            output_modalities: self
-                .output_modalities
-                .intersection(&other.output_modalities)
-                .copied()
-                .collect(),
-            json_schema_output: self.json_schema_output && other.json_schema_output,
-        }
-    }
-
-    /// Whether the set can carry the ordinary rustX text conversation path.
-    #[must_use]
-    pub fn supports_text_conversation(&self) -> bool {
-        self.input_modalities.contains(&Modality::Text)
-            && self.output_modalities.contains(&Modality::Text)
-    }
-}
-
-/// Which max-token field spelling a Chat Completions service accepts.
-///
-/// This is a real structural translation difference between
-/// OpenAI-compatible services, not a provider wire value: the two spellings
-/// are mutually exclusive and both are runtime-protected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ChatMaxTokensField {
-    /// The current `max_completion_tokens` field.
-    #[default]
-    MaxCompletionTokens,
-    /// The `max_tokens` field used by `DeepSeek`, GLM, Kimi and Qwen APIs.
-    MaxTokens,
-}
-
-impl ChatMaxTokensField {
-    /// The wire field name this spelling writes.
-    #[must_use]
-    pub const fn wire_name(self) -> &'static str {
-        match self {
-            Self::MaxCompletionTokens => "max_completion_tokens",
-            Self::MaxTokens => "max_tokens",
-        }
-    }
-}
-
-/// How the `OpenAI` Responses protocol operates with provider storage.
-///
-/// Stored requests provider retention and continues by `previous_response_id`.
-/// If the response reports `store: false`, the original output items are used
-/// instead. Stateless always continues by preserved output items (encrypted
-/// reasoning or a provider's original plaintext reasoning).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ResponsesStorageMode {
-    /// Request provider-side storage (`store: true`).
-    #[default]
-    Stored,
-    /// Zero provider retention (`store: false`).
-    Stateless,
-}
-
-/// Assistant-message field used to replay canonical reasoning through an
-/// OpenAI-compatible Chat Completions dialect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ChatReasoningReplay {
-    /// vLLM and `OpenRouter`'s plaintext reasoning field.
-    Reasoning,
-    /// `DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.
-    #[default]
-    ReasoningContent,
-    /// Do not replay historical canonical reasoning to the provider.
-    Omit,
-}
-
-impl ChatReasoningReplay {
-    /// Returns the assistant-message wire field, if reasoning is replayed.
-    #[must_use]
-    pub const fn wire_name(self) -> Option<&'static str> {
-        match self {
-            Self::Reasoning => Some("reasoning"),
-            Self::ReasoningContent => Some("reasoning_content"),
-            Self::Omit => None,
-        }
-    }
-}
-
-/// The in-band tool protocol a Chat Completions model speaks.
-///
-/// This is a real protocol difference between OpenAI-compatible services,
-/// not a provider wire value. Most services emit tool calls only through the
-/// structured `tool_calls` field. Some model families additionally have a
-/// *reserved in-band* tool syntax that the serving stack is supposed to parse
-/// out of the generated text; when that parse fails, the reserved markup
-/// leaks into ordinary content or reasoning and the request terminates as if
-/// the model had simply answered.
-///
-/// Declaring the dialect is what allows the adapter to recognize such a leak
-/// as malformed tool intent instead of guessing from arbitrary text. Nothing
-/// is ever inferred from a provider name or a base URL hostname.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ChatToolProtocol {
-    /// Tool calls exist only as structured `tool_calls`. Generated text is
-    /// never inspected for tool-protocol markup.
-    #[default]
-    Native,
-    /// The Qwen XML tool dialect (`<tool_call>`, `<function=…>`,
-    /// `<parameter=…>`), as served by vLLM and compatible stacks.
-    QwenXml,
-}
-
-impl ChatToolProtocol {
-    /// The human-readable dialect name used in runtime diagnostics. The
-    /// stable wire value is the serde representation, not this string.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::QwenXml => "Qwen XML",
-        }
-    }
-}
-
-/// The bounded structural protocol-translation metadata of one model.
-///
-/// Every field here corresponds to a translation branch the current
-/// adapters actually take. There is intentionally no strategy trait, no
-/// plugin registry, no translator factory, and no JSON-driven
-/// transformation. Optional overrides take precedence over the built-in
-/// protocol defaults and endpoint/model rules resolved at the binding boundary.
-#[derive(Debug, Clone, Copy, Default, schemars::JsonSchema)]
-#[schemars(with = "ModelCompatDocument")]
-pub struct ModelCompat {
-    /// Chat Completions: which max-token field spelling is legal.
-    pub chat_max_tokens_field: ChatMaxTokensField,
-    /// Chat Completions: whether the service supports
-    /// `stream_options.include_usage`.
-    pub chat_stream_usage: ChatStreamUsage,
-    /// Chat Completions: how previous assistant reasoning is replayed.
-    /// Omission uses `reasoning_content`; this does not enable thinking.
-    pub chat_reasoning_replay: Option<ChatReasoningReplay>,
-    /// Chat Completions: the model's in-band tool protocol, if it has one.
-    pub chat_tool_protocol: ChatToolProtocol,
-    /// Responses: the provider storage/continuation mode.
-    pub responses_storage: ResponsesStorageMode,
-    /// Bitset recording which compat fields were explicitly present in the
-    /// catalog, including fields equal to their defaults.
-    #[doc(hidden)]
-    pub explicit_fields: u8,
-}
-
-impl PartialEq for ModelCompat {
-    fn eq(&self, other: &Self) -> bool {
-        self.chat_max_tokens_field == other.chat_max_tokens_field
-            && self.chat_stream_usage == other.chat_stream_usage
-            && self.chat_reasoning_replay == other.chat_reasoning_replay
-            && self.chat_tool_protocol == other.chat_tool_protocol
-            && self.responses_storage == other.responses_storage
-    }
-}
-
-impl Eq for ModelCompat {}
-
-impl Serialize for ModelCompat {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let chat_max_tokens_field_is_present = self.chat_max_tokens_field_is_explicit();
-        let chat_stream_usage_is_present = self.chat_stream_usage_is_explicit();
-        let chat_reasoning_replay_is_present = self.chat_reasoning_replay.is_some();
-        let chat_tool_protocol_is_present = self.chat_tool_protocol_is_explicit();
-        let responses_storage_is_present = self.responses_storage_is_explicit();
-        let field_count = usize::from(chat_max_tokens_field_is_present)
-            + usize::from(chat_stream_usage_is_present)
-            + usize::from(chat_reasoning_replay_is_present)
-            + usize::from(chat_tool_protocol_is_present)
-            + usize::from(responses_storage_is_present);
-        let mut state = serializer.serialize_struct("ModelCompat", field_count)?;
-        if chat_max_tokens_field_is_present {
-            state.serialize_field("chatMaxTokensField", &self.chat_max_tokens_field)?;
-        }
-        if chat_stream_usage_is_present {
-            state.serialize_field("chatStreamUsage", &self.chat_stream_usage)?;
-        }
-        if let Some(chat_reasoning_replay) = self.chat_reasoning_replay {
-            state.serialize_field("chatReasoningReplay", &chat_reasoning_replay)?;
-        }
-        if chat_tool_protocol_is_present {
-            state.serialize_field("chatToolProtocol", &self.chat_tool_protocol)?;
-        }
-        if responses_storage_is_present {
-            state.serialize_field("responsesStorage", &self.responses_storage)?;
-        }
-        state.end()
-    }
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ModelCompatDocument {
-    #[serde(default)]
-    chat_max_tokens_field: Option<ChatMaxTokensField>,
-    #[serde(default)]
-    chat_stream_usage: Option<ChatStreamUsage>,
-    #[serde(default)]
-    chat_reasoning_replay: Option<ChatReasoningReplay>,
-    #[serde(default)]
-    chat_tool_protocol: Option<ChatToolProtocol>,
-    #[serde(default)]
-    responses_storage: Option<ResponsesStorageMode>,
-}
-
-impl<'de> Deserialize<'de> for ModelCompat {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let document = ModelCompatDocument::deserialize(deserializer)?;
-        let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
-            | (u8::from(document.chat_stream_usage.is_some()) << 1)
-            | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
-            | (u8::from(document.responses_storage.is_some()) << 3)
-            | (u8::from(document.chat_tool_protocol.is_some()) << 4);
-        Ok(Self {
-            chat_max_tokens_field: document.chat_max_tokens_field.unwrap_or_default(),
-            chat_stream_usage: document.chat_stream_usage.unwrap_or_default(),
-            chat_reasoning_replay: document.chat_reasoning_replay,
-            chat_tool_protocol: document.chat_tool_protocol.unwrap_or_default(),
-            responses_storage: document.responses_storage.unwrap_or_default(),
-            explicit_fields,
-        })
-    }
-}
-
-impl From<super::authoring::Compat> for ModelCompat {
-    fn from(document: super::authoring::Compat) -> Self {
+impl From<crate::model::authoring::Compat> for ModelCompat {
+    fn from(document: crate::model::authoring::Compat) -> Self {
         let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
             | (u8::from(document.chat_stream_usage.is_some()) << 1)
             | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
@@ -632,69 +222,26 @@ impl From<super::authoring::Compat> for ModelCompat {
     }
 }
 
-impl ModelCompat {
-    /// Resolve optional authoring overrides once, before an invocation is
-    /// frozen. Endpoint/model rules never change an explicit declaration.
-    pub(crate) fn for_binding(
-        mut self,
-        protocol: ModelProtocol,
-        model: &str,
-        base_url: &str,
-    ) -> Self {
-        if protocol == ModelProtocol::OpenAiChatCompletions {
-            if !self.chat_max_tokens_field_is_explicit() {
-                self.chat_max_tokens_field = super::compat::chat_max_tokens_field(model, base_url);
-            }
-            self.chat_reasoning_replay = Some(self.chat_reasoning_replay.unwrap_or_default());
+/// Resolve optional authoring overrides once, before an invocation is
+/// frozen. Endpoint/model rules never change an explicit declaration.
+/// Kept monolith-side: it consults the catalog-domain `compat` heuristics.
+pub(crate) fn compat_for_binding(
+    mut compat: ModelCompat,
+    protocol: ModelProtocol,
+    model: &str,
+    base_url: &str,
+) -> ModelCompat {
+    if protocol == ModelProtocol::OpenAiChatCompletions {
+        if !compat.chat_max_tokens_field_is_explicit() {
+            compat.chat_max_tokens_field =
+                crate::model::compat::chat_max_tokens_field(model, base_url);
         }
-        if protocol == ModelProtocol::OpenAiResponses && !self.responses_storage_is_explicit() {
-            self.responses_storage = super::compat::responses_storage(base_url);
-        }
-        self
+        compat.chat_reasoning_replay = Some(compat.chat_reasoning_replay.unwrap_or_default());
     }
-
-    const CHAT_MAX_TOKENS_EXPLICIT: u8 = 1;
-    const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
-    const CHAT_REASONING_REPLAY_EXPLICIT: u8 = 1 << 2;
-    const RESPONSES_STORAGE_EXPLICIT: u8 = 1 << 3;
-    const CHAT_TOOL_PROTOCOL_EXPLICIT: u8 = 1 << 4;
-
-    fn chat_max_tokens_field_is_explicit(self) -> bool {
-        self.explicit_fields & Self::CHAT_MAX_TOKENS_EXPLICIT != 0
-            || self.chat_max_tokens_field != ChatMaxTokensField::default()
+    if protocol == ModelProtocol::OpenAiResponses && !compat.responses_storage_is_explicit() {
+        compat.responses_storage = crate::model::compat::responses_storage(base_url);
     }
-
-    fn chat_stream_usage_is_explicit(self) -> bool {
-        self.explicit_fields & Self::CHAT_STREAM_USAGE_EXPLICIT != 0
-            || self.chat_stream_usage != ChatStreamUsage::default()
-    }
-
-    fn chat_reasoning_replay_is_explicit(self) -> bool {
-        self.explicit_fields & Self::CHAT_REASONING_REPLAY_EXPLICIT != 0
-            || self.chat_reasoning_replay.is_some()
-    }
-
-    fn chat_tool_protocol_is_explicit(self) -> bool {
-        self.explicit_fields & Self::CHAT_TOOL_PROTOCOL_EXPLICIT != 0
-            || self.chat_tool_protocol != ChatToolProtocol::default()
-    }
-
-    fn responses_storage_is_explicit(self) -> bool {
-        self.explicit_fields & Self::RESPONSES_STORAGE_EXPLICIT != 0
-            || self.responses_storage != ResponsesStorageMode::default()
-    }
-}
-
-/// Whether a Chat Completions service supports streaming usage options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ChatStreamUsage {
-    /// `stream_options.include_usage` is supported and requested.
-    #[default]
-    Supported,
-    /// The service rejects `stream_options`; the field is omitted.
-    Unsupported,
+    compat
 }
 
 /// One validated Model Profile: a complete, independent invocation preset.
@@ -1009,9 +556,12 @@ impl ModelCatalog {
             Some((
                 view,
                 model.id.clone(),
-                model
-                    .compat
-                    .for_binding(model.protocol, model.id.as_str(), &provider.base_url),
+                compat_for_binding(
+                    model.compat,
+                    model.protocol,
+                    model.id.as_str(),
+                    &provider.base_url,
+                ),
                 provider.clone(),
             ))
         };
@@ -1674,276 +1224,6 @@ fn validate_compat(
 // Errors
 // ---------------------------------------------------------------------------
 
-/// A model-catalog load, validation, or resolution failure.
-///
-/// No variant ever carries a credential value; an environment-backed
-/// credential is identified by its variable name only.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelCatalogError {
-    /// The catalog input is malformed or does not satisfy its typed schema.
-    Syntax {
-        /// The parser detail.
-        detail: String,
-    },
-    /// The document declares a schema version this runtime does not speak.
-    UnsupportedSchemaVersion {
-        /// The version this runtime supports.
-        supported: u32,
-        /// The version found in the document.
-        found: u32,
-    },
-    /// The catalog declares no provider.
-    EmptyCatalog,
-    /// A provider or model-profile identity is empty, contains whitespace,
-    /// or contains `/`. Model identities may contain `/` because the first
-    /// slash in a model reference is the provider separator, but their
-    /// slash-separated segments must be non-empty.
-    InvalidIdentity {
-        /// What kind of identity failed.
-        kind: &'static str,
-        /// The offending value.
-        value: String,
-    },
-    /// A model reference is not of the form `provider-id/model-id`.
-    InvalidModelRef {
-        /// The offending value.
-        value: String,
-    },
-    /// A provider endpoint is missing or is not an absolute HTTP(S) URL.
-    InvalidBaseUrl {
-        /// The provider.
-        provider: ProviderId,
-        /// The offending value.
-        base_url: String,
-    },
-    /// A provider credential source is malformed.
-    InvalidCredentialSource {
-        /// The provider.
-        provider: ProviderId,
-        /// The failure detail (never a credential value).
-        detail: String,
-    },
-    /// A provider declares no model.
-    ProviderWithoutModels {
-        /// The provider.
-        provider: ProviderId,
-    },
-    /// Two models of one provider share an identity.
-    DuplicateModel {
-        /// The duplicated reference.
-        model: ModelRef,
-    },
-    /// A model declares impossible context/output limits.
-    InvalidLimits {
-        /// The model.
-        model: ModelRef,
-        /// The failure detail.
-        detail: String,
-    },
-    /// A model declares an unusable capability set.
-    InvalidCapabilities {
-        /// The model.
-        model: ModelRef,
-        /// The failure detail.
-        detail: String,
-    },
-    /// A model declares an invalid Model Profile configuration.
-    InvalidProfiles {
-        /// The model.
-        model: ModelRef,
-        /// The failure detail.
-        detail: String,
-    },
-    /// A Model declares an invalid complete reasoning order.
-    InvalidReasoningProfileOrder {
-        /// The Model.
-        model: ModelRef,
-        /// The authorized diagnostic detail, which may quote identities.
-        detail: String,
-    },
-    /// A model declares bounded compatibility fields for a foreign protocol.
-    InvalidCompat {
-        /// The model.
-        model: ModelRef,
-        /// The validation detail.
-        detail: String,
-    },
-    /// A configured request-parameter layer collides with a runtime-owned
-    /// protected wire key.
-    ProtectedKey {
-        /// The model.
-        model: ModelRef,
-        /// The colliding key.
-        key: String,
-        /// Which configuration layer declared it.
-        layer: RequestParamsLayer,
-    },
-    /// A configured request-parameter layer carries a number that would not
-    /// survive a binary64 round trip.
-    InexactNumber {
-        /// The model.
-        model: ModelRef,
-        /// Which configuration layer declared it.
-        layer: RequestParamsLayer,
-    },
-    /// A referenced provider does not exist.
-    UnknownProvider {
-        /// The referenced provider.
-        provider: ProviderId,
-    },
-    /// A referenced model does not exist.
-    UnknownModel {
-        /// The referenced model.
-        model: ModelRef,
-    },
-    /// A `$ENV_VAR` credential is absent or empty in the process
-    /// environment.
-    MissingEnvironmentCredential {
-        /// The provider whose credential is unresolved.
-        provider: ProviderId,
-        /// The environment variable name (never a value).
-        variable: String,
-    },
-}
-
-impl ModelCatalogError {
-    /// The authored location and fixed category of this failure.
-    ///
-    /// Both are native constants: an identity appears only as `*`, and no
-    /// authored value, identity or detail is ever part of either, so they can
-    /// be shown where the [`fmt::Display`] text (which quotes values) cannot.
-    #[must_use]
-    pub fn classification(&self) -> (&'static str, &'static str) {
-        match self {
-            Self::Syntax { .. } => ("models", "malformed model catalog"),
-            Self::UnsupportedSchemaVersion { .. } => {
-                ("models", "unsupported model catalog schema version")
-            }
-            Self::EmptyCatalog => (
-                "providers",
-                "the composed model catalog declares no Provider or no Model",
-            ),
-            Self::InvalidIdentity { kind, .. } => match *kind {
-                "provider" => ("providers", "invalid Provider identity"),
-                "model profile" => ("models.*.profiles", "invalid Model Profile identity"),
-                _ => ("models", "invalid Model identity"),
-            },
-            Self::InvalidModelRef { .. } => (
-                "models",
-                "invalid Model reference; expected provider-id/model-id",
-            ),
-            Self::InvalidBaseUrl { .. } => (
-                "providers.*.base_url",
-                "invalid Provider endpoint; an absolute http(s) URL without credentials, query or fragment is required",
-            ),
-            Self::InvalidCredentialSource { .. } => {
-                ("providers.*.api_key", "invalid Provider credential source")
-            }
-            Self::ProviderWithoutModels { .. } => ("providers.*", "a Provider declares no Model"),
-            Self::DuplicateModel { .. } => ("models.*", "duplicate Model identity"),
-            Self::InvalidLimits { .. } => ("models.*", "invalid Model context or output limits"),
-            Self::InvalidCapabilities { .. } => {
-                ("models.*.capabilities", "unusable Model capabilities")
-            }
-            Self::InvalidProfiles { .. } => ("models.*.profiles", "invalid Model Profiles"),
-            Self::InvalidReasoningProfileOrder { .. } => (
-                "models.*.reasoning_profile_order",
-                "invalid Model reasoning Profile order",
-            ),
-            Self::InvalidCompat { .. } => ("models.*.compat", "invalid Model compatibility fields"),
-            Self::ProtectedKey { .. } => (
-                "models.*.request_params",
-                "request parameters set a runtime-owned key",
-            ),
-            Self::InexactNumber { .. } => (
-                "models.*.request_params",
-                "request parameters carry a number without an exact binary64 value",
-            ),
-            Self::UnknownProvider { .. } => (
-                "models.*.provider",
-                "a Model names a Provider the composed catalog does not define",
-            ),
-            Self::UnknownModel { .. } => (
-                "agent.model",
-                "a selected Model is not defined by the composed catalog",
-            ),
-            Self::MissingEnvironmentCredential { .. } => (
-                "providers.*.api_key",
-                "the credential environment variable is unset",
-            ),
-        }
-    }
-}
-
-impl fmt::Display for ModelCatalogError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Syntax { detail } => write!(f, "malformed model catalog: {detail}"),
-            Self::UnsupportedSchemaVersion { supported, found } => write!(
-                f,
-                "unsupported model catalog schema_version {found}; this runtime speaks {supported}"
-            ),
-            Self::EmptyCatalog => f.write_str("the model catalog declares no provider"),
-            Self::InvalidIdentity { kind, value } => {
-                write!(f, "invalid {kind} identity {value:?}")
-            }
-            Self::InvalidModelRef { value } => write!(
-                f,
-                "invalid model reference {value:?}; expected \"provider-id/model-id\""
-            ),
-            Self::InvalidBaseUrl { provider, base_url } => write!(
-                f,
-                "provider {provider} declares an invalid base_url {base_url:?}; \
-                 an explicit absolute http(s) endpoint is mandatory"
-            ),
-            Self::InvalidCredentialSource { provider, detail } => {
-                write!(f, "provider {provider} api_key source is invalid: {detail}")
-            }
-            Self::ProviderWithoutModels { provider } => {
-                write!(f, "provider {provider} declares no model")
-            }
-            Self::DuplicateModel { model } => write!(f, "duplicate model identity {model}"),
-            Self::InvalidLimits { model, detail } => {
-                write!(f, "model {model} declares invalid limits: {detail}")
-            }
-            Self::InvalidCapabilities { model, detail } => {
-                write!(f, "model {model} declares invalid capabilities: {detail}")
-            }
-            Self::InvalidProfiles { model, detail } => {
-                write!(f, "model {model} declares invalid profiles: {detail}")
-            }
-            Self::InvalidReasoningProfileOrder { model, detail } => {
-                write!(
-                    f,
-                    "model {model} declares invalid reasoning_profile_order: {detail}"
-                )
-            }
-            Self::InvalidCompat { model, detail } => {
-                write!(f, "model {model} declares invalid compat: {detail}")
-            }
-            Self::ProtectedKey { model, key, layer } => write!(
-                f,
-                "model {model} {layer} (request_params) declares runtime-owned protected wire key {key:?}"
-            ),
-            Self::InexactNumber { model, layer } => write!(
-                f,
-                "model {model} {layer} (request_params) carry a JSON number that is not exactly \
-                 representable as an IEEE 754 binary64 value"
-            ),
-            Self::UnknownProvider { provider } => {
-                write!(f, "unknown catalog provider {provider}")
-            }
-            Self::UnknownModel { model } => write!(f, "unknown catalog model {model}"),
-            Self::MissingEnvironmentCredential { provider, variable } => write!(
-                f,
-                "provider {provider} credential environment variable {variable} is not set"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ModelCatalogError {}
-
 /// Borrowed credential-free catalog encoding. The authoritative immutable
 /// catalog remains the only owner of growing profile/model identities.
 pub(crate) struct ModelCatalogReadView<'a>(&'a ModelCatalog);
@@ -2320,7 +1600,7 @@ mod tests {
             assert_eq!(page.total, 73);
             assert_eq!(page.next_offset, next);
             assert_eq!(page.items.first().unwrap().offset, offset);
-            assert!(crate::observation::bounded::bounded_bytes(&page, 786_432).is_some());
+            assert!(rustx_types::observation::bounded::bounded_bytes(&page, 786_432).is_some());
             if offset == 0 {
                 assert!(page.items[0].deferred);
                 assert!(page.items[1].value.is_some());

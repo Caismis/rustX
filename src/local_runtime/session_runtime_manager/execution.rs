@@ -790,7 +790,7 @@ impl LocalExecutionEndpoint {
             }
             let document = connection.read_bounded_file(
                 relative,
-                crate::bounded_file::MAX_RESOURCE_BYTES,
+                rustx_bounded_file::MAX_RESOURCE_BYTES,
                 deadline,
                 || Ok(()),
             );

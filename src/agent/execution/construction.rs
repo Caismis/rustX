@@ -15,6 +15,7 @@ use crate::agent::state::ExecutionStateMachine;
 use crate::capabilities::AttemptCapabilityLease;
 use crate::context::ContextRuntime;
 use crate::durable::{ConversationStore, ConversationStoreError};
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 use crate::model::deadline::ModelTimeoutPolicy;
 use crate::model::generation::GenerationSafetyPolicy;
@@ -299,6 +300,7 @@ impl<'a> AgentExecution<'a> {
 
     /// Installs the deterministic request deadline policy used by this
     /// execution's actual primary requests.
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn install_model_timeout_policy(&mut self, policy: ModelTimeoutPolicy) {
         self.model_timeout_policy = policy;
@@ -311,6 +313,7 @@ impl<'a> AgentExecution<'a> {
     /// policy alone, without streaming a quarter of a megabyte through the
     /// publication and durability planes, and so a policy whose two bounds
     /// are unrelated can be exercised directly.
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn install_generation_policy(&mut self, policy: GenerationSafetyPolicy) {
         self.generation_policy = policy;

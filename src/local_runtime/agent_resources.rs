@@ -128,7 +128,7 @@ pub(super) fn load(
         let error = |message: String| RuntimeResourceLoadError::new(message).at(path, &field);
         let mut revision = "unreadable".to_owned();
         let result = (|| -> Result<NamedAgentDefinition, RuntimeResourceLoadError> {
-            let limit = crate::bounded_file::MAX_RESOURCE_BYTES;
+            let limit = rustx_bounded_file::MAX_RESOURCE_BYTES;
             let bytes = match bound.filter(|_| project_exists) {
                 Some(bound) => bound.read(path, limit),
                 None => super::resource_directory::read_resource(boundary, path, limit),

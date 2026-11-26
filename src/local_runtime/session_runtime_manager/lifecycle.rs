@@ -721,6 +721,8 @@ impl SessionRuntimeManager {
         let core = LocalConversationCore::compose_with_access(
             &paths,
             &self.dependencies,
+            // Admission and settlement use the same UTC clock for retention.
+            self.schedule_clock.clone(),
             registry,
             paths.config().clone(),
             super::super::session::SessionPersistentState::from_input(&paths.input),

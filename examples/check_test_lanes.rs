@@ -100,8 +100,8 @@ const REQUIREMENTS: &[Requirement] = &[
     Requirement::new(
         Profile::Full,
         Platform::Linux,
-        "doc",
-        "conversation::ConversationState",
+        "rustx-conversation:doc",
+        "ConversationState",
     ),
     Requirement::new(
         Profile::Full,
@@ -112,13 +112,13 @@ const REQUIREMENTS: &[Requirement] = &[
     Requirement::new(
         Profile::Full,
         Platform::Linux,
-        "doc",
+        "rustx-types:doc",
         "message::types::AgentStatusGenerationMetadata",
     ),
     Requirement::new(
         Profile::Full,
         Platform::Linux,
-        "doc",
+        "rustx-types:doc",
         "message::types::CompactionSummaryMetadata",
     ),
     Requirement::new(
@@ -344,10 +344,12 @@ impl Target {
 
     /// Binary and example harnesses may deliberately define no test; they
     /// stay selected so Cargo discovers a future one. A non-root member's
-    /// doc target may legitimately list zero when the member has no doc
-    /// examples; the root package's doc target never may.
+    /// doc or structural lib target may legitimately list zero when the member
+    /// has no examples or its tests live in the root crate; the root package's
+    /// doc and lib targets never may.
     fn may_be_empty(&self) -> bool {
-        matches!(self.kind, Kind::Bin | Kind::Example) || (self.kind == Kind::Doc && !self.root)
+        matches!(self.kind, Kind::Bin | Kind::Example)
+            || (!self.root && matches!(self.kind, Kind::Doc | Kind::Lib))
     }
 }
 
@@ -464,7 +466,7 @@ struct WorkspaceMetadata {
     /// Every workspace member, keyed by its metadata `name`.
     packages: BTreeMap<String, PackageMetadata>,
     /// The package names `workspace_default_members` selects when a `cargo
-    /// test` step gives no `-p`.
+    /// test` step gives no `-p` or `--workspace`.
     default_members: BTreeSet<String>,
     /// Every member's testable targets, sorted and unique.
     targets: Vec<Target>,
@@ -605,7 +607,8 @@ fn parse_workflow(text: &str, scope: &TargetScope) -> Result<Vec<Step>, Vec<Stri
                 .as_str()
                 .map_or_else(|| format!("#{}", index + 1), str::to_owned);
             let located = |problem: String| format!("job `{id}` step `{name}`: {problem}");
-            if !mentions_cargo_test(run) {
+            let shard = run.contains("rust_test_shards.py run");
+            if !mentions_cargo_test(run) && !shard {
                 continue;
             }
             let platform = match platform_of(job) {
@@ -629,6 +632,9 @@ fn parse_workflow(text: &str, scope: &TargetScope) -> Result<Vec<Step>, Vec<Stri
                     continue;
                 }
             };
+            // A shard job fans its spec out over a matrix; every leg runs the
+            // same step with its own slice, so `strategy` is the mechanism,
+            // not a coverage hazard. Everything else stays rejected.
             for (key, value) in [
                 ("strategy", &job["strategy"]),
                 ("continue-on-error", &job["continue-on-error"]),
@@ -637,12 +643,34 @@ fn parse_workflow(text: &str, scope: &TargetScope) -> Result<Vec<Step>, Vec<Stri
                 ("working-directory", &step["working-directory"]),
                 ("shell", &step["shell"]),
             ] {
-                if !value.is_null() {
+                if !(value.is_null() || shard && key == "strategy") {
                     errors.push(located(format!(
                         "`{key}` makes the cargo test step conditional or relocated; \
                          the lane check cannot interpret it"
                     )));
                 }
+            }
+            if shard {
+                let root_targets: Vec<Target> = scope
+                    .targets
+                    .iter()
+                    .filter(|target| target.root)
+                    .cloned()
+                    .collect();
+                match shard_steps(run, &root_targets, platform) {
+                    Ok(shard_commands) => steps.extend(shard_commands.iter().flat_map(|command| {
+                        profiles.iter().map(|profile| Step {
+                            job: id.into(),
+                            name: name.clone(),
+                            platform,
+                            profile: *profile,
+                            affected,
+                            ..command.clone()
+                        })
+                    })),
+                    Err(problem) => errors.push(located(problem)),
+                }
+                continue;
             }
             match parse_command(run, scope) {
                 // A job in both profiles contributes its steps to each.
@@ -663,6 +691,103 @@ fn parse_workflow(text: &str, scope: &TargetScope) -> Result<Vec<Step>, Vec<Stri
     } else {
         Err(errors)
     }
+}
+
+/// The Steps one `rust_test_shards.py run --spec <path>` step executes:
+/// one per spec entry, with the entry's harness selector resolved to the
+/// root package's targets and its `libtest_args` parsed like the `--` tail
+/// of a `cargo test` command. Every shard leg declares the same spec, and
+/// the report job proves their union covers it exactly once.
+fn shard_steps(run: &str, targets: &[Target], platform: Platform) -> Result<Vec<Step>, String> {
+    let lines: Vec<&str> = run.lines().filter(|line| !line.trim().is_empty()).collect();
+    let [line] = lines.as_slice() else {
+        return Err("a rust_test_shards run step must be a single command line".into());
+    };
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let spec_path = tokens
+        .iter()
+        .position(|token| *token == "--spec")
+        .and_then(|index| tokens.get(index + 1))
+        .ok_or("a rust_test_shards run step must name its --spec file")?;
+    let spec_file = Path::new(env!("CARGO_MANIFEST_DIR")).join(spec_path);
+    let spec: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&spec_file)
+            .map_err(|error| format!("cannot read shard spec `{spec_path}`: {error}"))?,
+    )
+    .map_err(|error| format!("malformed shard spec `{spec_path}`: {error}"))?;
+    let entries = spec
+        .as_array()
+        .ok_or_else(|| format!("shard spec `{spec_path}` is not a JSON array"))?;
+    let mut shard_steps = Vec::new();
+    for entry in entries {
+        let selector = entry["harness"]
+            .as_str()
+            .ok_or_else(|| format!("shard spec entry in `{spec_path}` has no harness"))?;
+        let (kind, name) = selector
+            .split_once(':')
+            .ok_or_else(|| format!("shard spec harness `{selector}` is not `<kind>:<name>`"))?;
+        let kind = match kind {
+            "lib" => Kind::Lib,
+            "bin" => Kind::Bin,
+            "example" => Kind::Example,
+            "test" => Kind::Test,
+            "bench" => Kind::Bench,
+            other => {
+                return Err(format!(
+                    "shard spec harness `{selector}` has unsupported kind `{other}`"
+                ));
+            }
+        };
+        let mut step = Step {
+            job: String::new(),
+            name: String::new(),
+            platform,
+            executes: true,
+            features: entry["features"].as_array().map_or_default(|features| {
+                features
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            }),
+            targets: Vec::new(),
+            filters: Vec::new(),
+            skips: Vec::new(),
+            exact: false,
+            profile: Profile::Full,
+            affected: false,
+        };
+        if name == "*" {
+            step.targets
+                .extend(targets.iter().filter(|target| target.kind == kind).cloned());
+        } else {
+            step.targets.push(
+                targets
+                    .iter()
+                    .find(|target| target.kind == kind && target.name == name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("shard spec harness `{selector}` names no Cargo target")
+                    })?,
+            );
+        }
+        let libtest: Vec<&str> = entry["libtest_args"]
+            .as_array()
+            .map_or_default(|args| args.iter().filter_map(serde_json::Value::as_str).collect());
+        parse_libtest_arguments(&mut step, &libtest)?;
+        if step.targets.is_empty() {
+            return Err(format!(
+                "shard spec harness `{selector}` selected no Cargo targets"
+            ));
+        }
+        step.targets.sort();
+        step.targets.dedup();
+        shard_steps.push(step);
+    }
+    if shard_steps.is_empty() {
+        return Err(format!("shard spec `{spec_path}` has no entries"));
+    }
+    Ok(shard_steps)
 }
 
 fn platform_of(job: &serde_yaml_ng::Value) -> Result<Platform, String> {
@@ -897,9 +1022,11 @@ fn parse_command(run: &str, scope: &TargetScope) -> Result<Step, String> {
         affected: false,
     };
     // Selectors resolve against the package pool only after the scan: `-p`
-    // narrows every selector of the command no matter where it appears.
+    // or `--workspace`/`--exclude` narrows every selector regardless of order.
     let mut selectors: Vec<Selector<'_>> = Vec::new();
     let mut packages: Vec<(&str, &str)> = Vec::new();
+    let mut workspace = false;
+    let mut excludes: Vec<(&str, &str)> = Vec::new();
     let mut cargo = cargo.iter();
     while let Some(argument) = cargo.next() {
         match *argument {
@@ -920,6 +1047,13 @@ fn parse_command(run: &str, scope: &TargetScope) -> Result<Step, String> {
                     .ok_or(format!("{argument} requires a target name"))?;
                 selectors.push(Selector::Named(argument, kind, name));
             }
+            "--workspace" => workspace = true,
+            "--exclude" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                excludes.push((*argument, *name));
+            }
             "-p" | "--package" => {
                 let name = cargo
                     .next()
@@ -939,7 +1073,12 @@ fn parse_command(run: &str, scope: &TargetScope) -> Result<Step, String> {
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
     }
-    resolve_selectors(&mut step, selectors, &packages, scope)?;
+    resolve_selectors(&mut step, selectors, workspace, &excludes, &packages, scope)?;
+    parse_libtest_arguments(&mut step, libtest)?;
+    Ok(step)
+}
+
+fn parse_libtest_arguments(step: &mut Step, libtest: &[&str]) -> Result<(), String> {
     let mut libtest = libtest.iter();
     while let Some(argument) = libtest.next() {
         match *argument {
@@ -953,21 +1092,39 @@ fn parse_command(run: &str, scope: &TargetScope) -> Result<Step, String> {
             filter => step.filters.push(filter.into()),
         }
     }
-    Ok(step)
+    Ok(())
 }
 
 /// Resolves the collected selectors against the package pool: a bare command
-/// reaches only `workspace_default_members`, `-p` restricts the pool to the
-/// named packages, and a named selector may match identically named targets
-/// across the pool. The union is sorted and unique.
+/// reaches only `workspace_default_members`, `--workspace` selects every
+/// workspace member minus `--exclude`, `-p` restricts the pool to the named
+/// packages, and a named selector may match identically named targets across
+/// the pool. The union is sorted and unique.
 fn resolve_selectors(
     step: &mut Step,
     selectors: Vec<Selector<'_>>,
+    workspace: bool,
+    excludes: &[(&str, &str)],
     packages: &[(&str, &str)],
     scope: &TargetScope,
 ) -> Result<(), String> {
+    if workspace && !packages.is_empty() {
+        return Err("a cargo test step cannot combine --workspace with -p/--package".into());
+    }
+    if !workspace && !excludes.is_empty() {
+        return Err("--exclude requires --workspace".into());
+    }
+    for (flag, package) in packages.iter().chain(excludes.iter()) {
+        if !scope.packages.contains(*package) {
+            return Err(format!("{flag} `{package}` names no workspace package"));
+        }
+    }
     let in_pool = |target: &&Target| -> bool {
-        if packages.is_empty() {
+        if workspace {
+            !excludes
+                .iter()
+                .any(|(_, excluded)| *excluded == target.package)
+        } else if packages.is_empty() {
             scope.default_members.contains(&target.package)
         } else {
             packages
@@ -975,11 +1132,6 @@ fn resolve_selectors(
                 .any(|(_, package)| *package == target.package)
         }
     };
-    for (flag, package) in packages {
-        if !scope.packages.contains(*package) {
-            return Err(format!("{flag} `{package}` names no workspace package"));
-        }
-    }
     for selector in selectors {
         match selector {
             Selector::Kind(kind) => step.targets.extend(
@@ -1494,9 +1646,11 @@ fn parse_doctest_list_with(
         .lines()
         .filter(|line| line.trim_start().starts_with("Doc-tests "))
         .count();
-    if running != 0 || doc_banners != 1 {
+    // `--workspace` emits one `Doc-tests <crate>` banner per member library;
+    // crates without doctests still count.
+    if running != 0 || doc_banners == 0 {
         return Err(format!(
-            "expected one Doc-tests banner and no unit harness in doctest stderr \
+            "expected Doc-tests banners and no unit harness in doctest stderr \
              (running={running}, doc_banners={doc_banners}):\n{stderr}"
         ));
     }
@@ -1505,14 +1659,12 @@ fn parse_doctest_list_with(
     let mut blocks = Vec::new();
     let mut block_tests = 0usize;
     let mut block_benchmarks = 0usize;
-    let mut saw_final = false;
+    // One `all doctests ran in` line terminates each doctest-bearing crate's
+    // block; member crates without doctests emit their `(0, 0)` summary with
+    // no timing line, so later blocks legitimately follow a final line.
+    let mut finals = 0usize;
 
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-        if saw_final {
-            return Err(format!(
-                "unexpected doctest output after final summary `{line}`"
-            ));
-        }
         if let Some((summary_tests, summary_benchmarks)) = parse_doctest_block_summary(line) {
             if (summary_tests, summary_benchmarks) != (block_tests, block_benchmarks) {
                 return Err(format!(
@@ -1530,7 +1682,7 @@ fn parse_doctest_list_with(
                      {block_benchmarks} benchmarks)"
                 ));
             }
-            saw_final = true;
+            finals += 1;
         } else if let Some(name) = line.strip_suffix(": test") {
             block_tests += 1;
             tests.insert(name.to_owned());
@@ -1541,16 +1693,17 @@ fn parse_doctest_list_with(
         }
     }
 
-    // A genuinely empty doctest run prints one `0 tests, 0 benchmarks`
-    // block and no timing line; anything else without the final summary is
-    // truncated output and fails.
+    // Genuinely empty doctest runs (one `0 tests, 0 benchmarks` block, or
+    // workspace runs with only empty crates) print no `all doctests ran in`
+    // timing line; any non-empty run without a final summary is truncated and
+    // fails.
     if block_tests != 0
         || block_benchmarks != 0
         || blocks.is_empty()
-        || (!saw_final && blocks != [(0, 0)])
+        || (finals == 0 && blocks.iter().any(|&(t, b)| t != 0 || b != 0))
     {
         return Err(format!(
-            "incomplete doctest discovery output (blocks={blocks:?}, saw_final={saw_final})"
+            "incomplete doctest discovery output (blocks={blocks:?}, finals={finals})"
         ));
     }
     Ok(DoctestDiscovery { tests, blocks })
@@ -1587,6 +1740,29 @@ fn check(
                 "{target} is not selected by any executing FULL cargo test step on linux \
                  (compile-only --no-run steps and FAST steps do not count); assign it to a lane"
             ));
+        }
+    }
+    // Extracted non-root workspace member targets must also be selected on
+    // every other platform where the workflow executes cargo test steps.
+    let test_platforms: BTreeSet<Platform> = executing.iter().map(|step| step.platform).collect();
+    for platform in test_platforms
+        .into_iter()
+        .filter(|platform| *platform != Platform::Linux)
+    {
+        for target in targets
+            .iter()
+            .filter(|target| !target.root && target.kind != Kind::Doc)
+        {
+            if !executing.iter().any(|step| {
+                step.platform == platform
+                    && step.profile == Profile::Full
+                    && step.targets.contains(target)
+            }) {
+                report.findings.push(format!(
+                    "{target} is not selected by any executing FULL cargo test step on {platform} \
+                     (compile-only --no-run steps and FAST steps do not count); assign it to a lane"
+                ));
+            }
         }
     }
     for requirement in requirements {
@@ -1635,7 +1811,6 @@ fn check(
         .iter()
         .flat_map(|step| step.targets.iter().map(|target| (step.profile, target)))
         .collect();
-
     for (profile, target) in evaluated {
         let selecting: Vec<&Step> = executing
             .iter()
@@ -1661,6 +1836,19 @@ fn check(
                             "{} selects no runnable test of {target}",
                             step.label()
                         ));
+                    }
+                    if step.profile == Profile::Fast {
+                        let scale = runnable
+                            .iter()
+                            .filter(|name| name.contains(SCALE_SUITE))
+                            .count();
+                        if scale > 0 {
+                            report.findings.push(format!(
+                                "{} selects {scale} test(s) of {target} in the `{SCALE_SUITE}` \
+                                 capacity suite; FAST must not run them",
+                                step.label()
+                            ));
+                        }
                     }
                     if !step.affected {
                         unconditional
@@ -1944,7 +2132,7 @@ jobs:
       - name: Compile
         run: /usr/bin/time -l cargo test --lib --all-features --no-run
       - name: Native
-        run: '/usr/bin/time -l cargo test --lib --all-features -- --skip scripted_suites:: --skip manager::tests::'
+        run: '/usr/bin/time -l cargo test --lib --all-features -- --skip scripted_suites:: --skip manager::tests:: --skip ::scale::'
       - name: External
         run: cargo test --all-features --test durable
 ";
@@ -2409,8 +2597,8 @@ jobs:
         );
         // A requirement skipped out of its platform is also reported.
         let workflow = WORKFLOW.replace(
-            "--skip manager::tests::'",
-            "--skip manager::tests:: --skip boundary_suites::'",
+            "--skip manager::tests:: --skip ::scale::'",
+            "--skip manager::tests:: --skip boundary_suites:: --skip ::scale::'",
         );
         let macos = run(&workflow, Platform::Macos, &inventory());
         assert_eq!(
@@ -2422,12 +2610,274 @@ jobs:
         );
     }
 
+    fn member_scope(with_integration: bool) -> TargetScope {
+        let mut targets = vec![Target::member("rustx-foo", Kind::Lib, "rustx-foo")];
+        if with_integration {
+            targets.push(Target::member("rustx-foo", Kind::Test, "integration"));
+        }
+        let packages = BTreeSet::from(["rustx".to_owned(), "rustx-foo".to_owned()]);
+        TargetScope {
+            targets,
+            default_members: packages.clone(),
+            packages,
+        }
+    }
+
+    fn member_inventory(with_integration: bool) -> Fake {
+        let mut map = BTreeMap::from([(
+            Target::member("rustx-foo", Kind::Lib, "rustx-foo"),
+            vec![("member::unit", false), ("member::scale::big", false)],
+        )]);
+        if with_integration {
+            map.insert(
+                Target::member("rustx-foo", Kind::Test, "integration"),
+                vec![("integration_ok", false)],
+            );
+        }
+        Fake(map)
+    }
+
     #[test]
-    fn a_job_is_checked_only_on_its_native_platform() {
-        let steps = parse_workflow(WORKFLOW, &scope()).unwrap();
+    fn an_unassigned_workspace_member_target_fails() {
+        const MEMBER_WORKFLOW: &str = r"
+jobs:
+  linux-lane:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['linux-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+  macos-lane:
+    runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['macos-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+";
+        let scope = member_scope(true);
+        let steps = parse_workflow(MEMBER_WORKFLOW, &scope).unwrap();
         let findings = check(
             &steps,
-            &targets(),
+            &scope.targets,
+            Platform::Linux,
+            &[],
+            &[],
+            &member_inventory(true),
+        )
+        .findings;
+        // `--lib` selects the member's lib on both platforms but never its
+        // integration target.
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| finding.contains("rustx-foo:lib"))
+        );
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "rustx-foo:test integration is not selected by any executing FULL cargo test step"
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn a_workspace_step_excluding_rustx_covers_members() {
+        const MEMBER_WORKFLOW: &str = r"
+jobs:
+  linux-lane:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['linux-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+  macos-lane:
+    runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['macos-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+";
+        let scope = member_scope(false);
+        let steps = parse_workflow(MEMBER_WORKFLOW, &scope).unwrap();
+        let findings = check(
+            &steps,
+            &scope.targets,
+            Platform::Linux,
+            &[],
+            &[],
+            &member_inventory(false),
+        )
+        .findings;
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// A member lane in FAST profile: the member step alone (the FULL member
+    /// coverage tests live on their own fixtures).
+    const MEMBER_FAST: &str = r"
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['fast']
+    env:
+      VERIFICATION_PROFILE: fast
+    steps:
+      - name: Members
+        run: 'cargo test --workspace --exclude rustx --lib --all-features --locked'
+";
+
+    fn member_findings(workflow: &str) -> Vec<String> {
+        let scope = member_scope(false);
+        let steps = parse_workflow(workflow, &scope).unwrap();
+        check(
+            &steps,
+            &scope.targets,
+            Platform::Linux,
+            &[],
+            &[],
+            &member_inventory(false),
+        )
+        .findings
+    }
+
+    #[test]
+    fn a_fast_member_step_cannot_run_the_capacity_suite() {
+        assert_eq!(
+            findings_containing(&member_findings(MEMBER_FAST), "FAST must not run them"),
+            1
+        );
+        // Skipping the capacity suite makes the same member step clean.
+        let workflow = MEMBER_FAST.replace("--locked'", "--locked -- --skip ::scale::'");
+        let findings = member_findings(&workflow);
+        assert_eq!(findings_containing(&findings, "FAST must not run them"), 0);
+        assert_eq!(findings_containing(&findings, "excludes no test"), 0);
+    }
+
+    #[test]
+    fn a_member_skip_that_excludes_nothing_fails() {
+        let workflow =
+            MEMBER_FAST.replace("--locked'", "--locked -- --skip ::scale:: --skip nope::'");
+        assert_eq!(
+            findings_containing(
+                &member_findings(&workflow),
+                "--skip `nope::` excludes no test"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_full_member_step_must_cover_the_whole_member_lib() {
+        // A member selection that drops tests leaves FULL coverage incomplete.
+        let workflow = MEMBER_FAST
+            .replace("VERIFICATION_PROFILE: fast", "VERIFICATION_PROFILE: full")
+            .replace("--locked'", "--locked -- member::unit'");
+        let findings = member_findings(&workflow);
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "of rustx-foo:lib on linux are executed by no FULL lane"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_dropped_full_member_step_is_not_substituted_by_fast() {
+        // Only FAST covers rustx-foo:lib: FULL coverage still demands it.
+        let findings = member_findings(MEMBER_FAST);
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "rustx-foo:lib is not selected by any executing FULL cargo test step on linux"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_full_step_excluding_a_member_leaves_its_lib_uncovered() {
+        // FULL --exclude drops rustx-foo while keeping rustx-bar; FAST covers both.
+        let full = MEMBER_FAST
+            .replace("  fast:", "  full:")
+            .replace("['fast']", "['full']")
+            .replace("VERIFICATION_PROFILE: fast", "VERIFICATION_PROFILE: full")
+            .replace(
+                "--exclude rustx --lib",
+                "--exclude rustx --exclude rustx-foo --lib",
+            );
+        let fast = MEMBER_FAST
+            .replace("--locked'", "--locked -- --skip ::scale::'")
+            .replace("\njobs:", "");
+        let scope = TargetScope {
+            targets: vec![
+                Target::member("rustx-foo", Kind::Lib, "rustx-foo"),
+                Target::member("rustx-bar", Kind::Lib, "rustx-bar"),
+            ],
+            default_members: BTreeSet::from([
+                "rustx".to_owned(),
+                "rustx-foo".to_owned(),
+                "rustx-bar".to_owned(),
+            ]),
+            packages: BTreeSet::from([
+                "rustx".to_owned(),
+                "rustx-foo".to_owned(),
+                "rustx-bar".to_owned(),
+            ]),
+        };
+        let fake = Fake(BTreeMap::from([
+            (
+                Target::member("rustx-foo", Kind::Lib, "rustx-foo"),
+                vec![("member::unit", false), ("member::scale::big", false)],
+            ),
+            (
+                Target::member("rustx-bar", Kind::Lib, "rustx-bar"),
+                vec![("bar::unit", false)],
+            ),
+        ]));
+        let steps = parse_workflow(&format!("{full}{fast}"), &scope).unwrap();
+        let findings = check(&steps, &scope.targets, Platform::Linux, &[], &[], &fake).findings;
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "rustx-foo:lib is not selected by any executing FULL cargo test step on linux"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_member_filter_that_matches_nothing_fails() {
+        let workflow = MEMBER_FAST.replace("--locked'", "--locked -- nope::'");
+        assert_eq!(
+            findings_containing(
+                &member_findings(&workflow),
+                "filter `nope::` matches no test"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_job_is_checked_only_on_its_native_platform() {
+        let scope = scope();
+        let steps = parse_workflow(WORKFLOW, &scope).unwrap();
+        let findings = check(
+            &steps,
+            &scope.targets,
             Platform::Linux,
             &["platform".into()],
             MACOS,
@@ -2452,8 +2902,8 @@ jobs:
                 "unsupported libtest option `--ignored`",
             ),
             (
-                "cargo test --workspace",
-                "unsupported cargo test option `--workspace`",
+                "cargo test --frozen",
+                "unsupported cargo test option `--frozen`",
             ),
             (
                 "cargo test -- boundary_suites::",
@@ -2717,6 +3167,29 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         assert_eq!(
             parse_doctest_list(true, zero, banner).unwrap().blocks,
             vec![(0, 0), (0, 0)]
+        );
+        // `--workspace`: every member library prints a `Doc-tests` banner;
+        // crates carrying doctests end with a timing line while empty crates
+        // only emit their `(0, 0)` summary between them.
+        let workspace_stdout = "\
+src/a.rs - a::Pos (line 10): test
+1 test, 0 benchmarks
+all doctests ran in 0.20s; merged doctests compilation took 0.20s
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+src/b.rs - b::Neg (line 20): test
+1 test, 0 benchmarks
+all doctests ran in 0.10s; merged doctests compilation took 0.10s
+";
+        let workspace_banner = "   Doc-tests rustx\n   Doc-tests rustx_types\n";
+        let workspace_parsed =
+            parse_doctest_list(true, workspace_stdout, workspace_banner).unwrap();
+        assert_eq!(
+            workspace_parsed.tests,
+            BTreeSet::from([
+                "src/a.rs - a::Pos (line 10)".to_owned(),
+                "src/b.rs - b::Neg (line 20)".to_owned(),
+            ])
         );
         // Unit harness stdout/stderr (`Running ...`), missing timing summary, count mismatch,
         // or garbage lines must fail closed.

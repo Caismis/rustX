@@ -199,7 +199,9 @@ impl Lab {
 
                     selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                     agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
-                    definition_digest: serde_json::from_value(serde_json::json!(
+                    definition_digest: serde_json::from_value::<
+                        crate::runtime::subagent::NamedAgentDefinitionDigest,
+                    >(serde_json::json!(
                         "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                     ))
                     .expect("digest"),

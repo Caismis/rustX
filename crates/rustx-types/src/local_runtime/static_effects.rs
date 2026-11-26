@@ -1,0 +1,45 @@
+//! Test-only observation of entry into effect-owning boundaries.
+use std::cell::RefCell;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Effect {
+    Process,
+    Connect,
+    Provider,
+    Session,
+    State,
+    Preparation,
+    Credentials,
+    WorkflowRun,
+    Interaction,
+    ResourcePublication,
+    AuthorityMutation,
+}
+
+thread_local! { static COUNTS: RefCell<Option<[usize; 11]>> = const { RefCell::new(None) }; }
+
+pub fn observe(effect: Effect) {
+    COUNTS.with(|counts| {
+        if let Some(counts) = counts.borrow_mut().as_mut() {
+            counts[effect as usize] += 1;
+        }
+    });
+}
+
+pub fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 11]) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            COUNTS.with(|counts| *counts.borrow_mut() = None);
+        }
+    }
+    rustx_process_supervisor::effects::set_process_effect_observer(|| observe(Effect::Process));
+    COUNTS.with(|counts| {
+        assert!(counts.borrow().is_none());
+        *counts.borrow_mut() = Some([0; 11]);
+    });
+    let _reset = Reset;
+    let value = operation();
+    let counts = COUNTS.with(|counts| counts.borrow().expect("measurement active"));
+    (value, counts)
+}

@@ -446,7 +446,7 @@ pub(super) fn compact_replay_storage(event: &mut RuntimeClientEvent) {
 #[cfg(test)]
 pub(super) fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u8>> {
     let schema = crate::observation::structural_json::root::<RuntimeClientEvent>();
-    crate::observation::bounded::bounded_bytes(
+    rustx_types::observation::bounded::bounded_bytes(
         &crate::observation::structural_json::Encoded {
             value: event,
             schema: &schema,
@@ -882,7 +882,7 @@ impl RuntimeClientProjection {
     ) -> Option<RuntimeClientEvent> {
         if let Some((events, bytes, overflow)) = &mut self.batch_events {
             if !*overflow {
-                let encoded = crate::observation::bounded::bounded_bytes(
+                let encoded = rustx_types::observation::bounded::bounded_bytes(
                     &event,
                     crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
                 );
@@ -958,7 +958,7 @@ impl RuntimeClientProjection {
         self.snapshot.trace.stamp_cut(&cut);
         let mut event = event;
         stamp_event_trace_cut(&mut event, &cut);
-        let mut event = if crate::observation::bounded::bounded_bytes(
+        let mut event = if rustx_types::observation::bounded::bounded_bytes(
             &event,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
         )
@@ -990,7 +990,7 @@ impl RuntimeClientProjection {
                 metadata,
             },
         };
-        let event = if crate::observation::bounded::bounded_bytes(
+        let event = if rustx_types::observation::bounded::bounded_bytes(
             &event,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
         )

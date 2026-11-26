@@ -138,10 +138,13 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const checkpoints = useCompactionHistory(client, sessionId, keepCompactions && !readingPending, { owner: presentationOwner, keep: keepCompactions });
   const content = useMemo(() => [...view?.content ?? [], ...(view?.publicationHeads ?? []).flatMap(head => head.content)], [view?.content, view?.publicationHeads]);
   const initialTrace = mode === 'trajectory' ? view?.trace : undefined;
+  // History generation changes on every disjoint head transition (replace or
+  // slide), so hydration re-checks coverage of the newest head each time.
   useEffect(() => {
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;
     void (mode === 'chat' ? client.loadInitialHistory(view.id) : client.loadInitialTrace(view.id)).catch(() => {});
   }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected,
+    view?.history?.generation,
     initialTrace?.epoch, initialTrace?.page.next_cursor, initialTrace?.loading, initialTrace?.error]);
   useEffect(() => {
     if (mode !== 'trajectory' || !sessionId || disabled || scope?.selected || view?.retrying

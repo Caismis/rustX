@@ -474,14 +474,20 @@ impl SessionRuntimeManager {
                     .applications
                     .lock()
                     .view(&target.application_scope())
-                    .ok_or(SourceSettingsError::Source(
-                        super::super::configuration::settings::SettingsError::Io,
-                    ))
+                    .ok_or_else(|| {
+                        SourceSettingsError::Source(
+                            super::super::configuration::settings::SettingsError::Io(
+                                std::io::Error::other("application scope view unavailable"),
+                            ),
+                        )
+                    })
             })
             .await
-            .map_err(|_| {
+            .map_err(|error| {
                 SourceSettingsError::Source(
-                    super::super::configuration::settings::SettingsError::Io,
+                    super::super::configuration::settings::SettingsError::Io(
+                        std::io::Error::other(error.to_string()),
+                    ),
                 )
             })?
         })
@@ -588,8 +594,10 @@ impl SessionRuntimeManager {
             Ok(())
         })
         .await
-        .map_err(|_| {
-            SourceSettingsError::Source(super::super::configuration::settings::SettingsError::Io)
+        .map_err(|error| {
+            SourceSettingsError::Source(super::super::configuration::settings::SettingsError::Io(
+                std::io::Error::other(error.to_string()),
+            ))
         })?
     }
 
@@ -1195,9 +1203,11 @@ impl SessionRuntimeManager {
     ) -> Result<T, SourceSettingsError> {
         tokio::task::spawn_blocking(read)
             .await
-            .map_err(|_| {
+            .map_err(|error| {
                 SourceSettingsError::Source(
-                    super::super::configuration::settings::SettingsError::Io,
+                    super::super::configuration::settings::SettingsError::Io(
+                        std::io::Error::other(error.to_string()),
+                    ),
                 )
             })?
             .map_err(SourceSettingsError::Source)

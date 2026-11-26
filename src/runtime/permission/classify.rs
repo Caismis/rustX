@@ -79,7 +79,8 @@ pub fn classify_tool_kind(
 
 /// Whether any built-in mode can escalate a call to this tool. Without call
 /// arguments, Bash and file mutations use their non-fast-path classification.
-pub(crate) fn supports_elevation(tool: &ToolDefinition) -> bool {
+#[must_use]
+pub fn supports_elevation(tool: &ToolDefinition) -> bool {
     use super::{BuiltinPermissionAction, ExecutionPermissionMode, builtin_action_for};
     let (kind, _) = classify_tool_kind(
         &tool.id,
@@ -123,6 +124,48 @@ pub fn is_workspace_plan_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn supports_elevation_tracks_the_kind_matrix() {
+        use crate::tools::types::{ToolExecutionPolicy, ToolReplayPolicy};
+        let tool = |name: &str| ToolDefinition {
+            id: ToolId::new("example"),
+            name: name.into(),
+            description: "Business operation".into(),
+            input_schema: serde_json::json!({"type":"object"}).into(),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        for (name, expected) in [
+            ("read", false),
+            ("read_image", false),
+            ("glob", false),
+            ("grep", false),
+            ("todo", false),
+            ("get_goal", false),
+            ("update_goal", false),
+            ("ask_user", false),
+            ("present", false),
+            ("job_status", false),
+            ("write", true),
+            ("edit", true),
+            ("bash", true),
+            ("create_goal", true),
+        ] {
+            assert_eq!(supports_elevation(&tool(name)), expected, "{name}");
+        }
+        let mut delegated = tool("get_goal");
+        delegated.id = ToolId::new("tool-workflow-get_goal");
+        assert!(supports_elevation(&delegated));
+        let mut hosted = tool("read");
+        hosted.id = ToolId::new("tool-host-read");
+        hosted.origin = ToolOrigin::Host {
+            namespace: None,
+            name: "read".into(),
+        };
+        assert!(supports_elevation(&hosted));
+    }
+
     #[test]
     fn only_exact_workspace_plan_file_counts() {
         let root = tempfile::tempdir().expect("workspace");

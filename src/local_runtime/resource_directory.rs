@@ -111,7 +111,7 @@ pub(crate) fn read_resource(
         )
         .at(path, "resources"));
     }
-    crate::bounded_file::read_with_limit(path, byte_limit)
+    rustx_bounded_file::read_with_limit(path, byte_limit)
         .map_err(|e| RuntimeResourceLoadError::new(e).at(path, "resources"))
 }
 

@@ -2254,7 +2254,7 @@ fn noninterrupted_native_writer_lock_failure_does_not_retry_or_publish() {
         &revision_of(original),
         capacity(3),
     );
-    assert!(matches!(result, Err(SettingsError::Io)), "{result:?}");
+    assert!(matches!(result, Err(SettingsError::Io(_))), "{result:?}");
     assert_eq!(locks::attempts(), 1);
     assert_eq!(fixture.read(&fixture.workspace), original);
 }
@@ -3230,7 +3230,7 @@ fn a_failed_sync_after_the_confirmed_publication_is_uncertain_and_never_replayed
 
 /// The authored file bound, in bytes.
 fn bound() -> usize {
-    usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap()
+    usize::try_from(rustx_bounded_file::MAX_RESOURCE_BYTES).unwrap()
 }
 
 /// `prefix` padded with one comment line to exactly `size` bytes.
@@ -3272,7 +3272,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     let original = sized(&format!("schema_version = 9\n{USER}"), bound());
     fixture.write(&SourceTarget::User, &original);
     // The original itself is readable at exactly the bound.
-    assert!(crate::bounded_file::read_bounded(&fixture.path(&SourceTarget::User)).is_ok());
+    assert!(rustx_bounded_file::read_bounded(&fixture.path(&SourceTarget::User)).is_ok());
     let candidate = plan(original.as_bytes()).unwrap().candidate;
     assert_eq!(candidate.len(), bound() + 1);
     let sequence = fixture.sequence();
@@ -4240,7 +4240,7 @@ fn a_document_replaced_by_a_symlink_while_it_is_opened_is_never_followed() {
             .expect("the opening boundary was reached");
         assert!(!reached.redirect.opened(), "reread = {reread}");
         assert!(
-            matches!(read, Err(super::super::settings::SettingsError::Io)),
+            matches!(read, Err(super::super::settings::SettingsError::Io(_))),
             "reread = {reread}: {read:?}"
         );
         assert_eq!(
@@ -4692,7 +4692,7 @@ fn a_symlinked_workspace_source_is_refused_by_every_consumer() {
     assert!(failure.contains("not a symlink"), "{failure}");
     assert!(matches!(
         fixture.manager.read_source_settings(&fixture.workspace),
-        Err(super::super::settings::SettingsError::Io)
+        Err(super::super::settings::SettingsError::Io(_))
     ));
     assert_eq!(
         fixture.repair(&fixture.workspace, &fixture.workspace),
@@ -5004,7 +5004,7 @@ type Plant = fn(&Path, &Path, &str);
 /// leaves anything behind.
 #[test]
 fn unsupported_entries_and_oversized_documents_are_refused_without_effects() {
-    let bound = usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap();
+    let bound = usize::try_from(rustx_bounded_file::MAX_RESOURCE_BYTES).unwrap();
     let exact = format!("#{}\n", "x".repeat(bound - 2));
     let fixture = Fixture::new();
     fixture.write(&SourceTarget::User, USER);
@@ -5055,7 +5055,7 @@ fn unsupported_entries_and_oversized_documents_are_refused_without_effects() {
             assert_eq!(resource_read.unwrap().unwrap(), exact.as_bytes());
         } else {
             assert!(
-                matches!(read, Err(super::super::settings::SettingsError::Io)),
+                matches!(read, Err(super::super::settings::SettingsError::Io(_))),
                 "{case}: {read:?}"
             );
             assert!(resource_read.is_err(), "{case}");

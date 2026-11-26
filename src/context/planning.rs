@@ -297,6 +297,7 @@ impl Search<'_, '_> {
 }
 #[cfg(test)]
 thread_local! { static COPIED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_copied_bytes() -> u64 {
     COPIED_BYTES.with(|total| total.replace(0))

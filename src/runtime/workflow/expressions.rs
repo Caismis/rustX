@@ -6,13 +6,7 @@ use super::{
 mod inference;
 pub(super) use inference::{InferenceError, Schema, SchemaBudget, SchemaInference};
 
-pub(super) fn valid_local_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= 64
-        && key
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
-}
+pub use rustx_types::runtime::workflow::valid_local_key;
 
 fn invalid(detail: impl Into<String>) -> WorkflowCompileError {
     WorkflowCompileError::InvalidReference(detail.into())

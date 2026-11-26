@@ -1,6 +1,5 @@
 //! Real durable fixtures; gates are completion/queue boundaries, never sleeps.
 use super::*;
-use crate::durable::AuxiliaryStore;
 use crate::durable::{AuxiliarySettlementCommit, ConversationStore};
 use crate::durable::{
     CanonicalStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
@@ -1140,7 +1139,8 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             &conversation,
-            &crate::model::input::canonical_input(&history).into(),
+            crate::model::SelectedModelInput::from(crate::model::input::canonical_input(&history))
+                .semantic_fingerprint(),
             &output,
         )
         .unwrap();
@@ -1329,9 +1329,12 @@ fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
                 tool_call_id: ToolCallId::new("duplicate-call"),
             },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64))))
-                .unwrap(),
+            serde_json::from_value::<String>(serde_json::json!("sha256:definition")).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            )))
+            .unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &std::path::PathBuf::from("/authored/workspace"),
             Utc::now(),
@@ -1655,11 +1658,9 @@ async fn private_agent_authority_never_enters_archive_or_lineage_copy() {
         [],
     ).unwrap();
     assert_eq!(
-        parent
-            .load_agent_authority(&agent)
-            .unwrap()
-            .resolved
-            .instructions,
+        parent.load_agent_authority(&agent).unwrap().authority["resolved"]["instructions"]
+            .as_str()
+            .unwrap(),
         "ARCHIVE_PRIVATE_AUTHORITY_CANARY"
     );
     drop(private);

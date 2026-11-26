@@ -53,7 +53,7 @@ struct ArtifactManifest {
 }
 struct ArtifactCut {
     manifest: ArtifactManifest,
-    file: crate::tools::artifacts::ArtifactReadHandle,
+    file: rustx_durable::artifacts::ArtifactReadHandle,
     #[cfg(test)]
     read_hook: Option<ArtifactReadHook>,
 }

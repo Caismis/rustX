@@ -96,7 +96,7 @@ impl DomainSource {
             _ => None,
         };
         if let Some(text) = text {
-            let chunk = crate::runtime::read_layout::text_chunk(text, offset, max_bytes)
+            let chunk = rustx_durable::read_layout::text_chunk(text, offset, max_bytes)
                 .map_err(source_error)?;
             return Ok(CheckpointValueChunk {
                 representation: super::checkpoint::CheckpointValueRepresentation::Utf8Text,
@@ -167,11 +167,11 @@ impl DomainSource {
 /// The layout belongs to this exact source generation and disappears with it.
 pub(crate) struct SourceValue<T> {
     value: Arc<T>,
-    layout: crate::runtime::read_layout::ObservationLayoutCache,
+    layout: rustx_durable::read_layout::ObservationLayoutCache,
     rows: std::sync::Mutex<
         std::collections::VecDeque<(
             Vec<String>,
-            Arc<crate::runtime::read_layout::SeekableObservationSource>,
+            Arc<rustx_durable::read_layout::SeekableObservationSource>,
         )>,
     >,
 }
@@ -190,7 +190,7 @@ impl<T> SourceValue<T> {
         &self,
         key: Vec<String>,
         value: &R,
-    ) -> Result<Arc<crate::runtime::read_layout::SeekableObservationSource>, &'static str> {
+    ) -> Result<Arc<rustx_durable::read_layout::SeekableObservationSource>, &'static str> {
         if let Some(found) = self
             .rows
             .lock()
@@ -203,7 +203,7 @@ impl<T> SourceValue<T> {
         }
         // Native values are immutable at this source generation. Construction
         // and filesystem work never hold the cache or semantic owner lock.
-        let candidate = Arc::new(crate::runtime::read_layout::SeekableObservationSource::new(
+        let candidate = Arc::new(rustx_durable::read_layout::SeekableObservationSource::new(
             value,
         )?);
         let mut rows = self
@@ -223,10 +223,10 @@ impl<T> SourceValue<T> {
 impl<T: Serialize + schemars::JsonSchema> SourceValue<T> {
     pub(crate) fn indexed(
         &self,
-    ) -> Result<&crate::runtime::read_layout::SeekableObservationSource, &'static str> {
+    ) -> Result<&rustx_durable::read_layout::SeekableObservationSource, &'static str> {
         self.layout
             .get_or_init(|| {
-                crate::runtime::read_layout::SeekableObservationSource::new(self.value())
+                rustx_durable::read_layout::SeekableObservationSource::new(self.value())
             })
             .as_ref()
             .map_err(|error| *error)
@@ -237,15 +237,15 @@ impl<T: Serialize + schemars::JsonSchema> SourceValue<T> {
         offset: u64,
         limit: usize,
     ) -> Result<
-        crate::runtime::read_layout::ObservationPage,
-        crate::runtime::read_layout::ObservationReadError,
+        rustx_durable::read_layout::ObservationPage,
+        rustx_durable::read_layout::ObservationReadError,
     > {
         self.indexed()?.page(path, offset, limit)
     }
     pub(crate) fn header(
         &self,
         path: &[String],
-    ) -> Result<Option<serde_json::Value>, crate::runtime::read_layout::ObservationReadError> {
+    ) -> Result<Option<serde_json::Value>, rustx_durable::read_layout::ObservationReadError> {
         self.indexed()?.value(path)
     }
     pub(crate) fn read(
@@ -254,8 +254,8 @@ impl<T: Serialize + schemars::JsonSchema> SourceValue<T> {
         offset: u64,
         max_bytes: u32,
     ) -> Result<
-        crate::runtime::read_layout::ObservationChunk,
-        crate::runtime::read_layout::ObservationReadError,
+        rustx_durable::read_layout::ObservationChunk,
+        rustx_durable::read_layout::ObservationReadError,
     > {
         self.indexed()?.read(path, offset, max_bytes)
     }
@@ -292,7 +292,7 @@ fn invalid() -> RuntimeClientError {
     }
 }
 pub(crate) fn source_error(
-    error: impl Into<crate::runtime::read_layout::ObservationReadError>,
+    error: impl Into<rustx_durable::read_layout::ObservationReadError>,
 ) -> RuntimeClientError {
     RuntimeClientError::observation_read_error(error.into())
 }
@@ -387,7 +387,7 @@ fn ordinal(part: &str) -> Result<u64, RuntimeClientError> {
         .map_err(|_| invalid())
 }
 fn chunk_result(
-    chunk: crate::runtime::read_layout::ObservationChunk,
+    chunk: rustx_durable::read_layout::ObservationChunk,
     cut: &CheckpointReadCut,
     domain: &str,
     item_offset: u64,
@@ -445,7 +445,7 @@ fn next_page(offset: u64, count: usize, total: u64) -> Option<u64> {
     (next < total).then_some(next)
 }
 fn indexed_page(
-    layout: &crate::runtime::read_layout::SeekableObservationSource,
+    layout: &rustx_durable::read_layout::SeekableObservationSource,
     cut: &CheckpointReadCut,
     domain: &str,
     path: &[String],
@@ -503,7 +503,7 @@ fn catalog_row<'a>(
     path: &'a [String],
 ) -> Result<
     (
-        Arc<crate::runtime::read_layout::SeekableObservationSource>,
+        Arc<rustx_durable::read_layout::SeekableObservationSource>,
         &'a [String],
     ),
     RuntimeClientError,
@@ -595,7 +595,7 @@ fn capability_row<'a>(
     path: &'a [String],
 ) -> Result<
     (
-        Arc<crate::runtime::read_layout::SeekableObservationSource>,
+        Arc<rustx_durable::read_layout::SeekableObservationSource>,
         &'a [String],
     ),
     RuntimeClientError,
@@ -824,7 +824,7 @@ fn resource_read(
             if prefix == path.len()
                 && let Some(text) = node.text()
             {
-                let chunk = crate::runtime::read_layout::text_chunk(text, offset, max_bytes)
+                let chunk = rustx_durable::read_layout::text_chunk(text, offset, max_bytes)
                     .map_err(source_error)?;
                 return Ok(CheckpointValueChunk {
                     representation: super::checkpoint::CheckpointValueRepresentation::Utf8Text,
@@ -974,7 +974,7 @@ mod tests {
             1,
             "later reads and pages reuse the immutable index"
         );
-        crate::runtime::read_layout::READ_WORK.with(|work| assert_eq!(work.get(), (1, 65_536)));
+        rustx_durable::read_layout::READ_WORK.with(|work| assert_eq!(work.get(), (1, 65_536)));
         let tail = source.page(&["values".into()], 64, 32).unwrap();
         assert_eq!((tail.fields.len(), tail.next_offset), (9, None));
         assert!(source.read(&selected, first.readable_end + 1, 1).is_err());

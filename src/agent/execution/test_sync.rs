@@ -74,6 +74,7 @@ pub(crate) struct RetryBackoffPause {
 impl RetryBackoffPause {
     /// Creates the pause and its observation/release handles.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
         let (reached, reached_rx) = watch::channel(0);
         let (release_tx, release_rx) = mpsc::channel();
@@ -107,6 +108,7 @@ pub(crate) struct ModelStreamItemPause {
 impl ModelStreamItemPause {
     /// Creates the pause and its observation/release handles.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
         let (reached, reached_rx) = watch::channel(0);
         let (release_tx, release_rx) = mpsc::channel();
@@ -141,6 +143,7 @@ pub(crate) struct GenerationAnomalyPause {
 impl GenerationAnomalyPause {
     /// Creates the pause and its observation/release handles.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
         let (reached, reached_rx) = watch::channel(0);
         let (release_tx, release_rx) = mpsc::channel();
@@ -281,6 +284,7 @@ pub(crate) struct ToolCancellationSettlementPause {
 impl ToolCancellationSettlementPause {
     /// Creates the pause and its observation/release handles.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
         let (reached, reached_rx) = watch::channel(false);
         let (release_tx, release_rx) = mpsc::channel();
@@ -315,6 +319,7 @@ pub(crate) struct ToolPhysicalSettlementPause {
 
 impl ToolPhysicalSettlementPause {
     /// Creates the pause and its observation/release handles.
+    #[cfg(target_os = "linux")]
     #[must_use]
     pub(crate) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
         let (reached, reached_rx) = watch::channel(false);
@@ -539,6 +544,7 @@ pub(super) struct ExecutionPauses {
 use super::AgentExecution;
 
 impl AgentExecution<'_> {
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_compaction_admission_gate(
         &mut self,
         gate: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
@@ -559,6 +565,7 @@ impl AgentExecution<'_> {
 
     /// Installs the deterministic retry-backoff synchronization hook.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_retry_backoff_pause(&mut self, pause: RetryBackoffPause) {
         *self
             .pauses
@@ -569,6 +576,7 @@ impl AgentExecution<'_> {
 
     /// Installs the deterministic post-provider-stream-item synchronization hook.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_model_stream_item_pause(&mut self, pause: ModelStreamItemPause) {
         *self
             .pauses
@@ -589,6 +597,7 @@ impl AgentExecution<'_> {
 
     /// Installs the deterministic rejected-generation synchronization hook.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_generation_anomaly_pause(&mut self, pause: GenerationAnomalyPause) {
         *self
             .pauses
@@ -619,6 +628,7 @@ impl AgentExecution<'_> {
 
     /// Installs the deterministic foreground cancellation-settlement pause.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_tool_cancellation_settlement_pause(
         &mut self,
         pause: ToolCancellationSettlementPause,
@@ -632,6 +642,7 @@ impl AgentExecution<'_> {
 
     /// Installs the deterministic physical-result settlement pause.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn install_tool_physical_settlement_pause(
         &mut self,
         pause: ToolPhysicalSettlementPause,

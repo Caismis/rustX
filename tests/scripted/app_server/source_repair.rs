@@ -1042,7 +1042,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         document["schema_version"] = toml_edit::value(9);
         document["agent"]["agents_md"]["inherit"] = toml_edit::value(false);
         let prefix = document.to_string();
-        let bound = usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap();
+        let bound = usize::try_from(rustx_bounded_file::MAX_RESOURCE_BYTES).unwrap();
         let user = format!("{prefix}#{}\n", "x".repeat(bound - prefix.len() - 2));
         assert_eq!(user.len(), bound);
         std::fs::write(user_path(&f), &user).unwrap();

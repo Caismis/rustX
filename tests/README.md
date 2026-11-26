@@ -284,9 +284,10 @@ re-proven there.
 
 Every one of these is platform-sensitive (process groups, signals, unix
 sockets, shell supervision), so the `boundary_suites::` prefix runs in the
-`rust-boundaries` lane. CI is Linux-only. When a change touches a primitive
-that differs across operating systems, run the suite locally on each
-affected platform.
+`rust-boundaries` lane. Scripted boundary suites are compiled on Linux only;
+the macOS lanes cover the platform-sensitive boundary tests natively. When a
+change touches a primitive that differs across operating systems, run the
+suite locally on each affected platform.
 
 ## External integration targets
 
@@ -461,19 +462,19 @@ The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes. The
 workflow's `cargo test` steps are the only selection source; this table
 summarizes them and the lane check below verifies them against Cargo:
 
-| Suite / group | Class | Lane |
-| --- | --- | --- |
-| source-module unit tests (`src/**`) | unit | rust-contracts |
-| `scripted_suites::` | deterministic contracts | rust-contracts |
-| `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts |
-| `boundary_suites::` | boundary conformance | rust-boundaries |
-| bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts |
-| `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts |
-| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries |
-| `rustx-execution-client:test bootstrap` | execution-boundary integration | rust-fast and rust-boundaries |
-| `rustx-execution-client:test websocket` | execution-boundary WebSocket transport | rust-fast and rust-boundaries |
-| `rustx-execution-client:bins` | execution-boundary unit | rust-fast |
-| `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries |
+| Suite / group | Class | Linux lane | macOS |
+| --- | --- | --- | --- |
+| source-module unit tests (`src/**`) | unit | rust-contracts | full |
+| `scripted_suites::` | deterministic contracts | rust-contracts | not compiled (`cfg(target_os = "linux")`) |
+| `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts | skipped |
+| `boundary_suites::` | boundary conformance | rust-boundaries | full (required) |
+| bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
+| `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts | no |
+| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
+| `rustx-execution-client:test bootstrap` | execution-boundary integration | rust-fast and rust-boundaries | full (required) |
+| `rustx-execution-client:test websocket` | execution-boundary WebSocket transport | rust-fast and rust-boundaries | full (required) |
+| `rustx-execution-client:bins` | execution-boundary unit | rust-fast and rust-contracts | full (required) |
+| `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
 - **quality** (ubuntu) — `cargo fmt --all -- --check`, both default-feature and
   `--all-features` workspace `--all-targets --locked` Clippy (`-D warnings`),
@@ -484,8 +485,9 @@ summarizes them and the lane check below verifies them against Cargo:
   then
   `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::`,
   `cargo test --test contracts --test provider --all-features --locked`, and
-  explicit `cargo test --doc --all-features --locked` (executing both
-  positive API counterparts and `compile_fail` encapsulation proofs).
+  explicit `cargo test --doc --workspace --all-features --locked` (executing
+  both positive API counterparts and `compile_fail` encapsulation proofs,
+  including doctests of the extracted `rustx-*` crates).
   Preparation compiles the lane's targets once with `--all-features` (matching
   the ordinary library unit that `--examples`, `--test contracts`, and `--test
   provider` share) and physically stages the emitted package binaries beside
@@ -505,6 +507,36 @@ summarizes them and the lane check below verifies them against Cargo:
   --test tools --test conformance --test cfg3_catalog --test
   cfg3_managed_output`, then `cargo test --lib --all-features --locked -- boundary_suites::`.
   Both test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+- **rust-platform-core** (macos; FAST) — the seven external boundary
+  targets, natively: compiled and staged first through
+  `test-support/prepare_native_tests.py`, then run with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real process start and termination,
+  signals, PTY, stdio and WebSocket transports, the native configuration
+  writer lock race (`cfg3_catalog`), SQLite and filesystem durability and
+  cleanup. It never compiles the library test harness, which was about half
+  of the macOS lane's compilation (721 s of about 1,450 s in run
+  39015122730).
+- **rust-platform-boundaries** (macos; FULL) — one job: the same external
+  targets compiled and staged first, then `--lib --bins --test durable` compiled
+  and staged (reusing the fresh ordinary library and binaries from the first
+  step without compiling a third library copy), then `cargo test --lib --bins --all-features
+  -- --skip local_runtime::session_runtime_manager::tests::`
+  (unit tests — including the boundary-owning bash/uv modules, whose
+  primitives differ across OSes — plus the in-crate boundary suites) and the
+  external targets, both with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Running
+  the lib half on a second runner in parallel was measured and rejected:
+  with cold caches it shortened FULL by about a minute for about 17 more
+  macOS runner-minutes, since that runner compiles the dependencies and the
+  ordinary library again. The `--no-run` compile steps separate native
+  compile timing from execution and execute nothing; both macOS jobs keep
+  `CARGO_BUILD_JOBS=2`. `contracts`/`provider` and the deterministic
+  contract majority are Linux-only: they carry no process or filesystem
+  semantics. Overlap with Linux is intentional: a macOS boundary test is
+  native proof, not a duplicate. A pull request push that touches Rust runs
+  macOS core; the macOS unit tests and in-crate boundary suites run on its
+  promoted FULL head, on `main` and nightly. A low-risk change
+  (presentation, documentation) runs no macOS Rust lane at all; that is the
+  deliberate tradeoff of the FAST profile.
 - **tui** — independent Node/pnpm lane. `pnpm test` includes the real-child
   integration suite, which drives the actual `rustx` binary (built by
   `cargo build --bins` in that lane, including the `interactive-supervisor`
@@ -710,9 +742,12 @@ cancelled run is diagnostic evidence, not a timing baseline.
   ```
 
   Features, `cfg(test)` and dev-dependency feature unification (any test or
-  example target in the invocation) each select a different unit. The heavy
-  contracts and boundary lanes keep `CARGO_BUILD_JOBS=1`, bounding compiler
-  parallelism on their all-feature units.
+  example target in the invocation) each select a different unit. The macOS
+  lane keeps `CARGO_BUILD_JOBS=2`: a single rustX library compilation peaks
+  near 3.5 GB RSS there (`/usr/bin/time -l`). The two compile steps hold the
+  ordinary library and the `cfg(test)` harness in separate cargo invocations,
+  so they never overlap; the remaining pairings fit the 7 GB runner while two
+  codegen workers cover the long serial front-end inside each big unit.
 - **Browser acceptance**: each `browser-shard-<i>` artifact holds
   Playwright's JSON report of that shard (`shard-report/report.json`):
   `stats.duration` is the shard's run and each result's `duration` covers one
@@ -910,7 +945,7 @@ python3 test-support/prepare_native_tests.py -- \
   cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features --locked
-cargo test --doc --all-features --locked
+cargo test --doc --workspace --all-features --locked
 
 # Boundary lane (CI: rust-boundaries); uv is mandatory:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
@@ -925,7 +960,6 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- bo
 python3 test-support/prepare_native_tests.py -- \
   cargo test --lib --bins --test durable --all-features --locked --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features --locked -- \
-  --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
 
 # Lane coverage for one CI job on its own platform, or every target here
@@ -940,7 +974,8 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --lock
 # One domain target:
 cargo test --test durable --all-features
 
-# The in-crate scripted contract suites only:
+# The in-crate scripted contract suites only (Linux only — the suite
+# declarations are cfg(target_os = "linux") and do not compile on macOS):
 cargo test --lib --all-features scripted_suites::
 
 # UI detach while the real Execution Client has blocked data and full control:

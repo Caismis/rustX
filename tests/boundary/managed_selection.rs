@@ -231,7 +231,11 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             let definition = available.iter().find(|tool| tool.name == "ping").unwrap();
             assert_eq!(
                 expected[0],
-                rustx::tools::compile_model_definition(definition).unwrap()
+                rustx::tools::compile_model_definition(
+                    definition,
+                    rustx::runtime::permission::supports_elevation(definition),
+                )
+                .unwrap()
             );
             let expected_names = if source_wide {
                 vec![

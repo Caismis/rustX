@@ -138,7 +138,7 @@ mod connection;
 pub(crate) mod declaration_cache;
 mod diagnostics;
 mod dispatch;
-mod executor;
+pub(crate) mod executor;
 mod framing;
 mod generation;
 mod handler;
@@ -164,7 +164,7 @@ mod test_context;
 /// regressions. Test-only: no production path constructs these.
 #[cfg(test)]
 #[cfg_attr(not(feature = "mcp-fixture"), allow(dead_code))]
-pub(crate) mod test_sync;
+pub(crate) use rustx_types::tools::mcp::test_sync;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

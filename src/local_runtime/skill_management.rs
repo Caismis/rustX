@@ -62,29 +62,30 @@ fn descriptor(
         enabled_by_default: package.enabled_by_default(),
         operation_revision: authoring_collection
             .and_then(|collection| operations::operation_revision(package, collection)),
-        metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
+        metadata_revision: digest(&package.definition())
+            .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?,
         display: authoring_collection.and_then(|collection| read_display(package, collection)),
     };
     // Leave room for the surrounding array so every projected descriptor can
     // be paged on its own. Only the WebUI preview is shortened.
     let limit = SKILL_PAGE_DATA_BYTES - 2;
-    if crate::bounded_file::json_fits(&skill, limit) {
+    if rustx_bounded_file::json_fits(&skill, limit) {
         return Ok(Some(skill));
     }
     let description = &mut skill.catalog.description;
     if description.len() > SKILL_DESCRIPTION_PREVIEW_BYTES {
         description.truncate(description.floor_char_boundary(SKILL_DESCRIPTION_PREVIEW_BYTES));
         description.push('…');
-        if crate::bounded_file::json_fits(&skill, limit) {
+        if rustx_bounded_file::json_fits(&skill, limit) {
             return Ok(Some(skill));
         }
     }
     skill.provenance.shadowed.clear();
-    if crate::bounded_file::json_fits(&skill, limit) {
+    if rustx_bounded_file::json_fits(&skill, limit) {
         return Ok(Some(skill));
     }
     skill.display = None;
-    Ok(crate::bounded_file::json_fits(&skill, limit).then_some(skill))
+    Ok(rustx_bounded_file::json_fits(&skill, limit).then_some(skill))
 }
 fn skill_collection(
     configuration: &super::configuration::UserConfigManager,
@@ -164,7 +165,7 @@ fn read_instructions(
         max_bytes,
         None,
     )
-    .map_err(|_| SettingsError::Io)?;
+    .map_err(SettingsError::Io)?;
     Ok((
         chunk.data_base64,
         chunk.next_offset,
@@ -216,8 +217,8 @@ impl SessionRuntimeManager {
                     }),
                 }
             }
-            let revision =
-                digest(&(&descriptors, &all_diagnostics)).map_err(|_| SettingsError::Io)?;
+            let revision = digest(&(&descriptors, &all_diagnostics))
+                .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?;
             if let Some(expected) = expected
                 && expected != revision
             {
@@ -234,7 +235,7 @@ impl SessionRuntimeManager {
             let mut data = Vec::new();
             for descriptor in descriptors.into_iter().skip(offset).take(limit) {
                 data.push(descriptor);
-                if !crate::bounded_file::json_fits(&data, SKILL_PAGE_DATA_BYTES) {
+                if !rustx_bounded_file::json_fits(&data, SKILL_PAGE_DATA_BYTES) {
                     data.pop();
                     break;
                 }
@@ -244,7 +245,7 @@ impl SessionRuntimeManager {
             let diagnostic_count = all_diagnostics.len();
             for diagnostic in all_diagnostics.into_iter().take(32) {
                 diagnostics.push(diagnostic);
-                if !crate::bounded_file::json_fits(&diagnostics, 65_536) {
+                if !rustx_bounded_file::json_fits(&diagnostics, 65_536) {
                     diagnostics.pop();
                     break;
                 }
@@ -258,7 +259,7 @@ impl SessionRuntimeManager {
             })
         })
         .await
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
     }
     #[allow(clippy::too_many_arguments)] // Native wire parameters and physical admission travel together.
     pub(crate) async fn skill_read(
@@ -309,7 +310,7 @@ impl SessionRuntimeManager {
                 }
                 SkillContentKind::Metadata => {
                     let (bytes, total) = encode(&package.definition(), offset, max_bytes)
-                        .map_err(|_| SettingsError::Io)?;
+                        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?;
                     if offset > total {
                         return Err(SettingsError::Invalid);
                     }
@@ -348,7 +349,7 @@ impl SessionRuntimeManager {
             })
         })
         .await
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
     }
 }
 

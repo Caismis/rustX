@@ -15,14 +15,14 @@
 
 pub mod artifacts;
 pub mod background;
-pub mod deadline;
+pub use rustx_types::tools::deadline;
 pub mod environment;
 #[cfg(test)]
 pub mod execution_environment;
 pub mod executor;
 pub mod host;
 pub mod invocation;
-pub mod limits;
+pub use rustx_types::tools::limits;
 pub mod locator;
 pub(crate) mod managed_import;
 pub mod managed_output;
@@ -31,10 +31,10 @@ pub mod native;
 pub(crate) mod output;
 pub mod python;
 pub mod runtime;
-pub mod schema;
-pub mod session_files;
+pub use rustx_types::tools::schema;
+pub use rustx_types::tools::session_files;
 pub mod todo;
-pub mod types;
+pub use rustx_types::tools::types;
 pub mod workspace;
 #[cfg(test)]
 pub(crate) use rustx_execution_client::workspace_python;

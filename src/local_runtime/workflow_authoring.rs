@@ -387,7 +387,7 @@ fn parse(
             .map(|error| WorkflowDiagnostic::from_resource(&error));
     let diagnostic = diagnostic.or_else(|| {
         definition
-            .presentation_diagnostics()
+            .presentation_diagnostics(&crate::runtime::workflow::authoring::declared_output)
             .first()
             .map(presentation_diagnostic)
     });

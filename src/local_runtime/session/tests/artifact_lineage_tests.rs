@@ -1,6 +1,5 @@
 //! Artifact copying preserves the same immutable native history as an ordinary copy.
 use super::*;
-use crate::durable::AuxiliaryStore;
 use crate::durable::reading::{ConversationWindowAt, InheritedTurnOutcome};
 use crate::durable::{
     CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,

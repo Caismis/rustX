@@ -597,6 +597,7 @@ impl LocalConversationCore {
         Self::compose_with_access(
             paths,
             dependencies,
+            Arc::new(crate::runtime::types::SystemClock),
             registry,
             runtime_config,
             session_state,
@@ -617,6 +618,7 @@ impl LocalConversationCore {
     pub(crate) async fn compose_with_access(
         paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
+        clock: Arc<dyn crate::runtime::types::RuntimeClock>,
         registry: ModelBindingRegistry,
         runtime_config: CurrentRuntimeConfig,
         session_state: SessionPersistentState,
@@ -694,6 +696,7 @@ impl LocalConversationCore {
                 }));
             }
             tool_runtime_config.execution_scope = execution_scope;
+            tool_runtime_config.clock = Some(clock.clone());
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
@@ -980,7 +983,7 @@ impl LocalConversationCore {
                     tool_runtime: tool_runtime.clone(),
                     capability: capability.clone(),
                     resources,
-                    clock: None,
+                    clock: Some(clock),
                     initial_messages,
                     subagents: Some(subagents),
                     role: ConversationRole::Root,

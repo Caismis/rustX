@@ -55,18 +55,20 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
     bounded(async {
         let mut f = Fixture::with_session_count(None, 1).await;
         f.install_scheduled_workflow("Native execution");
-        // Start one delay before the wall-clock UTC used by native Workflow
-        // settlement, so ordinary retention keeps the just-completed schedule.
-        let clock = Arc::new(Clock(Mutex::new(Utc::now() - Duration::seconds(60))));
+        // A fallback to wall time would make this freshly admitted Schedule
+        // older than the 30-day retention window when its Workflow settles.
+        let clock = Arc::new(Clock(Mutex::new(DateTime::UNIX_EPOCH)));
         f.manager.schedule_clock = clock.clone();
         let resident = f.load(0).await.unwrap().unwrap();
         let runtime = resident.inspect_runtime().unwrap();
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        runtime.install_scheduled_settlement_gate(gate.clone());
         let created = scheduled(&f).await;
-        let session = &f.sessions[0];
         clock.add(60);
-        let admission = f
-            .manager
-            .schedule_operation(
+        let session = &f.sessions[0];
+        let admit = || {
+            f.manager.schedule_operation(
                 &session.id,
                 &session.active_node,
                 ScheduleOperation::Admit {
@@ -74,54 +76,58 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
                     expected_revision: created.revision,
                 },
             )
+        };
+        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+            snapshot,
+            start,
+        }) = admit().await.unwrap()
+        else {
+            panic!("native target admission")
+        };
+        tokio::task::spawn_blocking(move || gate.wait_entered())
             .await
             .unwrap();
-        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
-            start,
-            snapshot,
-        }) = admission
-        else {
-            panic!("expected native Workflow admission, got {admission:?}");
-        };
+        let before_settlement = admit().await.unwrap();
+        assert!(matches!(
+            before_settlement,
+            ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current })
+                if current.revision == snapshot.revision
+        ));
+
+        clock.add(1);
+        drop(release);
         let view = finished(&f, &runtime, &start.id).await;
+        let after_settlement = admit().await.unwrap();
+        assert!(
+            matches!(
+                &after_settlement,
+                ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current })
+                    if current.revision == snapshot.revision
+            ),
+            "stale admission after settlement returned {after_settlement:?}"
+        );
         assert!(matches!(
             view.start.state,
             ScheduledWorkflowState::Settled {
                 outcome: ScheduledWorkflowOutcome::Completed,
-                ..
-            }
+                settled_at,
+            } if settled_at == clock.now()
         ));
         assert_eq!(
             view.result,
             Some(serde_json::json!({"answer":"native durable return"}))
         );
         assert!(!view.capacity_blocked && !view.deletion_blocked);
-        let retry = f
-            .manager
-            .schedule_operation(
-                &session.id,
-                &session.active_node,
-                ScheduleOperation::Admit {
-                    id: created.id,
-                    expected_revision: created.revision,
-                },
-            )
-            .await
-            .unwrap();
-        let ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current }) =
-            retry
-        else {
-            panic!("expected the existing admission on retry, got {retry:?}");
-        };
-        assert_eq!(current, snapshot);
         let store = runtime.tool_runtime().durable_store();
         let events = store.read_events(None, 256).unwrap().events;
         assert_eq!(
             events
                 .iter()
-                .filter(|event| matches!(&event.event,
+                .filter(|event| matches!(
+                    &event.event,
                     RuntimeEvent::WorkflowStarted { run_id, tool_call_id: None, .. }
-                        if run_id == &start.run_id))
+                        if run_id == &start.run_id
+                ))
                 .count(),
             1
         );
@@ -132,7 +138,7 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
         );
         assert_eq!(
             store.load_pending().unwrap(),
-            [] as [crate::durable::inbox::PendingInboundItem; 0]
+            [] as [rustx_durable::PendingInboundItem; 0]
         );
         f.close().await;
     })
@@ -469,7 +475,13 @@ async fn reopened_workflow(claim_before_reopen: bool) {
             let store = crate::durable::SqliteConversationStore::recover_existing(
                 conversation.clone(),
                 &access.database_path,
-                &controller,
+                std::sync::Arc::new(
+                    crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                        controller.clone(),
+                        access.database_path.parent().unwrap(),
+                    )
+                    .unwrap(),
+                ),
             )
             .unwrap();
             let accepted = store.scheduled_workflow_get(&start.id).unwrap().unwrap();

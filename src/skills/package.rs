@@ -36,8 +36,7 @@ use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance
 use crate::skills::identity::definition_version_id;
 use crate::skills::source::{AutomaticSkillRoot, SkillSource};
 
-/// The canonical primary instructions file name of a Skill package.
-pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
+pub use rustx_types::skills::package::SKILL_MARKDOWN_FILE;
 
 /// The recommended maximum length of a standard Skill name.
 pub const MAX_SKILL_NAME_CHARS: usize = 64;

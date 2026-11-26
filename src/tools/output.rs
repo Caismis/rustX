@@ -32,7 +32,7 @@ use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSp
 use crate::tools::types::ManagedOutputContinuation;
 use crate::tools::types::TruncationState;
 
-mod stdout;
+pub(crate) use rustx_types::tools::output::stdout;
 pub(crate) use stdout::BoundedStdoutCapture;
 
 /// Test-only observation seam for committed background appends.

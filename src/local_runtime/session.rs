@@ -65,7 +65,7 @@ macro_rules! profile_stage {
 }
 
 #[cfg(test)]
-pub(crate) mod create_profile;
+pub use rustx_types::local_runtime::session::create_profile;
 
 /// The persisted native session-catalog schema.
 ///
@@ -494,10 +494,12 @@ struct PersistedSession {
 mod artifacts;
 mod catalog_commit;
 mod creation;
-mod invalidations;
+pub use rustx_types::local_runtime::session::invalidations;
 mod lineage;
 mod metadata;
 mod projection;
+#[cfg(test)]
+pub(crate) use projection::preview_of;
 pub mod threads;
 mod title;
 pub use catalog_commit::CatalogCommitError;
@@ -510,7 +512,6 @@ pub(crate) use invalidations::SessionSummaryInvalidations;
 pub(crate) use lineage::PreparedLineage;
 #[cfg(test)]
 pub(crate) use lineage::{lineage_cut, remap_seed};
-pub(crate) use projection::preview_of;
 pub(crate) mod deletion;
 pub mod uploads;
 
@@ -838,8 +839,17 @@ impl SessionCatalog {
                     detail: "ambiguous or cyclic durable ownership".into(),
                 });
             }
-            let store = SqliteConversationStore::recover_existing(id, &path, guard)
-                .map_err(SessionError::Store)?;
+            let access =
+                crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                    guard.clone(),
+                    path.parent().ok_or(SessionError::Catalog {
+                        detail: "missing allocation".into(),
+                    })?,
+                )
+                .map_err(|e| SessionError::Store(ConversationStoreError::Storage(e.to_string())))?;
+            let store =
+                SqliteConversationStore::recover_existing(id, &path, std::sync::Arc::new(access))
+                    .map_err(SessionError::Store)?;
             // Child references are the ownership facts alone, read through
             // the Journal kind index.
             for event in

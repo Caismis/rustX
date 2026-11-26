@@ -491,7 +491,7 @@ pub(crate) fn workflow_document_to_bytes(
     schema
         .convert_wire(&mut value, true)
         .map_err(str::to_owned)?;
-    let mut output = crate::bounded_file::LimitedWriter::new(
+    let mut output = rustx_bounded_file::LimitedWriter::new(
         Vec::new(),
         super::workflow_documents::MAX_TRANSFER_BYTES,
     );

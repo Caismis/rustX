@@ -2,6 +2,7 @@
 //! coordinator, not an Agent Attempt.
 
 use super::*;
+use crate::durable::observation::NativeObservationBatch;
 
 pub(super) struct ManualCompactionTaskResult {
     pub(super) committed_failure: Option<ExecutedCompaction>,
@@ -297,7 +298,10 @@ impl RuntimeInner {
         let Some(fanout) = self.pending.get() else {
             return;
         };
-        let batch = persisted.observation.as_deref();
+        let batch = persisted
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>());
         if !fanout
             .native_manual_compaction(request, batch)
             .is_installed()

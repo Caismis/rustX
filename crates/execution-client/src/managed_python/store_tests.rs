@@ -227,3 +227,46 @@ async fn independent_stores_reuse_the_exclusive_winner_and_refuse_corruption() {
         1
     );
 }
+
+/// Overlapping callers coalesce onto one elected build owner (before any
+/// `read_prepared_state` check runs), and a subsequent caller after publication
+/// reuses the published state without starting a second physical build.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_and_post_publish_callers_run_one_physical_build() {
+    let mut fixture = StoreFixture::new();
+    let store = fixture.store();
+    let first = fixture.start(store.clone(), ProcessSignal::new());
+    let stage = fixture.stage().await;
+    let attached_to = store
+        .inner
+        .in_flight
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let unshared = Arc::strong_count(&attached_to);
+    let second = fixture.start(store.clone(), ProcessSignal::new());
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while Arc::strong_count(&attached_to) <= unshared {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("second caller joined the in-flight build");
+    stage.resume.send(()).unwrap();
+    let first_prepared = first.await.unwrap().expect("first preparation");
+    let second_prepared = second.await.unwrap().expect("second preparation");
+    assert_eq!(first_prepared, second_prepared);
+    let third_prepared = store
+        .ensure_prepared(&fixture.package, &ProcessSignal::new())
+        .await
+        .expect("post-publish preparation");
+    assert_eq!(third_prepared, first_prepared);
+    assert_eq!(
+        fixture.runner.count.load(Ordering::SeqCst),
+        1,
+        "overlapping and post-publish callers must run exactly one physical build"
+    );
+}

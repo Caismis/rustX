@@ -102,19 +102,7 @@ pub const REQUIREMENTS_FILE: &str = "requirements.txt";
 /// under `tools.<name>.permissions`. Absent means product/matrix defaults.
 pub const PERMISSIONS_FILE: &str = "permissions.toml";
 
-/// A package discovery/preparation failure.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum PythonToolError {
-    /// The package is malformed.
-    #[error("invalid Python tool package: {0}")]
-    InvalidPackage(String),
-    /// Prepared state could not be read or published.
-    #[error("Python tool storage failed: {0}")]
-    Storage(String),
-    /// The dependency environment could not be checked or materialized.
-    #[error("Python tool environment failed: {0}")]
-    Environment(String),
-}
+pub use rustx_types::tools::python::PythonToolError;
 
 /// Package-local permission authoring document (`permissions.toml`).
 ///
@@ -620,7 +608,7 @@ fn parse_permissions_document(
     PythonToolError,
 > {
     let path = root.join(PERMISSIONS_FILE);
-    let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
+    let bytes = rustx_bounded_file::read_bounded(&path).map_err(|error| {
         invalid(format!(
             "{PERMISSIONS_FILE}: cannot read resource permissions: {error}"
         ))
@@ -703,21 +691,7 @@ fn collect_files(
     Ok(files)
 }
 
-pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
-    if identifier.is_empty()
-        || identifier.starts_with('-')
-        || identifier.ends_with('-')
-        || identifier.contains("--")
-        || !identifier.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        })
-    {
-        return Err(PythonToolError::InvalidPackage(format!(
-            "invalid package name {identifier:?}"
-        )));
-    }
-    Ok(())
-}
+pub(crate) use rustx_types::tools::python::validate_identifier;
 
 /// Parses the normalized requirement lines of one `requirements.txt`.
 ///

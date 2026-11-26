@@ -1696,7 +1696,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         panic!("catalog")
     };
     assert_eq!(page.data.len(), 1);
-    assert!(crate::bounded_file::json_fits(&page, 32_768));
+    assert!(rustx_bounded_file::json_fits(&page, 32_768));
     assert_eq!(page.data[0].catalog.name, "large");
     let preview = page.data[0].catalog.description.strip_suffix('…').unwrap();
     assert!(!preview.is_empty() && description.starts_with(preview));
@@ -1739,7 +1739,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         else {
             panic!("metadata")
         };
-        assert!(crate::bounded_file::json_fits(&content, 131_072));
+        assert!(rustx_bounded_file::json_fits(&content, 131_072));
         metadata.extend(
             base64::engine::general_purpose::STANDARD
                 .decode(content.data_base64)
@@ -2009,7 +2009,7 @@ pub(crate) async fn skill_catalog_page_scenario() {
         else {
             panic!("catalog page")
         };
-        assert!(crate::bounded_file::json_fits(&page.data, 131_072));
+        assert!(rustx_bounded_file::json_fits(&page.data, 131_072));
         assert_ne!(
             page.data,
             [] as [crate::local_runtime::skill_management::SkillDescriptor; 0]

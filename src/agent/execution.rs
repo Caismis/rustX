@@ -71,12 +71,12 @@
 
 use crate::events::types::RuntimeEvent;
 #[cfg(test)]
-pub(crate) mod attribution;
+pub(crate) use rustx_types::agent::execution::attribution;
 mod compaction;
 mod construction;
 mod publication;
 mod recovery;
-mod request;
+pub mod request;
 mod start;
 mod step;
 mod stream;

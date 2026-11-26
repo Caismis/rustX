@@ -275,7 +275,7 @@ impl UserConfigManager {
         let policy_effective = layers.merged.clone();
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
-        let (context, read) = crate::bounded_file::recording_reads(|| {
+        let (context, read) = rustx_bounded_file::recording_reads(|| {
             self.resolve_captured_layers(
                 layers,
                 true,

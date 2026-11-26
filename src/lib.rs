@@ -6,8 +6,6 @@
 
 pub mod agent;
 pub mod app_server;
-mod bounded_file;
-mod bounded_json;
 pub mod capabilities;
 pub mod context;
 pub mod conversation;
@@ -19,7 +17,7 @@ pub mod local_runtime;
 pub mod message;
 pub mod model;
 pub mod observation;
-mod package_io;
+pub(crate) use rustx_types::package_io;
 pub mod protocol;
 pub mod publication;
 pub mod runtime;
@@ -27,7 +25,9 @@ pub mod runtime_client;
 pub mod scheduler;
 pub mod session_archive;
 pub mod skills;
-pub mod toml_authoring;
+pub mod toml_authoring {
+    pub use rustx_types::toml_authoring::*;
+}
 pub mod tools;
 pub mod workflow_file;
 pub mod workspace_changes;
@@ -51,6 +51,12 @@ mod launch_fixture;
 /// published API and neither is reachable from an external test binary;
 /// the suites therefore compile as part of this crate's test build. Their
 /// sources stay under `tests/` so `src/` carries production code only.
+///
+/// The suite declarations are `cfg(target_os = "linux")`: macOS CI never
+/// executes these deterministic contracts (it selects only the
+/// platform-sensitive lanes), so the suite bodies are not code-generated on
+/// macOS at all. `common` and `support` remain mounted on every platform
+/// because the boundary suites share them.
 ///
 /// Every suite here is a deterministic contract: no real process, signal,
 /// stdio/IPC, or platform-semantics boundary is under test. Suites whose

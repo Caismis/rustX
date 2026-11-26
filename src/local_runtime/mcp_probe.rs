@@ -189,7 +189,7 @@ async fn probe_query(
             Ok::<_, SettingsError>((binding, workspace, resolve_scope))
         })
         .await
-        .map_err(|_| SettingsError::Io)??;
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))??;
         let (outcome, page, unsettled) = run_query(
             &id,
             &binding,
@@ -229,7 +229,7 @@ async fn probe_query(
             capture(&owner, &target, &check_id, &check_revision, scope.as_ref())
         })
         .await
-        .map_err(|_| SettingsError::Io)??;
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))??;
         Ok(McpProbeResult {
             id,
             revision,
@@ -238,7 +238,7 @@ async fn probe_query(
         })
     })
     .await
-    .map_err(|_| SettingsError::Io)?
+    .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
 }
 
 fn capture(

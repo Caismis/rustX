@@ -193,7 +193,7 @@ async fn t08_t12_t14_t19_cold_host_giant_owner_uses_original_inherited_identity_
         [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
     assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
-    assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
 }
 
 #[tokio::test]
@@ -264,7 +264,7 @@ async fn t08_t12_t14_t19_cold_host_response_only_giant_owner_uses_original_ident
         store.load_inherited_responses().unwrap(),
         seed.completed_responses()
     );
-    assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
 }
 
 #[tokio::test]
@@ -354,8 +354,8 @@ async fn t08_t12_t14_t19_cold_giant_turn_page_navigates_by_native_ordinal() {
         [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
     assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
-    assert!(crate::observation::bounded::bounded_bytes(&page, 65_536).is_some());
-    assert!(crate::observation::bounded::bounded_bytes(&window, 786_432).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(&page, 65_536).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(&window, 786_432).is_some());
 }
 
 fn read_local_owner(

@@ -569,6 +569,11 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
     has_lib = any(kind == ("lib",) or "rlib" in kind for kind, _ in all_targets)
 
     test_records = run_cargo_json(test_cmd, work_dir)
+    json_out = os.environ.get("RUSTX_PREPARED_JSON_OUT")
+    if json_out:
+        Path(json_out).write_text(
+            "".join(json.dumps(row) + "\n" for row in test_records)
+        )
     libraries, binaries, harnesses = collect_package_artifacts(
         test_records, pkg_id, manifest_path, all_targets
     )

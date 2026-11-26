@@ -185,11 +185,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
 
-use crate::durable::InboundDraft;
-use crate::events::{
-    BackgroundTerminalState, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
-    RuntimeEventSink,
-};
+use crate::events::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, RuntimeEventSink};
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
 use crate::runtime::RuntimeClock;
@@ -202,7 +198,7 @@ use crate::runtime::types::{
     CancellationReason, ConversationLifecycle, DurabilityCommitGuard, DurabilityGate,
     OwnershipCommitRefused,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
@@ -270,173 +266,7 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 /// reaches a terminal outcome. An internal unpublished prepared
 /// state implements dispatch atomicity but never leaks as an accepted
 /// execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum BackgroundLifecycle {
-    /// The dispatch committed and the runner is starting.
-    Starting,
-    /// The runner is executing.
-    Running,
-    /// Cancellation intent committed and the cancellation was requested.
-    /// This is non-terminal: terminal certainty is still pending and the
-    /// executor's returned settlement decides the terminal state.
-    Cancelling,
-    /// The executor returned its terminal candidate; the registry owns
-    /// durable terminal publication, which has not committed yet.
-    PublishingTerminal,
-    /// The execution succeeded.
-    Succeeded,
-    /// The execution reached a known failure: the executor proved a failed
-    /// terminal outcome. `Failed` never means "anything that is not success
-    /// or cancelled" — an unproven outcome is [`Self::OutcomeUnknown`].
-    Failed,
-    /// Invocation was refused by policy or approval authority.
-    Denied,
-    /// The executor proved physical cancellation settlement; the canonical
-    /// terminal result carries the registry-retained cancellation reason and
-    /// the phase derived from its logical start frontier.
-    Cancelled,
-    /// The execution's deadline expired and the executor proved the
-    /// terminal settlement (see [`ToolExecutionStatus::TimedOut`]).
-    TimedOut,
-    /// The executor returned without being able to prove the external
-    /// outcome (see [`ToolExecutionStatus::OutcomeUnknown`]). This is a
-    /// first-class terminal state: the execution is settled as far as this
-    /// runtime is concerned, but its external outcome is genuinely unknown
-    /// and is never collapsed into [`Self::Failed`].
-    OutcomeUnknown,
-}
-
-/// The read-only observation seam of the background registry.
-///
-/// A state observer receives the authoritative snapshot of one background
-/// execution after every published registry transition (dispatch commit,
-/// start, progress, cancellation request, and terminal settlement). The
-/// callback fires while the registry synchronization boundary is held, so
-/// the observed order is exactly the registry linearization order. An
-/// observer must never call back into the registry; the Runtime Client
-/// projection (Issue #37) treats each callback as one projection fold
-/// under its own synchronization boundary.
-pub trait BackgroundObserver: Send + Sync {
-    /// Observes one authoritative registry transition snapshot.
-    fn on_snapshot(
-        &self,
-        snapshot: &BackgroundExecutionSnapshot,
-        cut: crate::runtime::identity::ObservationCollectionCut,
-        ordinal: Option<u64>,
-    );
-    /// Publishes installed native state together with its exact durable receipt.
-    fn on_committed(
-        &self,
-        snapshot: &BackgroundExecutionSnapshot,
-        _committed: &crate::events::types::RuntimeEventEnvelope,
-        cut: crate::runtime::identity::ObservationCollectionCut,
-        ordinal: Option<u64>,
-    ) {
-        self.on_snapshot(snapshot, cut, ordinal);
-    }
-}
-
-/// The narrow durability-failure seam of the background settlement owner
-/// (Issue #63).
-///
-/// Once a background executor has returned, the registry owns settlement
-/// until a terminal outcome exists: the runner performs the bounded
-/// publication budget itself (the initial attempt inside `finish` plus
-/// exactly one registry-owned retry under the same deterministic
-/// correlation). When that bounded budget is exhausted, the unresolved
-/// terminal candidate stays retained in the explicit non-terminal
-/// [`BackgroundLifecycle::PublishingTerminal`] state and the registry
-/// reports the failure through this seam, so the owning
-/// `ConversationRuntime` enters its explicit durable-failure state. A
-/// standalone never-claimed registry may retain the observable candidate
-/// without this runtime-owned degraded outcome because no owner exists.
-///
-/// The sink is invoked by the runner **without** the registry lock held:
-/// the runtime-side implementation acquires the coordinator lock, and the
-/// lock graph already has a coordinator -> registry edge (the bootstrap
-/// handshake), so holding the registry lock across this call could
-/// deadlock.
-///
-/// This call is the runner's **last conversation-facing callback**, and it
-/// is ordered *before* the registry publishes `publication_abandoned` (M9c):
-/// runtime drain consumes the abandoned fact as settlement, so a drain that
-/// observed it while this callback were still runnable could cache a failed
-/// shutdown ahead of a real conversation callback. Implementations may
-/// therefore assume the caller keeps a lifecycle settlement admission alive
-/// across this call.
-pub trait BackgroundDurabilityFailureSink: Send + Sync {
-    /// The bounded terminal-publication budget of `execution_id` was
-    /// exhausted; the terminal candidate remains retained by the registry
-    /// in the non-terminal `PublishingTerminal` state.
-    fn terminal_publication_failed(&self, execution_id: &ToolExecutionId, diagnostic: String);
-}
-
-impl BackgroundLifecycle {
-    /// Whether this state is terminal (absorbing).
-    #[must_use]
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Succeeded
-                | Self::Failed
-                | Self::Denied
-                | Self::Cancelled
-                | Self::TimedOut
-                | Self::OutcomeUnknown
-        )
-    }
-
-    /// Whether this state is active (non-terminal).
-    #[must_use]
-    pub fn is_active(self) -> bool {
-        !self.is_terminal()
-    }
-
-    /// The stable serialized name of the state.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Cancelling => "cancelling",
-            Self::PublishingTerminal => "publishing_terminal",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Denied => "denied",
-            Self::Cancelled => "cancelled",
-            Self::TimedOut => "timed_out",
-            Self::OutcomeUnknown => "outcome_unknown",
-        }
-    }
-}
-
-/// The one canonical read-only snapshot of one background execution.
-///
-/// The snapshot is reused by registry queries, `job_status`,
-/// `job_cancel`, Agent Status projection input, and
-/// deterministic tests. It never exposes internal task handles or process
-/// ids.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BackgroundExecutionSnapshot {
-    /// Native Bash presentation, derived from the canonical invocation.
-    pub bash: Option<Arc<crate::tools::types::BashPresentation>>,
-    /// The detached runtime execution identity.
-    pub execution_id: ToolExecutionId,
-    /// The canonical tool identity.
-    pub tool_id: Arc<ToolId>,
-    /// The model-facing tool name.
-    pub tool_name: Arc<str>,
-    /// The authoritative lifecycle state.
-    pub state: BackgroundLifecycle,
-    /// The latest bounded progress snapshot, when any was reported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress: Option<ToolProgress>,
-    /// The bounded terminal result, when terminal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<Arc<ToolExecutionResult>>,
-}
+pub use rustx_types::tools::background::*;
 
 /// Borrowed read evidence from the native Job owner, with no copied result body.
 #[derive(Serialize, schemars::JsonSchema)]
@@ -451,7 +281,7 @@ pub(crate) struct BackgroundObservationValue<'a> {
 }
 #[derive(Clone)]
 pub(crate) struct BackgroundObservationSource {
-    layout: crate::runtime::read_layout::ObservationLayoutCache,
+    layout: rustx_durable::read_layout::ObservationLayoutCache,
     bash: Option<Arc<crate::tools::types::BashPresentation>>,
     job_id: ToolExecutionId,
     tool_id: Arc<ToolId>,
@@ -512,11 +342,11 @@ impl BackgroundObservationSource {
 
     pub(crate) fn indexed(
         &self,
-    ) -> Result<&crate::runtime::read_layout::SeekableObservationSource, &'static str> {
+    ) -> Result<&rustx_durable::read_layout::SeekableObservationSource, &'static str> {
         self.layout
             .get_or_init(|| {
                 self.with_value(|value| {
-                    crate::runtime::read_layout::SeekableObservationSource::new(value)
+                    rustx_durable::read_layout::SeekableObservationSource::new(value)
                 })
             })
             .as_ref()
@@ -876,7 +706,7 @@ enum NotificationState {
 
 /// One published background record.
 struct BackgroundRecord {
-    observation_layout: crate::runtime::read_layout::ObservationLayoutCache,
+    observation_layout: rustx_durable::read_layout::ObservationLayoutCache,
     bash: Option<Arc<crate::tools::types::BashPresentation>>,
     client_output: Option<std::path::PathBuf>,
     /// Absorbing logical start frontier, owned by `mark_running`.
@@ -2473,14 +2303,14 @@ impl ConversationBackgroundRegistry {
         // Durable acceptance commits **before** the terminal lifecycle.
         let correlation = format!("background-terminal:{}", execution_id.as_str());
         let event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
-        let event = background_terminal_event(
+        let event = crate::durable::background_facts::background_terminal_event(
             &self.conversation_id,
             &event_id,
             &notification,
             execution_id,
             settled,
         );
-        let draft = inbound_draft(notification, correlation);
+        let draft = crate::durable::background_facts::inbound_draft(notification, correlation);
         let mut committed_sequence = None;
         match self.resources.mailbox.accept_draft_with_event(draft, event) {
             Ok((_, committed)) => {
@@ -2658,14 +2488,14 @@ impl ConversationBackgroundRegistry {
         );
         let correlation = format!("background-terminal:{}", execution_id.as_str());
         let event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
-        let event = background_terminal_event(
+        let event = crate::durable::background_facts::background_terminal_event(
             &self.conversation_id,
             &event_id,
             &notification,
             execution_id,
             candidate.settled,
         );
-        let draft = inbound_draft(notification, correlation);
+        let draft = crate::durable::background_facts::inbound_draft(notification, correlation);
         let mut committed_sequence = None;
         match self.resources.mailbox.accept_draft_with_event(draft, event) {
             Ok((_, committed)) => {
@@ -3462,76 +3292,6 @@ fn terminal_candidate(
     })
 }
 
-fn inbound_draft(notification: UserMessageBlock, correlation: String) -> InboundDraft {
-    let timestamp = notification
-        .timestamp
-        .expect("background terminal notifications carry a timestamp");
-    InboundDraft {
-        message_id: Some(notification.id.clone()),
-        source: notification.source,
-        kind: notification.kind,
-        content: notification.content,
-        timestamp,
-        correlation: Some(correlation),
-    }
-}
-
-fn background_terminal_event(
-    conversation_id: &ConversationId,
-    event_id: &EventId,
-    notification: &UserMessageBlock,
-    execution_id: &ToolExecutionId,
-    state: BackgroundLifecycle,
-) -> RuntimeEventEnvelope {
-    background_publication_event(
-        conversation_id,
-        event_id,
-        notification,
-        execution_id,
-        match state {
-            BackgroundLifecycle::Succeeded => BackgroundTerminalState::Succeeded,
-            BackgroundLifecycle::Failed => BackgroundTerminalState::Failed,
-            BackgroundLifecycle::Denied => BackgroundTerminalState::Denied,
-            BackgroundLifecycle::Cancelled => BackgroundTerminalState::Cancelled,
-            BackgroundLifecycle::TimedOut => BackgroundTerminalState::TimedOut,
-            BackgroundLifecycle::OutcomeUnknown => BackgroundTerminalState::OutcomeUnknown,
-            BackgroundLifecycle::Starting
-            | BackgroundLifecycle::Running
-            | BackgroundLifecycle::Cancelling
-            | BackgroundLifecycle::PublishingTerminal => {
-                unreachable!("only terminal background states are published")
-            }
-        },
-    )
-}
-
-fn background_publication_event(
-    conversation_id: &ConversationId,
-    event_id: &EventId,
-    notification: &UserMessageBlock,
-    execution_id: &ToolExecutionId,
-    state: BackgroundTerminalState,
-) -> RuntimeEventEnvelope {
-    RuntimeEventEnvelope {
-        tool_occurrence: None,
-        observation: None,
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: event_id.clone(),
-        sequence: 0,
-        conversation_id: conversation_id.clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp: notification
-            .timestamp
-            .expect("background terminal notifications carry a timestamp"),
-        event: RuntimeEvent::BackgroundTerminalPublished {
-            execution_id: execution_id.clone(),
-            message_id: notification.id.clone(),
-            state,
-        },
-    }
-}
-
 /// The durable ownership fact of one detached execution (Issue #12, M9a).
 ///
 /// The fact carries exactly the identity a restart needs to answer "which
@@ -3582,36 +3342,6 @@ fn background_ownership_event(
 /// The published state is [`BackgroundTerminalState::OutcomeUnknown`], never
 /// `Failed`: the old task/process did not survive the restart and its actual
 /// external outcome is unknown. Nothing is relaunched.
-pub(crate) fn recovery_terminal_publication(
-    conversation_id: &ConversationId,
-    execution_id: &ToolExecutionId,
-    tool_name: &str,
-    timestamp: chrono::DateTime<chrono::Utc>,
-) -> (InboundDraft, RuntimeEventEnvelope) {
-    let notification = UserMessageBlock {
-        id: MessageId::new(format!("background-{}-terminal", execution_id.as_str())),
-        content: vec![UserContentBlock::Text(TextBlock {
-            text: format!(
-                "Background execution {} ({tool_name}) was interrupted by a runtime restart: \
-                 its actual outcome is unknown and it was not restarted.",
-                execution_id.as_str()
-            ),
-        })],
-        source: UserSource::Runtime,
-        kind: InboundKind::Message,
-        timestamp: Some(timestamp),
-    };
-    let event = background_publication_event(
-        conversation_id,
-        &EventId::new(format!("background-terminal-event:{execution_id}")),
-        &notification,
-        execution_id,
-        BackgroundTerminalState::OutcomeUnknown,
-    );
-    let correlation = format!("background-terminal:{}", execution_id.as_str());
-    (inbound_draft(notification, correlation), event)
-}
-
 /// The background progress reporter handed to detached executors: it
 /// updates the registry's latest progress snapshot and emits the
 /// corresponding canonical execution fact.
@@ -4365,7 +4095,7 @@ mod tests {
                 resume_rx.recv().unwrap();
                 let text = captured.direct_text(&["tool_id".into()]).unwrap();
                 let offset = u64::try_from(text.len() - 65_536).unwrap();
-                let chunk = crate::runtime::read_layout::text_chunk(text, offset, 65_536).unwrap();
+                let chunk = rustx_durable::read_layout::text_chunk(text, offset, 65_536).unwrap();
                 assert_eq!(
                     chunk.bytes,
                     original.as_str().as_bytes()[text.len() - 65_536..]

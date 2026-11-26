@@ -2649,12 +2649,23 @@ async fn image_tool_round_trip_and_text_model_switch() {
                 result => panic!("failed to observe the runtime before compaction: {result:?}"),
             }
         }
-        assert!(matches!(
-            driver.compact_context().await.unwrap(),
-            MethodResult::ContextCompacted {
-                compaction: Some(_)
+        // Manual compaction invokes the production summary request builder and
+        // adapter over the image-bearing canonical span, not a helper-only mock.
+        // Attempt settlement is logical; the coordinator may still own its tail.
+        // A Busy refusal admits nothing, so retry until the native owner returns.
+        // The wire message is the generic "Operation rejected"; the Busy/invalid
+        // admission state travels in `data` as `InvalidState`.
+        loop {
+            match driver.compact_context().await {
+                Err(error) if error.data == Some(ErrorData::InvalidState) => {
+                    tokio::task::yield_now().await;
+                }
+                Ok(MethodResult::ContextCompacted {
+                    compaction: Some(_),
+                }) => break,
+                other => panic!("unexpected manual compaction outcome: {other:?}"),
             }
-        ));
+        }
     })
     .await
     .expect("native owners must return and manual compaction must settle");

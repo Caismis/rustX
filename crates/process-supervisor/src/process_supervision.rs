@@ -58,7 +58,7 @@
 //! The only OS mutation is one `prctl` scalar syscall with a literal
 //! enable value, executed at most once per process lifetime.
 //!
-//! [`PR_SET_CHILD_SUBREAPER`]: libc::PR_SET_CHILD_SUBREAPER
+//! [`PR_SET_CHILD_SUBREAPER`]: https://docs.rs/libc/latest/aarch64-unknown-linux-gnu/libc/constant.PR_SET_CHILD_SUBREAPER.html
 
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
