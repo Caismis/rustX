@@ -193,7 +193,6 @@ pub(crate) fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable::AuxiliaryStore;
     use crate::durable::CanonicalStore;
     use crate::durable::JournalStore;
     use crate::durable::ObservationStore;
@@ -746,7 +745,7 @@ mod tests {
             ),
         };
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &record,
                 crate::model::auxiliary::AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
             )
@@ -782,14 +781,14 @@ mod tests {
             ),
         };
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &record,
                 crate::model::auxiliary::AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
             )
             .is_none()
         );
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &record,
                 crate::model::auxiliary::AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX,
             )

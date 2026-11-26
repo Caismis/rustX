@@ -7,6 +7,7 @@ import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote,openEmptySession,choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { replaceCodeMirrorText } from './codemirror';
 
 for(const width of [1440,390])test.describe(`Template panel ${width}`,()=>{
   test.use({viewport:{width,height:1000},hasTouch:width===390});
@@ -32,7 +33,7 @@ for(const width of [1440,390])test.describe(`Template panel ${width}`,()=>{
       const inputBox=(await names.first().boundingBox())!,referenceBox=(await panel.getByRole('button',{name:'选择变量',exact:true}).first().boundingBox())!;
       expect(inputBox.x+inputBox.width).toBeLessThanOrEqual(referenceBox.x);expect(Math.abs(inputBox.height-referenceBox.height)).toBeLessThan(1);
       await panel.getByRole('button',{name:'删除输入 arg1',exact:true}).click();
-      await code.fill('Result: ');await code.press('End');await code.press('/');
+      await replaceCodeMirrorText(code,'Result: ');await code.press('End');await code.press('/');
       const picker=page.getByRole('dialog',{name:'选择变量',exact:true});await expect(picker).toBeVisible();
       await expect(picker.getByRole('button',{name:/^args \/ query /})).toBeVisible();
       // Native analysis grows the loading popup; autoUpdate positions the new
@@ -48,13 +49,13 @@ for(const width of [1440,390])test.describe(`Template panel ${width}`,()=>{
       await page.getByRole('button',{name:'撤销',exact:true}).click();await expect(names).toHaveCount(1);await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}{']);
       await page.getByRole('button',{name:'重做',exact:true}).click();await expect(names).toHaveCount(2);await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}{{ priority }}']);
       await names.nth(1).fill('importance');await names.nth(1).press('Enter');await expect(code).toContainText('{{ importance }}');
-      const source='{{ question.strip() | upper }} / {{ importance }}\n{% if question %}{{ question }}{% endif %}';await code.fill(source);await code.blur();
+      const source='{{ question.strip() | upper }} / {{ importance }}\n{% if question %}{{ question }}{% endif %}';await replaceCodeMirrorText(code,source);await code.blur();
       await expect(editor.locator('.cm-gutters')).toBeVisible();await expect(editor.locator('.tok-keyword').first()).toBeVisible();
       await editor.getByRole('button',{name:'复制',exact:true}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(source);
       await editor.getByRole('button',{name:'展开',exact:true}).click();await expect(editor).toHaveCSS('position','fixed');
       const body=(await panel.locator('[data-workflow-inspector-body]').boundingBox())!,expanded=(await editor.boundingBox())!;expect(Math.abs(expanded.height-body.height)).toBeLessThan(2);
       await code.click();await code.press('ControlOrMeta+End');await code.press('/');await expect(picker).toBeVisible();await page.keyboard.press('Escape');await expect(picker).toHaveCount(0);await expect(code).toBeFocused();await expect(editor).toHaveCSS('position','fixed');
-      await code.press('Escape');await expect(panel.locator('[data-template-expanded]')).toHaveCount(0);await code.fill(source);await code.blur();
+      await code.press('Escape');await expect(panel.locator('[data-template-expanded]')).toHaveCount(0);await replaceCodeMirrorText(code,source);await code.blur();
       const output=panel.getByRole('button',{name:'输出变量',exact:true});await expect(output).toHaveAttribute('aria-expanded','false');await output.click();await expect(panel.getByText('转换后的内容。',{exact:true})).toBeVisible();
       await panel.locator('[data-workflow-inspector-body]').evaluate(element=>{element.scrollTop=0;});await panel.screenshot({path:`/tmp/rustx-template-${width}.png`});
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

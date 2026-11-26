@@ -7,7 +7,6 @@
 use super::*;
 use crate::common::provider_emulator::ProviderEmulator;
 use rustx::context::operation::{CompactionOperationPhase, CompactionOperationStatus};
-use rustx::durable::AuxiliaryStore;
 use rustx::model::auxiliary::{
     AuxiliaryBusinessSource, AuxiliaryCallAudit, AuxiliaryCallOutcome, AuxiliaryRequestAudit,
 };

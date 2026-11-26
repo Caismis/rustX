@@ -190,7 +190,7 @@ pub(super) fn authorize_prepared(
                 _ => None,
             });
     if let Some(operation_id) = operation {
-        request.authorize_prompt_fallback(operation_id);
+        crate::model::structured::authorize_prompt_fallback(request, operation_id);
     }
     Ok(())
 }

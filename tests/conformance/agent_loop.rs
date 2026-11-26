@@ -41,7 +41,7 @@ use crate::common::provider_emulator::ProviderEmulator;
 use rustx::app_server::connection::AppServerConnection;
 use rustx::app_server::host::AppServerHost;
 use rustx::app_server::protocol::{
-    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, InitializeParams,
+    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, ErrorData, InitializeParams,
     JsonRpcVersion, Method, MethodResult, NotificationMethod, PresentationCapabilities, Request,
     RequestId, Response, RpcError,
 };
@@ -1852,7 +1852,6 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
 /// summary for an `OpenAI` primary request through both real provider adapters.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
-    use rustx::durable::AuxiliaryStore;
     use rustx::events::types::RuntimeEvent as E;
     use rustx::model::auxiliary::AuxiliaryInputEvidence;
     use rustx::model::session::AuxiliaryModelView;
@@ -2027,7 +2026,7 @@ async fn authored_responses_text_rejection_never_downgrades_the_summary() {
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             let result = driver.compact_context().await;
-            if matches!(&result, Err(error) if matches!(error.data, Some(rustx::app_server::protocol::ErrorData::InvalidState)))
+            if matches!(&result, Err(error) if matches!(error.data, Some(ErrorData::InvalidState)))
                 && emulator.requests().await.len() == 1
             {
                 tokio::task::yield_now().await;
@@ -2035,7 +2034,9 @@ async fn authored_responses_text_rejection_never_downgrades_the_summary() {
             }
             break result;
         }
-    }).await.expect("manual compaction settles");
+    })
+    .await
+    .expect("manual compaction settles");
     assert!(result.is_err(), "{result:?}");
     assert_eq!(driver.snapshot().unwrap().0.context.compaction_count, 0);
     let requests = emulator.requests().await;
@@ -2057,7 +2058,6 @@ async fn assert_compaction_format_rejection(
     protocol: &str,
     wrapper: &str,
 ) {
-    use rustx::durable::AuxiliaryStore;
     use rustx::events::types::RuntimeEvent as E;
     use rustx::model::auxiliary::AuxiliaryInputEvidence;
     use rustx::model::structured::StructuredOutputStrategy;
@@ -2235,7 +2235,6 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
 #[allow(clippy::too_many_lines)]
 async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
     use rustx::context::tokens::{DefaultTokenEstimator, TokenEstimator};
-    use rustx::durable::AuxiliaryStore;
     use rustx::events::types::RuntimeEvent as E;
     use rustx::model::ModelRequestOwner;
     use rustx::model::auxiliary::{
@@ -3529,10 +3528,8 @@ async fn image_tool_round_trip_and_text_model_switch() {
                 };
                 match result {
                     Err(error)
-                        if matches!(
-                            error.data,
-                            Some(rustx::app_server::protocol::ErrorData::InvalidState)
-                        ) && emulator.requests().await.len() == settled_provider_count =>
+                        if matches!(error.data, Some(ErrorData::InvalidState))
+                            && emulator.requests().await.len() == settled_provider_count =>
                     {
                         tokio::task::yield_now().await;
                     }

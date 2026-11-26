@@ -1,516 +1,70 @@
-//! Bounded coordinates for comparable, authenticated prefix coverage.
-//!
-//! A coordinate is meaningful only after the Store verifies its capture and
-//! installation evidence. Comparing values from different roots is never a
-//! claim that either one covers the other.
-
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+//! Seal a Summary only after its frozen chunk cursor has accepted complete coverage.
 
 use crate::context::checkpoint::SummaryGenerationRef;
 use crate::context::chunks::CompletedSourceCoverage;
 use crate::context::resources::ResourceReadCut;
 use crate::context::{ContextError, ContextErrorKind};
-use crate::model::ModelInputMessage;
 use crate::model::SelectedModelInput;
-use crate::model::projected::{
-    CanonicalMessageRef, CheckpointSourceRef, DerivedModelMessage, ProjectedMessage,
-    SemanticTransformation,
-};
-use crate::runtime::identity::ConversationId;
+use crate::model::projected::{CheckpointSourceRef, DerivedModelMessage};
 
-/// The immutable origin of a continuous logical projection prefix.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum CoverageRoot {
-    /// Original canonical projection with no predecessor checkpoint.
-    LedgerGenesis { conversation_id: ConversationId },
-    /// A checkpoint without native coverage, identified by its exact content.
-    OpaqueCheckpoint { source: CheckpointSourceRef },
-}
+pub use rustx_durable::compaction_coverage::VerifiedPrefixCoverage;
+pub(crate) use rustx_durable::compaction_coverage::capture_digest;
+pub use rustx_types::context::coverage::{CoverageRoot, PrefixCoverage};
 
-/// The captured retirement prefix and its coordinate in one coverage root.
-///
-/// `retired_through` is not a Ledger position or a count comparable across
-/// roots. `captured_prefix_items` is interpreted only at `capture_cut` after
-/// the Store has authenticated that exact projection and its predecessor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PrefixCoverage {
-    pub root: CoverageRoot,
-    pub retired_through: u64,
-    pub capture_cut: ResourceReadCut,
-    pub captured_prefix_items: u32,
-    /// Exact captured prefix identity at its original Resource Read Cut.
-    pub capture_digest: String,
-    /// Frozen rendered source bytes actually covered by the accepted chunks.
-    pub rendered_bytes: u64,
-    /// Digest of the frozen rendered source roles, indices and text.
-    pub rendered_digest: String,
-}
-
-impl PrefixCoverage {
-    /// Derive a coordinate from one captured projection predecessor. The
-    /// caller must obtain the predecessor and its digest from native Store
-    /// authority; this arithmetic alone does not authenticate either one.
-    ///
-    /// # Errors
-    /// Rejects an empty/out-of-bounds prefix, foreign predecessor, impossible
-    /// activation shape, or an overflowing logical frontier.
-    pub fn from_capture(
-        capture_cut: ResourceReadCut,
-        captured_prefix_items: u32,
-        capture_digest: String,
-        rendered_bytes: u64,
-        rendered_digest: String,
-        predecessor: Option<(&CheckpointSourceRef, Option<&Self>)>,
-    ) -> Result<Self, &'static str> {
-        let count = u64::from(captured_prefix_items);
-        let (root, retired_through) = match predecessor {
-            None if capture_cut.projection_activation.0 == 0 => (
-                CoverageRoot::LedgerGenesis {
-                    conversation_id: capture_cut.conversation_id.clone(),
-                },
-                count,
-            ),
-            Some((source, prior)) if capture_cut.projection_activation.0 > 0 => {
-                if source.conversation_id != capture_cut.conversation_id {
-                    return Err("coverage predecessor belongs to another conversation");
-                }
-                match prior {
-                    Some(prior) => {
-                        prior.validate_shape()?;
-                        if prior.capture_cut.conversation_id != capture_cut.conversation_id
-                            || count == 0
-                        {
-                            return Err("native predecessor coverage or prefix is invalid");
-                        }
-                        (
-                            prior.root.clone(),
-                            prior
-                                .retired_through
-                                .checked_add(count - 1)
-                                .ok_or("coverage frontier overflow")?,
-                        )
-                    }
-                    None => (
-                        CoverageRoot::OpaqueCheckpoint {
-                            source: source.clone(),
-                        },
-                        count,
-                    ),
-                }
-            }
-            _ => return Err("coverage predecessor disagrees with captured activation"),
-        };
-        let value = Self {
-            root,
-            retired_through,
-            capture_cut,
-            captured_prefix_items,
-            capture_digest,
-            rendered_bytes,
-            rendered_digest,
-        };
-        value.validate_shape()?;
-        Ok(value)
-    }
-
-    /// Compare already-authenticated continuous prefixes; differing roots
-    /// remain incomparable, regardless of their numerical frontiers.
-    #[must_use]
-    pub fn compare(&self, other: &Self) -> Option<Ordering> {
-        (self.root == other.root).then(|| self.retired_through.cmp(&other.retired_through))
-    }
-
-    /// Compare this authenticated record to a current authenticated Head.
-    /// An unmarked Head is an opaque root; no Head is the Ledger genesis.
-    #[must_use]
-    pub fn compare_to_head(
-        &self,
-        head: Option<(&CheckpointSourceRef, Option<&Self>)>,
-    ) -> Option<Ordering> {
-        match head {
-            Some((source, Some(active)))
-                if source.conversation_id == self.capture_cut.conversation_id =>
-            {
-                self.compare(active)
-            }
-            Some((source, None))
-                if self.root
-                    == (CoverageRoot::OpaqueCheckpoint {
-                        source: source.clone(),
-                    }) =>
-            {
-                Some(self.retired_through.cmp(&0))
-            }
-            None if self.root
-                == (CoverageRoot::LedgerGenesis {
-                    conversation_id: self.capture_cut.conversation_id.clone(),
-                }) =>
-            {
-                Some(self.retired_through.cmp(&0))
-            }
-            _ => None,
-        }
-    }
-
-    /// Index of the retained suffix for a strict compatible advance. The
-    /// caller must still verify this bound and the complete source structure.
-    #[must_use]
-    pub fn retained_offset(
-        &self,
-        head: Option<(&CheckpointSourceRef, Option<&Self>)>,
-    ) -> Option<usize> {
-        if self.compare_to_head(head) != Some(Ordering::Greater) {
-            return None;
-        }
-        let (active, summary) = head
-            .and_then(|(_, active)| active)
-            .map_or((0, 0_usize), |active| (active.retired_through, 1));
-        usize::try_from(self.retired_through.checked_sub(active)?)
-            .ok()?
-            .checked_add(summary)
-    }
-
-    /// Check finite local shape before the Store resolves authoritative facts.
-    /// # Errors
-    /// Rejects empty, oversized, foreign or malformed coverage coordinates.
-    pub fn validate_shape(&self) -> Result<(), &'static str> {
-        let scope = &self.capture_cut.conversation_id;
-        if self.retired_through == 0
-            || self.captured_prefix_items == 0
-            || self.captured_prefix_items as usize
-                > super::resources::ResourceLimits::default().total_items
-            || self.rendered_bytes > super::resources::ResourceLimits::default().total_bytes as u64
-            || !valid_digest(&self.capture_digest)
-            || !valid_digest(&self.rendered_digest)
-        {
-            return Err("coverage prefix must be positive and within captured item bounds");
-        }
-        match &self.root {
-            CoverageRoot::LedgerGenesis { conversation_id } if conversation_id == scope => Ok(()),
-            CoverageRoot::OpaqueCheckpoint { source }
-                if &source.conversation_id == scope
-                    && !source.checkpoint_id.as_str().is_empty()
-                    && valid_digest(&source.content_digest) =>
-            {
-                Ok(())
-            }
-            _ => Err("coverage root is foreign or has invalid checkpoint identity"),
-        }
-    }
-}
-
-fn valid_digest(digest: &str) -> bool {
-    digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-/// Process-local generation proof. It is never deserialized from a checkpoint
-/// or accepted from an external caller; a native generator seals it only from
-/// an accepted complete `ChunkPlan` witness and its exact source/output values.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedPrefixCoverage {
-    record: PrefixCoverage,
-    summary_digest: String,
-    generation: Option<SummaryGenerationRef>,
-    current_reduction: Option<CheckpointSourceRef>,
-}
-
-impl VerifiedPrefixCoverage {
-    /// Seal one fully accepted captured prefix and its actual final Summary.
-    /// The witness binds both the unrendered capture and the frozen rendered
-    /// source. Store later checks the predecessor and retained current suffix.
-    pub(crate) fn seal(
-        generated: &super::compaction::GeneratedCompaction,
-    ) -> Result<Self, ContextError> {
-        let cut = generated.source_cut().clone();
-        let previous = generated.source_checkpoint();
-        let previous_source = previous.map(|checkpoint| CheckpointSourceRef {
-            conversation_id: cut.conversation_id.clone(),
-            checkpoint_id: checkpoint.candidate.checkpoint_id.clone(),
-            content_digest: checkpoint.fingerprint.clone(),
-        });
-        let predecessor = previous_source.as_ref().map(|source| {
-            (
-                source,
-                previous.and_then(|checkpoint| checkpoint.candidate.prefix_coverage.as_ref()),
-            )
-        });
-        let generation = generated.summary_generation().generation.as_ref();
-        Self::seal_parts(
-            generated.completed_coverage(),
-            cut,
-            &generated.source_history().messages,
-            predecessor,
-            generated.generated_summary(),
-            generation,
+pub(super) fn seal(
+    generated: &super::compaction::GeneratedCompaction,
+    allow_current_reduction: bool,
+) -> Result<VerifiedPrefixCoverage, ContextError> {
+    let cut = generated.source_cut().clone();
+    let previous = generated.source_checkpoint();
+    let previous_source = previous.map(|checkpoint| CheckpointSourceRef {
+        conversation_id: cut.conversation_id.clone(),
+        checkpoint_id: checkpoint.candidate.checkpoint_id.clone(),
+        content_digest: checkpoint.fingerprint.clone(),
+    });
+    let predecessor = previous_source.as_ref().map(|source| {
+        (
+            source,
+            previous.and_then(|checkpoint| checkpoint.candidate.prefix_coverage.as_ref()),
         )
-    }
-
-    /// A newly authorized blocking/manual owner may shrink the current Summary
-    /// without retiring another canonical item. Independent results receive no
-    /// such permission: their equal coverage still preserves the installed Head.
-    pub(crate) fn seal_current(
-        generated: &super::compaction::GeneratedCompaction,
-    ) -> Result<Self, ContextError> {
-        let mut proof = Self::seal(generated)?;
-        if generated.retired_count() == 1
-            && let Some(previous) = generated.source_checkpoint()
-            && previous.candidate.prefix_coverage.is_some()
-            && matches!(generated.source_history().messages.first(), Some(ModelInputMessage::Derived(message))
-                if message.transformations.contains(&SemanticTransformation::Summary))
-        {
-            proof.current_reduction = Some(CheckpointSourceRef {
-                conversation_id: proof.record.capture_cut.conversation_id.clone(),
-                checkpoint_id: previous.candidate.checkpoint_id.clone(),
-                content_digest: previous.fingerprint.clone(),
-            });
-        }
-        Ok(proof)
-    }
-
-    /// Interpret a sealed current-owner reduction only at its exact Head.
-    /// Serialized coverage alone can never authorize an equal-coverage rewrite.
-    pub(crate) fn retained_offset(
-        &self,
-        head: Option<(&CheckpointSourceRef, Option<&PrefixCoverage>)>,
-    ) -> Option<usize> {
-        self.record.retained_offset(head).or_else(|| {
-            (self.current_reduction.as_ref() == head.map(|(source, _)| source)
-                && self.current_reduction.is_some()
-                && self.record.compare_to_head(head) == Some(Ordering::Equal))
-            .then_some(1)
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)] // These are independently frozen authorities.
-    fn seal_parts(
-        witness: &CompletedSourceCoverage,
-        cut: ResourceReadCut,
-        input: &SelectedModelInput,
-        predecessor: Option<(&CheckpointSourceRef, Option<&PrefixCoverage>)>,
-        summary: &DerivedModelMessage,
-        generation: Option<&SummaryGenerationRef>,
-    ) -> Result<Self, ContextError> {
-        let count = usize::try_from(witness.source_count()).map_err(|_| {
-            ContextError::new(
-                ContextErrorKind::CannotFit,
-                "captured prefix count exceeds platform bounds",
-            )
-        })?;
-        let digest = capture_digest(&cut, input, count)?;
-        if digest != witness.capture_digest()
-            || generation.is_some_and(|generation| {
-                generation.conversation_id != cut.conversation_id
-                    || generation.through_journal <= cut.journal.0
-                    || generation.call_id.as_str().is_empty()
-            })
-        {
-            return Err(ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                "completed Summary witness disagrees with its frozen capture or generation",
-            ));
-        }
-        validate_summary_sources(
-            &cut.conversation_id,
-            input,
-            count,
-            predecessor.map(|(source, _)| source),
-            summary,
-        )?;
-        let record = PrefixCoverage::from_capture(
-            cut,
-            u32::try_from(count).map_err(|_| {
-                ContextError::new(
-                    ContextErrorKind::CannotFit,
-                    "captured prefix count exceeds its bound",
-                )
-            })?,
-            digest,
-            witness.rendered_bytes(),
-            witness.rendered_digest().to_owned(),
-            predecessor,
-        )
-        .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
-        Ok(Self {
-            record,
-            summary_digest: summary_digest(summary, generation)?,
-            generation: generation.cloned(),
-            current_reduction: None,
-        })
-    }
-
-    /// The bounded durable record described by this process-local proof.
-    #[must_use]
-    pub const fn record(&self) -> &PrefixCoverage {
-        &self.record
-    }
-
-    /// Check the exact record, generated Summary and Call admitted at commit.
-    pub(crate) fn authorizes(
-        &self,
-        record: &PrefixCoverage,
-        summary: &DerivedModelMessage,
-        generation: Option<&SummaryGenerationRef>,
-    ) -> bool {
-        &self.record == record
-            && self.generation.as_ref() == generation
-            && summary_digest(summary, generation).is_ok_and(|digest| digest == self.summary_digest)
-    }
+    });
+    seal_parts(
+        generated.completed_coverage(),
+        cut,
+        &generated.source_history().messages,
+        predecessor,
+        generated.generated_summary(),
+        generated.summary_generation().generation.as_ref(),
+        allow_current_reduction,
+    )
 }
 
-fn summary_digest(
+fn seal_parts(
+    witness: &CompletedSourceCoverage,
+    cut: ResourceReadCut,
+    input: &SelectedModelInput,
+    predecessor: Option<(&CheckpointSourceRef, Option<&PrefixCoverage>)>,
     summary: &DerivedModelMessage,
     generation: Option<&SummaryGenerationRef>,
-) -> Result<String, ContextError> {
-    struct Writer<'a>(&'a mut Sha256, &'a mut usize);
-    impl std::io::Write for Writer<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            *self.1 = self
-                .1
-                .checked_sub(bytes.len())
-                .ok_or_else(|| std::io::Error::other("summary proof exceeds byte bound"))?;
-            self.0.update(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut hash = Sha256::new();
-    let mut remaining = 8 * 1024 * 1024_usize;
-    serde_json::to_writer(
-        Writer(&mut hash, &mut remaining),
-        &("rustx-summary-output-v1", summary, generation),
+    allow_current_reduction: bool,
+) -> Result<VerifiedPrefixCoverage, ContextError> {
+    let record = PrefixCoverage::from_capture(
+        cut,
+        witness.source_count(),
+        witness.capture_digest().to_owned(),
+        witness.rendered_bytes(),
+        witness.rendered_digest().to_owned(),
+        predecessor,
     )
-    .map_err(|_| {
-        ContextError::new(
-            ContextErrorKind::CannotFit,
-            "summary proof exceeds byte bound",
-        )
-    })?;
-    Ok(format!("{:x}", hash.finalize()))
-}
-
-fn validate_summary_sources(
-    scope: &ConversationId,
-    input: &SelectedModelInput,
-    count: usize,
-    predecessor: Option<&CheckpointSourceRef>,
-    summary: &DerivedModelMessage,
-) -> Result<(), ContextError> {
-    let invalid = || {
-        ContextError::new(
-            ContextErrorKind::MalformedHistory,
-            "generated Summary does not name its complete captured prefix sources",
-        )
-    };
-    if !matches!(
-        &summary.message,
-        ProjectedMessage::User {
-            source: crate::message::types::UserSource::Runtime,
-            kind: crate::model::projected::ProjectedUserKind::CompactionContext,
-            ..
-        }
-    ) || summary.transformations != [SemanticTransformation::Summary]
-        || count > input.len()
-    {
-        return Err(invalid());
-    }
-    let mut originals = BTreeMap::new();
-    let mut checkpoints = BTreeMap::new();
-    let mut includes_previous_summary = false;
-    for message in input.iter().take(count) {
-        match message {
-            ModelInputMessage::Canonical(original) => {
-                let source = CanonicalMessageRef::of(scope, original);
-                originals.insert(source.message_id.clone(), source);
-            }
-            ModelInputMessage::Derived(derived)
-                if derived
-                    .transformations
-                    .contains(&SemanticTransformation::Summary) =>
-            {
-                includes_previous_summary = true;
-            }
-            ModelInputMessage::Derived(derived) => {
-                for source in &derived.sources {
-                    originals.insert(source.message_id.clone(), source.clone());
-                }
-                for source in &derived.checkpoint_sources {
-                    checkpoints.insert(source.checkpoint_id.clone(), source.clone());
-                }
-            }
-            ModelInputMessage::RequestOnly(_) => return Err(invalid()),
-        }
-    }
-    if includes_previous_summary {
-        let prior = predecessor.ok_or_else(invalid)?;
-        checkpoints.insert(prior.checkpoint_id.clone(), prior.clone());
-    }
-    if summary.sources != originals.into_values().collect::<Vec<_>>()
-        || summary.checkpoint_sources != checkpoints.into_values().collect::<Vec<_>>()
-    {
-        return Err(invalid());
-    }
-    Ok(())
-}
-
-/// Hash the typed original projection occurrences and capture cut without
-/// materializing encoded source copies. The same value binds a completed
-/// chunk witness to the exact prefix that the Store can independently read.
-pub(crate) fn capture_digest(
-    cut: &ResourceReadCut,
-    input: &SelectedModelInput,
-    count: usize,
-) -> Result<String, ContextError> {
-    struct DigestBudget<'a> {
-        digest: &'a mut Sha256,
-        remaining: usize,
-    }
-    impl std::io::Write for DigestBudget<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.remaining = self
-                .remaining
-                .checked_sub(bytes.len())
-                .ok_or_else(|| std::io::Error::other("capture identity exceeds its byte budget"))?;
-            self.digest.update(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let limit = super::resources::ResourceLimits::default();
-    if count == 0 || count > limit.total_items || count > input.len() {
-        return Err(ContextError::new(
-            ContextErrorKind::CannotFit,
-            "captured prefix item count exceeds its source or resource bounds",
-        ));
-    }
-    let prefix = input.range(0..count);
-    let mut hash = Sha256::new();
-    serde_json::to_writer(
-        DigestBudget {
-            digest: &mut hash,
-            remaining: limit.total_bytes,
-        },
-        &("rustx-compaction-prefix-v1", cut, prefix),
+    .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
+    VerifiedPrefixCoverage::seal(
+        record,
+        input,
+        predecessor,
+        summary,
+        generation,
+        allow_current_reduction,
     )
-    .map_err(|_| {
-        ContextError::new(
-            ContextErrorKind::CannotFit,
-            "capture identity exceeds its byte budget",
-        )
-    })?;
-    Ok(format!("{:x}", hash.finalize()))
 }
 
 #[cfg(test)]
@@ -523,8 +77,11 @@ mod tests {
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
-    use crate::runtime::identity::CheckpointId;
+    use crate::model::ModelInputMessage;
+    use crate::model::projected::{CanonicalMessageRef, ProjectedMessage, SemanticTransformation};
     use crate::runtime::identity::{AuxiliaryCallId, MessageId};
+    use crate::runtime::identity::{CheckpointId, ConversationId};
+    use std::cmp::Ordering;
 
     const CONVERSATION_ONE: &str = "conv_019a0000-0000-7000-8000-000000000001";
     const CONVERSATION_OTHER: &str = "conv_019a0000-0000-7000-8000-000000000002";
@@ -662,49 +219,53 @@ mod tests {
             call_id: AuxiliaryCallId::new("aux_019a0000-0000-7000-8000-000000000001"),
             through_journal: cut.journal.0 + 1,
         };
-        let proof = VerifiedPrefixCoverage::seal_parts(
+        let proof = seal_parts(
             &witness,
             cut.clone(),
             &selected,
             None,
             &summary,
             Some(&generation),
+            false,
         )
         .unwrap();
         assert!(proof.authorizes(proof.record(), &summary, Some(&generation)));
         assert!(!proof.authorizes(proof.record(), &summary, None));
-        let scripted = VerifiedPrefixCoverage::seal_parts(
+        let scripted = seal_parts(
             &witness,
             cut.clone(),
             &selected,
             None,
             &summary,
             None,
+            false,
         )
         .unwrap();
         assert!(scripted.authorizes(scripted.record(), &summary, None));
         assert!(!scripted.authorizes(scripted.record(), &summary, Some(&generation)));
         assert!(
-            VerifiedPrefixCoverage::seal_parts(
+            seal_parts(
                 &witness,
                 cut.clone(),
                 &input("changed"),
                 None,
                 &summary,
-                Some(&generation)
+                Some(&generation),
+                false,
             )
             .is_err()
         );
         let mut later = cut;
         later.ledger = LedgerFrontier(later.ledger.0 + 1);
         assert!(
-            VerifiedPrefixCoverage::seal_parts(
+            seal_parts(
                 &witness,
                 later,
                 &selected,
                 None,
                 &summary,
-                Some(&generation)
+                Some(&generation),
+                false,
             )
             .is_err()
         );

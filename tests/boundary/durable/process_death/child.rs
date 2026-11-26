@@ -582,6 +582,7 @@ impl Child {
             LocalConversationCore::compose_with_access(
                 &launch,
                 &dependencies,
+                Arc::new(crate::runtime::types::SystemClock),
                 registry,
                 runtime_config.clone(),
                 state,

@@ -134,7 +134,7 @@ impl Peer {
         request: RuntimeClientRequest,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let expected = request.id();
-        let mut bytes = crate::observation::bounded::bounded_bytes(
+        let mut bytes = rustx_types::observation::bounded::bounded_bytes(
             &request,
             super::transport::stdio::STDIO_JSONL_MAX_RECORD_BYTES,
         )
@@ -193,7 +193,7 @@ impl Peer {
         if *refreshed != expected
             || page.records.len() > 32
             || page.updates.len() > super::trace::TRACE_RECORD_LIMIT
-            || crate::observation::bounded::bounded_bytes(
+            || rustx_types::observation::bounded::bounded_bytes(
                 &result,
                 crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
             )
@@ -230,7 +230,7 @@ impl Peer {
             location.record_id.len() > 256
                 || location.page.records.len() > 32
                 || location.page.updates.len() > 32
-        }) || crate::observation::bounded::bounded_bytes(
+        }) || rustx_types::observation::bounded::bounded_bytes(
             &result,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
         )
@@ -269,7 +269,7 @@ impl Peer {
             location.record_id.len() > 256
                 || location.page.records.len() > 32
                 || location.page.updates.len() > 32
-        }) || crate::observation::bounded::bounded_bytes(
+        }) || rustx_types::observation::bounded::bounded_bytes(
             &result,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
         )

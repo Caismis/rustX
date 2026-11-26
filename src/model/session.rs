@@ -122,33 +122,7 @@ impl Default for AuxiliaryModelPolicy {
     }
 }
 
-/// Follow the Session primary invocation, or resolve an explicit catalog model.
-///
-/// Used by Workflow Model nodes and other direct model calls. These are not
-/// Auxiliary consumers and do not apply Lowest-profile selection (#543).
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum DirectModelPolicy {
-    /// Generation follows the primary invocation captured by the consumer.
-    #[default]
-    Session,
-    /// Generation uses an explicitly configured catalog model.
-    Explicit {
-        /// The catalog model reference.
-        model: ModelRef,
-        /// The selected Model Profile; the model's `default_profile` is used
-        /// when absent.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        profile: Option<ModelProfileId>,
-        /// The explicit request-parameter overrides.
-        #[serde(default)]
-        request_params: RequestParams,
-        /// The explicit output-budget override.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_output_tokens: Option<u32>,
-    },
-}
+pub use rustx_types::model::session::DirectModelPolicy;
 
 /// The authoritative mutable model configuration of one conversation
 /// session.
@@ -274,27 +248,6 @@ impl AuxiliaryModelPolicy {
     #[must_use]
     pub fn is_explicit(&self) -> bool {
         matches!(self, Self::Explicit { .. })
-    }
-}
-
-impl DirectModelPolicy {
-    /// Select the same native catalog semantics used by primary invocations.
-    #[must_use]
-    pub fn selection(&self) -> Option<ModelSelection> {
-        match self {
-            Self::Session => None,
-            Self::Explicit {
-                model,
-                profile,
-                request_params,
-                max_output_tokens,
-            } => Some(ModelSelection {
-                model: model.clone(),
-                profile: profile.clone(),
-                request_params: request_params.clone(),
-                max_output_tokens: *max_output_tokens,
-            }),
-        }
     }
 }
 
@@ -1320,13 +1273,12 @@ mod tests {
         ];
         let borrowed = source.selected_text(&path).unwrap();
         assert_eq!(borrowed, original);
-        let first = crate::runtime::read_layout::text_chunk(borrowed, 1, 65_536).unwrap();
+        let first = rustx_durable::read_layout::text_chunk(borrowed, 1, 65_536).unwrap();
         assert_eq!(first.bytes, &original.as_bytes()[1..65_537]);
         assert_eq!(first.next_offset, Some(65_537));
         assert_eq!(first.readable_end, original.len() as u64);
         assert!(
-            crate::runtime::read_layout::text_chunk(borrowed, original.len() as u64 + 1, 1)
-                .is_err()
+            rustx_durable::read_layout::text_chunk(borrowed, original.len() as u64 + 1, 1).is_err()
         );
         assert_eq!(source.catalog_source().model_count(), 1);
     }

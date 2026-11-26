@@ -2148,95 +2148,8 @@ impl PendingObservations {
     }
 }
 
-/// Closed dependency list for Trace's durable facts. Other native facts are
-/// deliberately excluded from Trace; they do not create a Trace-only cursor
-/// transition. Their owners continue publishing ordinary observations.
-pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
-    match event {
-        RuntimeEvent::AttemptStarted { .. }
-        | RuntimeEvent::AttemptCompleted { .. }
-        | RuntimeEvent::AttemptCancelled { .. }
-        | RuntimeEvent::AttemptTimedOut { .. }
-        | RuntimeEvent::AttemptLimitExceeded { .. }
-        | RuntimeEvent::AttemptFailed { .. }
-        | RuntimeEvent::TurnStarted
-        | RuntimeEvent::TurnCompleted
-        | RuntimeEvent::ContextContributionEmitted { .. }
-        | RuntimeEvent::ModelRetryScheduled { .. }
-        // A Session configuration commit is its own between-Attempt record.
-        | RuntimeEvent::ConfigurationApplied { .. }
-        // Adoption is the canonical linearization point at which inbound
-        // became a turn this conversation owes an answer for. Trace projects
-        // it as the ledger's User record, so its receipt must be published
-        // before a later owner may advance the represented prefix past it.
-        | RuntimeEvent::InboundTurnAdopted { .. }
-        | RuntimeEvent::AssistantMessageCommitted { .. }
-        | RuntimeEvent::ToolCallRequested { .. }
-        | RuntimeEvent::ToolExecutionStarted { .. }
-        | RuntimeEvent::ToolExecutionCompleted { .. }
-        | RuntimeEvent::ToolExecutionFailed { .. }
-        | RuntimeEvent::ToolMessageCommitted { .. }
-        | RuntimeEvent::CompactionStarted { .. }
-        | RuntimeEvent::CompactionCompleted { .. }
-        | RuntimeEvent::CompactionFailed { .. }
-        | RuntimeEvent::BackgroundExecutionCommitted { .. }
-        | RuntimeEvent::BackgroundTerminalPublished { .. }
-        | RuntimeEvent::AgentActivationAdmission { .. }
-        | RuntimeEvent::SubagentOwnershipCommitted { .. }
-        | RuntimeEvent::SubagentTerminalPublished { .. }
-        | RuntimeEvent::SubagentTerminalSettled { .. }
-        | RuntimeEvent::SubagentPhysicalSettlementProven { .. }
-        | RuntimeEvent::WorkflowStarted { .. }
-        | RuntimeEvent::WorkflowCompleted { .. }
-        | RuntimeEvent::WorkflowFailed { .. }
-        | RuntimeEvent::WorkflowCancelled { .. }
-        | RuntimeEvent::InteractionRequested { .. }
-        | RuntimeEvent::InteractionSettled { .. }
-        | RuntimeEvent::Goal { .. }
-        | RuntimeEvent::ModelRequestStarted {
-            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
-            ..
-        }
-        | RuntimeEvent::ModelRequestCompleted {
-            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
-            ..
-        }
-        | RuntimeEvent::ModelRequestFailed {
-            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
-            ..
-        } => true,
-        RuntimeEvent::CompactionSkipped { .. }
-        | RuntimeEvent::CompactionOperationUpdated { .. }
-        | RuntimeEvent::CompactionCancelled { .. }
-        | RuntimeEvent::CompactionChunkAccepted { .. }
-        | RuntimeEvent::ModelRequestStarted { .. }
-        | RuntimeEvent::ModelRequestCompleted { .. }
-        | RuntimeEvent::ModelRequestFailed { .. }
-        | RuntimeEvent::AuxiliaryCallStarted { .. }
-        | RuntimeEvent::AuxiliaryCallSettled { .. }
-        | RuntimeEvent::AuxiliaryRetryScheduled { .. }
-        | RuntimeEvent::NativeToolInvocation { .. }
-        | RuntimeEvent::ToolExecutionProgress { .. }
-        | RuntimeEvent::ToolExecutionDeadlineFired { .. }
-        | RuntimeEvent::ToolExecutionCancellationRequested { .. }
-        | RuntimeEvent::ToolExecutionSettlementObserved { .. }
-        | RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
-        | RuntimeEvent::WorkflowBlockStarted { .. }
-        | RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
-        | RuntimeEvent::WorkflowLoopIterationSettled { .. }
-        | RuntimeEvent::WorkflowLoopExited { .. }
-        | RuntimeEvent::WorkflowBlockSettled { .. }
-        | RuntimeEvent::WorkflowNodeStarted { .. }
-        | RuntimeEvent::WorkflowNodeInputRecorded { .. }
-        | RuntimeEvent::WorkflowNodeOutputRecorded { .. }
-        | RuntimeEvent::WorkflowNodeWaiting { .. }
-        | RuntimeEvent::WorkflowNodeSettled { .. }
-        | RuntimeEvent::WorkflowAgentAdmitted { .. }
-        | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
-        | RuntimeEvent::WorkflowBranchSelected { .. }
-        => false,
-    }
-}
+#[cfg(test)]
+pub(crate) use crate::durable::trace::trace_fact_requires_publication;
 
 #[cfg(test)]
 mod tests {
@@ -2419,7 +2332,7 @@ mod tests {
                     panic!("finite source witness");
                 };
                 assert_eq!(witness.sequence, sequence);
-                assert!(crate::observation::bounded::bounded_bytes(witness, 16384).is_some());
+                assert!(rustx_types::observation::bounded::bounded_bytes(witness, 16384).is_some());
                 sequences.push(sequence);
             }
         }

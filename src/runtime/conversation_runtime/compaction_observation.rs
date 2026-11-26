@@ -122,7 +122,9 @@ impl RuntimeInner {
         let Some(fanout) = self.pending.get() else {
             return;
         };
-        let Some(batch) = persisted.observation.as_deref() else {
+        let Some(batch) = persisted.observation.as_ref().and_then(|receipt| {
+            receipt.get::<crate::durable::observation::NativeObservationBatch>()
+        }) else {
             fanout.source_failed();
             return;
         };

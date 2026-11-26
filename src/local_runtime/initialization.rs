@@ -76,7 +76,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             .model_document
             .as_ref()
             .ok_or("custom requires --model-document")?;
-        crate::toml_authoring::parse(&crate::bounded_file::read_bounded(path)?)
+        crate::toml_authoring::parse(&rustx_bounded_file::read_bounded(path)?)
             .map_err(|_| "invalid custom model document".to_owned())?
     } else {
         if request.model_document.is_some() {

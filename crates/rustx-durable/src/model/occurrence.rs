@@ -1,0 +1,600 @@
+//! Frozen actual-request coordinates and provider correlation labels.
+//! These are model-input relationships; they never authorize or record Tool execution.
+use rustx_types::context::checkpoint::{RequestBlockIndex, RequestMessageOccurrence};
+use rustx_types::message::types::{AssistantContentBlock, ContentBlockIndex};
+use rustx_types::model::projected::{CanonicalMessageRef, ModelMessageView};
+use rustx_types::runtime::identity::RequestId;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct ProviderWireCorrelationId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CanonicalCallSource {
+    pub assistant: CanonicalMessageRef,
+    pub block: ContentBlockIndex,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ActualRequestCallCoordinate {
+    pub message: RequestMessageOccurrence,
+    pub block: RequestBlockIndex,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ActualRequestToolAssociation {
+    pub call: ActualRequestCallCoordinate,
+    pub result: RequestMessageOccurrence,
+    pub source: CanonicalCallSource,
+    /// Absent only when both occurrences are covered by native continuation
+    /// and no correlation field is transmitted in this actual request.
+    pub wire_id: Option<ProviderWireCorrelationId>,
+}
+pub mod history;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use history::HISTORICAL_VISITS;
+pub use history::{
+    AssociationCoordinates, AssociationNode, AssociationRoot, StoredAssociation, WirePolicy,
+    native_origins,
+};
+pub use history::{HistoricalToolAssociation, ToolAssociationHistory};
+use std::sync::{Arc, OnceLock};
+
+/// Native requests pin a shared, request-free history and a small coordinate
+/// binding. The public flat array is materialized only for inspection/replay.
+#[derive(Debug, Clone, Default)]
+pub struct FrozenToolAssociations {
+    values: Arc<OnceLock<Vec<ActualRequestToolAssociation>>>,
+    pub binding: Option<Arc<AssociationBinding>>,
+    validation: Option<Arc<AssociationValidation>>,
+}
+#[derive(Debug)]
+pub struct AssociationBinding {
+    pub history: ToolAssociationHistory,
+    pub request: RequestId,
+    pub coordinates: AssociationCoordinates,
+}
+#[derive(Debug)]
+struct AssociationValidation {
+    origin: Arc<rustx_types::model::selected_input::SelectionOrigin>,
+    request: RequestId,
+    policy: [u8; 32],
+}
+impl PartialEq for FrozenToolAssociations {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.values, &other.values)
+            || self
+                .binding
+                .as_ref()
+                .zip(other.binding.as_ref())
+                .is_some_and(|(a, b)| {
+                    a.history.same_prefix(&b.history)
+                        && a.request == b.request
+                        && a.coordinates == b.coordinates
+                })
+            || **self == **other
+    }
+}
+impl Eq for FrozenToolAssociations {}
+impl From<Vec<ActualRequestToolAssociation>> for FrozenToolAssociations {
+    fn from(values: Vec<ActualRequestToolAssociation>) -> Self {
+        Self {
+            values: Arc::new(OnceLock::from(values)),
+            binding: None,
+            validation: None,
+        }
+    }
+}
+impl Serialize for FrozenToolAssociations {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        if let Some(values) = self.values.get() {
+            return values.serialize(serializer);
+        }
+        let mut sequence = serializer.serialize_seq(Some(self.len()))?;
+        if let Some(binding) = &self.binding {
+            for value in binding.iter() {
+                sequence.serialize_element(&value)?;
+            }
+        }
+        sequence.end()
+    }
+}
+impl<'de> Deserialize<'de> for FrozenToolAssociations {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<ActualRequestToolAssociation>::deserialize(deserializer).map(Self::from)
+    }
+}
+impl std::ops::Deref for FrozenToolAssociations {
+    type Target = Vec<ActualRequestToolAssociation>;
+    fn deref(&self) -> &Self::Target {
+        self.values.get_or_init(|| {
+            let Some(binding) = &self.binding else {
+                return Vec::new();
+            };
+            #[cfg(any(test, feature = "test-hooks"))]
+            MATERIALIZATIONS.with(|work| work.set(work.get() + binding.history.len()));
+            binding.iter().collect()
+        })
+    }
+}
+impl AssociationBinding {
+    fn iter(&self) -> impl Iterator<Item = ActualRequestToolAssociation> + '_ {
+        let labels = self.coordinates.labels(&self.history);
+        self.history.iter().map(move |a| {
+            let call_message = self.coordinates.position(a.call_message);
+            ActualRequestToolAssociation {
+                call: ActualRequestCallCoordinate {
+                    message: RequestMessageOccurrence {
+                        request_id: self.request.clone(),
+                        item_index: call_message,
+                    },
+                    block: RequestBlockIndex(a.call_block),
+                },
+                result: RequestMessageOccurrence {
+                    request_id: self.request.clone(),
+                    item_index: self.coordinates.position(a.result_message),
+                },
+                source: a.source.clone(),
+                wire_id: if self.coordinates.wire.is_some() {
+                    labels
+                        .get(&(call_message, a.call_block))
+                        .cloned()
+                        .map(ProviderWireCorrelationId)
+                } else {
+                    a.wire_id.clone()
+                },
+            }
+        })
+    }
+}
+impl std::ops::DerefMut for FrozenToolAssociations {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let _ = &**self;
+        self.validation = None;
+        self.binding = None;
+        Arc::make_mut(&mut self.values)
+            .get_mut()
+            .expect("materialized associations")
+    }
+}
+impl<'a> IntoIterator for &'a FrozenToolAssociations {
+    type Item = &'a ActualRequestToolAssociation;
+    type IntoIter = std::slice::Iter<'a, ActualRequestToolAssociation>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+impl<'a> IntoIterator for &'a mut FrozenToolAssociations {
+    type Item = &'a mut ActualRequestToolAssociation;
+    type IntoIter = std::slice::IterMut<'a, ActualRequestToolAssociation>;
+    fn into_iter(self) -> Self::IntoIter {
+        (**self).iter_mut()
+    }
+}
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {pub static MATERIALIZATIONS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
+fn association_policy(
+    protocol: rustx_types::model::types::ModelProtocol,
+    replay_origin: Option<&rustx_types::model::replay::ReplayOrigin>,
+    continuation: Option<&rustx_types::runtime::continuation::ProviderContinuationState>,
+    source: Option<&rustx_types::runtime::continuation::AcceptedOutputContinuationSource>,
+) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    serde_json::to_writer(
+        {
+            struct PolicyWriter<'a>(&'a mut Sha256);
+            impl std::io::Write for PolicyWriter<'_> {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    self.0.update(bytes);
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            PolicyWriter(&mut digest)
+        },
+        &(protocol, replay_origin, continuation, source),
+    )
+    .expect("native wire policy serializes");
+    digest.finalize().into()
+}
+impl FrozenToolAssociations {
+    /// An incremental, conservative JSON bound for native request admission.
+    /// The rare near-limit case still uses exact streaming byte accounting.
+    #[must_use]
+    pub fn encoded_len_upper_bound(&self) -> Option<usize> {
+        if self.is_empty() {
+            return Some(2);
+        }
+        let binding = self.binding.as_ref()?;
+        binding.coordinates.wire.as_ref()?;
+        let request_bytes = serde_json::to_vec(&binding.request)
+            .ok()?
+            .len()
+            .checked_sub(2)?;
+        binding
+            .history
+            .encoded_bytes_upper
+            .checked_add(request_bytes.checked_mul(2)?.checked_mul(self.len())?)?
+            .checked_add(self.len().saturating_sub(1))?
+            .checked_add(2)
+    }
+    #[must_use]
+    pub fn from_history(
+        history: ToolAssociationHistory,
+        request: RequestId,
+        coordinates: AssociationCoordinates,
+    ) -> Self {
+        Self {
+            values: Arc::new(OnceLock::new()),
+            binding: Some(Arc::new(AssociationBinding {
+                history,
+                request,
+                coordinates,
+            })),
+            validation: None,
+        }
+    }
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.binding.as_ref().map_or_else(
+            || self.values.get().map_or(0, Vec::len),
+            |b| b.history.len(),
+        )
+    }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub fn rebind_request(&mut self, request: &RequestId) {
+        if let Some(binding) = &self.binding {
+            self.binding = Some(Arc::new(AssociationBinding {
+                history: binding.history.clone(),
+                request: request.clone(),
+                coordinates: binding.coordinates.clone(),
+            }));
+            self.values = Arc::new(OnceLock::new());
+            self.validation = self.validation.as_ref().map(|validation| {
+                Arc::new(AssociationValidation {
+                    origin: validation.origin.clone(),
+                    request: request.clone(),
+                    policy: validation.policy,
+                })
+            });
+        } else {
+            for association in self {
+                association.call.message.request_id = request.clone();
+                association.result.request_id = request.clone();
+            }
+        }
+    }
+    #[must_use]
+    pub fn certifies(
+        &self,
+        origin: &std::sync::Arc<rustx_types::model::selected_input::SelectionOrigin>,
+        snapshot: &crate::model::snapshot::RequestSnapshot,
+    ) -> bool {
+        self.validation.as_ref().is_some_and(|validation| {
+            std::sync::Arc::ptr_eq(&validation.origin, origin)
+                && validation.request == snapshot.request_id
+                && validation.policy
+                    == association_policy(
+                        snapshot.invocation.protocol,
+                        snapshot.invocation.replay_origin().as_ref(),
+                        snapshot.continuation.as_ref(),
+                        snapshot.continuation_source.as_ref(),
+                    )
+        })
+    }
+}
+
+pub fn freeze_associations(
+    history: &crate::projection::HistoricalModelInput,
+    request_id: &RequestId,
+    request: &rustx_types::model::types::ModelRequest,
+    inserted_at: Option<usize>,
+) -> Result<FrozenToolAssociations, String> {
+    #[cfg(test)]
+    let _reads = rustx_types::model::selected_input::PreparationReads::new();
+    let boundary = request.continuation_boundary()?;
+    let stored = request.protocol() == rustx_types::model::types::ModelProtocol::OpenAiResponses
+        && matches!(
+            request.continuation,
+            Some(
+                rustx_types::runtime::continuation::ProviderContinuationState::OpenAiResponses(
+                    rustx_types::runtime::continuation::OpenAiResponsesContinuation::Stored { .. }
+                )
+            )
+        );
+    let coordinates = AssociationCoordinates {
+        inserted_at: inserted_at
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| "request occurrence overflow")?,
+        wire: Some(WirePolicy {
+            protocol: request.protocol(),
+            origin: request.invocation.replay_origin(),
+            stored_boundary: if stored {
+                Some(
+                    u32::try_from(boundary.ok_or("stored continuation lacks accepted output")?)
+                        .map_err(|_| "request occurrence overflow")?,
+                )
+            } else {
+                None
+            },
+        }),
+    };
+    history
+        .tool_associations
+        .validate_wire_policy(coordinates.wire.as_ref().expect("native policy"))?;
+    // Stored replay transmits only the uncovered suffix. Validate its native
+    // calls against the actual suffix, without enumerating the covered prefix.
+    if stored {
+        rustx_types::model::adapter::correlation::compute_labels(request, boundary)?;
+    }
+    let mut frozen = FrozenToolAssociations::from_history(
+        history.tool_associations.clone(),
+        request_id.clone(),
+        coordinates,
+    );
+    let shared_insertion = inserted_at.is_some_and(|at| {
+        at <= history.messages.len()
+            && history
+                .messages
+                .get(at)
+                .is_none_or(|message| !matches!(message.view(), ModelMessageView::Tool(_, _)))
+            && request.messages.len() > history.messages.len()
+            && matches!(
+                request.messages.get(at),
+                Some(rustx_types::model::input::ModelInputMessage::RequestOnly(_))
+            )
+            && request
+                .messages
+                .range(0..at)
+                .same_input(&history.messages.range(0..at))
+            && request
+                .messages
+                .range(at + 1..history.messages.len() + 1)
+                .same_input(&history.messages.range(at..history.messages.len()))
+            && (history.messages.len() + 1..request.messages.len())
+                .all(|index| matches!(request.messages[index].view(), ModelMessageView::User(_)))
+    });
+    if !shared_insertion
+        && !request
+            .messages
+            .follows_native_history(&history.input_manifest)
+    {
+        validate_associations(request_id, request, &frozen)?;
+    }
+    let validation = history.input_manifest.origin.as_ref().map(|origin| {
+        std::sync::Arc::new(AssociationValidation {
+            origin: origin.clone(),
+            request: request_id.clone(),
+            policy: association_policy(
+                request.protocol(),
+                request.invocation.replay_origin().as_ref(),
+                request.continuation.as_ref(),
+                request.continuation_source.as_ref(),
+            ),
+        })
+    });
+    frozen.validation = validation;
+    Ok(frozen)
+}
+
+#[allow(clippy::too_many_lines)] // One complete request coordinate and Tool-batch validation fold.
+pub fn validate_associations(
+    request_id: &RequestId,
+    request: &rustx_types::model::types::ModelRequest,
+    associations: &[ActualRequestToolAssociation],
+) -> Result<(), String> {
+    if associations.is_empty() && !request.messages.has_tool_relationships() {
+        request.continuation_boundary()?;
+        return Ok(());
+    }
+    let messages = &request.messages;
+    let labels = rustx_types::model::adapter::correlation::compute_labels_at_boundary(request)?;
+    let mut calls = std::collections::BTreeSet::new();
+    let mut results = std::collections::BTreeSet::new();
+    for association in associations {
+        if association.call.message.request_id != *request_id
+            || association.result.request_id != *request_id
+            || association.result.item_index <= association.call.message.item_index
+        {
+            return Err("foreign or reordered actual-request Tool association".into());
+        }
+        if !calls.insert((
+            association.call.message.item_index,
+            association.call.block.0,
+        )) || !results.insert(association.result.item_index)
+        {
+            return Err("duplicate actual-request Tool association".into());
+        }
+        let Some(ModelMessageView::Assistant(content)) = messages
+            .get(association.call.message.item_index as usize)
+            .map(|m| m.view())
+        else {
+            return Err("actual request call message is absent".into());
+        };
+        let Some(AssistantContentBlock::ToolCall(call)) =
+            content.get(association.call.block.0 as usize)
+        else {
+            return Err("actual request call block is absent".into());
+        };
+        let Some(ModelMessageView::Tool(id, _)) = messages
+            .get(association.result.item_index as usize)
+            .map(|m| m.view())
+        else {
+            return Err("actual request result message is absent".into());
+        };
+        if &call.id != id
+            || labels.get(&(
+                association.call.message.item_index,
+                association.call.block.0,
+            )) != association.wire_id.as_ref().map(|id| &id.0)
+        {
+            return Err("actual request wire correlation disagrees with frozen association".into());
+        }
+    }
+    for (index, message) in messages.iter().enumerate() {
+        let index = u32::try_from(index).map_err(|_| "request message occurrence overflow")?;
+        match message.view() {
+            ModelMessageView::Assistant(content) => {
+                for (block, content) in content.iter().enumerate() {
+                    if matches!(content, AssistantContentBlock::ToolCall(_))
+                        && !calls.contains(&(
+                            index,
+                            u32::try_from(block)
+                                .map_err(|_| "request block occurrence overflow")?,
+                        ))
+                    {
+                        return Err("unassociated actual-request ToolCall".into());
+                    }
+                }
+            }
+            ModelMessageView::Tool(_, _) if !results.contains(&index) => {
+                return Err("orphan actual-request ToolResult".into());
+            }
+            _ => {}
+        }
+    }
+    let mut pending = std::collections::BTreeSet::new();
+    for (index, message) in messages.iter().enumerate() {
+        let index = u32::try_from(index).map_err(|_| "request occurrence overflow")?;
+        match message.view() {
+            ModelMessageView::Tool(_, _) => {
+                let association = associations
+                    .iter()
+                    .find(|a| a.result.item_index == index)
+                    .ok_or("orphan request result")?;
+                if !pending.remove(&(
+                    association.call.message.item_index,
+                    association.call.block.0,
+                )) {
+                    return Err("request ToolResult crosses a preserved batch".into());
+                }
+            }
+            ModelMessageView::Assistant(content) => {
+                if !pending.is_empty() {
+                    return Err("request Assistant splits an unresolved Tool batch".into());
+                }
+                for (block, content) in content.iter().enumerate() {
+                    if matches!(content, AssistantContentBlock::ToolCall(_)) {
+                        pending.insert((
+                            index,
+                            u32::try_from(block).map_err(|_| "request block overflow")?,
+                        ));
+                    }
+                }
+            }
+            _ if !pending.is_empty() => {
+                return Err("core or historical message splits a Tool batch".into());
+            }
+            _ => {}
+        }
+    }
+    if !pending.is_empty() {
+        return Err("request ends inside an unresolved Tool batch".into());
+    }
+    Ok(())
+}
+
+/// Canonical-only fixtures and callers can bind physical occurrences directly.
+/// Derived pairs require the compiler's explicit bindings; no association is inferred from strings.
+#[must_use]
+pub fn canonical_associations(
+    scope: &rustx_types::runtime::identity::ConversationId,
+    request_id: &RequestId,
+    request: &rustx_types::model::types::ModelRequest,
+) -> Option<Vec<ActualRequestToolAssociation>> {
+    let messages = &request.messages;
+    let mut pending = std::collections::BTreeMap::new();
+    let mut associations = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        let index = u32::try_from(index).ok()?;
+        match message {
+            rustx_types::model::input::ModelInputMessage::Canonical(
+                rustx_types::message::types::MessageBlock::Assistant(assistant),
+            ) => {
+                for (block, content) in assistant.content.iter().enumerate() {
+                    if let AssistantContentBlock::ToolCall(call) = content {
+                        let block = u32::try_from(block).ok()?;
+                        let source = rustx_types::message::types::ToolCallOccurrenceRef::new(
+                            assistant.id.clone(),
+                            ContentBlockIndex::new(block),
+                        );
+                        if pending
+                            .insert(
+                                source,
+                                (
+                                    index,
+                                    block,
+                                    CanonicalMessageRef::of(scope, message.as_canonical()?),
+                                    call.id.clone(),
+                                ),
+                            )
+                            .is_some()
+                        {
+                            return None;
+                        }
+                    }
+                }
+            }
+            rustx_types::model::input::ModelInputMessage::Canonical(
+                rustx_types::message::types::MessageBlock::Tool(result),
+            ) => {
+                let (call_message, call_block, assistant, id) =
+                    pending.remove(&result.occurrence)?;
+                if id != result.tool_call_id {
+                    return None;
+                }
+                associations.push(ActualRequestToolAssociation {
+                    call: ActualRequestCallCoordinate {
+                        message: RequestMessageOccurrence {
+                            request_id: request_id.clone(),
+                            item_index: call_message,
+                        },
+                        block: RequestBlockIndex(call_block),
+                    },
+                    result: RequestMessageOccurrence {
+                        request_id: request_id.clone(),
+                        item_index: index,
+                    },
+                    source: CanonicalCallSource {
+                        assistant,
+                        block: result.occurrence.block_index,
+                    },
+                    wire_id: Some(ProviderWireCorrelationId(id.to_string())),
+                });
+            }
+            rustx_types::model::input::ModelInputMessage::Derived(_)
+                if matches!(
+                    message.view(),
+                    ModelMessageView::Tool(_, _) | ModelMessageView::Assistant(_)
+                ) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    install_wire_labels(request, &mut associations).ok()?;
+    pending.is_empty().then_some(associations)
+}
+
+/// Stable wire names for distinct input occurrences. Keep the latest native
+/// label so its continuation result still refers to the accepted output.
+fn install_wire_labels(
+    request: &rustx_types::model::types::ModelRequest,
+    associations: &mut [ActualRequestToolAssociation],
+) -> Result<(), String> {
+    let labels = rustx_types::model::adapter::correlation::compute_labels_at_boundary(request)?;
+    for a in associations {
+        a.wire_id = labels
+            .get(&(a.call.message.item_index, a.call.block.0))
+            .map(|label| ProviderWireCorrelationId(label.clone()));
+    }
+    Ok(())
+}

@@ -220,6 +220,7 @@ impl AuxiliaryExecutor {
         (observed, release)
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn hold_resource_release_for_test(
         &self,

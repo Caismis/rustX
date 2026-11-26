@@ -290,7 +290,7 @@ fn build_prompt(view: &PreToolView<'_>, matrix_reason: &str) -> Result<String, S
         },
     };
     let limit = arguments_budget(view) + REVIEW_PROMPT_OVERHEAD - REVIEW_INSTRUCTIONS.len();
-    let encoded = crate::bounded_json::encode_capped_bytes(&facts, limit).map_err(
+    let encoded = rustx_bounded_json::encode_capped_bytes(&facts, limit).map_err(
         |_| "permission review facts cannot be fully encoded within the inspection budget",
     )?;
     Ok(format!(

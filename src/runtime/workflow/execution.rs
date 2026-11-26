@@ -1381,7 +1381,7 @@ impl WorkflowRuntime {
 
 /// Diagnostic capture cannot exceed a bounded body or alter execution admission.
 fn node_trace_json(value: &impl serde::Serialize) -> Option<String> {
-    crate::observation::bounded::bounded_bytes(value, 65_536)
+    rustx_types::observation::bounded::bounded_bytes(value, 65_536)
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 struct TraceVariables<'a>(&'a imbl::OrdMap<String, Value>);

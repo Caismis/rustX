@@ -248,17 +248,7 @@ pub struct RuntimeClientSnapshot {
     pub goal: Option<crate::observation::goal::RuntimeClientGoalView>,
 }
 
-/// Native accepted work for the currently active Compaction operation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientCompactionProgress {
-    pub operation_id: crate::runtime::identity::CompactionOperationId,
-    /// The native trigger fixed at operation admission.
-    pub mode: crate::context::operation::CompactionMode,
-    pub accepted_fragments: u32,
-    pub source_ranges: Vec<crate::model::auxiliary::AuxiliarySourceRange>,
-    pub generation: Option<crate::context::checkpoint::SummaryGenerationRef>,
-}
+pub use rustx_types::context::operation::RuntimeClientCompactionProgress;
 
 /// A bounded operation observation and whether this process still owns the work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -1,5 +1,6 @@
 use super::*;
 use crate::context::assembly::ContextGeneration;
+use crate::durable::ConversationStoreError;
 use crate::durable::SqliteConversationStore;
 use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::events::types::RuntimeEventEnvelope;

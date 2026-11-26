@@ -1,7 +1,7 @@
 //! Deterministic Model-node tests use the real compiler, Workflow owner,
 //! SQLite Call audit and Auxiliary Executor. Channels establish every race.
 use super::*;
-use crate::durable::{AuxiliaryStore, JournalStore, ObservationStore};
+use crate::durable::{JournalStore, ObservationStore};
 use crate::message::types::ContentBlockIndex;
 use crate::model::{
     ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol, ModelRequest, ModelStream,

@@ -29,10 +29,10 @@ use crate::model::adapter::openai::mapping::{
 };
 use crate::model::adapter::openai::qwen_xml::{self, QwenReservedEnvelope};
 use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
-use crate::model::adapter::traits::{
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
+use crate::model::adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol,
 };
@@ -1771,11 +1771,7 @@ fn stage_messages<'a>(
         .chat_reasoning_replay
         .unwrap_or_default();
     let origin = request.invocation.replay_origin();
-    let mut prefix = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache")
+    let mut prefix = crate::model::adapter::cache::lock(&request.messages)
         .chat
         .take()
         .filter(|prefix| {
@@ -1897,13 +1893,10 @@ fn finish_messages<'a>(
         count: prefix.count,
         bytes: prefix.bytes,
     };
-    let mut cache = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache");
+    let mut cache = crate::model::adapter::cache::lock(&request.messages);
     if let Some(current) = cache
         .correlation
+        .plan
         .as_mut()
         .filter(|current| current.epoch == plan.epoch && current.matches(&request.messages))
     {
@@ -1977,8 +1970,10 @@ pub(crate) fn uncached_request(request: &ModelRequest) -> Result<WireRequest<'_>
             _ => Vec::new(),
         })
         .collect::<Vec<_>>();
-    let labels =
-        crate::model::adapter::correlation::wire_labels(&raw, ModelProtocol::OpenAiChatCompletions);
+    let labels = crate::model::adapter::correlation::resolve_wire_labels(
+        &raw,
+        ModelProtocol::OpenAiChatCompletions,
+    );
     crate::model::adapter::correlation::encode_fields(&labels, |field| {
         for message in &mut translated {
             match &mut message.main {

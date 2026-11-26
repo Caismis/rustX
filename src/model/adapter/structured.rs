@@ -26,7 +26,7 @@ pub(crate) fn validate_request(request: &ModelRequest) -> Result<(), ModelError>
     }
     if let StructuredOutputStrategy::PromptFallback { operation_id } = &output.strategy
         && (operation_id.as_str().is_empty()
-            || !request.has_prompt_fallback_authorization(operation_id)
+            || !crate::model::structured::has_prompt_fallback_authorization(request, operation_id)
             || !request
                 .effective_system_prompt
                 .ends_with(&output.schema.prompt_instruction()))

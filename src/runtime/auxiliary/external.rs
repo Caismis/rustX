@@ -216,6 +216,7 @@ impl ExternalAuxiliary {
         self.executor.hold_retirement_for_test()
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn hold_resource_release_for_test(
         &self,

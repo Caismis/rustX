@@ -1,7 +1,6 @@
 //! Detached Summary generation continues across real provider and Attempt boundaries.
 use super::*;
 use rustx::context::operation::{CompactionOperationPhase as Phase, CompactionOperationStatus};
-use rustx::durable::AuxiliaryStore;
 use rustx::events::types::RuntimeEvent as E;
 use rustx::model::auxiliary::{
     AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryInputEvidence,

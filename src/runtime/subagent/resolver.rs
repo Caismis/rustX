@@ -1680,6 +1680,12 @@ pub(crate) fn render_agent_routing(catalog: &AgentCatalog) -> String {
 #[cfg(test)]
 mod resource_profile_tests;
 
+impl AsRef<str> for SubagentExecutionProfileDigest {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

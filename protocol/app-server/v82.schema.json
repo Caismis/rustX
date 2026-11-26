@@ -959,6 +959,7 @@
       ]
     },
     "WorkflowCodeLanguage": {
+      "description": "Typed Python/JavaScript main functions over the admitted workspace Bash tool.",
       "type": "string",
       "enum": [
         "python3",
@@ -3721,7 +3722,7 @@
       ]
     },
     "AgentStatusGenerationMetadata": {
-      "description": "The structured durable identity of one canonical Agent Status generation.\n\nThe descriptor is attached to [`ContextKind::AgentStatus`] itself. Its\ntimestamp is the single Agent Status clock sample used to produce the\ngeneration, and its typed module list is the source of truth for active\nSurface visibility. Renderer text is never consulted for either fact.\n\nThe fields are private so every value, including one decoded from durable\nJSON, has non-empty, duplicate-free membership in deterministic semantic\norder.\n\n```compile_fail\nuse rustx::message::types::AgentStatusGenerationMetadata;\n\nfn mutate(metadata: &mut AgentStatusGenerationMetadata) {\n    metadata.modules = Vec::new();\n}\n```\n\n```rust\nuse chrono::Utc;\nuse rustx::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};\n\nlet metadata = AgentStatusGenerationMetadata::new(\n    Utc::now(),\n    [AgentStatusModuleId::Time, AgentStatusModuleId::Todo],\n)\n.expect(\"canonical status metadata\");\nassert_eq!(\n    metadata.modules(),\n    &[AgentStatusModuleId::Time, AgentStatusModuleId::Todo]\n);\nassert!(metadata.contains(AgentStatusModuleId::Time));\n```",
+      "description": "The structured durable identity of one canonical Agent Status generation.\n\nThe descriptor is attached to [`ContextKind::AgentStatus`] itself. Its\ntimestamp is the single Agent Status clock sample used to produce the\ngeneration, and its typed module list is the source of truth for active\nSurface visibility. Renderer text is never consulted for either fact.\n\nThe fields are private so every value, including one decoded from durable\nJSON, has non-empty, duplicate-free membership in deterministic semantic\norder.\n\n```compile_fail\nuse rustx_types::message::types::AgentStatusGenerationMetadata;\n\nfn mutate(metadata: &mut AgentStatusGenerationMetadata) {\n    metadata.modules = Vec::new();\n}\n```\n\n```rust\nuse chrono::Utc;\nuse rustx_types::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};\n\nlet metadata = AgentStatusGenerationMetadata::new(\n    Utc::now(),\n    [AgentStatusModuleId::Time, AgentStatusModuleId::Todo],\n)\n.expect(\"canonical status metadata\");\nassert_eq!(\n    metadata.modules(),\n    &[AgentStatusModuleId::Time, AgentStatusModuleId::Todo]\n);\nassert!(metadata.contains(AgentStatusModuleId::Time));\n```",
       "type": "object",
       "properties": {
         "generated_at": {
@@ -4128,7 +4129,7 @@
       "pattern": "^exec_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "BackgroundLifecycle": {
-      "description": "The public lifecycle of one background execution.\n\nTerminal states are absorbing. The allowed public transitions are:\n\n```text\nStarting  → Running\nStarting  → Cancelling\nStarting  → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nRunning   → Cancelling\nRunning   → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nStarting / Running / Cancelling → PublishingTerminal\nCancelling → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nPublishingTerminal → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\n```\n\nThe terminal vocabulary claims only facts the executor proved: `Failed`\nis a *known* failure, `Denied` is policy/approval refusal (not `Failed`),\n`TimedOut` is a proven deadline settlement, and\n`OutcomeUnknown` means the executor could not prove the external outcome\nat all. A terminal lifecycle never claims a stronger external outcome\nthan the canonical [`ToolExecutionStatus`] of the stored result proves —\nin particular an unknown outcome is never labelled `Failed`, and a\ncancellation request that could not be confirmed physically never\nbecomes `Cancelled`.\n\n[`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal\nstate in which the executor has returned its terminal candidate and the\nregistry now owns durable terminal publication; it is never `Running`:\nthe executor has returned and the runner now owns the durable settlement\ncontinuation, retaining the settlement candidate until publication\nreaches a terminal outcome. An internal unpublished prepared\nstate implements dispatch atomicity but never leaks as an accepted\nexecution.",
+      "description": "The public lifecycle of one background execution.\n\nTerminal states are absorbing. The allowed public transitions are:\n\n```text\nStarting  → Running\nStarting  → Cancelling\nStarting  → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nRunning   → Cancelling\nRunning   → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nStarting / Running / Cancelling → PublishingTerminal\nCancelling → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\nPublishingTerminal → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown\n```\n\nThe terminal vocabulary claims only facts the executor proved: `Failed`\nis a *known* failure, `Denied` is policy/approval refusal (not `Failed`),\n`TimedOut` is a proven deadline settlement, and\n`OutcomeUnknown` means the executor could not prove the external outcome\nat all. A terminal lifecycle never claims a stronger external outcome\nthan the canonical `ToolExecutionStatus` of the stored result proves —\nin particular an unknown outcome is never labelled `Failed`, and a\ncancellation request that could not be confirmed physically never\nbecomes `Cancelled`.\n\n[`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal\nstate in which the executor has returned its terminal candidate and the\nregistry now owns durable terminal publication; it is never `Running`:\nthe executor has returned and the runner now owns the durable settlement\ncontinuation, retaining the settlement candidate until publication\nreaches a terminal outcome. An internal unpublished prepared\nstate implements dispatch atomicity but never leaks as an accepted\nexecution.",
       "oneOf": [
         {
           "description": "The dispatch committed and the runner is starting.",
@@ -4171,12 +4172,12 @@
           "const": "cancelled"
         },
         {
-          "description": "The execution's deadline expired and the executor proved the\nterminal settlement (see [`ToolExecutionStatus::TimedOut`]).",
+          "description": "The execution's deadline expired and the executor proved the\nterminal settlement (see `ToolExecutionStatus::TimedOut`).",
           "type": "string",
           "const": "timed_out"
         },
         {
-          "description": "The executor returned without being able to prove the external\noutcome (see [`ToolExecutionStatus::OutcomeUnknown`]). This is a\nfirst-class terminal state: the execution is settled as far as this\nruntime is concerned, but its external outcome is genuinely unknown\nand is never collapsed into [`Self::Failed`].",
+          "description": "The executor returned without being able to prove the external\noutcome (see `ToolExecutionStatus::OutcomeUnknown`). This is a\nfirst-class terminal state: the execution is settled as far as this\nruntime is concerned, but its external outcome is genuinely unknown\nand is never collapsed into [`Self::Failed`].",
           "type": "string",
           "const": "outcome_unknown"
         }
@@ -4400,7 +4401,7 @@
       ]
     },
     "ModelUsage": {
-      "description": "Normalized token accounting for one generation.\n\nProviders do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.\nMissing provider metrics remain absent; a reported zero is `Some(0)`.\nThese are native u64 quantities, not byte offsets. Observation transports\nuse the existing exact decimal codec without narrowing provider evidence.",
+      "description": "Providers do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.\nMissing provider metrics remain absent; a reported zero is `Some(0)`.\nThese are native u64 quantities, not byte offsets. Observation transports\nuse the existing exact decimal codec without narrowing provider evidence.",
       "type": "object",
       "properties": {
         "input_tokens": {
@@ -7122,6 +7123,7 @@
       ]
     },
     "WorkflowNodeKind": {
+      "description": "The fixed Workflow node kinds.",
       "type": "string",
       "enum": [
         "template",
@@ -7235,6 +7237,7 @@
       ]
     },
     "WorkflowWait": {
+      "description": "What a node is currently waiting for.",
       "type": "string",
       "enum": [
         "tool",
@@ -8077,7 +8080,7 @@
       ]
     },
     "InteractionRequester": {
-      "description": "The canonical, provider-independent identity of whoever asked the human.\n\nThese are the registry-resolved facts of the tool invocation that reached\nthe interaction boundary — never a display string, never an rmcp value, and\nnever something a Runtime Client infers from the prompt text. The same\nimmutable value flows through the live request, the Event Journal subject,\nthe Runtime Client projection, and the TUI, so an MCP-originated prompt can\nalways name the server that asked:\n\n```text\nToolOrigin::Mcp { server_id: \"github\" } + tool_name \"create_issue\"\n    -> \"Requested by MCP server: github / Tool: create_issue\"\nToolOrigin::Builtin + tool_name \"ask_user\"\n    -> the native wording, never labelled as MCP\n```\n\nIt is deliberately orthogonal to\n[`InteractionSource`](crate::runtime::interaction::InteractionSource):\n*where* an interaction came from (primary or subagent) and *who* requested\nit (native tool or MCP server) are two independent facts and are never\ncollapsed into one field.",
+      "description": "The canonical, provider-independent identity of whoever asked the human.\n\nThese are the registry-resolved facts of the tool invocation that reached\nthe interaction boundary — never a display string, never an rmcp value, and\nnever something a Runtime Client infers from the prompt text. The same\nimmutable value flows through the live request, the Event Journal subject,\nthe Runtime Client projection, and the TUI, so an MCP-originated prompt can\nalways name the server that asked:\n\n```text\nToolOrigin::Mcp { server_id: \"github\" } + tool_name \"create_issue\"\n    -> \"Requested by MCP server: github / Tool: create_issue\"\nToolOrigin::Builtin + tool_name \"ask_user\"\n    -> the native wording, never labelled as MCP\n```\n\nIt is deliberately orthogonal to\n`InteractionSource` (`rustx::runtime::interaction::InteractionSource`):\n*where* an interaction came from (primary or subagent) and *who* requested\nit (native tool or MCP server) are two independent facts and are never\ncollapsed into one field.",
       "type": "object",
       "properties": {
         "tool_id": {
@@ -11917,7 +11920,7 @@
       ]
     },
     "InboundSequence": {
-      "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`]`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
+      "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
@@ -15442,7 +15445,7 @@
       ]
     },
     "RuntimeClientAttemptFailure": {
-      "description": "The normalized client-visible failure of one attempt.\n\nThis is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields\n(such as the raw provider error code) never appear here.",
+      "description": "The normalized client-visible failure of one attempt.\n\nThis is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields\n(such as the raw provider error code) never appear here.",
       "oneOf": [
         {
           "description": "A model request exhausted its retry policy.",
@@ -19831,7 +19834,7 @@
       ]
     },
     "ModelRef": {
-      "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
+      "description": "A fully qualified `provider/model` catalog reference.",
       "type": "string"
     },
     "ModelProfileId": {

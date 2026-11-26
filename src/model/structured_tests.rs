@@ -1,5 +1,6 @@
 use super::*;
-use serde_json::json;
+use rustx_types::model::error::{ModelErrorKind, ModelRetryDisposition};
+use serde_json::{Value, json};
 
 fn definition() -> Value {
     json!({"type":"object","properties":{"label":{"type":"string","enum":["yes","no"]}},"required":["label"],"additionalProperties":false})

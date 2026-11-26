@@ -971,7 +971,9 @@ impl AgentExecution<'_> {
                     &envelope.event,
                     envelope.sequence,
                     envelope.tool_occurrence.as_ref(),
-                    envelope.observation.as_deref(),
+                    envelope.observation.as_ref().and_then(|receipt| {
+                        receipt.get::<crate::durable::observation::NativeObservationBatch>()
+                    }),
                 );
             }
         };
@@ -1133,7 +1135,9 @@ impl AgentExecution<'_> {
                     &persisted.event,
                     persisted.sequence,
                     persisted.tool_occurrence.as_ref(),
-                    persisted.observation.as_deref(),
+                    persisted.observation.as_ref().and_then(|receipt| {
+                        receipt.get::<crate::durable::observation::NativeObservationBatch>()
+                    }),
                 );
             }
             Ok(())

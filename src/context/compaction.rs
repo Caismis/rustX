@@ -246,6 +246,7 @@ impl GeneratedCompaction {
 }
 
 /// Standalone Context fixtures own the same operation lifetime explicitly.
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_compaction(
@@ -407,7 +408,7 @@ pub(crate) fn activate_blocking_generated(
     owner: crate::durable::projection::ProjectionOwner,
     generated: GeneratedCompaction,
 ) -> Result<ExecutedCompaction, CompactionExecutionError> {
-    let prefix_proof = super::coverage::VerifiedPrefixCoverage::seal_current(&generated)?;
+    let prefix_proof = super::coverage::seal(&generated, true)?;
     operation.budget().check(cancellation)?;
     let grant = operation.authorize_commit()?;
     let GeneratedCompaction {

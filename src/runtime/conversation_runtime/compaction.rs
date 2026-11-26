@@ -2,6 +2,7 @@
 //! coordinator, not an Agent Attempt.
 
 use super::*;
+use crate::durable::observation::NativeObservationBatch;
 
 /// Maximum UTF-8 byte length of manual compaction focus instructions.
 pub const MANUAL_COMPACTION_INSTRUCTIONS_MAX_BYTES: usize = 4_096;
@@ -356,7 +357,10 @@ impl RuntimeInner {
         let Some(fanout) = self.pending.get() else {
             return;
         };
-        let batch = persisted.observation.as_deref();
+        let batch = persisted
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>());
         if !fanout
             .native_manual_compaction(request, batch)
             .is_installed()

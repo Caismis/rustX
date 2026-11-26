@@ -576,11 +576,7 @@ fn stage_messages<'a>(
     tools: &crate::model::adapter::validation::ValidatedTools,
 ) -> Result<StagedMessages<'a>, ModelError> {
     let origin = request.invocation.replay_origin();
-    let prefix = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache")
+    let prefix = crate::model::adapter::cache::lock(&request.messages)
         .anthropic
         .take()
         .filter(|prefix| {
@@ -791,12 +787,8 @@ fn finish_messages<'a>(
         bytes: prefix.bytes,
         _lifetime: std::marker::PhantomData,
     };
-    let mut cache = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache");
-    if let Some(current) = cache.correlation.as_mut().filter(|current| {
+    let mut cache = crate::model::adapter::cache::lock(&request.messages);
+    if let Some(current) = cache.correlation.plan.as_mut().filter(|current| {
         current.epoch == tools.correlation.epoch && current.matches(&request.messages)
     }) {
         current.dirty.clear();

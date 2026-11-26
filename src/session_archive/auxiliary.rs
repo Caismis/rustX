@@ -177,7 +177,6 @@ impl ConversationCut {
 
 #[cfg(test)]
 mod tests {
-    use crate::durable::AuxiliaryStore;
     use crate::durable::ProjectionStore;
     use crate::durable::SqliteConversationStore;
     use crate::durable::auxiliary::auxiliary_settlement_envelope;

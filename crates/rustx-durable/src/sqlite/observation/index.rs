@@ -1,0 +1,1120 @@
+//! Commit-time observation descriptor indexes.
+//!
+//! These writers run inside the caller's canonical, Journal, pending, or
+//! publication transaction and derive finite display headers from the facts
+//! that transaction commits. They are read layouts only, never authority.
+
+#[cfg(any(test, feature = "test-hooks"))]
+use super::PUBLICATION_CAPTURE_WORK;
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! { static DESCRIPTOR_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0,0)) }; }
+use super::{audit_summary, block, cut, has_text_preview, identity, kind, message_locator};
+use crate::observation::capture::Capture;
+use crate::observation::cut::ContentBinding;
+use crate::observation::transcript::RuntimeClientTranscriptEntry;
+use crate::observation::{
+    HEADER_ENCODED_MAX, HEADER_PAGE_MAX, MessageBlockHeader, MessageHeader, TranscriptHeader,
+};
+use crate::sqlite::statements::FixedStatements;
+use crate::sqlite::{Connection, ConversationStoreError, Transaction, params, seq_to_i64, storage};
+use rustx_types::message::types::{InboundKind, MessageBlock};
+use rustx_types::observation::bounded::bounded_bytes;
+use rustx_types::runtime::identity::ConversationId;
+
+pub fn append_message_metadata(
+    connection: &Connection,
+    conversation: &ConversationId,
+    message: &MessageBlock,
+    count: usize,
+    position: Option<u64>,
+    semantic_fits: bool,
+    capture: &mut Capture,
+) -> Result<bool, ConversationStoreError> {
+    let mut metadata_deferred = false;
+    if let Some(position) = position {
+        let source = rustx_types::observation::content::ContentSource::CanonicalMessageBlock {
+            component:
+                rustx_types::observation::content::CanonicalContentComponent::MessageMetadata,
+            locator: message_locator(message.id(), position),
+            block_index: rustx_types::message::types::ContentBlockIndex::new(0),
+        };
+        if let Some(reference) = crate::sqlite::content::descriptor(
+            connection,
+            conversation,
+            &source,
+            rustx_types::observation::content::ContentRepresentation::CanonicalJsonV1,
+        )? {
+            metadata_deferred = !semantic_fits || reference.readable_end > 1024;
+            capture.content.push(
+                crate::observation::cut::ContentBinding {
+                    source_path: None,
+                    path: vec!["display".into()],
+                    content_ref: reference.into(),
+                    deferred: metadata_deferred,
+                }
+                .into(),
+            );
+        }
+    }
+    if let Some(position) = position {
+        for index in 0..count.min(HEADER_PAGE_MAX) {
+            let binary_source =
+                rustx_types::observation::content::ContentSource::CanonicalMessageBlock {
+                    component:
+                        rustx_types::observation::content::CanonicalContentComponent::Payload,
+                    locator: message_locator(message.id(), position),
+                    block_index: rustx_types::message::types::ContentBlockIndex::new(
+                        u32::try_from(index).map_err(|_| storage("block index"))?,
+                    ),
+                };
+            if let Some(reference) = crate::sqlite::content::descriptor(
+                connection,
+                conversation,
+                &binary_source,
+                rustx_types::observation::content::ContentRepresentation::BinaryBytes,
+            )? {
+                let mut path = vec!["display".into()];
+                if matches!(message, MessageBlock::Tool(_)) {
+                    path.push("result".into());
+                }
+                path.extend(["content".into(), index.to_string(), "binary".into()]);
+                capture.content.push(
+                    crate::observation::cut::ContentBinding {
+                        source_path: None,
+                        path,
+                        content_ref: reference.into(),
+                        deferred: true,
+                    }
+                    .into(),
+                );
+            }
+            let source = rustx_types::observation::content::ContentSource::CanonicalMessageBlock {
+                component:
+                    rustx_types::observation::content::CanonicalContentComponent::BlockMetadata,
+                locator: message_locator(message.id(), position),
+                block_index: rustx_types::message::types::ContentBlockIndex::new(
+                    u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
+                ),
+            };
+            if let Some(reference) = crate::sqlite::content::descriptor(
+                connection,
+                conversation,
+                &source,
+                rustx_types::observation::content::ContentRepresentation::CanonicalJsonV1,
+            )? && reference.readable_end > 1024
+            {
+                metadata_deferred = true;
+                let mut path = vec!["display".into()];
+                if matches!(message, MessageBlock::Tool(_)) {
+                    path.push("result".into());
+                }
+                path.extend(["content".into(), index.to_string()]);
+                capture.content.push(
+                    crate::observation::cut::ContentBinding {
+                        source_path: None,
+                        path,
+                        content_ref: reference.into(),
+                        deferred: true,
+                    }
+                    .into(),
+                );
+            }
+        }
+    }
+
+    Ok(metadata_deferred)
+}
+
+#[must_use]
+pub fn message_source_label(message: &MessageBlock) -> Option<String> {
+    match message {
+        MessageBlock::User(user) => Some(
+            match user.source {
+                rustx_types::message::types::UserSource::Human => "human",
+                rustx_types::message::types::UserSource::Agent { .. } => "agent",
+                rustx_types::message::types::UserSource::Fleet => "fleet",
+                rustx_types::message::types::UserSource::ExternalSystem => "external_system",
+                rustx_types::message::types::UserSource::Runtime => "runtime",
+                rustx_types::message::types::UserSource::Extension { .. } => "certified_extension",
+            }
+            .into(),
+        ),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn tool_call_count(message: &MessageBlock) -> u64 {
+    match message {
+        MessageBlock::Assistant(value) => value
+            .content
+            .iter()
+            .filter(|block| {
+                matches!(
+                    block,
+                    rustx_types::message::types::AssistantContentBlock::ToolCall(_)
+                )
+            })
+            .count() as u64,
+        _ => 0,
+    }
+}
+
+/// A single publication's finite pre-trim draft. It never outlives the
+/// canonical transaction and is admitted only without custom SQL triggers.
+/// Keep the pre-trim value: shorter final raw bindings can restore a display
+/// that the original canonical representation could not fit.
+#[derive(Debug)]
+pub struct PublicationHeader {
+    pub header: MessageHeader,
+    pub captured_bindings: usize,
+}
+
+#[allow(clippy::too_many_lines)] // One native descriptor with its original bounded admission.
+pub fn index_message_capture(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: Option<u64>,
+    retain_publication: bool,
+    transcript_cursor: Option<crate::TranscriptCursor>,
+) -> Result<Option<PublicationHeader>, ConversationStoreError> {
+    #[cfg(any(test, feature = "test-hooks"))]
+    PUBLICATION_CAPTURE_WORK.with(|work| {
+        let (messages, blocks, reused) = work.get();
+        work.set((messages + 1, blocks, reused));
+    });
+    if position.is_some() {
+        index_blocks(connection, message)?;
+    }
+    let conversation = identity(connection)?;
+    let (role, kind, count) = kind(message);
+    let mut capture = Capture::new(1);
+    // A descriptor must never change a native semantic family when growing
+    // metadata cannot fit. Keep its exact kind/identity and mark it deferred.
+    let semantic_fits = match message {
+        MessageBlock::User(value) => {
+            bounded_bytes(&value.kind, 1024).is_some()
+                && bounded_bytes(&value.source, 1024).is_some()
+        }
+        _ => true,
+    };
+    let display = (semantic_fits && message.id().as_str().len() <= 256)
+        .then(|| capture.message(message, &conversation, &["display".into()]));
+    if display.is_none() && count > 0 {
+        capture.frontier("display/content", count as u64, 0, Some(0));
+    }
+    if let Some(position) = position {
+        for frontier in &mut capture.collections {
+            if frontier.domain == "display/content" {
+                frontier.domain = format!("messages.ledger:{position}.blocks");
+            }
+        }
+    }
+    let payload_deferred = !capture.content.is_empty();
+    if position.is_some() {
+        canonical_bindings(connection, &conversation, &mut capture)?;
+    } else {
+        // Pending inbound is not canonical content; no locator may claim otherwise.
+        capture.content.clear();
+    }
+    let captured_bindings = capture.content.len();
+    let metadata_deferred = append_message_metadata(
+        connection,
+        &conversation,
+        message,
+        count,
+        position,
+        semantic_fits,
+        &mut capture,
+    )?;
+    let deferred = !semantic_fits
+        || payload_deferred
+        || metadata_deferred
+        || message.id().as_str().len() > 256;
+    let mut header = MessageHeader {
+        deliveries: if let (Some(position), MessageBlock::Tool(tool)) = (position, message) {
+            (tool.result.status == rustx_types::tools::types::ToolExecutionStatus::Success)
+                .then(|| crate::sqlite::observation_delivery::head(connection, position, 0, 8))
+                .transpose()?
+        } else {
+            None
+        },
+        tool_calls: Vec::new(),
+        transcript_cursor,
+        identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
+        locator: position.map(|position| {
+            rustx_types::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                position,
+            }
+        }),
+        ledger_position: position,
+        role: role.into(),
+        source_label: message_source_label(message),
+        human_activity_at: match message {
+            MessageBlock::User(user)
+                if user.kind == InboundKind::Message
+                    && matches!(user.source, rustx_types::message::types::UserSource::Human) =>
+            {
+                user.timestamp
+            }
+            _ => None,
+        },
+        opening_preview: match message {
+            MessageBlock::User(user) if user.kind == InboundKind::Message => {
+                crate::preview::preview_of(user)
+            }
+            _ => None,
+        },
+        has_text_preview: has_text_preview(message),
+        opening_prompt: matches!(message,MessageBlock::User(value) if value.kind==InboundKind::Message && matches!(value.source,rustx_types::message::types::UserSource::Human|rustx_types::message::types::UserSource::Agent {..}) && value.content.iter().any(|block|matches!(block,rustx_types::message::types::UserContentBlock::Text(text) if text.text.split_whitespace().next().is_some()))),
+        kind: kind.into(),
+        block_count: count as u64,
+        tool_call_count: tool_call_count(message),
+        display: (message.id().as_str().len() <= 256)
+            .then_some(display)
+            .flatten(),
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::observation::metadata::MetadataFragment::into_owned)
+            .collect(),
+        collections: capture.collections,
+        deferred,
+    };
+    if let Some(head) = &header.deliveries {
+        header
+            .collections
+            .push(crate::observation::delivery::frontier(head));
+    }
+    let (bytes, prepared) = if retain_publication {
+        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
+            // The common path encodes once and moves its exact admitted draft.
+            (
+                bytes,
+                Some(PublicationHeader {
+                    header,
+                    captured_bindings,
+                }),
+            )
+        } else {
+            // Only a head that needs trimming retains a bounded pre-trim copy.
+            // This private limit never narrows the public header admission.
+            let prepared = (rustx_types::observation::preflight::bounded_fit(&header, 128 * 1024)
+                == Some(true))
+            .then(|| PublicationHeader {
+                header: header.clone(),
+                captured_bindings,
+            });
+            (message_header_bytes(&mut header)?, prepared)
+        }
+    } else {
+        (message_header_bytes(&mut header)?, None)
+    };
+    // Hidden carriers use their own negative rowids, independent of the full
+    // width Ledger/Inbound coordinates. MIN is a primary-key endpoint seek.
+    connection.execute_cached("INSERT INTO transcript_entries(position,reference_kind,reference_id,ledger_position,header_json) VALUES(COALESCE((SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1),(SELECT position FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1),(SELECT CASE WHEN MIN(position)<0 THEN MIN(position)-1 ELSE -1 END FROM transcript_entries)),'message',?1,?2,?3) ON CONFLICT(position) DO UPDATE SET reference_kind=excluded.reference_kind,reference_id=excluded.reference_id,ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    index_tool_result(connection, message, position)?;
+    Ok(prepared)
+}
+
+pub fn index_message(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: Option<u64>,
+) -> Result<(), ConversationStoreError> {
+    let cursor = crate::sqlite::canonical::ledger::load_transcript_reference(
+        connection,
+        "message",
+        message.id().as_str(),
+    )?;
+    index_message_capture(connection, message, position, false, cursor).map(|_| ())
+}
+
+pub fn index_tool_result(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: Option<u64>,
+) -> Result<(), ConversationStoreError> {
+    if let MessageBlock::Tool(tool) = message {
+        let result = crate::sqlite::observation_tools::result_header(&tool.result);
+        let bytes = bounded_bytes(&result, HEADER_ENCODED_MAX)
+            .ok_or_else(|| storage("native Tool result summary exceeds header budget"))?;
+        connection
+            .execute(
+                "UPDATE transcript_entries SET tool_result_json=?2 WHERE ledger_position=?1",
+                params![position, bytes],
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    }
+    Ok(())
+}
+
+pub fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, ConversationStoreError> {
+    loop {
+        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
+            return Ok(bytes);
+        }
+        header.deferred = true;
+        if header.display.take().is_some() {
+            for binding in &mut header.content {
+                if matches!(
+                    &binding.content_ref.source,
+                    rustx_types::observation::content::ContentSource::CanonicalMessageBlock {
+                        component:
+                            rustx_types::observation::content::CanonicalContentComponent::MessageMetadata,
+                        ..
+                    }
+                ) {
+                    binding.deferred = true;
+                }
+            }
+            continue;
+        }
+        if let Some(head) = header.deliveries.as_mut() {
+            if head.items.iter().any(|item| item.file.is_some()) {
+                for item in &mut head.items {
+                    item.file = None;
+                    item.metadata_deferred = true;
+                }
+                continue;
+            }
+            if let Some(item) = head.items.pop() {
+                head.next_offset = Some(item.index);
+                if let Some(frontier) = header
+                    .collections
+                    .iter_mut()
+                    .find(|frontier| frontier.domain == head.domain)
+                {
+                    *frontier = crate::observation::delivery::frontier(head);
+                }
+                continue;
+            }
+        }
+        let old = header.content.len();
+        header.content.retain(|binding| {
+            matches!(
+                &binding.content_ref.source,
+                rustx_types::observation::content::ContentSource::CanonicalMessageBlock {
+                    component:
+                        rustx_types::observation::content::CanonicalContentComponent::MessageMetadata,
+                    ..
+                }
+            )
+        });
+        if header.content.len() != old {
+            continue;
+        }
+        if let Some(position) = header.ledger_position {
+            let blocks = format!("messages.ledger:{position}.blocks");
+            let tools = format!("messages.ledger:{position}.tools");
+            let mut essential = vec![
+                crate::observation::cut::CollectionFrontier {
+                    domain: blocks,
+                    revision: 1,
+                    total: header.block_count,
+                    loaded: 0,
+                    next_offset: (header.block_count > 0).then_some(0),
+                },
+                crate::observation::cut::CollectionFrontier {
+                    domain: tools,
+                    revision: 1,
+                    total: header.tool_call_count,
+                    loaded: 0,
+                    next_offset: (header.tool_call_count > 0).then_some(0),
+                },
+            ];
+            if let Some(head) = &header.deliveries {
+                essential.push(crate::observation::delivery::frontier(head));
+            }
+            if header.collections != essential {
+                header.collections = essential;
+                continue;
+            }
+        }
+        return Err(storage(
+            "native message identity exceeds finite descriptor budget",
+        ));
+    }
+}
+
+fn entry_header(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    entry: &RuntimeClientTranscriptEntry,
+) -> Result<TranscriptHeader, ConversationStoreError> {
+    let conversation = identity(connection)?;
+    let mut capture = Capture::new(1);
+    let display = capture.transcript_entry(entry, &conversation, &["display".into()]);
+    if let crate::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit { audit } =
+        &entry.item
+    {
+        for (index, block) in audit.content.iter().take(HEADER_PAGE_MAX).enumerate() {
+            if let rustx_publication::PublicationAuditBlock::ProposedToolCall {
+                block_index,
+                name,
+                ..
+            } = block
+                && name.len() > 1024
+            {
+                let source = rustx_types::observation::content::ContentSource::DurableTranscriptAudit {
+                    component:
+                        rustx_types::observation::content::PublicationContentComponent::BlockMetadata,
+                    stream_id: audit.stream_id.clone(),
+                    message_id: audit.message_id.clone(),
+                    attempt_id: audit.attempt_id.clone(),
+                    turn_id: audit.turn_id.clone(),
+                    publication_request_id: audit.request_id.clone(),
+                    block_index: *block_index,
+                };
+                if let Some(reference) = crate::sqlite::content::descriptor(
+                    connection,
+                    &conversation,
+                    &source,
+                    rustx_types::observation::content::ContentRepresentation::CanonicalJsonV1,
+                )? {
+                    capture.content.push(
+                        crate::observation::cut::ContentBinding {
+                            source_path: None,
+                            path: vec![
+                                "display".into(),
+                                "item".into(),
+                                "audit".into(),
+                                "content".into(),
+                                index.to_string(),
+                            ],
+                            content_ref: reference.into(),
+                            deferred: true,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+    }
+    let deferred = display.is_none() || !capture.content.is_empty();
+    let header = TranscriptHeader {
+        tool_calls: Vec::new(),
+        publication_settlement: None,
+        cursor: entry.cursor.into(),
+        reference_kind: kind.into(),
+        reference_id: if id.len() <= 256 {
+            id.into()
+        } else {
+            format!("transcript:{}", entry.cursor.get())
+        },
+        message: None,
+        display,
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::observation::metadata::MetadataFragment::into_owned)
+            .collect(),
+        collections: capture.collections,
+        deferred,
+    };
+    Ok(header)
+}
+
+fn transcript_header_bytes(
+    mut header: TranscriptHeader,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    loop {
+        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
+            return Ok(bytes);
+        }
+        header.deferred = true;
+        if header.display.take().is_some() {
+            continue;
+        }
+        if header.content.pop().is_some() {
+            continue;
+        }
+        if header.collections.pop().is_some() {
+            continue;
+        }
+        return Err(storage(
+            "native transcript identity exceeds finite descriptor budget",
+        ));
+    }
+}
+
+pub fn store_transcript_header(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    header: TranscriptHeader,
+) -> Result<(), ConversationStoreError> {
+    let bytes = transcript_header_bytes(header)?;
+    let journal: u64 = if matches!(
+        kind,
+        "attempt_terminal" | "interaction_event" | "configuration_event"
+    ) {
+        crate::sqlite::journal::find_event_sequence(connection, id)?
+            .ok_or_else(|| storage("transcript event identity is missing"))?
+    } else {
+        0
+    };
+    store_transcript_bytes(connection, kind, id, journal, &bytes)
+}
+
+fn store_transcript_bytes(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    journal: u64,
+    bytes: &[u8],
+) -> Result<(), ConversationStoreError> {
+    connection.execute("UPDATE transcript_entries SET reference_kind=?1,reference_id=?2,journal_position=?3,header_json=?4 WHERE native_reference_kind=?1 AND native_reference_id=?2",params![kind,id,journal,bytes]).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    Ok(())
+}
+
+/// The trigger-free append builder already allocated the native T seat and
+/// prepared this exact event's member/execution domains in its savepoint.
+/// No historical read uses this entry point or substitutes pending evidence.
+pub fn index_pending_native_event(
+    transaction: &Transaction<'_>,
+    kind: &str,
+    event: &rustx_types::events::types::RuntimeEventEnvelope,
+    cursor: crate::TranscriptCursor,
+    members: Option<
+        &crate::sqlite::append_facts::Captured<crate::observation::AttemptMemberCounts>,
+    >,
+    execution: Option<&crate::sqlite::observation_execution::Captured>,
+) -> Result<(), ConversationStoreError> {
+    let header = if kind == "attempt_terminal" {
+        // Keep the actual metadata/counter validation. process_view uses only
+        // this cut's T frontier, already advanced by native seat allocation.
+        let cut = cut(transaction, &event.conversation_id)?;
+        let counts = members.ok_or_else(|| storage("native member header unavailable"))?;
+        let process = crate::sqlite::observation_members::pending_process_view(
+            &cut,
+            counts.value.clone(),
+            cursor,
+            event.sequence,
+            execution,
+        )?
+        .ok_or_else(|| storage("native terminal process unavailable"))?;
+        terminal_header(kind, event, cursor, process)
+    } else {
+        other_native_header(transaction, kind, event, cursor)?
+    };
+    let bytes = transcript_header_bytes(header)?;
+    store_transcript_bytes(
+        transaction,
+        kind,
+        event.event_id.as_str(),
+        event.sequence,
+        &bytes,
+    )
+}
+
+fn terminal_header(
+    kind: &str,
+    event: &rustx_types::events::types::RuntimeEventEnvelope,
+    cursor: crate::TranscriptCursor,
+    process: crate::observation::turn::TurnProcessView,
+) -> TranscriptHeader {
+    TranscriptHeader {
+        tool_calls: Vec::new(),
+        publication_settlement: None,
+        cursor,
+        reference_kind: kind.into(),
+        reference_id: if event.event_id.as_str().len() <= 256 {
+            event.event_id.to_string()
+        } else {
+            format!("transcript:{}", cursor.get())
+        },
+        message: None,
+        display: Some(
+            crate::observation::transcript::RuntimeClientTranscriptEntry {
+                cursor: crate::observation::transcript::RuntimeClientTranscriptCursor::new(
+                    cursor.get(),
+                ),
+                item:
+                    crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal {
+                        turn: process,
+                    },
+                tool_calls: Vec::new(),
+                turn_process: None,
+                completed_response: None,
+                response_pending: false,
+            },
+        ),
+        content: Vec::new(),
+        collections: Vec::new(),
+        deferred: false,
+    }
+}
+
+pub fn index_native_event(
+    transaction: &Transaction<'_>,
+    kind: &str,
+    event: &rustx_types::events::types::RuntimeEventEnvelope,
+    cursor: crate::TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    let header = if kind == "attempt_terminal" {
+        let cut = cut(transaction, &event.conversation_id)?;
+        let process = crate::sqlite::observation_members::process_view(
+            transaction,
+            &cut,
+            crate::sqlite::observation_members::at_sequence(transaction, event.sequence)?,
+            Some(cursor),
+        )?
+        .ok_or_else(|| storage("native terminal process unavailable"))?;
+        terminal_header(kind, event, cursor, process)
+    } else {
+        other_native_header(transaction, kind, event, cursor)?
+    };
+    store_transcript_header(transaction, kind, event.event_id.as_str(), header)
+}
+
+fn other_native_header(
+    connection: &Connection,
+    kind: &str,
+    event: &rustx_types::events::types::RuntimeEventEnvelope,
+    cursor: crate::TranscriptCursor,
+) -> Result<TranscriptHeader, ConversationStoreError> {
+    let Some(event_copy) = crate::observation::bounded::bounded_clone(event, HEADER_ENCODED_MAX)
+    else {
+        return Ok(TranscriptHeader {
+            tool_calls: Vec::new(),
+            publication_settlement: None,
+            cursor,
+            reference_kind: kind.into(),
+            reference_id: if event.event_id.as_str().len() <= 256 {
+                event.event_id.to_string()
+            } else {
+                format!("transcript:{}", cursor.get())
+            },
+            message: None,
+            display: None,
+            content: Vec::new(),
+            collections: Vec::new(),
+            deferred: true,
+        });
+    };
+    let item = match &event.event {
+        rustx_types::events::types::RuntimeEvent::InteractionRequested { .. } => {
+            crate::TranscriptItem::InteractionRequested { event: event_copy }
+        }
+        rustx_types::events::types::RuntimeEvent::InteractionSettled { .. } => {
+            crate::TranscriptItem::InteractionSettled { event: event_copy }
+        }
+        rustx_types::events::types::RuntimeEvent::ConfigurationApplied { .. } => {
+            crate::TranscriptItem::ConfigurationApplied { event: event_copy }
+        }
+        _ => crate::TranscriptItem::AttemptTerminal { event: event_copy },
+    };
+    item_header(connection, kind, event.event_id.as_str(), item, cursor)
+}
+
+fn item_header(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    item: crate::TranscriptItem,
+    cursor: crate::TranscriptCursor,
+) -> Result<TranscriptHeader, ConversationStoreError> {
+    let page = crate::TranscriptPage {
+        inherited_through: crate::TranscriptCursor::new(0),
+        entries: vec![crate::TranscriptEntry {
+            cursor,
+            item,
+            tool_calls: Vec::new(),
+        }],
+        next_cursor: None,
+    };
+    let view = crate::observation::transcript::transcript_page_view(page).map_err(storage)?;
+    let entry = view
+        .entries
+        .into_iter()
+        .next()
+        .ok_or_else(|| storage("native transcript descriptor absent"))?;
+    entry_header(connection, kind, id, &entry)
+}
+
+pub fn index_item(
+    transaction: &Transaction<'_>,
+    kind: &str,
+    id: &str,
+    item: crate::TranscriptItem,
+    cursor: crate::TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    if kind == "inherited_turn" {
+        let ordinal = id
+            .parse::<u64>()
+            .map_err(|_| storage("invalid original turn ordinal"))?;
+        let conversation: String = transaction
+            .query_row_cached(
+                "SELECT conversation_id FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        let cut = cut(transaction, &ConversationId::new(conversation))?;
+        let process = crate::sqlite::observation_members::inherited_process(
+            transaction,
+            &cut,
+            ordinal,
+            cursor,
+        )?
+        .ok_or_else(|| storage("inherited terminal process unavailable"))?;
+        return store_transcript_header(transaction,kind,id,TranscriptHeader {
+            tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:id.into(),message:None,
+            display:Some(crate::observation::transcript::RuntimeClientTranscriptEntry { cursor:crate::observation::transcript::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
+            content:Vec::new(),collections:Vec::new(),deferred:false,
+        });
+    }
+    let header = item_header(transaction, kind, id, item, cursor)?;
+    store_transcript_header(transaction, kind, id, header)
+}
+
+pub fn index_blocks(
+    connection: &Connection,
+    message: &MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    use rustx_types::message::types::{
+        AssistantContentBlock as Assistant, UserContentBlock as User,
+    };
+    use rustx_types::tools::types::ToolResultContent as Tool;
+    match message {
+        MessageBlock::User(value) => {
+            for (index, value) in value.content.iter().enumerate() {
+                let (kind, field): (&str, &[&str]) = match value {
+                    User::Text(_) => ("text", &["text"]),
+                    User::Image(_) => ("image", &[]),
+                    User::File(_) => ("file", &[]),
+                    User::UploadedFile(_) => ("uploaded_file", &[]),
+                };
+                block(connection, message, index, kind, value, field)?;
+            }
+        }
+        MessageBlock::Assistant(value) => {
+            for (index, value) in value.content.iter().enumerate() {
+                let (kind, field): (&str, &[&str]) = match value {
+                    Assistant::Text(_) => ("text", &["text"]),
+                    Assistant::Reasoning(_) => ("reasoning", &["text"]),
+                    Assistant::Refusal(_) => ("refusal", &["text"]),
+                    Assistant::ToolCall(_) => ("tool_call", &["arguments"]),
+                    Assistant::Image(_) => ("image", &[]),
+                };
+                block(connection, message, index, kind, value, field)?;
+            }
+        }
+        MessageBlock::Tool(value) => {
+            for (index, value) in value.result.content.iter().enumerate() {
+                let (kind, field): (&str, &[&str]) = match value {
+                    Tool::Text(_) => ("text", &["text"]),
+                    Tool::Json { .. } => ("json", &["value"]),
+                    Tool::Image(_) => ("image", &[]),
+                    Tool::File(_) => ("file", &[]),
+                };
+                block(connection, message, index, kind, value, field)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Revision-tagged pending header stored in `pending_inbound.observation_header`.
+/// Binds the derived display header to the exact native pending revision so a
+/// stale header can never be served if a later native revision update cannot
+/// overwrite or clear `observation_header`.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(in crate::sqlite) struct StoredPendingHeader {
+    pub(in crate::sqlite) revision: u64,
+    pub(in crate::sqlite) message: MessageHeader,
+}
+
+/// Same native pending transaction stores a finite read header ahead of the original body.
+pub fn index_pending_header(
+    connection: &Connection,
+    sequence: u64,
+    revision: u64,
+    id: &rustx_types::runtime::identity::MessageId,
+    transcript: Option<u64>,
+) -> Result<(), ConversationStoreError> {
+    let bytes: Vec<u8> = connection
+        .query_row_cached(
+            "SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    if bytes.len() > HEADER_ENCODED_MAX {
+        return Err(storage("pending source header exceeds bound"));
+    }
+    let message: MessageHeader =
+        serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+    let mut stored = StoredPendingHeader { revision, message };
+    let encoded = if let Some(encoded) = bounded_bytes(&stored, HEADER_ENCODED_MAX) {
+        encoded
+    } else {
+        stored.message.deferred = true;
+        stored.message.display = None;
+        bounded_bytes(&stored, HEADER_ENCODED_MAX)
+            .ok_or_else(|| storage("pending source header exceeds bound"))?
+    };
+    connection
+        .execute_cached(
+            "UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",
+            params![encoded, transcript, sequence],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    Ok(())
+}
+
+pub fn index_audit(
+    connection: &Connection,
+    audit: &rustx_publication::PublicationAudit,
+    cursor: crate::TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    let conversation = identity(connection)?;
+    let mut capture = Capture::new(1);
+    let display = capture
+        .audit(audit, &conversation, &["display".into()])
+        .map(|audit| RuntimeClientTranscriptEntry {
+            response_pending: false,
+            cursor: cursor.into(),
+            tool_calls: Vec::new(),
+            turn_process: None,
+            completed_response: None,
+            item: crate::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit {
+                audit,
+            },
+        });
+    audit_metadata_bindings(connection, audit, &conversation, &mut capture)?;
+    for frontier in &mut capture.collections {
+        frontier.domain = format!("transcript.entries.{}.item.audit.content", cursor.get());
+        frontier.revision = cursor.get();
+    }
+    let deferred = display.is_none()
+        || !capture.content.is_empty()
+        || capture
+            .collections
+            .iter()
+            .any(|collection| collection.loaded < collection.total);
+    index_audit_blocks(connection, audit, &conversation, cursor)?;
+    let header = TranscriptHeader {
+        tool_calls: Vec::new(),
+        publication_settlement: Some(
+            crate::observation::transcript::RuntimeClientPublicationSettlementRecord {
+                settlement: audit_summary(audit).into(),
+                transcript_cursor: cursor.into(),
+                read_cut: cut(connection, &conversation)?,
+            },
+        ),
+        cursor,
+        reference_kind: "publication_audit".into(),
+        reference_id: if audit.stream_id.as_str().len() <= 256 {
+            audit.stream_id.as_str().into()
+        } else {
+            format!("transcript:{}", cursor.get())
+        },
+        message: None,
+        display,
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::observation::metadata::MetadataFragment::into_owned)
+            .collect(),
+        collections: capture.collections,
+        deferred,
+    };
+    store_transcript_header(
+        connection,
+        "publication_audit",
+        audit.stream_id.as_str(),
+        header,
+    )
+}
+
+pub fn audit_metadata_bindings(
+    connection: &Connection,
+    audit: &rustx_publication::PublicationAudit,
+    conversation: &ConversationId,
+    capture: &mut Capture,
+) -> Result<(), ConversationStoreError> {
+    for (index, block) in audit.content.iter().take(HEADER_PAGE_MAX).enumerate() {
+        if let rustx_publication::PublicationAuditBlock::ProposedToolCall {
+            block_index,
+            name,
+            call_id,
+            tool_id,
+            ..
+        } = block
+            && (name.len() > 1024 || call_id.as_str().len() > 256 || tool_id.as_str().len() > 256)
+        {
+            let source = rustx_types::observation::content::ContentSource::DurableTranscriptAudit {
+                component:
+                    rustx_types::observation::content::PublicationContentComponent::BlockMetadata,
+                stream_id: audit.stream_id.clone(),
+                message_id: audit.message_id.clone(),
+                attempt_id: audit.attempt_id.clone(),
+                turn_id: audit.turn_id.clone(),
+                publication_request_id: audit.request_id.clone(),
+                block_index: *block_index,
+            };
+            if let Some(reference) = crate::sqlite::content::descriptor(
+                connection,
+                conversation,
+                &source,
+                rustx_types::observation::content::ContentRepresentation::CanonicalJsonV1,
+            )? {
+                capture.content.push(
+                    crate::observation::cut::ContentBinding {
+                        source_path: None,
+                        path: vec![
+                            "display".into(),
+                            "item".into(),
+                            "audit".into(),
+                            "content".into(),
+                            index.to_string(),
+                        ],
+                        content_ref: reference.into(),
+                        deferred: true,
+                    }
+                    .into(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn index_audit_blocks(
+    connection: &Connection,
+    audit: &rustx_publication::PublicationAudit,
+    conversation: &ConversationId,
+    cursor: crate::TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    for (ordinal, block) in audit.content.iter().enumerate() {
+        use rustx_publication::PublicationAuditBlock as Block;
+        use rustx_types::observation::content::{
+            ContentRepresentation as Rep, ContentSource, PublicationContentComponent as Component,
+        };
+        let (block_index, kind, representation, field) = match block {
+            Block::Text { block_index, .. } => (*block_index, "text", Rep::Utf8Text, "text"),
+            Block::Reasoning { block_index, .. } => {
+                (*block_index, "reasoning", Rep::Utf8Text, "text")
+            }
+            Block::Refusal { block_index, .. } => (*block_index, "refusal", Rep::Utf8Text, "text"),
+            Block::ProposedToolCall { block_index, .. } => (
+                *block_index,
+                "proposed_tool_call",
+                Rep::RawJsonUtf8,
+                "arguments",
+            ),
+        };
+        let source = |component| ContentSource::DurableTranscriptAudit {
+            component,
+            stream_id: audit.stream_id.clone(),
+            message_id: audit.message_id.clone(),
+            attempt_id: audit.attempt_id.clone(),
+            turn_id: audit.turn_id.clone(),
+            publication_request_id: audit.request_id.clone(),
+            block_index,
+        };
+        let value = crate::observation::bounded::bounded_item_bytes(block, 1024)
+            .and_then(|_| crate::observation::bounded::structural_value(block));
+        let deferred = value.is_none();
+        let mut content = Vec::new();
+        if deferred {
+            if let Some(reference) = crate::sqlite::content::descriptor(
+                connection,
+                conversation,
+                &source(Component::Payload),
+                representation,
+            )? {
+                content.push(ContentBinding {
+                    source_path: None,
+                    path: vec![field.into()],
+                    content_ref: reference.into(),
+                    deferred: true,
+                });
+            }
+            if let Some(reference) = crate::sqlite::content::descriptor(
+                connection,
+                conversation,
+                &source(Component::BlockMetadata),
+                Rep::CanonicalJsonV1,
+            )? {
+                content.push(ContentBinding {
+                    source_path: None,
+                    path: Vec::new(),
+                    content_ref: reference.into(),
+                    deferred: true,
+                });
+            }
+        }
+        let row = MessageBlockHeader {
+            block_index,
+            kind: kind.into(),
+            value,
+            content,
+            deferred,
+        };
+        let bytes = bounded_bytes(&row, HEADER_ENCODED_MAX)
+            .ok_or_else(|| storage("audit block descriptor exceeds native bound"))?;
+        connection
+            .execute(
+                "INSERT INTO audit_observation_blocks VALUES(?1,?2,?3)",
+                params![cursor.get(), ordinal as u64, bytes],
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn take_publication_capture_work() -> (usize, usize, usize) {
+    PUBLICATION_CAPTURE_WORK.with(|work| work.replace((0, 0, 0)))
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn record_descriptor_work(hit: bool) {
+    DESCRIPTOR_WORK.with(|work| {
+        let (decodes, hits) = work.get();
+        work.set((decodes + usize::from(!hit), hits + usize::from(hit)));
+    });
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn descriptor_work() -> (usize, usize) {
+    DESCRIPTOR_WORK.with(|work| work.replace((0, 0)))
+}
+
+pub fn canonical_bindings(
+    connection: &Connection,
+    conversation: &ConversationId,
+    capture: &mut Capture,
+) -> Result<(), ConversationStoreError> {
+    for binding in &mut capture.content {
+        let raw = if binding
+            .path
+            .last()
+            .is_some_and(|field| field == "arguments")
+        {
+            crate::sqlite::content::descriptor(
+                connection,
+                conversation,
+                &binding.content_ref.source,
+                rustx_types::observation::content::ContentRepresentation::RawJsonUtf8,
+            )?
+        } else {
+            None
+        };
+        if let Some(reference) = raw.or(crate::sqlite::content::descriptor(
+            connection,
+            conversation,
+            &binding.content_ref.source,
+            binding.content_ref.representation,
+        )?) {
+            *binding = binding.resolve(&std::sync::Arc::new(reference));
+        } else {
+            return Err(storage("canonical descriptor missing native byte index"));
+        }
+    }
+    Ok(())
+}

@@ -1,0 +1,143 @@
+//! Store contract for the Event Journal.
+
+use rustx_types::events::types::RuntimeEventEnvelope;
+
+use crate::{ConversationStoreError, TranscriptCursor};
+
+/// A page of durable Event Journal envelopes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventPage {
+    /// Events in stable conversation sequence order.
+    pub events: Vec<RuntimeEventEnvelope>,
+    /// The last event sequence in this page, when non-empty.
+    pub next_sequence: Option<u64>,
+}
+
+/// The Event Journal domain of the conversation Store: validated execution
+/// facts, private Agent authority captured with its admission, and bounded
+/// Journal reads for presentation consumers.
+/// Private executable authority and every captured credential share one row.
+/// This type is never included in `RuntimeEvent`, projections or archives.
+///
+/// The authority document itself is opaque to the journal: its schema is owned
+/// by the runtime that composed it, while the journal owns atomic persistence
+/// of the document together with the credential escrow of that admission.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateAgentAuthority {
+    /// The complete serialized authority document produced by the owner.
+    pub authority: serde_json::Value,
+    /// Process credentials escrowed alongside the admission.
+    pub credentials: Vec<(String, String)>,
+}
+
+#[allow(clippy::missing_errors_doc)]
+pub trait JournalStore: Send + Sync + 'static {
+    /// Private executable Agent authority, never copied into public history or events.
+    fn load_agent_authority(
+        &self,
+        agent_id: &rustx_types::runtime::identity::AgentId,
+    ) -> Result<PrivateAgentAuthority, ConversationStoreError>;
+    /// Atomically admit one private authority and its public ownership reference.
+    fn append_agent_admission(
+        &self,
+        event: RuntimeEventEnvelope,
+        authority: &PrivateAgentAuthority,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Appends one standalone execution fact after validating every durable
+    /// reference and lifecycle terminal rule. Canonical-message,
+    /// compaction-completion, request-start, workflow-start, and
+    /// background-publication facts must use their specialized combined
+    /// transition; this method rejects them so a reference event cannot be
+    /// split from its durable authority.
+    fn append_event(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Atomically persists a `WorkflowStarted` Event Journal fact together with
+    /// its immutable admission-bound definition snapshot and run binding.
+    fn publish_workflow_start(
+        &self,
+        event: RuntimeEventEnvelope,
+        snapshot: &crate::workflow::snapshot::WorkflowRunDefinitionSnapshot,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Atomically admit a proactive Compaction Started fact and its initial
+    /// operation status; neither fact may be visible without the other.
+    fn append_compaction_admission(
+        &self,
+        started: RuntimeEventEnvelope,
+        status: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError>;
+    /// Commits a non-success Workflow-owned child terminal fact without a
+    /// parent inbound notification. Successful Workflow terminals must use
+    /// [`JournalStore::commit_workflow_agent_terminal`] so their value
+    /// and lifecycle fact cannot split across durable transitions.
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Commits a successful Workflow Agent's structured value and its native
+    /// `SubagentTerminalSettled` lifecycle fact in one durable transaction.
+    /// This specialized transition is the Workflow terminal boundary: it
+    /// records execution evidence without creating a parent message or a
+    /// durable `settled -> delivered` state.
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError>;
+    /// Commits one interaction audit event and returns the transcript
+    /// position allocated in the same durable transaction.
+    fn append_interaction_audit(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
+    /// Commits one Session-level configuration change fact, with the exact
+    /// effective instructions and installed catalog as that fact's retained
+    /// content, and returns the transcript position allocated in the same
+    /// durable transaction.
+    fn append_configuration_change(
+        &self,
+        event: RuntimeEventEnvelope,
+        instructions: &str,
+        catalog: &str,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
+    /// Atomically install the leaf Journal observer and capture its initial prefix.
+    fn observe_journal(
+        &self,
+        observer: std::sync::Arc<dyn crate::presentation::JournalObserver>,
+    ) -> Result<u64, ConversationStoreError>;
+    /// Latest committed Journal position, read without enumerating history.
+    fn presentation_frontier(&self) -> Result<u64, ConversationStoreError>;
+    /// Indexed, bounded execution-fact reads for presentation consumers.
+    /// `before` is exclusive; `through` fixes a durable read cut. This is an
+    /// internal Journal query, never a public cursor or a semantic authority.
+    fn read_presentation_events(
+        &self,
+        query: &crate::presentation::FactQuery,
+    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+    /// The durable recovery frontier: the Journal fold through one exact
+    /// sequence, advanced atomically with every Journal append. Its anchor
+    /// row is verified; a frontier ahead of the Journal or naming another row
+    /// is rejected.
+    fn recovery_frontier(
+        &self,
+    ) -> Result<crate::recovery_frontier::RecoveryFrontier, ConversationStoreError>;
+
+    /// Reads a bounded Event Journal page in stable sequence order.
+    fn read_events(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<EventPage, ConversationStoreError>;
+
+    /// Commits an attempt's admission and its first logical turn together.
+    /// The two facts retain their native order and share one observation
+    /// receipt. Cancellation before turn preparation uses `append_event` for
+    /// the attempt alone; subsequent turns also use that standalone method.
+    fn commit_attempt_first_turn(
+        &self,
+        attempt: RuntimeEventEnvelope,
+        turn: RuntimeEventEnvelope,
+    ) -> Result<[RuntimeEventEnvelope; 2], ConversationStoreError>;
+}

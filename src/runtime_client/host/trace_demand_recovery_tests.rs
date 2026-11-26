@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use super::*;
 use crate::runtime_client::host::{ClientInner, commit_display};
 // Isolated reconstruction from published source; no original unpushed work recovered.
@@ -147,7 +148,7 @@ async fn deferred_trace_detail_and_content_keep_original_cut_across_native_commi
     assert!(
         crate::runtime::observation::PublicationProjectionCommit::native_batch(
             &sink,
-            committed.observation.as_deref().unwrap(),
+            committed.observation.native_batch().unwrap(),
         )
         .is_installed()
     );

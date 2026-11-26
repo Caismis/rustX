@@ -391,7 +391,7 @@ pub(crate) struct AgentObservationValue<'a> {
 
 #[derive(Clone)]
 pub(crate) struct AgentObservationSource {
-    pub(super) layout: crate::runtime::read_layout::ObservationLayoutCache,
+    pub(super) layout: rustx_durable::read_layout::ObservationLayoutCache,
     pub(super) authority: Arc<agents::DurableAgentAuthority>,
     profile: Option<Arc<SubagentExecutionProfile>>,
     title_agent_id: AgentId,
@@ -432,11 +432,11 @@ impl AgentObservationSource {
 
     pub(crate) fn indexed(
         &self,
-    ) -> Result<&crate::runtime::read_layout::SeekableObservationSource, &'static str> {
+    ) -> Result<&rustx_durable::read_layout::SeekableObservationSource, &'static str> {
         self.layout
             .get_or_init(|| {
                 self.with_value(|value| {
-                    crate::runtime::read_layout::SeekableObservationSource::new(value)
+                    rustx_durable::read_layout::SeekableObservationSource::new(value)
                 })
             })
             .as_ref()

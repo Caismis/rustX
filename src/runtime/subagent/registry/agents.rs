@@ -1154,6 +1154,36 @@ pub(super) const SUBAGENT_LIFECYCLE_KINDS: &[&str] = &[
     "subagent_physical_settlement_proven",
 ];
 
+fn load_durable_agent_authority(
+    store: &dyn crate::durable::JournalStore,
+    agent_id: &rustx_identity::AgentId,
+) -> Result<DurableAgentAuthority, crate::durable::ConversationStoreError> {
+    let private = store.load_agent_authority(agent_id)?;
+    let mut authority: DurableAgentAuthority =
+        serde_json::from_value(private.authority).map_err(|_| {
+            crate::durable::ConversationStoreError::InvalidReference(
+                "decode private Agent authority".to_owned(),
+            )
+        })?;
+    // The journal only escrows the credential values; hydration back into the
+    // resolved authority is the owner's concern, so a resumed activation
+    // materializes the same admitted provider binding after a restart.
+    let credentials = crate::credentials::CredentialSnapshot::new(private.credentials);
+    authority
+        .resolved
+        .model
+        .restore_admitted_credentials(&credentials)
+        .map_err(|_| {
+            crate::durable::ConversationStoreError::InvalidReference(
+                "restore private Agent provider credentials".to_owned(),
+            )
+        })?;
+    for binding in authority.resolved.materialization.sources.values_mut() {
+        binding.credentials.capture(credentials.clone());
+    }
+    Ok(authority)
+}
+
 impl SubagentRegistry {
     /// Rebuild durable identity/activation relationships from committed facts.
     /// Startup reconciliation has already terminalized orphaned activations.
@@ -1177,7 +1207,10 @@ impl SubagentRegistry {
                 ..
             } = &envelope.event
             {
-                authorities.insert(agent_id.clone(), store.load_agent_authority(agent_id)?);
+                authorities.insert(
+                    agent_id.clone(),
+                    load_durable_agent_authority(store, agent_id)?,
+                );
             }
             events.push(envelope);
         }

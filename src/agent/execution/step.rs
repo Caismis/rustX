@@ -13,6 +13,7 @@ use super::{
     MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN, MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP,
 };
 use crate::context::AcceptedContext;
+use crate::durable::observation::NativeObservationBatch;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, ToolCallOccurrenceRef};
@@ -797,7 +798,7 @@ impl<'a> AgentExecution<'a> {
                 .expect("accepted Assistant is committed");
             Some(crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
                 input.snapshot.request_id.clone(), &self.request.conversation_id,
-                &input.request.input().messages, output,
+                input.request.input().messages.semantic_fingerprint(), output,
             ).expect("canonical accepted output is Assistant"))
         } else {
             None
@@ -940,7 +941,10 @@ impl<'a> AgentExecution<'a> {
                 &adoption.event,
                 adoption.sequence,
                 adoption.tool_occurrence.as_ref(),
-                adoption.observation.as_deref(),
+                adoption
+                    .observation
+                    .as_ref()
+                    .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>()),
             );
         }
         self.pending_fresh_inbound = Some(fresh);

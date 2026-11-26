@@ -1163,7 +1163,7 @@ impl UserConfigManager {
         candidate: &[u8],
     ) -> Result<(), String> {
         let workspace = target.scope() == SourceScope::Workspace;
-        if !crate::bounded_file::within_bound(candidate) {
+        if !rustx_bounded_file::within_bound(candidate) {
             return Err(
                 "the repaired document would exceed the authored file size limit; the source is unchanged"
                     .into(),
@@ -1314,7 +1314,7 @@ impl UserConfigManager {
             }
             // Staging failed, or the source directory's path could not be
             // confirmed durable: nothing was published.
-            Err(SettingsError::Io) => (
+            Err(SettingsError::Io(_)) => (
                 ConfigRepairStatus::Unresolved,
                 None,
                 Some(

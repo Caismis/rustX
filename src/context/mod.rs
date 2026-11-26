@@ -32,7 +32,7 @@ pub mod resources;
 pub mod status;
 pub mod summarizer;
 pub(crate) mod summary_content;
-mod system_prompt;
+pub(crate) use rustx_types::context::system_prompt;
 pub mod tokens;
 
 use std::sync::Arc;

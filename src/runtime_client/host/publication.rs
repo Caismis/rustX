@@ -16,6 +16,7 @@ use super::{
     NativePublicationProjection, PendingObservations, PublicationGate, Publishing,
     RuntimeClientProjection,
 };
+use crate::durable::observation::NativeObservationBatch;
 
 impl PublicationGate {
     #[cfg(test)]
@@ -454,7 +455,12 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
                 | ConversationObservation::InteractionSettled {
                     audit: Some((event, _)),
                     ..
-                } => Some(event.observation.clone()),
+                } => Some(
+                    event
+                        .observation
+                        .as_ref()
+                        .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>().cloned()),
+                ),
                 _ => None,
             })
             .collect::<Vec<_>>();

@@ -1,5 +1,6 @@
 use super::*;
 use crate::conversation::{SurfaceOp, message_id_of};
+use crate::durable::ConversationStoreError;
 use crate::durable::LineageSeed;
 use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::local_runtime::session::remap_seed;

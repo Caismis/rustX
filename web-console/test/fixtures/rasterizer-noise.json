@@ -59730,15 +59730,42 @@
       {
         "run": 44432316970,
         "pngSha256": "8f377b8a6a37854d6ef9cd7d6694775a4a1adb6c4da673eae7e5e071e9e590c3",
-        "pixels": [[25, 360, [82, 83, 84, 255], [83, 84, 84, 255]]]
+        "pixels": [
+          [
+            25,
+            360,
+            [
+              82,
+              83,
+              84,
+              255
+            ],
+            [
+              83,
+              84,
+              84,
+              255
+            ]
+          ]
+        ]
       }
     ],
     "pixels": [
       [
         25,
         360,
-        [82, 83, 84, 255],
-        [83, 84, 84, 255]
+        [
+          82,
+          83,
+          84,
+          255
+        ],
+        [
+          83,
+          84,
+          84,
+          255
+        ]
       ],
       [
         26,
@@ -59753,6 +59780,65 @@
           61,
           61,
           63,
+          255
+        ]
+      ]
+    ]
+  },
+  {
+    "reference": "trajectory-inspector-390-light-linux.png",
+    "referenceSha256": "4e09ad73875b4f8abdfc3cc7e48c986e1fbb07220410c6f2d487178a885e8888",
+    "captureSha256": "15884a1af71a901a44fed91865694275bcedd1d27a201c2c50dd2d550aeeff7a",
+    "evidence": "Pinned Playwright 1.63.0 Linux FULL CI run 44635777783, job Browser acceptance (shard 1/3), artifact browser-evidence-shard-1: one changed pixel at (28,233), channel delta 1, reference (206,214,228,255) -> observed (205,213,228,255). The site sits on the event-details panel's left elevation boundary at 390px (document.elementFromPoint resolves to the details-resize handle element); a coverage-boundary rasterization site, not a layout or content change. Between b63aa066, where this shard passed against the same baseline, and 61550962, where it failed, zero web-console, fixture or workflow-presentation files changed. Fifteen consecutive stable captures under the pinned authority (mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7) on a second Linux x86_64 host are byte-identical to the baseline, so the host-dependent rasterizer differs by at most one channel level at this boundary. The bound is the single measured site with the largest delta actually observed; no rectangle, adjacent pixel or global threshold applies.",
+    "regions": [
+      {
+        "label": "Details panel left-edge coverage",
+        "x": 28,
+        "y": 233,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      }
+    ],
+    "captures": [
+      {
+        "run": 44635777783,
+        "pngSha256": "15884a1af71a901a44fed91865694275bcedd1d27a201c2c50dd2d550aeeff7a",
+        "pixels": [
+          [
+            28,
+            233,
+            [
+              206,
+              214,
+              228,
+              255
+            ],
+            [
+              205,
+              213,
+              228,
+              255
+            ]
+          ]
+        ]
+      }
+    ],
+    "pixels": [
+      [
+        28,
+        233,
+        [
+          206,
+          214,
+          228,
+          255
+        ],
+        [
+          205,
+          213,
+          228,
           255
         ]
       ]

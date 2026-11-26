@@ -69,28 +69,29 @@ impl LiveTarget<'_> {
     }
 }
 
-impl TraceRecord {
-    fn live_target(&mut self) -> LiveTarget<'_> {
-        LiveTarget {
-            kind: self.kind,
-            request_id: self
-                .request
-                .as_ref()
-                .and_then(|request| request.request_id.as_ref()),
-            state: &mut self.state,
-            native_id: self.native_id.as_deref(),
-            attempt_id: self.location.attempt_id.as_ref(),
-            assistant_message_id: self
-                .request
-                .as_ref()
-                .and_then(|request| request.assistant_message_id.as_ref()),
-            tool_occurrence: self.tool.as_ref().and_then(|tool| tool.occurrence.as_ref()),
-            tool_call: self
-                .tool
-                .as_ref()
-                .and_then(|tool| Some((tool.call_id.as_ref()?, tool.tool_id.as_ref()?))),
-            tool_started: self.tool.as_ref().is_some_and(|tool| tool.started),
-        }
+fn trace_record_live_target(record: &mut TraceRecord) -> LiveTarget<'_> {
+    LiveTarget {
+        kind: record.kind,
+        request_id: record
+            .request
+            .as_ref()
+            .and_then(|request| request.request_id.as_ref()),
+        state: &mut record.state,
+        native_id: record.native_id.as_deref(),
+        attempt_id: record.location.attempt_id.as_ref(),
+        assistant_message_id: record
+            .request
+            .as_ref()
+            .and_then(|request| request.assistant_message_id.as_ref()),
+        tool_occurrence: record
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.occurrence.as_ref()),
+        tool_call: record
+            .tool
+            .as_ref()
+            .and_then(|tool| Some((tool.call_id.as_ref()?, tool.tool_id.as_ref()?))),
+        tool_started: record.tool.as_ref().is_some_and(|tool| tool.started),
     }
 }
 
@@ -178,7 +179,7 @@ pub(crate) fn repair_records<'a>(
     snapshot: impl Into<LiveSnapshot<'a>>,
 ) {
     repair(
-        records.iter_mut().map(TraceRecord::live_target),
+        records.iter_mut().map(trace_record_live_target),
         snapshot.into(),
     );
 }
@@ -302,7 +303,7 @@ pub(crate) fn repair_agent_records(
     records: &mut [TraceRecord],
     agent: &crate::runtime_client::snapshot::RuntimeClientAgent,
 ) {
-    repair_agent(records.iter_mut().map(TraceRecord::live_target), agent);
+    repair_agent(records.iter_mut().map(trace_record_live_target), agent);
 }
 pub(super) fn repair_agent_anchor(
     facts: &mut AnchorFacts,

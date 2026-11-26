@@ -168,6 +168,7 @@ pub fn validate_request(
 
 #[cfg(test)]
 thread_local! { static PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_preflights() -> usize {
     PREFLIGHTS.with(|v| v.replace(0))
@@ -258,7 +259,7 @@ pub(crate) fn prepare_request_with_limit(
     #[cfg(test)]
     PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
     let body = if let Some(limit) = body_limit {
-        crate::bounded_json::encode_capped_bytes(&wire, limit)
+        rustx_bounded_json::encode_capped_bytes(&wire, limit)
     } else {
         let mut body = Vec::with_capacity(wire.capacity_hint());
         serde_json::to_writer(&mut body, &wire).map(|()| body)
@@ -414,11 +415,7 @@ fn validate_continuation(
 fn validate_tools(request: &ModelRequest) -> Result<ValidatedTools, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = super::profile::phase(super::profile::Phase::Tools);
-    let mut cache = request
-        .messages
-        .preparation()
-        .lock()
-        .expect("input preparation cache");
+    let mut cache = crate::model::adapter::cache::lock(&request.messages);
     if let Some(table) = cache
         .tools
         .as_ref()
@@ -905,7 +902,7 @@ mod tests {
             let source = AcceptedOutputContinuationSource::from_accepted_output(
                 RequestId::new("actual-request"),
                 &ConversationId::generate(),
-                &input.messages,
+                input.messages.semantic_fingerprint(),
                 &output,
             )
             .unwrap();

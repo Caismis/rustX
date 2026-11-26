@@ -428,3 +428,104 @@ it('an exact oversized directory count preserves its source facts and reports un
  expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(before+1);
  expect(reads()).toHaveLength(0);expect(view.attachment).toBe('attached');
 });
+
+it('an older page resolving late retains live rows admitted while it was in flight',async()=>{
+ server=new Server();
+ server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(3+i)),next_cursor:'3'}});
+ await server.attached('A');
+ server.handlers.set('session/transcript',request=>{
+  if(request.method!=='session/transcript'||request.params.at.type!=='older')throw new Error('Expected bounded older read');
+  const before=Number(request.params.at.before),start=Math.max(1,before-Number(request.params.limit));
+  return {type:'transcript_window',window:{cut,page:{entries:Array.from({length:before-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
+ });
+ server.held.add('session/transcript');
+ const work=server.client.loadEarlier('A');
+ const held=await server.waitFor('session/transcript',1);
+ // Two live heads land while the page read is in flight: the first slides the
+ // bounded head past every held row (a disjoint forward merge), the second
+ // advances it again. m12 is now held only in the client cache.
+ await server.update('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(12+i)),next_cursor:'12'}});
+ await server.update('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(13+i)),next_cursor:'13'}});
+ expect(cursors()).toEqual([3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,19,20]);
+ server.socket.success(held,{type:'transcript_window',window:{cut:{...cut,transcript:'10'},page:{entries:[entry(1),entry(2)],next_cursor:null}}});
+ await work;
+ // The committed page accepts into the cache live at commit time: m12 stays
+ // loaded exactly once, and its unfetched gap stays reachable.
+ expect(cursors()).toEqual([1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,19,20]);
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBe('12');
+ // Walk the remaining gap to the bottom: refetched held rows dedupe.
+ server.held.delete('session/transcript');
+ await server.client.loadEarlier('A');
+ expect(cursors()).toEqual(Array.from({length:20},(_,i)=>i+1));
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBeNull();
+});
+
+it('a held read cannot clear a gap the live head opened while it was in flight',async()=>{
+ server=new Server();
+ server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(3+i)),next_cursor:'3'}});
+ await server.attached('A');
+ server.held.add('session/transcript');
+ const work=server.client.loadEarlier('A');
+ const held=await server.waitFor('session/transcript',1);
+ // The head slides while the read is in flight, opening a gap (11) and moving
+ // the continuation from 3 to 12. The stale fetched page must not erase it.
+ await server.update('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(12+i)),next_cursor:'12'}});
+ server.socket.success(held,{type:'transcript_window',window:{cut:{...cut,transcript:'10'},page:{entries:[entry(1),entry(2)],next_cursor:null}}});
+ await work;
+ expect(cursors()).toEqual([1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,19]);
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBe('12');
+});
+
+const olderHistory = (target: Server) => target.handlers.set('session/transcript', request => {
+ if(request.method!=='session/transcript'||request.params.at.type!=='older')throw new Error('Expected bounded older read');
+ const before=Number(request.params.at.before),start=Math.max(1,before-Number(request.params.limit));
+ return {type:'transcript_window',window:{cut,page:{entries:Array.from({length:before-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
+});
+
+it('a retained cache still fills the slide gap when hydration is re-judged',async()=>{
+ server=new Server();
+ server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(120+i)),next_cursor:'120'}});
+ await server.attached('A');olderHistory(server);
+ await server.client.loadInitialHistory('A');
+ expect(cursors()).toEqual(Array.from({length:72},(_,i)=>56+i));
+ // A disjoint forward slide keeps the held rows and opens the gap 128..159.
+ await server.update('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(160+i)),next_cursor:'160'}});
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBe('56');
+ // Meeting the message/turn bound is not enough: coverage re-judgement owes
+ // reads for the unfetched interval between the held rows and the new head.
+ const before=reads().length;
+ await server.client.loadInitialHistory('A');
+ expect(reads().length).toBeGreaterThan(before);
+ expect(cursors()).toEqual(Array.from({length:144},(_,i)=>24+i));
+});
+
+it('an already-bottomed cache refills the slide gap without re-reading below the bottom',async()=>{
+ server=new Server();
+ server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:64},(_,i)=>entry(i+1)),next_cursor:null}});
+ await server.attached('A');olderHistory(server);
+ await server.update('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(193+i)),next_cursor:'193'}});
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBe('193');
+ await server.client.loadInitialHistory('A');
+ expect(cursors()).toEqual(Array.from({length:200},(_,i)=>i+1));
+ const befores=reads().map(row=>(row.request.params as {at:{before:string}}).at.before);
+ expect(befores).not.toContain('1');
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBeNull();
+});
+
+it('a slide during an in-flight hydration read is owed a re-judgement at settle',async()=>{
+ server=new Server();
+ server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(120+i)),next_cursor:'120'}});
+ await server.attached('A');olderHistory(server);
+ server.held.add('session/transcript');
+ const work=server.client.loadInitialHistory('A');
+ await server.waitFor('session/transcript',1);
+ // The head slides while the refill is in flight; the generation change
+ // re-judges hydration but the in-flight read defers it.
+ await server.update('A',{...snapshot(),transcript:{entries:Array.from({length:8},(_,i)=>entry(160+i)),next_cursor:'160'}});
+ const rejudged=server.client.loadInitialHistory('A');
+ // Serve the in-flight walk and the pages its settle re-judgement owes.
+ for(let n=1;n<=4;n++)server.reply(await server.waitFor('session/transcript',n));
+ await work;await rejudged;
+ expect(cursors()).toEqual(Array.from({length:144},(_,i)=>24+i));
+ expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBe('24');
+});

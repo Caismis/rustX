@@ -238,7 +238,15 @@ impl FrozenModelSpec {
         export(&mut self.primary.binding, "PRIMARY");
         export(&mut self.summary.0.binding, "SUMMARY");
     }
-    /// Rehydrate only the private credential capture committed with this authority.
+
+    /// Restores the resolved credentials escrowed out of this authority by
+    /// [`FrozenModelSpec::export_process_credentials`], so a reloaded durable
+    /// authority materializes without the spawning process's environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns the credential-resolution failure when the snapshot does not
+    /// carry an escrowed reference this binding names.
     pub(crate) fn restore_admitted_credentials(
         &mut self,
         credentials: &dyn CredentialEnvironment,

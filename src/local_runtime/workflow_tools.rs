@@ -13,7 +13,7 @@ use super::session_runtime_manager::SessionRuntimeManager;
 use crate::runtime::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::runtime::resources::SourceScope;
-use crate::runtime::workflow::{WorkflowToolChoice, WorkflowToolResult};
+use crate::runtime::workflow::WorkflowToolChoice;
 use crate::tools::mcp::{McpInvalidationState, McpServerBinding, McpServerRuntime, OwnedConnect};
 use crate::tools::workspace::Workspace;
 use std::collections::BTreeMap;
@@ -94,7 +94,10 @@ fn page(
     use sha2::{Digest, Sha256};
     let digest = format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(&catalog).map_err(|_| SettingsError::Io)?)
+        Sha256::digest(
+            serde_json::to_vec(&catalog)
+                .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
+        )
     );
     let offset = cursor.map_or(0, |cursor| cursor.offset as usize);
     if cursor.is_some_and(|cursor| cursor.digest != digest) {
@@ -116,7 +119,7 @@ fn page(
     }
     // Include the complete envelope and reserve the bounded continuation.
     let mut bytes = serde_json::to_vec(&catalog)
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
         .len()
         + 256;
     let mut consumed = offset;
@@ -126,7 +129,7 @@ fn page(
         } else {
             serde_json::to_vec(&sources[index])
         }
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?
         .len()
             + 1;
         if bytes + size > MAX_CATALOG_PAGE_BYTES {
@@ -196,7 +199,7 @@ impl SessionRuntimeManager {
         let (plans, workspace, runtime_root) =
             tokio::task::spawn_blocking(move || capture(&owner, &target))
                 .await
-                .map_err(|_| SettingsError::Io)??;
+                .map_err(|error| SettingsError::Io(std::io::Error::other(error)))??;
         let Some(source) = source else {
             return page(
                 WorkflowToolCatalog {
@@ -225,7 +228,10 @@ impl SessionRuntimeManager {
             .find(|plan| plan.source_id == source)
             .filter(|plan| expected_scope.is_none_or(|scope| plan.scope == scope))
             .ok_or(SettingsError::Invalid)?;
-        let _permit = LISTINGS.acquire().await.map_err(|_| SettingsError::Io)?;
+        let _permit = LISTINGS
+            .acquire()
+            .await
+            .map_err(|error| SettingsError::Io(std::io::Error::other(error)))?;
         let mut listed = list(
             plan,
             &workspace,
@@ -369,7 +375,9 @@ async fn list(
             tools: tools
                 .into_iter()
                 .map(|tool| WorkflowToolChoice {
-                    result: WorkflowToolResult::declared(tool.output_schema.as_ref()),
+                    result: crate::runtime::workflow::tool::tool_result_declared(
+                        tool.output_schema.as_ref(),
+                    ),
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.input_schema.into(),
@@ -397,6 +405,7 @@ fn python_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustx_workflow::WorkflowToolResult;
     use serde_json::json;
 
     fn large() -> WorkflowToolCatalog {

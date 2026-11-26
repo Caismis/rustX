@@ -6,193 +6,23 @@ use super::{
     WorkflowNodeDefinition, WorkflowPredicate, WorkflowValue, control_flow, validate_root_schema,
     validate_workflow_schema,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-mod selections;
-pub use selections::{WorkflowModelPolicy, WorkflowToolSelector};
+
+pub use rustx_workflow::nav::{
+    WorkflowAnalysisQuery, WorkflowBlockStep, WorkflowCandidateAnalysis, WorkflowConsumerAddress,
+    WorkflowConsumerField, WorkflowExpressionStep, WorkflowNodeAddress, WorkflowOutputDeclaration,
+    WorkflowReferenceAvailability, WorkflowReferenceChoice, WorkflowReferenceCompatibility,
+    block_at,
+};
+pub use rustx_workflow::selections::{WorkflowModelPolicy, WorkflowToolSelector};
 #[cfg(test)]
 mod tests;
 
 pub const MAX_ANALYSIS_BYTES: usize = 256 * 1024;
 pub const MAX_ANALYSIS_CHOICES: usize = 256;
 pub const MAX_ANALYSIS_VISITS: usize = 2048;
-
-/// Structured lexical address of a Loop or Iteration body.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowBlockStep {
-    pub node: String,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowNodeAddress {
-    pub block: Vec<WorkflowBlockStep>,
-    pub node: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkflowConsumerField {
-    TemplateVariable {
-        name: String,
-    },
-    CodeVariable {
-        name: String,
-    },
-    TransformInput,
-    ListFilterValue,
-    ListExtract,
-    ClassifierInstruction,
-    ClassifierClass {
-        index: u32,
-    },
-    AggregateVariable {
-        group: u32,
-        index: u32,
-    },
-    /// A variable in one Model prompt message. Every part of a message shares
-    /// its scope, so this also answers for a variable not inserted yet.
-    Message {
-        index: u32,
-    },
-    /// A variable in an Agent's task, answered as for a Model message.
-    Task,
-    Arguments,
-    /// A variable in a Human Input's content, answered as for a Model message.
-    ReviewContent,
-    Condition {
-        case_id: String,
-    },
-    /// Select a comparable variable independently of the current counterpart.
-    ConditionVariable {
-        case_id: String,
-    },
-    ReturnOutput,
-    /// The value of one Loop variable.
-    LoopVariable {
-        index: u32,
-    },
-    /// The Loop's break condition, read in its body's scope.
-    BreakCondition,
-    /// Select a comparable variable of the break condition.
-    BreakConditionVariable,
-    IterationIterator,
-    /// The Iteration's output, read in its body's scope.
-    IterationOutput,
-    /// The operand of one Variable Assigner write.
-    AssignerValue {
-        index: u32,
-    },
-}
-
-/// Exact authored position within a value construction or predicate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkflowExpressionStep {
-    Field { key: String },
-    Item { index: u32 },
-    Value,
-    Left,
-    Right,
-    Predicate,
-    PredicateAt { index: u32 },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowConsumerAddress {
-    pub address: WorkflowNodeAddress,
-    pub field: WorkflowConsumerField,
-    #[serde(default)]
-    pub path: Vec<WorkflowExpressionStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowAnalysisQuery {
-    pub consumer: WorkflowConsumerAddress,
-    #[serde(default)]
-    pub search: String,
-    /// An existing/manual reference to classify even if it is absent from the
-    /// declaration catalog. This never creates fallback or indexing semantics.
-    #[serde(default)]
-    pub reference: Option<Vec<String>>,
-    pub limit: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowReferenceAvailability {
-    Available,
-    Unavailable,
-    Pending,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowReferenceCompatibility {
-    Compatible,
-    Incompatible,
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowOutputDeclaration {
-    pub producer: WorkflowNodeAddress,
-    /// None means an invalid/incomplete output contract, never an empty schema.
-    #[schemars(with = "Option<BTreeMap<String, Value>>")]
-    pub schema: Option<Value>,
-    pub diagnostic: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowReferenceChoice {
-    /// `args`/`result` have no executable producer address.
-    pub producer: Option<WorkflowNodeAddress>,
-    pub path: Vec<String>,
-    #[schemars(with = "Option<BTreeMap<String, Value>>")]
-    pub schema: Option<Value>,
-    pub availability: WorkflowReferenceAvailability,
-    pub compatibility: WorkflowReferenceCompatibility,
-    pub diagnostic: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowCandidateAnalysis {
-    pub outputs: Vec<WorkflowOutputDeclaration>,
-    pub references: Vec<WorkflowReferenceChoice>,
-    pub selected: Option<WorkflowReferenceChoice>,
-    /// Lexical proof failure or invalid consumer; never an execution verdict.
-    pub diagnostic: Option<String>,
-    pub incomplete: bool,
-    pub truncated: bool,
-}
-
-/// Resolve an address without interpreting local node ids as global identities.
-#[must_use]
-pub fn block_at<'a>(
-    root: &'a WorkflowBlock,
-    path: &[WorkflowBlockStep],
-) -> Option<&'a WorkflowBlock> {
-    let mut block = root;
-    for step in path {
-        block = match block.nodes.get(&step.node)? {
-            WorkflowNodeDefinition::Loop { body, .. }
-            | WorkflowNodeDefinition::Iteration { body, .. } => body,
-            _ => return None,
-        };
-    }
-    Some(block)
-}
 
 /// The same declared/derived contract the compiler commits after each producer.
 /// No binding, dependency or readiness is implied by a declaration.
@@ -219,7 +49,7 @@ pub fn declared_output(
             super::agent_value_schema(output, routes)
         }
         WorkflowNodeDefinition::Tool { result, .. } => {
-            let schema = result.schema();
+            let schema = super::tool::tool_result_schema(result);
             validate_workflow_schema(&schema, "result")?;
             schema
         }
@@ -263,40 +93,6 @@ fn produced(output: &WorkflowValue, body: &WorkflowBlock) -> Option<Value> {
     Some(schema)
 }
 
-fn valid_key(key: &str) -> bool {
-    super::expressions::valid_local_key(key)
-}
-fn valid_address(address: &WorkflowNodeAddress) -> bool {
-    address.block.len() <= super::MAX_BLOCK_DEPTH
-        && valid_key(&address.node)
-        && address.block.iter().all(|step| valid_key(&step.node))
-}
-
-impl WorkflowAnalysisQuery {
-    /// # Errors
-    /// Rejects query depth/count/text beyond the finite authoring envelope.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if serde_json::to_vec(self).map_or(true, |bytes| bytes.len() > 16 * 1024) {
-            return Err("analysis query exceeds 16 KiB");
-        }
-        if !valid_address(&self.consumer.address) || self.consumer.path.len() > super::MAX_VALUE_DEPTH
-            || self.search.len() > 256 || self.limit == 0 || self.limit > MAX_ANALYSIS_CHOICES
-            || self.reference.as_ref().is_some_and(|path| path.is_empty() || path.len() > super::MAX_REFERENCE_COMPONENTS || path.iter().any(|s| s.is_empty() || s.len() > 64))
-            || self.consumer.path.iter().any(|step| matches!(step, WorkflowExpressionStep::Field { key } if key.is_empty() || key.len() > 64)) {
-            return Err("analysis query exceeds address, text, depth or result bounds");
-        }
-        match &self.consumer.field {
-            WorkflowConsumerField::Condition { case_id }
-            | WorkflowConsumerField::ConditionVariable { case_id }
-                if !valid_key(case_id) =>
-            {
-                Err("invalid case identity")
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
 /// Validate candidate traversal independently of whether the graph is finished.
 /// # Errors
 /// Rejects aggregate executable bytes, block depth or node count over native bounds.
@@ -315,7 +111,7 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
         }
         Ok(())
     }
-    if !crate::bounded_file::json_fits(definition, super::MAX_WORKFLOW_BYTES) {
+    if !rustx_bounded_file::json_fits(definition, super::MAX_WORKFLOW_BYTES) {
         return Err("executable candidate exceeds 16 MiB");
     }
     walk(&definition.block, 0, &mut 0)
@@ -400,8 +196,8 @@ fn consumer<'a>(
     block: &'a WorkflowBlock,
     address: &WorkflowConsumerAddress,
 ) -> Option<Consumer<'a>> {
-    use WorkflowConsumerField as F;
-    use WorkflowNodeDefinition as N;
+    use rustx_workflow::definition::WorkflowNodeDefinition as N;
+    use rustx_workflow::nav::WorkflowConsumerField as F;
     let node = block.nodes.get(&address.address.node)?;
     let (expression, expected, result_scope) = match (node, &address.field) {
         // The template editor queries the input scope before inserting a
@@ -501,7 +297,7 @@ fn position<'a>(
     path: &[WorkflowExpressionStep],
     inference: &mut SchemaInference<'a>,
 ) -> Option<Consumer<'a>> {
-    use WorkflowExpressionStep as S;
+    use rustx_workflow::nav::WorkflowExpressionStep as S;
     for step in path {
         // No descendant can repair a field forbidden by an enclosing contract.
         if !matches!(current.necessary, NecessaryCondition::ForbiddenField) {
@@ -555,7 +351,7 @@ fn position_predicate<'a>(
     current: &mut Consumer<'a>,
     inference: &mut SchemaInference<'a>,
 ) -> Option<Expression<'a>> {
-    use WorkflowExpressionStep as S;
+    use rustx_workflow::nav::WorkflowExpressionStep as S;
     Some(match (Expression::Predicate(predicate), step) {
         (Expression::Predicate(WorkflowPredicate::Boolean { value }), S::Value) => {
             current.expected = Some(Cow::Owned(serde_json::json!({"type":"boolean"})));
@@ -726,7 +522,7 @@ fn destination_compatibility(
     contract: DestinationContract<'_>,
     inference: &mut SchemaInference<'_>,
 ) -> WorkflowReferenceCompatibility {
-    use WorkflowReferenceCompatibility as C;
+    use rustx_workflow::nav::WorkflowReferenceCompatibility as C;
     match (schema, contract) {
         (_, DestinationContract::ForbiddenField) => C::Incompatible,
         (Some(actual), DestinationContract::NumberOrString) => {
@@ -780,7 +576,7 @@ fn array_compatibility<'a>(
     schema: Option<&'a Value>,
     inference: &mut SchemaInference<'a>,
 ) -> (WorkflowReferenceCompatibility, Option<String>) {
-    use WorkflowReferenceCompatibility as C;
+    use rustx_workflow::nav::WorkflowReferenceCompatibility as C;
     if contract.arrays.is_empty() {
         return (C::Compatible, None);
     }
@@ -832,8 +628,8 @@ fn choice<'a>(
     invalid_consumer: bool,
     inference: &mut ChoiceInference<'a>,
 ) -> WorkflowReferenceChoice {
-    use WorkflowReferenceAvailability as A;
-    use WorkflowReferenceCompatibility as C;
+    use rustx_workflow::nav::WorkflowReferenceAvailability as A;
+    use rustx_workflow::nav::WorkflowReferenceCompatibility as C;
     let declarations = inference.schemas.declarations;
     let resolution = inference.schemas.resolve(&path);
     let resolution_pending = matches!(resolution, Err(InferenceError::Budget));

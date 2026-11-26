@@ -131,7 +131,7 @@ pub(in crate::local_runtime) fn candidate(
             let source_name = file_name(&source);
             let bytes = directory
                 .read(OsStr::new(&source_name))
-                .map_err(|_| SettingsError::Io)?;
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let actual = crate::local_runtime::settings::revision(bytes.as_deref());
             if actual != source_revision {
                 return Err(SettingsError::Conflict {

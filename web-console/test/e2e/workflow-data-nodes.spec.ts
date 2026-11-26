@@ -1,5 +1,6 @@
 import { dataNodesDocument } from '../workflow-data-document';
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import type { EditorView } from '@uiw/react-codemirror';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
@@ -7,6 +8,7 @@ import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { replaceCodeMirrorText } from './codemirror';
 
 const canvas=(page:Page)=>page.getByRole('region',{name:'Workflow canvas'});
 const panel=(page:Page)=>page.getByRole('complementary',{name:'Inspector'});
@@ -37,7 +39,20 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await panel(page).getByRole('textbox',{name:'Variable name',exact:true}).fill('question');
     await panel(page).getByRole('textbox',{name:'Variable name',exact:true}).press('Enter');
     const template=panel(page).getByRole('textbox',{name:'Template code',exact:true});
-    await template.fill('{{ question | upper }}!');await template.blur();
+    await expect(template.locator('.cm-line')).toHaveText(['{{ arg1 | upper }}']);
+    await expect(template).not.toBeFocused();
+    await template.evaluate(element => {
+      // Force a redraw after Playwright's focus/DOM range selection and before it
+      // sends input. The DOM tile lets this test reach the mounted production view.
+      const view = (element as HTMLElement & { cmTile: { root: { view: EditorView } } }).cmTile.root.view;
+      element.addEventListener('focus', () => queueMicrotask(() => {
+        view.setState(view.state);
+        element.dataset.testRedrawn = 'true';
+      }), { once: true });
+    });
+    await replaceCodeMirrorText(template,'{{ question | upper }}!');await template.blur();
+    await expect(template).toHaveAttribute('data-test-redrawn', 'true');
+    await expect(template.locator('.cm-line')).toHaveText(['{{ question | upper }}!']);
     await page.screenshot({path:`/tmp/rustx-data-template-${width}.png`});
 
     // Primitive list filtering needs no field path; operations have fixed order.
@@ -86,7 +101,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await expect(command).toContainText('def main(arg1: str, arg2: str)');
     await expect(panel(page).getByRole('textbox',{name:'Variable name',exact:true})).toHaveCount(2);
     for(const index of [0,1]){await panel(page).getByRole('button',{name:'Choose a variable',exact:true}).nth(index).click();await page.getByRole('dialog',{name:'Choose a variable',exact:true}).getByRole('button',{name:/^args \/ query /}).click();}
-    const script='def main(arg1, arg2):\n    return {"result":"node check"}\n';await command.fill(script);await command.blur();
+    const script='def main(arg1, arg2):\n    return {"result":"node check"}\n';await replaceCodeMirrorText(command,script);await command.blur();
     await panel(page).getByRole('button',{name:'Choose next node for Next step',exact:true}).click();
     await chooser.getByRole('tab',{name:'Existing',exact:true}).click();await chooser.locator('[data-node-id="done"]').click();
     await command.scrollIntoViewIfNeeded();

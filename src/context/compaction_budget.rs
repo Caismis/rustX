@@ -14,10 +14,8 @@ use crate::runtime::monotonic::MonotonicClock;
 
 /// Absolute operation eligibility, including preparation and persistence waits.
 pub const COMPACTION_DEADLINE_MILLIS: u64 = 300_000;
-/// Maximum normal physical starts admitted by one bounded source plan.
-pub(crate) const MAX_PLANNED_SUMMARY_STARTS: usize = 256;
-/// Maximum exceptional recovery actions, shared by all re-entry and retries.
-pub const COMPACTION_RECOVERY_LIMIT: usize = 12;
+pub use rustx_types::context::operation::COMPACTION_RECOVERY_LIMIT;
+pub(crate) use rustx_types::context::operation::MAX_PLANNED_SUMMARY_STARTS;
 /// Extra elapsed time per planned start after the first.
 pub const COMPACTION_PER_START_MILLIS: u64 = 30_000;
 /// Absolute ceiling from original operation creation, independent of re-entry.
@@ -216,7 +214,7 @@ mod tests {
     use std::sync::Barrier;
 
     use crate::durable::auxiliary::AuxiliaryWriteFailure;
-    use crate::durable::{AuxiliaryStore, ConversationStoreError, SqliteConversationStore};
+    use crate::durable::{ConversationStoreError, SqliteConversationStore};
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart,
         AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition, AuxiliaryFingerprint,

@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::observation::NativeObservationTransition;
 
 #[test]
@@ -22,8 +23,8 @@ fn attempt_first_turn_family_preserves_ordered_facts_old_cut_and_single_publicat
             source_tool_event(&store, RuntimeEvent::TurnStarted, "family-first-turn"),
         )
         .unwrap();
-    let shared = start.observation.as_ref().unwrap();
-    assert!(Arc::ptr_eq(shared, turn.observation.as_ref().unwrap()));
+    let shared = start.observation.native_arc().unwrap();
+    assert!(Arc::ptr_eq(&shared, &turn.observation.native_arc().unwrap()));
     let family = shared.as_ref();
     assert_eq!(family.journal_range, Some((start.sequence, turn.sequence)));
     let NativeObservationTransition::AttemptFirstTurn {

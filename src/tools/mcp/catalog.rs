@@ -119,7 +119,7 @@ impl McpServerRuntime {
                 }
             }
             if page.tools.len() + page.resources.len() + page.templates.len() > 128
-                || !crate::bounded_file::json_fits(&page, 65_536)
+                || !rustx_bounded_file::json_fits(&page, 65_536)
                 || self.unusable_reason().is_some()
             {
                 return Err(McpError::Discovery(
@@ -157,7 +157,7 @@ impl McpServerRuntime {
             redact_optional(&mut template.description, &self.credentials);
             redact_optional(&mut template.mime_type, &self.credentials);
         }
-        if !crate::bounded_file::json_fits(&page, 65_536) {
+        if !rustx_bounded_file::json_fits(&page, 65_536) {
             return Err(McpError::Discovery(
                 "redacted MCP inventory exceeds bounds".into(),
             ));

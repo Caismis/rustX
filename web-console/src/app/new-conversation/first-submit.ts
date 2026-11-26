@@ -10,6 +10,8 @@ export interface FirstDraft { preparation?: McpDraftTarget; submission?: Compose
 export interface CreatedSession { id: string; node?: string; conversation: string; diagnostic?: string }
 export interface FirstSubmitPort {
   current(): boolean;
+  /** Hard-identity fences only: still true while transient attach/socket churn is allowed to settle inside the flow. */
+  viable?(): boolean;
   /** Observe the already requested attachment without acquiring another claim. */
   readExisting?(id: string): Promise<CreatedSession>;
   create(draft: FirstDraft, acknowledged: (session: CreatedSession) => void): Promise<CreatedSession>;
@@ -142,7 +144,7 @@ export class FirstSubmissions {
   }
   async submit(binding: string, draft: FirstDraft, port: FirstSubmitPort, sealed?: () => void, rejected?: (files: readonly File[], ids: readonly string[]) => boolean, existingId?: string): Promise<boolean> {
     const previous = this.drafts.get(`${this.authority}:${binding}`);
-    if (this.disposed || previous && !['rejected', 'discarded', ...(existingId ? ['admitted'] : [])].includes(previous.phase) || !port.current()
+    if (this.disposed || previous && !['rejected', 'discarded', ...(existingId ? ['admitted'] : [])].includes(previous.phase) || !(existingId && port.viable ? port.viable() : port.current())
       || !existingId && !draft.workspaceId || !draft.text.trim() && !draft.files.length) return false;
     // The accepted gesture transfers File ownership from intake to this owner.
     const authority = this.authority;

@@ -45,7 +45,7 @@ impl ClientInner {
             };
             match delivery {
                 EventDelivery::Event(event) => {
-                    let weight = crate::observation::bounded::bounded_bytes(
+                    let weight = rustx_types::observation::bounded::bounded_bytes(
                         &event,
                         crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
                     )

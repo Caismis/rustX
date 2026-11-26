@@ -1032,7 +1032,7 @@ pub(crate) fn validate_project_resource_path(
     }
     // A capture depends on the path it authorizes even when authorization
     // fails, so that repairing the path recaptures it.
-    crate::bounded_file::record_read(path);
+    rustx_bounded_file::record_read(path);
     // The owner supplies the canonical workspace captured at launch. Do not
     // recanonicalize that authority: replacing the workspace itself with a
     // symlink must not transfer its trust to the new target.
@@ -1060,7 +1060,7 @@ fn load_context_file_from_directory(
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            crate::bounded_file::record_read(&path);
+            rustx_bounded_file::record_read(&path);
             return Err(RuntimeResourceLoadError::new(format!(
                 "cannot inspect project context file {}: {error}",
                 path.display()
@@ -1072,7 +1072,7 @@ fn load_context_file_from_directory(
     }
     validate_project_resource_path(directory, &path)
         .map_err(|error| error.at(&path, "projectInstructions"))?;
-    let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
+    let bytes = rustx_bounded_file::read_bounded(&path).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
             "cannot read project context file {}: {error}",
             path.display()

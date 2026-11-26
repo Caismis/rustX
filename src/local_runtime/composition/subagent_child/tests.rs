@@ -180,8 +180,10 @@ fn spec_with_extensions(
                 ..Default::default()
             },
             agent: SubagentName::parse("explore").expect("canonical name"),
-            definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
-                .expect("digest"),
+            definition_digest: serde_json::from_value::<
+                crate::runtime::subagent::NamedAgentDefinitionDigest,
+            >(serde_json::json!("sha256:frozen"))
+            .expect("digest"),
             execution_deadline: None,
             instructions: "frozen child instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(

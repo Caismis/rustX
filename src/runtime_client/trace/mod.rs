@@ -556,7 +556,7 @@ pub(crate) fn ensure_page_bound(page: &TracePage) -> Result<(), ConversationStor
     if crate::observation::preflight::bounded_fit(&encoded, limit) == Some(true) {
         return Ok(());
     }
-    if crate::observation::bounded::bounded_bytes(&encoded, limit).is_none() {
+    if rustx_types::observation::bounded::bounded_bytes(&encoded, limit).is_none() {
         return Err(ConversationStoreError::ObservationCapacityExceeded);
     }
     Ok(())

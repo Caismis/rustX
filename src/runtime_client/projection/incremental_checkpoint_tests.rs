@@ -481,8 +481,8 @@ fn incremental_checkpoint_publishes_async_compaction_lifecycle_without_mutating_
         )
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
-        projection.apply_native_batch(generating.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap());
+        projection.apply_native_batch(generating.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap());
     });
     let held = projection.checkpoint_seed();
     let held_bytes = serde_json::to_vec(&held.checkpoint_candidate().unwrap()).unwrap();
@@ -500,7 +500,7 @@ fn incremental_checkpoint_publishes_async_compaction_lifecycle_without_mutating_
             ))
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(event.observation.as_deref().unwrap());
+            projection.apply_native_batch(event.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap());
         });
         let current = projection.checkpoint_seed();
         assert!(!current.prepared.shared(&prior.prepared, "context"));

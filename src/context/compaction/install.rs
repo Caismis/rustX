@@ -54,7 +54,7 @@ pub(crate) fn preview_generated(
     store: &dyn ConversationStore,
     current: &CurrentInstallation<'_>,
 ) -> Result<ActivationPreview, CompactionExecutionError> {
-    let proof = super::super::coverage::VerifiedPrefixCoverage::seal(generated)?;
+    let proof = super::super::coverage::seal(generated, false)?;
     let coverage = proof.record().clone();
     let (history, cut) = store.auxiliary_history().map_err(resource_failure)?;
     let head = store

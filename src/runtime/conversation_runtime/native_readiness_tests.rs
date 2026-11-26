@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::observation::NativeObservationBatch;
 use crate::runtime::observation::{
     NativeReceiptInstallation, ObservationFanout, PublicationProjectionCommit,
@@ -100,7 +101,7 @@ async fn native_readiness_requires_successful_cpu_installation() {
                 },
             ))
             .unwrap();
-        let receipt = event.observation.as_deref().unwrap();
+        let receipt = event.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap();
         super::super::RuntimeObserver::publish_native_batch(
             &runtime.inner,
             &fanout,
@@ -154,8 +155,8 @@ async fn attempt_first_turn_callbacks_install_only_at_final_member_and_require_e
         turn.turn_id = Some(TurnId::new("1"));
         let pair = store.commit_attempt_first_turn(started, turn).unwrap();
         assert!(Arc::ptr_eq(
-            pair[0].observation.as_ref().unwrap(),
-            pair[1].observation.as_ref().unwrap()
+            pair[0].observation.native_batch().unwrap(),
+            pair[1].observation.native_batch().unwrap()
         ));
         let observer = super::super::RuntimeObserver::new(&runtime.inner);
         for (index, event) in pair.iter().enumerate() {
@@ -165,7 +166,7 @@ async fn attempt_first_turn_callbacks_install_only_at_final_member_and_require_e
                 &event.event,
                 event.sequence,
                 None,
-                receipt_available.then_some(event.observation.as_deref().unwrap()),
+                receipt_available.then_some(event.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap()),
             );
             let installed = index == 1 && receipt_available && accept;
             assert_eq!(

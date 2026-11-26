@@ -23,7 +23,6 @@ impl OperationLease {
         &self,
         binding: &crate::scheduler::ScheduleBinding,
         operation: &crate::scheduler::ScheduleOperation,
-        clock: &dyn crate::runtime::types::RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, RuntimeManagerError> {
         self.0
             .as_ref()
@@ -34,7 +33,7 @@ impl OperationLease {
             .as_ref()
             .ok_or(RuntimeManagerError::StaleIncarnation)?
             .runtime()
-            .schedule_operation(binding, operation, clock)
+            .schedule_operation(binding, operation)
             .map_err(|e| match e {
                 crate::runtime::inbound::MailboxError::Durable(e) => {
                     RuntimeManagerError::ScheduleStore(e)

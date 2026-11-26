@@ -1,0 +1,1713 @@
+//! Canonical tool contracts.
+//!
+//! These types describe what the runtime knows about tools: their
+//! definitions, the calls the current agent issues, the normalized
+//! execution results, and the runtime-owned invocation data delivered to
+//! executors. The canonical [`ToolDefinition`] is tool-owned and carries the
+//! three independent execution policy axes; the provider-neutral compiled
+//! [`ModelToolDefinition`] is what actually reaches a model request.
+//! Execution scheduling and executors are runtime-owned (M3+); native and
+//! MCP executors reuse the same contract (managed Python tool packages are
+//! MCP tools, Issue #174). No external SDK type appears here.
+
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use crate::runtime::types::CancellationReason;
+use rustx_identity::{McpServerId, ToolCallId, ToolId};
+
+/// The canonical runtime/tool contract of one registered tool.
+///
+/// The definition is owned by the tool plane's registry, which pairs it with
+/// an executor. Execution ownership is tool-declared; permission (whether an
+/// eligible invocation may start) is decided by the built-in mode matrix and
+/// resource overrides, never by a per-tool never/always authoring axis.
+/// Prepared slots in one batch may run concurrently; domain owners keep their
+/// own synchronization.
+///
+/// The `input_schema` is the original canonical JSON Schema document owned by
+/// the tool. The runtime validates it at registration and never mutates it:
+/// model-selectable invocation metadata is added only to the compiled
+/// model-facing definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolDefinition {
+    /// Identity of the tool within the capability set.
+    pub id: ToolId,
+    /// Stable model-facing tool name used when emitting tool calls.
+    pub name: String,
+    /// Human-readable description shown to the model.
+    pub description: String,
+    /// The original canonical JSON Schema document describing the accepted
+    /// tool-call arguments. Tool-owned and never mutated by the runtime.
+    pub input_schema: Arc<serde_json::Value>,
+    /// Who owns an invocation of this tool: the attempt (foreground) or the
+    /// conversation (background). Required: a missing policy is never
+    /// silently interpreted.
+    pub execution_policy: ToolExecutionPolicy,
+    /// Replay policy; `Never` is the safe default.
+    #[serde(default)]
+    pub replay_policy: ToolReplayPolicy,
+    /// Where the tool comes from.
+    pub origin: ToolOrigin,
+}
+
+/// Who owns one execution of a tool.
+///
+/// This axis decides ownership and settlement, never batch scheduling:
+///
+/// - `ForegroundOnly` — every invocation settles before the current agent
+///   attempt may continue past that tool result. The execution is
+///   attempt-owned and observable attempt cancellation physically reaches
+///   it.
+/// - `BackgroundOnly` — every invocation is detached from the current
+///   attempt after successful background dispatch; the conversation owns the
+///   execution.
+/// - `ModelSelectable` — the model must explicitly choose foreground or
+///   background execution for each invocation through the required
+///   outer `execution_mode` invocation field. Runtime metadata is separate
+///   from the business object, whose same-named properties stay tool-owned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolExecutionPolicy {
+    /// Every invocation settles before the attempt continues; attempt-owned.
+    ForegroundOnly,
+    /// Every invocation is detached after accepted dispatch; conversation-owned.
+    BackgroundOnly,
+    /// The model selects foreground or background per invocation.
+    ModelSelectable,
+}
+
+/// Foreground/background ownership attached to an external tool configuration.
+/// Native tools use the concrete `NativeToolPolicies` table; MCP servers and
+/// Python manifests carry this value directly. Permission is not part of this
+/// policy: the built-in mode matrix and resource overrides own that decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolInvocationPolicy {
+    /// Foreground/background ownership policy.
+    pub execution: ToolExecutionPolicy,
+}
+
+impl Default for ToolInvocationPolicy {
+    fn default() -> Self {
+        Self::new(ToolExecutionPolicy::ForegroundOnly)
+    }
+}
+
+impl ToolInvocationPolicy {
+    /// Creates a policy from the execution-ownership axis.
+    #[must_use]
+    pub const fn new(execution: ToolExecutionPolicy) -> Self {
+        Self { execution }
+    }
+}
+
+/// The resolved execution ownership of one canonical invocation.
+///
+/// The runtime resolves the effective mode from the tool's declared
+/// [`ToolExecutionPolicy`] and (for `ModelSelectable`) the required
+/// `execution_mode` invocation field, and delivers it to the executor as
+/// canonical invocation data. The field is consumed before business-argument
+/// validation and never reaches an executor. No policy resolution happens
+/// inside executors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolInvocationMode {
+    /// Attempt-owned execution: settles before the attempt continues.
+    Foreground,
+    /// Conversation-owned execution: detached after accepted dispatch.
+    Background,
+}
+
+/// Whether the runtime may automatically re-execute a tool after a crash.
+///
+/// `Never` is the safe default. After a crash the runtime must never blindly
+/// replay a tool whose external completion state is unknown: it records an
+/// `OutcomeUnknown` result and lets the model decide the next action.
+/// Automatic replay is allowed only for tools that explicitly declare
+/// themselves idempotent. `Idempotent` is metadata for the future #12
+/// recovery policy, not permission to invent replay behavior in M8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolReplayPolicy {
+    /// Never automatically re-execute after an unknown outcome.
+    #[default]
+    Never,
+    /// Re-execution is safe because repeated invocation has no side effects.
+    Idempotent,
+}
+
+/// Where a tool comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolOrigin {
+    /// An application callback declared for this native Thread.
+    Host {
+        namespace: Option<String>,
+        name: String,
+    },
+    /// A tool built into the runtime. Platform communication tools such as
+    /// future Fleet messaging are represented as built-in tools as well.
+    Builtin,
+    /// A configured MCP source, independent of its current connection.
+    Mcp { server_id: McpServerId },
+    /// A canonical package prepared by the Managed Python owner.
+    ManagedPython { package: String },
+}
+
+impl ToolOrigin {
+    /// Canonical source provenance; builtins do not belong to a `ToolSource`.
+    #[must_use]
+    pub fn source(&self) -> Option<crate::capabilities::ToolSourceId> {
+        use crate::capabilities::ToolSourceId;
+        match self {
+            Self::Builtin | Self::Host { .. } => None,
+            Self::Mcp { server_id } => Some(ToolSourceId::Mcp(server_id.clone())),
+            Self::ManagedPython { package } => Some(ToolSourceId::ManagedPython(package.clone())),
+        }
+    }
+}
+
+/// One tool call issued by the current agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolCall {
+    /// Identity of this specific call, referenced by the matching
+    /// `ToolMessageBlock` and tool-result events.
+    pub id: ToolCallId,
+    /// Identity of the tool being called within the capability set.
+    pub tool_id: ToolId,
+    /// Name of the tool at call time, sufficient for resolution together with
+    /// `tool_id`.
+    pub name: String,
+    /// Arbitrary JSON arguments for the tool call.
+    pub arguments: serde_json::Value,
+}
+
+/// The data known when a tool call starts, before its arguments stream.
+///
+/// Streaming protocols expose the call identity, tool identity, and name
+/// before any argument JSON is available. The fully assembled `ToolCall`
+/// (including `arguments`) is emitted only when the call completes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolCallStart {
+    /// Identity of this specific call.
+    pub id: ToolCallId,
+    /// Identity of the tool being called within the capability set.
+    pub tool_id: ToolId,
+    /// Name of the tool at call time.
+    pub name: String,
+}
+
+/// Caller correlation for one native invocation. Capability source is
+/// independently represented by [`ToolOrigin`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "caller", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub enum ToolInvocationId {
+    /// An accepted canonical Assistant call, owned by the Agent Loop.
+    Agent { call_id: ToolCallId },
+    /// A concrete fixed-program node visit, owned by `WorkflowRuntime`.
+    Workflow {
+        node: Box<crate::runtime::workflow::WorkflowNodeInstance>,
+        /// Which call of the visit: 0, then one more per retry, so each call
+        /// is its own invocation with its own approval and events.
+        #[serde(default, skip_serializing_if = "is_first_call")]
+        retry: u32,
+    },
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
+const fn is_first_call(retry: &u32) -> bool {
+    *retry == 0
+}
+
+impl ToolInvocationId {
+    /// Returns canonical correlation only for an Agent caller.
+    #[must_use]
+    pub fn canonical_call_id(&self) -> Option<&ToolCallId> {
+        match self {
+            Self::Agent { call_id } => Some(call_id),
+            Self::Workflow { .. } => None,
+        }
+    }
+}
+
+/// The caller-neutral runtime-owned invocation delivered to a `ToolExecutor`.
+///
+/// An invocation contains only runtime-owned execution data: the logical
+/// call identity, the tool identity, the model-facing tool name, the
+/// resolved execution mode, and the stripped, already-validated business
+/// arguments. No provider types and no executor-specific fields (Bash
+/// commands, MCP SDK types, Python runtime objects) ever appear here.
+///
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolInvocation {
+    /// Correlation with the caller's concrete invocation authority.
+    pub id: ToolInvocationId,
+    /// The canonical tool identity.
+    pub tool_id: ToolId,
+    /// The model-facing tool name at call time.
+    pub tool_name: String,
+    /// The runtime-resolved execution ownership of this invocation.
+    pub mode: ToolInvocationMode,
+    /// The stripped business arguments, validated against the canonical
+    /// schema. The reserved `__rustx_*` invocation metadata is never present.
+    pub arguments: serde_json::Value,
+}
+
+/// The normalized outcome of one tool execution.
+///
+/// `ToolMessageBlock` composes this type instead of duplicating its fields,
+/// keeping one source of truth for tool results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolExecutionResult {
+    /// Immutable native Workflow identity on the existing outer result.
+    /// Historical identity only: no execution state or continuation authority.
+    /// Its retention is exactly that of this result, never a separate registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Box<crate::runtime::workflow::WorkflowToolIdentity>>,
+    /// Typed execution status, including unknown external outcomes.
+    pub status: ToolExecutionStatus,
+    /// Tool-owned result content.
+    ///
+    /// This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
+    /// tool-owned structured data, and the runtime never infers semantics
+    /// from its property names. rustX reserves no ordinary JSON field names;
+    /// runtime-owned facts live in the typed fields of this struct. A
+    /// provider-independent, bounded model-facing representation is produced
+    /// by [`Self::model_facing_projection`]; producers do not append runtime
+    /// status or managed-output continuation text here.
+    #[serde(default)]
+    pub content: Vec<ToolResultContent>,
+    /// Execution duration in integer milliseconds (stable for persistence).
+    pub duration_ms: u64,
+    /// Process exit code where the tool executed a process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Immutable managed Artifact references produced by the execution.
+    #[serde(default)]
+    pub artifacts: Vec<crate::message::content::FileReference>,
+    /// Runtime-owned explicit declarations of mutable native Session files.
+    /// Only successful canonical Tool results authorize delivery cards.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deliveries: Vec<crate::tools::session_files::SessionFileReference>,
+    /// Truncation metadata where output was truncated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<TruncationState>,
+    /// Runtime-owned managed textual-output continuation metadata: where
+    /// the complete — or honestly partial — textual output of this result
+    /// lives in the conversation's managed tool-output store (Issue #86).
+    /// Absent for results whose output fits the model-facing content.
+    ///
+    /// This is the one typed source of truth for complete-vs-partial
+    /// managed output; producers never encode these facts as magic
+    /// properties of tool-owned JSON, and generic runtime publication code
+    /// consumes only this typed field, never arbitrary JSON keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_output: Option<Box<ManagedOutputContinuation>>,
+}
+
+/// The provider-independent model-facing representation of one tool result.
+///
+/// The projection is text-oriented because the three current tool-result
+/// protocol surfaces translate tool text and compact JSON into textual wire
+/// content. Runtime-owned status feedback and managed-output continuation are
+/// added here, rather than by an executor or provider adapter. The complete
+/// joined representation is always bounded by
+/// `MAX_MODEL_TOOL_RESULT_BYTES`.
+///
+/// Tool-owned file/image references remain marked as non-text content so
+/// protocol adapters can reject them when their wire format cannot represent
+/// them. Their bounded textual mention is still available to text-only
+/// consumers such as background terminal publication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolResultProjection {
+    parts: Vec<String>,
+    contains_non_text_content: bool,
+}
+
+impl ToolResultProjection {
+    /// Returns the already-bounded text parts in canonical order.
+    #[must_use]
+    pub fn parts(&self) -> &[String] {
+        &self.parts
+    }
+
+    /// Returns the complete bounded representation with canonical separators.
+    #[must_use]
+    pub fn as_text(&self) -> String {
+        self.parts.join("\n")
+    }
+
+    fn into_text(mut self) -> String {
+        if self.parts.len() == 1 {
+            self.parts.pop().unwrap_or_default()
+        } else {
+            self.as_text()
+        }
+    }
+
+    /// Returns the exact byte length of [`Self::as_text`].
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        self.parts.iter().fold(0usize, |length, part| {
+            length
+                .saturating_add(part.len())
+                .saturating_add(usize::from(length > 0))
+        })
+    }
+
+    /// Whether the canonical result contained a file/image block that a
+    /// text-only provider protocol cannot represent natively.
+    #[must_use]
+    pub fn contains_non_text_content(&self) -> bool {
+        self.contains_non_text_content
+    }
+
+    /// Whether this result has no model-facing text.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+}
+
+/// Bounded model-facing content, retaining the canonical image/text ordering.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
+pub enum ModelToolResultPart {
+    Text(String),
+    Image(crate::message::content::ImageReference),
+}
+
+/// Bounded semantic content shared by accounting and semantic fingerprints.
+/// Text-only part boundaries carry no provider-neutral semantic distinction;
+/// media parts retain their model-visible ordering.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ModelToolResultContent {
+    Text(String),
+    Parts(Vec<ModelToolResultPart>),
+}
+impl ToolExecutionResult {
+    pub fn model_visible_content(&self) -> Result<ModelToolResultContent, &'static str> {
+        if self
+            .content
+            .iter()
+            .any(|block| matches!(block, ToolResultContent::Image(_)))
+        {
+            self.image_projection().map(ModelToolResultContent::Parts)
+        } else {
+            self.reject_file_projection()?;
+            Ok(ModelToolResultContent::Text(
+                self.model_facing_projection().into_text(),
+            ))
+        }
+    }
+}
+
+impl ToolExecutionResult {
+    /// Project supported input content without encoding provider wire structures.
+    /// Status/continuation text keeps its reserved budget; images retain position.
+    pub fn image_projection(&self) -> Result<Vec<ModelToolResultPart>, &'static str> {
+        self.reject_file_projection()?;
+        if !self
+            .content
+            .iter()
+            .any(|block| matches!(block, ToolResultContent::Image(_)))
+        {
+            return Ok(self
+                .model_facing_projection()
+                .parts
+                .into_iter()
+                .map(ModelToolResultPart::Text)
+                .collect());
+        }
+        let feedback = Self::project_result(
+            &[],
+            &self.status,
+            self.managed_output.as_deref(),
+            &self.artifacts,
+        );
+        let mut remaining =
+            crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(feedback.byte_len());
+        let mut parts = Vec::new();
+        for block in &self.content {
+            if let ToolResultContent::Image(image) = block {
+                parts.push(ModelToolResultPart::Image(image.clone()));
+            } else if remaining != 0 {
+                // The media path historically caps the single block first,
+                // then takes its remaining prefix. Preserve any marker that
+                // falls within that prefix.
+                let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+                let block = std::slice::from_ref(block);
+                let text = if remaining <= bound - CONTENT_TRUNCATION_MARKER.len() - 3 {
+                    render_content_prefix(block, remaining).finish("")
+                } else {
+                    let mut text = render_tool_owned_content(block, bound);
+                    text.truncate(text.floor_char_boundary(remaining.min(text.len())));
+                    text
+                };
+                remaining -= text.len();
+                if !text.is_empty() {
+                    parts.push(ModelToolResultPart::Text(text));
+                }
+            }
+        }
+        parts.extend(feedback.parts.into_iter().map(ModelToolResultPart::Text));
+        Ok(parts)
+    }
+
+    fn reject_file_projection(&self) -> Result<(), &'static str> {
+        if self
+            .content
+            .iter()
+            .any(|block| matches!(block, ToolResultContent::File(_)))
+        {
+            return Err("file tool results are unsupported");
+        }
+        Ok(())
+    }
+}
+
+impl ToolExecutionResult {
+    /// Produces the one canonical model-facing projection of this result.
+    ///
+    /// The deterministic policy is:
+    ///
+    /// 1. render typed runtime status feedback first;
+    /// 2. reserve the structural managed-output continuation (including its
+    ///    locator and complete/partial truth) next;
+    /// 3. render references from the current typed Artifact identities;
+    /// 4. use the remaining bytes for ordinary tool-owned content.
+    ///
+    /// Status feedback and continuation therefore survive pressure before
+    /// ordinary content. Oversized status/content text is shortened at a
+    /// UTF-8 boundary with an explicit marker. Continuation diagnostics are
+    /// advisory; the bounded continuation renderer prioritizes its fixed
+    /// complete/partial label, locator, and guidance. The typed status and
+    /// managed-output fields remain unchanged and authoritative.
+    #[must_use]
+    pub fn model_facing_projection(&self) -> ToolResultProjection {
+        Self::project_result(
+            &self.content,
+            &self.status,
+            self.managed_output.as_deref(),
+            &self.artifacts,
+        )
+    }
+
+    /// The single projection policy borrows only model-visible fields. Media
+    /// segments never clone the full result or unrelated execution metadata.
+    fn project_result(
+        content: &[ToolResultContent],
+        status: &ToolExecutionStatus,
+        managed_output: Option<&ManagedOutputContinuation>,
+        artifacts: &[crate::message::content::FileReference],
+    ) -> ToolResultProjection {
+        const STATUS_TRUNCATION_MARKER: &str = "\n...[tool status truncated]";
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+
+        let has_status = *status != ToolExecutionStatus::Success;
+        let contains_non_text_content = content.iter().any(|block| {
+            matches!(
+                block,
+                ToolResultContent::File(_) | ToolResultContent::Image(_)
+            )
+        });
+        // Reserve the minimum truthful continuation before allowing a large
+        // status diagnostic to consume the result budget. This makes the
+        // locator/guidance structural rather than something that can be
+        // accidentally truncated away by an error string.
+        let continuation_minimum =
+            managed_output.map_or(0, ManagedOutputContinuation::minimum_render_len);
+        let status_budget = bound.saturating_sub(
+            continuation_minimum + usize::from(has_status && managed_output.is_some()),
+        );
+        let status = has_status.then(|| {
+            let mut text = ProjectionText::new(status_budget);
+            let _ = status.write_feedback(&mut text);
+            text.finish(STATUS_TRUNCATION_MARKER)
+        });
+
+        // Continuation is allocated after status, before ordinary content.
+        // Its structural minimum is guaranteed by the reservation above.
+        let continuation_budget = bound
+            .saturating_sub(status.as_ref().map_or(0, String::len) + usize::from(status.is_some()));
+        let continuation =
+            managed_output.map(|continuation| continuation.render_bounded(continuation_budget));
+
+        let reserved = status.as_ref().map_or(0, String::len)
+            + continuation.as_ref().map_or(0, String::len)
+            + usize::from(status.is_some() && continuation.is_some());
+        // Artifact identities are runtime-owned and can change during lineage
+        // materialization. Derive their text here, never in canonical JSON or
+        // managed output that cannot participate in reference remapping.
+        let artifacts = render_artifact_references(
+            artifacts,
+            bound.saturating_sub(reserved + usize::from(reserved > 0)),
+        );
+        let reserved = reserved
+            + artifacts.as_ref().map_or(0, String::len)
+            + usize::from(reserved > 0 && artifacts.is_some());
+        let content_budget = bound.saturating_sub(
+            reserved
+                + usize::from(status.is_some())
+                + usize::from(continuation.is_some())
+                + usize::from(artifacts.is_some()),
+        );
+        let content = render_tool_owned_content(content, content_budget);
+
+        let parts = [status, Some(content), artifacts, continuation]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .collect();
+        let projection = ToolResultProjection {
+            parts,
+            contains_non_text_content,
+        };
+        debug_assert!(
+            projection.byte_len() <= bound,
+            "the complete model-facing tool result projection is bounded"
+        );
+        projection
+    }
+}
+
+fn render_artifact_references(
+    artifacts: &[crate::message::content::FileReference],
+    bound: usize,
+) -> Option<String> {
+    const OMITTED: &str = "[Remaining artifact references omitted by output limit]";
+    if artifacts.is_empty() || bound == 0 {
+        return None;
+    }
+    let mut text = ProjectionText::new(bound);
+    for (index, reference) in artifacts.iter().enumerate() {
+        if !text.bytes.is_empty() {
+            text.append("\n");
+        }
+        let before = text.bytes.len();
+        if index + 1 < artifacts.len() {
+            text.limit = bound.saturating_sub(1 + OMITTED.len());
+        }
+        if before <= text.limit {
+            text.append("Artifact reference: ");
+            if !text.overflowed
+                && let Err(error) = serde_json::to_writer(&mut text, reference)
+                && !text.overflowed
+            {
+                panic!("Artifact reference serializes: {error}");
+            }
+        } else {
+            text.overflowed = true;
+        }
+        text.limit = bound;
+        if text.overflowed {
+            text.bytes.truncate(before);
+            text.overflowed = false;
+            text.append(utf8_prefix(OMITTED, bound - before));
+            break;
+        }
+    }
+    Some(text.finish(""))
+}
+
+const CONTENT_TRUNCATION_MARKER: &str = "\n...[tool-owned result content truncated]";
+
+fn render_tool_owned_content(content: &[ToolResultContent], budget: usize) -> String {
+    render_content_prefix(content, budget).finish(CONTENT_TRUNCATION_MARKER)
+}
+
+fn render_content_prefix(content: &[ToolResultContent], budget: usize) -> ProjectionText {
+    let mut text = ProjectionText::new(budget);
+    for (index, block) in content.iter().enumerate() {
+        if index > 0 {
+            text.append("\n");
+        }
+        if text.overflowed {
+            break;
+        }
+        match block {
+            ToolResultContent::Text(value) => text.append(&value.text),
+            ToolResultContent::Json { value } => {
+                let before = text.bytes.len();
+                if serde_json::to_writer(&mut text, value).is_err() && !text.overflowed {
+                    text.bytes.truncate(before);
+                    text.append("<unserializable JSON result>");
+                }
+            }
+            ToolResultContent::File(reference) => {
+                text.append("[file artifact: ");
+                text.append(
+                    reference
+                        .name
+                        .as_deref()
+                        .unwrap_or(reference.artifact_id.as_str()),
+                );
+                text.append("]");
+            }
+            ToolResultContent::Image(_) => text.append("[image content]"),
+        }
+        if text.overflowed {
+            break;
+        }
+    }
+    text
+}
+
+fn utf8_prefix(text: &str, bound: usize) -> &str {
+    &text[..text.floor_char_boundary(bound.min(text.len()))]
+}
+
+/// A bounded prefix of serialized or borrowed text. Overflow stops the
+/// serializer and keeps only the bytes needed for the final UTF-8 prefix.
+struct ProjectionText {
+    bytes: Vec<u8>,
+    limit: usize,
+    overflowed: bool,
+}
+
+impl ProjectionText {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            overflowed: false,
+        }
+    }
+
+    fn append(&mut self, text: &str) {
+        self.append_bytes(text.as_bytes());
+    }
+
+    fn append_bytes(&mut self, bytes: &[u8]) {
+        let take = bytes.len().min(self.limit.saturating_sub(self.bytes.len()));
+        let needed = self.bytes.len() + take;
+        if needed > self.bytes.capacity() {
+            let capacity = needed
+                .max(self.bytes.capacity().saturating_mul(2))
+                .min(self.limit);
+            self.bytes.reserve_exact(capacity - self.bytes.len());
+        }
+        self.bytes.extend_from_slice(&bytes[..take]);
+        self.overflowed |= take < bytes.len();
+    }
+
+    fn finish(mut self, marker: &str) -> String {
+        if self.overflowed {
+            if self.limit <= marker.len() {
+                return utf8_prefix(marker, self.limit).to_owned();
+            }
+            self.bytes.truncate(self.limit - marker.len());
+        }
+        let mut text = String::from_utf8(self.bytes).unwrap_or_else(|error| {
+            let valid = error.utf8_error().valid_up_to();
+            let mut bytes = error.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).expect("valid UTF-8 prefix")
+        });
+        if self.overflowed {
+            text.push_str(marker);
+        }
+        text
+    }
+}
+
+impl std::io::Write for ProjectionText {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.append_bytes(bytes);
+        if self.overflowed {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::fmt::Write for ProjectionText {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.append(text);
+        if self.overflowed {
+            return Err(std::fmt::Error);
+        }
+        Ok(())
+    }
+}
+
+/// Runtime-owned managed textual-output continuation metadata of one tool
+/// result (Issue #86): where the complete — or honestly partial — textual
+/// output of the execution lives in the conversation's managed tool-output
+/// store.
+///
+/// This is rustX runtime metadata, explicitly typed and separate from
+/// arbitrary tool-owned structured content (`ToolResultContent::Json`). It
+/// is not a semantic artifact, not a `FileReference`, and not a File
+/// modality: textual output stays textual. The locator is an advisory
+/// model-facing absolute path inside the read-only managed tool-output
+/// root — it is a locator, never filesystem authority.
+///
+/// The two managed-output lifecycles both use this type: a foreground
+/// result references its lazy result spill (`r-<16 hex>.txt`) only
+/// when the complete representation crossed the shared preview threshold,
+/// while a background result references its dispatch-allocated live-output
+/// file (`e-<16 hex>.output`). A size-only cutoff is never a semantic tool
+/// failure; `Partial`/`Unavailable` make output-storage failure explicit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ManagedOutputContinuation {
+    /// Capture retained complete output at this absolute temporary locator.
+    /// The bounded result content is a preview. Later OS removal does not
+    /// rewrite this capture-time fact or guarantee full-output reconstruction.
+    Complete {
+        /// The absolute locator inside the managed tool-output root.
+        locator: std::path::PathBuf,
+    },
+    /// Output storage did not settle completely: the locator holds only
+    /// partial output and must never be presented as the complete output.
+    Partial {
+        /// The absolute locator inside the managed tool-output root.
+        locator: std::path::PathBuf,
+        /// The output-storage failure diagnostic. Advisory only: it is
+        /// bounded whenever the continuation is rendered.
+        diagnostic: String,
+    },
+    /// No managed-output file exists for the result — output storage
+    /// failed before or without allocation — so the bounded result content
+    /// is the only record.
+    Unavailable {
+        /// The output-storage failure diagnostic. Advisory only: it is
+        /// bounded whenever the continuation is rendered.
+        diagnostic: String,
+    },
+}
+
+impl ManagedOutputContinuation {
+    /// The fixed guidance sentence of a complete-output continuation.
+    const COMPLETE_GUIDANCE: &'static str =
+        "Use Read or Grep with this absolute path to inspect the complete output.";
+
+    /// The fixed guidance sentence of a partial-output continuation.
+    const PARTIAL_GUIDANCE: &'static str =
+        "The output storage did not complete; this file does NOT hold the complete output.";
+
+    /// The complete textual rendering of this continuation.
+    ///
+    /// The provider-independent bounded model-facing projection uses
+    /// `Self::render_bounded` rather than this complete rendering. The
+    /// diagnostic is bounded here, but a pathological locator may still be
+    /// longer than the model-result budget until the canonical projection
+    /// applies its structural bound.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let bound_diagnostic = |diagnostic: &String| {
+            crate::tools::limits::bound_utf8_text(
+                diagnostic.clone(),
+                crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES,
+            )
+        };
+        match self {
+            Self::Complete { locator } => format!(
+                "Complete output: {}\n{}",
+                locator.display(),
+                Self::COMPLETE_GUIDANCE
+            ),
+            Self::Partial {
+                locator,
+                diagnostic,
+            } => format!(
+                "Partial output only: {}\n{}\nDiagnostic: {}",
+                locator.display(),
+                Self::PARTIAL_GUIDANCE,
+                bound_diagnostic(diagnostic)
+            ),
+            Self::Unavailable { diagnostic } => format!(
+                "The output capture did not complete; the bounded result content is the only \
+                 record and no complete output file is available.\nDiagnostic: {}",
+                bound_diagnostic(diagnostic)
+            ),
+        }
+    }
+
+    /// Renders this continuation within `bound` bytes while preserving its
+    /// complete/partial truth and fixed Read/Grep guidance whenever the bound
+    /// can hold the structural form. A locator is essential, so an oversized
+    /// locator is shortened with an explicit marker; diagnostics are advisory
+    /// and are omitted before structural continuation text is lost.
+    #[must_use]
+    pub fn render_bounded(&self, bound: usize) -> String {
+        let complete_prefix = "Complete output: ";
+        let partial_prefix = "Partial output only: ";
+        let diagnostic_prefix = "\nDiagnostic: ";
+        let locator_marker = "[locator truncated]";
+
+        match self {
+            Self::Complete { locator } => {
+                let guidance = format!("\n{}", Self::COMPLETE_GUIDANCE);
+                let structural = format!("{complete_prefix}{locator_marker}{guidance}");
+                if bound < structural.len() {
+                    return crate::tools::limits::bound_utf8_text(structural, bound);
+                }
+                let locator_budget = bound
+                    .saturating_sub(complete_prefix.len())
+                    .saturating_sub(guidance.len());
+                format!(
+                    "{complete_prefix}{}{}",
+                    bound_locator(locator, locator_budget, locator_marker),
+                    guidance
+                )
+            }
+            Self::Partial {
+                locator,
+                diagnostic,
+            } => {
+                let guidance = format!("\n{}", Self::PARTIAL_GUIDANCE);
+                let structural = format!("{partial_prefix}{locator_marker}{guidance}");
+                if bound < structural.len() {
+                    return crate::tools::limits::bound_utf8_text(structural, bound);
+                }
+                let locator_text = locator.to_string_lossy();
+                let structural_len = partial_prefix.len() + locator_text.len() + guidance.len();
+                if structural_len > bound {
+                    let locator_budget = bound
+                        .saturating_sub(partial_prefix.len())
+                        .saturating_sub(guidance.len());
+                    return format!(
+                        "{partial_prefix}{}{}",
+                        bound_locator(locator, locator_budget, locator_marker),
+                        guidance
+                    );
+                }
+                let structural_with_locator = format!("{partial_prefix}{locator_text}{guidance}");
+                let remaining = bound - structural_len;
+                if remaining < diagnostic_prefix.len() + 1 {
+                    return structural_with_locator;
+                }
+                let diagnostic_budget = remaining
+                    .saturating_sub(diagnostic_prefix.len())
+                    .min(crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES);
+                let bounded = utf8_prefix(diagnostic, diagnostic_budget);
+                format!("{structural_with_locator}{diagnostic_prefix}{bounded}")
+            }
+            Self::Unavailable { diagnostic } => {
+                let prefix = "The output capture did not complete; the bounded result content is the only record and no complete output file is available.";
+                if bound < prefix.len() {
+                    return crate::tools::limits::bound_utf8_text(prefix.to_owned(), bound);
+                }
+                let remaining = bound.saturating_sub(prefix.len());
+                if remaining < diagnostic_prefix.len() + 1 {
+                    return prefix.to_owned();
+                }
+                let diagnostic_budget = remaining
+                    .saturating_sub(diagnostic_prefix.len())
+                    .min(crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES);
+                let bounded = utf8_prefix(diagnostic, diagnostic_budget);
+                format!("{prefix}{diagnostic_prefix}{bounded}")
+            }
+        }
+    }
+
+    fn minimum_render_len(&self) -> usize {
+        match self {
+            Self::Complete { locator } =>
+                "Complete output: ".len() + locator.to_string_lossy().len() + 1 + Self::COMPLETE_GUIDANCE.len(),
+            Self::Partial { locator, .. } =>
+                "Partial output only: ".len() + locator.to_string_lossy().len() + 1 + Self::PARTIAL_GUIDANCE.len(),
+            Self::Unavailable { .. } => "The output capture did not complete; the bounded result content is the only record and no complete output file is available.".len(),
+        }
+    }
+}
+
+fn bound_locator(locator: &std::path::Path, bound: usize, marker: &str) -> String {
+    let locator = locator.to_string_lossy();
+    if locator.len() <= bound {
+        return locator.into_owned();
+    }
+    if bound > marker.len() {
+        let prefix = utf8_prefix(&locator, bound - marker.len());
+        format!("{prefix}{marker}")
+    } else {
+        crate::tools::limits::bound_utf8_text(marker.to_owned(), bound)
+    }
+}
+
+/// The semantic phase at which a tool call was cancelled.
+///
+/// This is a closed, provider-independent fact owned by the canonical tool
+/// result contract and shared by foreground and background runtime-owned
+/// results. The foreground Agent Loop selects it from its per-call executor
+/// start frontier; the background registry selects it from its detached-runner
+/// frontier. Executors may report a provisional physical cancellation status,
+/// but they do not own the canonical phase classification. Clients only
+/// consume or project the canonical typed fact; provider adapters likewise
+/// translate that fact without inferring its phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolCancellationPhase {
+    /// The accepted call had execution authority, but its owner's executor
+    /// start frontier was never crossed.
+    BeforeStart,
+    /// The owner's executor start frontier was crossed and cancellation won
+    /// before normal completion with proven terminal settlement. This does
+    /// not promise rollback or absence of side effects. A cancellation that
+    /// cannot be proven settled is not `Cancelled` at all: it is
+    /// [`ToolExecutionStatus::OutcomeUnknown`].
+    DuringExecution,
+}
+
+/// Typed execution status of a tool call.
+///
+/// The terminal vocabulary is explicit about **outcome certainty**: a
+/// terminal status may claim only facts the owning runtime/executor can
+/// prove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are
+/// confirmed terminal outcomes; `OutcomeUnknown` means an admitted call
+/// crossed the external-effect frontier but rustX cannot prove its final
+/// external result. An unknown outcome is never silently collapsed into
+/// success, generic failure, confirmed timeout, or confirmed cancellation,
+/// and every non-success status produces bounded model-facing feedback
+/// through `Self::feedback_text`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolExecutionStatus {
+    /// The tool completed successfully and the outcome is known.
+    Success,
+    /// The tool reached a known failed terminal outcome.
+    ///
+    /// This is never used merely because communication with an external
+    /// executor failed after dispatch while the external operation could
+    /// still have succeeded; that situation is [`Self::OutcomeUnknown`].
+    Failed {
+        /// Human-readable error message.
+        error: String,
+    },
+    /// The pre-tool policy denied the already-resolved invocation before an
+    /// executor future was created.
+    Denied {
+        /// The policy or human-readable approval reason.
+        reason: String,
+    },
+    /// The execution's cancellation settlement is established.
+    ///
+    /// Cancellation is an authoritative terminal outcome only when rustX can
+    /// prove the execution's cancellation settlement: pre-start
+    /// ([`ToolCancellationPhase::BeforeStart`]) or proven stopped after start
+    /// ([`ToolCancellationPhase::DuringExecution`]). A cancellation *request*
+    /// is not a confirmed cancellation result: when the call crossed the
+    /// external-effect frontier and final settlement cannot be proven, the
+    /// status is [`Self::OutcomeUnknown`].
+    Cancelled {
+        /// Why the execution was cancelled.
+        reason: CancellationReason,
+        /// Whether cancellation won before executor start or while execution
+        /// was already in flight.
+        phase: ToolCancellationPhase,
+    },
+    /// The execution deadline expired and the owning runtime/executor
+    /// established terminal settlement for the execution: it was stopped and
+    /// proven unable to continue (for example, a local process tree that was
+    /// killed, waited/reaped, and proven terminal).
+    ///
+    /// `TimedOut` means more than "rustX stopped awaiting the operation". A
+    /// deadline expiry whose termination cannot be confirmed (for example a
+    /// remote call whose cancellation is unconfirmed) is
+    /// [`Self::OutcomeUnknown`], never `TimedOut`.
+    TimedOut,
+    /// The admitted call crossed the external-effect frontier, but rustX
+    /// cannot prove its final external outcome: a runtime restart before the
+    /// durable outcome commit, transport loss after dispatch, or a
+    /// cancellation/deadline whose remote termination could not be
+    /// confirmed. The operation may have partially or fully completed.
+    OutcomeUnknown {
+        /// A producer-owned diagnostic describing why certainty is
+        /// unavailable. It is rendered into the bounded model-facing
+        /// projection and is never parsed to decide semantics; the typed
+        /// variant itself is the certainty claim.
+        detail: String,
+    },
+}
+
+impl ToolExecutionStatus {
+    /// Renders status feedback for consumers that apply their own byte budget.
+    #[must_use]
+    pub fn feedback_text(&self) -> Option<String> {
+        (*self != Self::Success).then(|| {
+            let mut text = String::new();
+            self.write_feedback(&mut text).expect("writing to a String");
+            text
+        })
+    }
+
+    fn write_feedback(&self, output: &mut impl std::fmt::Write) -> std::fmt::Result {
+        match self {
+            Self::Success => Ok(()),
+            Self::Failed { error } => write!(output, "Tool call failed: {error}"),
+            Self::Denied { reason } => write!(output, "Denied: {reason}"),
+            Self::Cancelled { reason, phase } => {
+                let reason = match reason {
+                    CancellationReason::UserRequested => "user_requested",
+                    CancellationReason::RuntimeShutdown => "runtime_shutdown",
+                    CancellationReason::ParentCancelled => "parent_cancelled",
+                    CancellationReason::SubagentExecutionDeadlineExceeded => {
+                        "subagent_execution_deadline_exceeded"
+                    }
+                };
+                let phase = match phase {
+                    ToolCancellationPhase::BeforeStart => {
+                        "rustX did not start execution of this tool call."
+                    }
+                    ToolCancellationPhase::DuringExecution => {
+                        "Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
+                    }
+                };
+                write!(output, "Tool call was cancelled (reason: {reason}). {phase}")
+            }
+            Self::TimedOut => output.write_str(
+                "Tool call timed out: the execution deadline expired and rustX established terminal settlement; the execution was stopped and proven unable to continue.",
+            ),
+            Self::OutcomeUnknown { detail } => write!(output,
+                "The tool execution started, but rustX could not establish its final external outcome ({detail}). The operation may have partially or fully completed; inspect the relevant state before repeating any side-effecting call, because blind repetition may duplicate work."
+            ),
+        }
+    }
+}
+
+/// Truncation metadata for tool output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TruncationState {
+    /// Whether the result content was truncated.
+    pub truncated: bool,
+    /// Size of the untruncated output in bytes, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_bytes: Option<u64>,
+}
+
+/// A bounded structured progress notification of one tool execution.
+///
+/// Progress is an execution fact, never canonical message history. All
+/// fields are optional; an empty `ToolProgress` is a bare tick. The progress
+/// message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
+///
+/// [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolProgress {
+    /// A short human-readable progress message, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Completed units, when a total is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<f64>,
+    /// Total units, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+}
+
+/// A content block inside a tool result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
+pub enum ToolResultContent {
+    /// Plain text output.
+    Text(crate::message::content::TextBlock),
+    /// Structured output preserved as arbitrary JSON.
+    Json {
+        /// The structured tool output value.
+        value: serde_json::Value,
+    },
+    /// A file reference produced by the tool.
+    File(crate::message::content::FileReference),
+    /// An image reference produced by the tool.
+    Image(crate::message::content::ImageReference),
+}
+
+/// The provider-neutral compiled model-facing tool definition.
+///
+/// One model request receives these compiled definitions, never the
+/// canonical [`ToolDefinition`]: runtime execution, replay, and origin
+/// policy never reach provider adapters. The compiled schema wraps business
+/// inputs in `arguments`, separate from runtime metadata. `ModelSelectable`
+/// requires the outer `execution_mode`; the stored canonical business schema
+/// remains untouched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelToolDefinition {
+    /// Identity of the tool within the capability set.
+    pub id: ToolId,
+    /// Stable model-facing tool name.
+    pub name: String,
+    /// Human-readable description shown to the model.
+    pub description: String,
+    /// The compiled model-facing JSON Schema, including the reserved
+    /// runtime invocation metadata for `ModelSelectable` tools.
+    pub input_schema: Arc<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ToolCall, ToolCallStart, ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy,
+        ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy, TruncationState,
+    };
+    use rustx_identity::{McpServerId, ToolCallId, ToolId};
+    use serde_json::json;
+
+    /// The safe replay default is `Never`.
+    #[test]
+    fn replay_policy_default_is_never() {
+        assert_eq!(ToolReplayPolicy::default(), ToolReplayPolicy::Never);
+    }
+
+    /// A missing execution policy must not silently deserialize.
+    #[test]
+    fn tool_definition_requires_explicit_execution_policy() {
+        let json = r#"{
+            "id": "tool-bash",
+            "name": "bash",
+            "description": "Run a shell command",
+            "input_schema": {"type": "object"},
+            "replay_policy": "never",
+            "origin": "builtin"
+        }"#;
+        let result = serde_json::from_str::<ToolDefinition>(json);
+        assert!(
+            result.is_err(),
+            "missing execution_policy must fail deserialization"
+        );
+    }
+
+    /// A definition with an explicit execution policy round-trips.
+    #[test]
+    fn tool_definition_with_explicit_policies_round_trips() {
+        use super::ToolInvocationMode;
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+            description: "Run a shell command".to_owned(),
+            input_schema: json!({"type": "object"}).into(),
+            execution_policy: ToolExecutionPolicy::ModelSelectable,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: crate::tools::types::ToolOrigin::Mcp {
+                server_id: McpServerId::new("mcp-fs"),
+            },
+        };
+        let json = serde_json::to_string(&definition).expect("serialize definition");
+        let decoded: ToolDefinition = serde_json::from_str(&json).expect("deserialize definition");
+        assert_eq!(decoded, definition);
+        let invocation_mode =
+            serde_json::from_str::<ToolInvocationMode>("\"foreground\"").expect("mode");
+        assert_eq!(invocation_mode, ToolInvocationMode::Foreground);
+    }
+
+    /// Tool call starts carry only the data known before arguments stream.
+    #[test]
+    fn tool_call_start_carries_only_known_identity() {
+        let start = ToolCallStart {
+            id: ToolCallId::new("call_01"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+        };
+        let json = serde_json::to_string(&start).expect("serialize start");
+        let decoded: ToolCallStart = serde_json::from_str(&json).expect("deserialize start");
+        assert_eq!(decoded, start);
+        let value = serde_json::to_value(&start).expect("serialize start value");
+        assert!(
+            value.get("arguments").is_none(),
+            "no arguments exist at start"
+        );
+    }
+
+    /// Tool calls round-trip arbitrary JSON arguments untouched.
+    #[test]
+    fn tool_call_round_trips_arbitrary_json_arguments() {
+        let call = ToolCall {
+            id: ToolCallId::new("call_01"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+            arguments: json!({
+                "command": "ls -la",
+                "options": { "timeout_seconds": 30, "flags": [1, 2, 3] },
+            }),
+        };
+        let json = serde_json::to_string(&call).expect("serialize call");
+        let decoded: ToolCall = serde_json::from_str(&json).expect("deserialize call");
+        assert_eq!(decoded, call);
+        assert_eq!(
+            decoded.arguments,
+            json!({"command": "ls -la", "options": {"timeout_seconds": 30, "flags": [1, 2, 3]}})
+        );
+    }
+
+    /// Unknown external outcome is a distinct, round-trippable status with a
+    /// stable wire discriminator.
+    #[test]
+    fn outcome_unknown_result_round_trip() {
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "the runtime restarted before a durable outcome was committed".to_owned(),
+            },
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: Some(TruncationState {
+                truncated: false,
+                original_bytes: None,
+            }),
+            workflow: None,
+            managed_output: None,
+        };
+        let json = serde_json::to_string(&result).expect("serialize result");
+        let decoded: ToolExecutionResult = serde_json::from_str(&json).expect("deserialize result");
+        assert_eq!(decoded, result);
+        let value = serde_json::to_value(&result.status).expect("status value");
+        assert_eq!(value["type"], "outcome_unknown");
+    }
+
+    /// Execution statuses serialize with stable explicit discriminators.
+    #[test]
+    fn issue136_execution_status_discriminators_are_stable() {
+        let status = ToolExecutionStatus::Cancelled {
+            reason: crate::runtime::types::CancellationReason::UserRequested,
+            phase: ToolCancellationPhase::DuringExecution,
+        };
+        let value = serde_json::to_value(&status).expect("serialize status");
+        assert_eq!(value["type"], "cancelled");
+        assert_eq!(value["reason"], "user_requested");
+        assert_eq!(value["phase"], "during_execution");
+    }
+
+    /// Both cancellation axes are closed, independent, and useful to the
+    /// model without relying on prose as a serialization mechanism.
+    #[test]
+    fn issue136_cancellation_reason_and_phase_render_independently() {
+        use crate::runtime::types::CancellationReason;
+
+        for (reason, reason_label) in [
+            (CancellationReason::UserRequested, "user_requested"),
+            (CancellationReason::RuntimeShutdown, "runtime_shutdown"),
+            (CancellationReason::ParentCancelled, "parent_cancelled"),
+            (
+                CancellationReason::SubagentExecutionDeadlineExceeded,
+                "subagent_execution_deadline_exceeded",
+            ),
+        ] {
+            for phase in [
+                ToolCancellationPhase::BeforeStart,
+                ToolCancellationPhase::DuringExecution,
+            ] {
+                let status = ToolExecutionStatus::Cancelled { reason, phase };
+                let text = status.feedback_text().expect("cancelled text");
+                assert!(text.contains(reason_label));
+                match phase {
+                    ToolCancellationPhase::BeforeStart => {
+                        assert!(text.contains("did not start execution"));
+                        assert!(!text.contains("Partial side effects"));
+                    }
+                    ToolCancellationPhase::DuringExecution => {
+                        assert!(text.contains("already started"));
+                        assert!(text.contains("Partial side effects may have occurred"));
+                    }
+                }
+                if matches!(
+                    reason,
+                    CancellationReason::RuntimeShutdown
+                        | CancellationReason::ParentCancelled
+                        | CancellationReason::SubagentExecutionDeadlineExceeded
+                ) {
+                    assert!(!text.contains("user requested"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_tool_status_is_visible_to_the_model() {
+        let status = ToolExecutionStatus::Failed {
+            error: "input schema validation failed: query is required".to_owned(),
+        };
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: status.clone(),
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        let projection = result.model_facing_projection();
+        assert_eq!(
+            projection.as_text(),
+            "Tool call failed: input schema validation failed: query is required"
+        );
+        assert_eq!(result.status, status);
+        assert!(ToolExecutionStatus::Success.feedback_text().is_none());
+    }
+
+    #[test]
+    fn typed_artifact_projection_survives_content_pressure_and_tracks_current_identity() {
+        use crate::message::content::{FileReference, ImageReference, TextBlock};
+        use rustx_identity::ArtifactId;
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let mut result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: ToolExecutionStatus::Success,
+            content: vec![super::ToolResultContent::Text(TextBlock {
+                text: "x".repeat(bound),
+            })],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: vec![FileReference {
+                artifact_id: ArtifactId::new("artifact_10"),
+                name: Some("fixture://blob".to_owned()),
+                mime_type: Some("application/octet-stream".to_owned()),
+                description: None,
+            }],
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        let original = result.model_facing_projection();
+        assert!(original.byte_len() <= bound);
+        assert!(
+            original
+                .as_text()
+                .contains("\"artifact_id\":\"artifact_10\"")
+        );
+        result.artifacts[0].artifact_id = ArtifactId::new("artifact_2");
+        let projected = result.model_facing_projection().as_text();
+        assert!(projected.contains("\"artifact_id\":\"artifact_2\""));
+        assert!(!projected.contains("artifact_10"));
+        assert!(
+            result
+                .image_projection()
+                .unwrap()
+                .iter()
+                .all(|part| matches!(part, super::ModelToolResultPart::Text(_)))
+        );
+        result
+            .content
+            .push(super::ToolResultContent::Image(ImageReference {
+                artifact_id: ArtifactId::new("artifact_3"),
+                alt: None,
+            }));
+        let media = result.image_projection().unwrap();
+        let text: String = media
+            .iter()
+            .filter_map(|part| match part {
+                super::ModelToolResultPart::Text(text) => Some(text.as_str()),
+                super::ModelToolResultPart::Image(_) => None,
+            })
+            .collect();
+        assert!(text.len() <= bound);
+        assert!(text.contains("\"artifact_id\":\"artifact_2\""));
+    }
+
+    #[test]
+    fn oversized_artifact_projection_omits_whole_references() {
+        use crate::message::content::FileReference;
+        use rustx_identity::ArtifactId;
+        let references = [FileReference {
+            artifact_id: ArtifactId::new("artifact_123"),
+            name: Some("界".repeat(100)),
+            mime_type: None,
+            description: None,
+        }];
+        for bound in 1..500 {
+            let rendered = super::render_artifact_references(&references, bound).unwrap();
+            assert!(rendered.len() <= bound);
+            if rendered.starts_with("Artifact reference: ") {
+                let decoded: FileReference =
+                    serde_json::from_str(rendered.trim_start_matches("Artifact reference: "))
+                        .unwrap();
+                assert_eq!(decoded, references[0]);
+            } else {
+                assert!(!rendered.contains("artifact_"));
+            }
+        }
+    }
+
+    #[test]
+    fn model_facing_projection_bounds_content_status_and_continuation_together() {
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let status = ToolExecutionStatus::Failed {
+            error: format!(
+                "input schema validation failed: query is required; {}",
+                "e".repeat(4 * 1024)
+            ),
+        };
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: status.clone(),
+            content: vec![super::ToolResultContent::Text(
+                crate::message::content::TextBlock {
+                    text: "o".repeat(bound.saturating_sub(128)),
+                },
+            )],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: Some(Box::new(super::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(
+                    "/tmp/rx-0000000000000001/r-0000000000000007.txt",
+                ),
+            })),
+        };
+
+        let first = result.model_facing_projection();
+        let second = result.model_facing_projection();
+        assert_eq!(first, second, "projection is deterministic");
+        assert!(first.byte_len() <= bound);
+        let text = first.as_text();
+        assert!(
+            text.contains("Tool call failed: input schema validation failed: query is required")
+        );
+        assert!(text.contains("Complete output: /tmp/rx-0000000000000001/r-0000000000000007.txt"));
+        assert!(text.contains("Read or Grep"));
+        assert!(text.contains("tool-owned result content truncated"));
+        assert_eq!(result.status, status, "typed status remains authoritative");
+    }
+
+    #[test]
+    fn model_facing_projection_truncates_only_at_utf8_boundaries() {
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: ToolExecutionStatus::Success,
+            content: vec![super::ToolResultContent::Text(
+                crate::message::content::TextBlock {
+                    text: "😀".repeat(crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES),
+                },
+            )],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        let projection = result.model_facing_projection();
+        assert!(projection.byte_len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES);
+        let text = projection.as_text();
+        assert!(text.is_char_boundary(text.len()));
+        assert!(text.contains("tool-owned result content truncated"));
+        let marker = "\n...[tool-owned result content truncated]";
+        let prefix = text.strip_suffix(marker).expect("truncation marker");
+        assert_eq!(prefix.len() % "😀".len(), 0);
+    }
+
+    #[test]
+    fn bounded_render_matches_the_full_projection_prefix_and_detects_late_media() {
+        use super::{CONTENT_TRUNCATION_MARKER, ToolResultContent};
+        use crate::message::content::{ImageReference, TextBlock};
+        use rustx_identity::ArtifactId;
+
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let value = json!({"escaped": "界😀\n\"".repeat(bound)});
+        let content = vec![
+            ToolResultContent::Text(TextBlock {
+                text: String::new(),
+            }),
+            ToolResultContent::Text(TextBlock {
+                text: "😀".repeat(16),
+            }),
+            ToolResultContent::Json {
+                value: value.clone(),
+            },
+            ToolResultContent::Image(ImageReference {
+                artifact_id: ArtifactId::new("late-image"),
+                alt: None,
+            }),
+        ];
+        let full = format!("\n{}\n{value}\n[image content]", "😀".repeat(16));
+        let marker = CONTENT_TRUNCATION_MARKER;
+        for budget in [
+            0,
+            1,
+            marker.len() - 1,
+            marker.len(),
+            marker.len() + 3,
+            80,
+            bound,
+        ] {
+            let rendered = super::render_content_prefix(&content, budget);
+            assert!(rendered.bytes.capacity() <= budget);
+            let expected = if budget <= marker.len() {
+                marker[..budget].to_owned()
+            } else {
+                let end = full.floor_char_boundary(budget - marker.len());
+                format!("{}{marker}", &full[..end])
+            };
+            assert_eq!(rendered.finish(marker), expected);
+        }
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: ToolExecutionStatus::Success,
+            content,
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        assert!(result.model_facing_projection().contains_non_text_content());
+        let parts = result.image_projection().expect("image projection");
+        assert!(matches!(
+            parts.last(),
+            Some(super::ModelToolResultPart::Image(_))
+        ));
+    }
+
+    #[test]
+    fn model_facing_projection_keeps_continuation_structure_before_status_tail() {
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let status = ToolExecutionStatus::Failed {
+            error: "e".repeat(bound.saturating_mul(2)),
+        };
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: status.clone(),
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: Some(Box::new(super::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(
+                    "/tmp/rx-0000000000000001/r-0000000000000008.txt",
+                ),
+            })),
+        };
+
+        let projection = result.model_facing_projection();
+        assert!(projection.byte_len() <= bound);
+        let text = projection.as_text();
+        assert!(text.contains("Tool call failed: e"));
+        assert!(text.contains("...[tool status truncated]"));
+        assert!(text.contains("Complete output: /tmp/rx-0000000000000001/r-0000000000000008.txt"));
+        assert!(text.contains("Read or Grep"));
+        assert_eq!(result.status, status, "typed status remains authoritative");
+    }
+
+    /// Issue #202: every terminal non-success status produces non-empty,
+    /// bounded model-facing feedback, even with no tool-owned content.
+    #[test]
+    fn every_non_success_status_projects_non_empty_bounded_feedback() {
+        use crate::runtime::types::CancellationReason;
+        let statuses = [
+            ToolExecutionStatus::Failed {
+                error: "boom".to_owned(),
+            },
+            ToolExecutionStatus::Denied {
+                reason: "approval rejected".to_owned(),
+            },
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: ToolCancellationPhase::BeforeStart,
+            },
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                phase: ToolCancellationPhase::DuringExecution,
+            },
+            ToolExecutionStatus::TimedOut,
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: "transport closed after dispatch".to_owned(),
+            },
+        ];
+        for status in statuses {
+            let result = ToolExecutionResult {
+                deliveries: Vec::new(),
+                status: status.clone(),
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+            let projection = result.model_facing_projection();
+            assert!(
+                !projection.is_empty(),
+                "non-success status must project model-facing feedback: {status:?}"
+            );
+            assert!(
+                projection.byte_len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
+                "projection stays bounded: {status:?}"
+            );
+            assert!(
+                status.feedback_text().is_some(),
+                "non-success status has typed feedback: {status:?}"
+            );
+        }
+        assert!(ToolExecutionStatus::Success.feedback_text().is_none());
+    }
+
+    /// Issue #202: the unknown-outcome diagnostic states that execution
+    /// started, that the final outcome is unconfirmed, and that side effects
+    /// may have partially or fully occurred — never implying success,
+    /// confirmed failure, confirmed timeout, or confirmed cancellation.
+    #[test]
+    fn outcome_unknown_feedback_states_uncertainty_and_possible_side_effects() {
+        let status = ToolExecutionStatus::OutcomeUnknown {
+            detail: "the runtime restarted while the call was in flight".to_owned(),
+        };
+        let text = status.feedback_text().expect("unknown outcome feedback");
+        assert!(text.contains("execution started"));
+        assert!(text.contains("could not establish its final external outcome"));
+        assert!(text.contains("the runtime restarted while the call was in flight"));
+        assert!(text.contains("may have partially or fully completed"));
+        assert!(text.contains("inspect the relevant state"));
+        assert!(!text.contains("failed"));
+        assert!(!text.contains("timed out"));
+        assert!(!text.contains("cancelled"));
+    }
+
+    /// Issue #202: `TimedOut` feedback communicates a confirmed terminal
+    /// settlement, never a mere local deadline expiry.
+    #[test]
+    fn timed_out_feedback_states_confirmed_terminal_settlement() {
+        let text = ToolExecutionStatus::TimedOut
+            .feedback_text()
+            .expect("timed out feedback");
+        assert!(text.contains("deadline expired"));
+        assert!(text.contains("terminal settlement"));
+        assert!(text.contains("proven unable to continue"));
+    }
+}
+
+/// Presentation metadata derived from canonical native Bash arguments.
+/// Command remains the authoritative execution fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BashPresentation {
+    pub command: String,
+    pub description: Option<String>,
+}
+impl BashPresentation {
+    #[must_use]
+    pub fn from_arguments(tool_id: &ToolId, arguments: &serde_json::Value) -> Option<Self> {
+        if tool_id.as_str() != "tool-bash" {
+            return None;
+        }
+        Some(Self {
+            command: arguments.get("command")?.as_str()?.to_owned(),
+            description: arguments
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        })
+    }
+}

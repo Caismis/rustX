@@ -6,7 +6,7 @@ use crate::runtime_client::types::RequestId;
 #[test]
 #[allow(clippy::too_many_lines)] // One bounded persisted operation covers cold start, accepted progress and cancellation.
 fn cold_read_restores_full_bounded_progress_without_trace_or_completion() {
-    use crate::durable::{AuxiliaryStore, CanonicalStore, SqliteConversationStore};
+    use crate::durable::{CanonicalStore, SqliteConversationStore};
     use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart,

@@ -251,9 +251,15 @@ def load_package_metadata(
     elif len(packages) == 1:
         pkg = packages[0]
     else:
-        raise PreparationError(
-            f"expected one package in workspace metadata (pass `-p`), found {len(packages)}"
-        )
+        # Multi-member workspace: cargo resolves the default member the same
+        # way a bare `cargo test` at the root does.
+        default_ids = set(metadata.get("workspace_default_members") or [])
+        matches = [pkg for pkg in packages if pkg.get("id") in default_ids]
+        if len(matches) != 1:
+            raise PreparationError(
+                f"expected one package in workspace metadata (pass `-p`), found {len(packages)}"
+            )
+        pkg = matches[0]
 
     pkg_id = pkg["id"]
     manifest_path = Path(pkg["manifest_path"]).resolve()
@@ -506,6 +512,11 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
     has_lib = any(kind == ("lib",) or "rlib" in kind for kind, _ in all_targets)
 
     test_records = run_cargo_json(test_cmd, work_dir)
+    json_out = os.environ.get("RUSTX_PREPARED_JSON_OUT")
+    if json_out:
+        Path(json_out).write_text(
+            "".join(json.dumps(row) + "\n" for row in test_records)
+        )
     libraries, binaries, harnesses = collect_package_artifacts(
         test_records, pkg_id, manifest_path, all_targets
     )

@@ -387,13 +387,6 @@ impl DefaultTokenEstimator {
     }
 }
 
-/// One immutable leaf's exact model-visible JSON. Called only when the native
-/// node aggregate is first computed; unsupported Tool projections remain errors.
-pub(crate) fn model_visible_item_bytes(message: &ModelInputMessage) -> Option<u64> {
-    let visible = message.view().model_visible().ok()?;
-    Some(encoded_bytes(&visible))
-}
-
 /// Price semantic role/content directly into a counting sink. Message IDs,
 /// source digests and projection provenance never enter model token accounting.
 fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> u64 {
@@ -428,8 +421,10 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn take_accounted_bytes() -> u64 {
     ACCOUNTED_BYTES.with(|total| total.replace(0))
+        + rustx_types::context::tokens::take_accounted_bytes()
 }
 
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_estimator_calls() -> u64 {
     ESTIMATOR_CALLS.with(|total| total.replace(0))
@@ -548,14 +543,17 @@ impl TokenEstimator for ClosureTokenEstimator {
 }
 
 /// `ceil(bytes / 4)`: every four deterministic UTF-8 serialized bytes count
-/// as one estimated token, with any remainder counting as one more.
-#[must_use]
-pub const fn bytes_to_tokens(bytes: u64) -> u64 {
-    bytes.div_ceil(4)
-}
+pub use rustx_durable::context_resources::bytes_to_tokens;
 
 #[cfg(test)]
 mod selected_tests;
+
+#[cfg(test)]
+#[cfg(test)]
+fn model_visible_item_bytes(message: &ModelInputMessage) -> Option<u64> {
+    let visible = message.view().model_visible().ok()?;
+    Some(encoded_bytes(&visible))
+}
 
 #[cfg(test)]
 mod tests {

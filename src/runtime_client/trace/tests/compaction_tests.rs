@@ -2,7 +2,6 @@ use super::*;
 use crate::context::operation::{
     CompactionMode, CompactionOperationPhase as Phase, CompactionOperationStatus,
 };
-use crate::durable::AuxiliaryStore;
 use crate::observation::trace::TraceCompactionOutcome as Outcome;
 use crate::runtime::identity::CompactionOperationId;
 

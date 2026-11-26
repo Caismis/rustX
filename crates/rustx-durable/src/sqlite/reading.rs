@@ -1,0 +1,910 @@
+//! One transaction owns outline identity, location and bounded transcript selection.
+
+#[cfg(test)]
+mod tests;
+use super::{
+    Connection, ConversationStoreError, OptionalExtension,
+    canonical::transcript::load_transcript_page, nonnegative, params, seq_to_i64, storage,
+};
+use crate::reading::{
+    ConversationReadCut, ConversationTurn, ConversationTurnId, ConversationTurnPage,
+    ConversationWindowAt, DurableConversationWindow, InheritedTurnOutcome, TURN_PAGE_MAX,
+    TURN_PROMPT_PREVIEW_MAX, TURN_RESPONSE_PREVIEW_MAX, TurnExecution, TurnReadingProvenance,
+};
+use crate::sqlite::statements::FixedStatements;
+use rustx_types::runtime::identity::{AttemptId, ConversationId, MessageId};
+
+mod attempt_facts;
+
+pub const CUT_SQL: &str = "SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),CASE WHEN (surface_revision IS NULL)!=(surface_compaction_generation IS NULL) THEN NULL ELSE COALESCE(surface_revision,0) END,retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1";
+
+pub fn cut(
+    connection: &Connection,
+    conversation: &ConversationId,
+) -> Result<ConversationReadCut, ConversationStoreError> {
+    let (
+        journal,
+        transcript,
+        mutation_revision,
+        ledger_through,
+        surface_revision,
+        transcript_total,
+        pending_through,
+        pending_total,
+    ): (i64, i64, i64, i64, i64, i64, i64, i64) = connection
+        .prepare_cached(CUT_SQL)
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
+        .query_row([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        })
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    Ok(ConversationReadCut {
+        conversation_id: conversation.clone(),
+        journal: nonnegative(journal, "read journal")?,
+        transcript: nonnegative(transcript, "read transcript")?,
+        mutation_revision: nonnegative(mutation_revision, "read mutation")?,
+        ledger_through: nonnegative(ledger_through, "read canonical ledger")?,
+        surface_revision: rustx_conversation::SurfaceRevision::new(nonnegative(
+            surface_revision,
+            "read surface revision",
+        )?),
+        transcript_total: nonnegative(transcript_total, "read transcript count")?,
+        pending_through: nonnegative(pending_through, "read pending frontier")?,
+        pending_total: nonnegative(pending_total, "read pending count")?,
+    })
+}
+
+pub fn window_cut(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ConversationWindowAt,
+) -> Result<ConversationReadCut, ConversationStoreError> {
+    let actual = cut(connection, conversation)?;
+    let expected = match at {
+        ConversationWindowAt::Latest => None,
+        ConversationWindowAt::Older { cut, .. }
+        | ConversationWindowAt::Message { cut, .. }
+        | ConversationWindowAt::Canonical { cut, .. } => cut.as_ref(),
+        ConversationWindowAt::Newer { cut, .. }
+        | ConversationWindowAt::Turn { cut, .. }
+        | ConversationWindowAt::TurnOrdinal { cut, .. } => Some(cut),
+    };
+
+    if expected.is_some_and(|expected| !expected.reconstructible_from(&actual)) {
+        return Err(ConversationStoreError::InvalidReference(
+            "stale conversation read cut; reload the turn outline".into(),
+        ));
+    }
+    Ok(expected.cloned().unwrap_or(actual))
+}
+
+// Bootstrap order is immutable native provenance order. Local Attempt starts
+// use their indexed Journal order, independent of compaction or model steps.
+const OWNERS: &str = concat!(
+    "WITH owners AS (
+    SELECT 0 AS source, p.ordinal AS ordering
+    FROM inherited_turn_provenance p
+    UNION ALL
+    SELECT 1,sequence
+    FROM events INDEXED BY events_kind_idx
+    WHERE sequence<=?1 AND ",
+    crate::sql!("event_kind"),
+    "=x'0002'",
+    "
+) "
+);
+
+fn location(
+    connection: &Connection,
+    id: &ConversationTurnId,
+    inherited: Option<&TurnReadingProvenance>,
+    cut: &ConversationReadCut,
+) -> Result<Option<u64>, ConversationStoreError> {
+    let position: Option<i64> = if let Some(turn) = inherited {
+        // Used only while the immutable seed transaction prepares its native
+        // finite reading header, never by a later observation request.
+        if turn.process_message_ids.is_empty() {
+            connection.query_row("SELECT t.position FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx JOIN transcript_entries t ON t.native_reference_kind='inherited_turn' AND t.native_reference_id=CAST(p.ordinal AS TEXT) WHERE json_extract(p.payload,'$.id.conversation_id')=?1 AND json_extract(p.payload,'$.id.attempt_id')=?2 AND t.position<=?3",params![id.conversation_id.as_str(),id.attempt_id.as_str(),cut.transcript],|row|row.get(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?
+        } else {
+            connection.query_row("SELECT MIN(t.position) FROM json_each(?1) m JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=m.value WHERE t.position<=?2",params![super::encode(&turn.process_message_ids,"turn members")?,cut.transcript],|row|row.get(0)).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?
+        }
+    } else {
+        let mut earliest = None;
+        for kind in [
+            "assistant_message_committed",
+            "attempt_completed",
+            "attempt_cancelled",
+            "attempt_failed",
+            "attempt_timed_out",
+            "attempt_limit_exceeded",
+        ] {
+            let fact:Option<(String,Option<String>)>=connection.query_row(concat!("SELECT event_id,event_message_id FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND event_kind=?2 AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),kind,cut.journal],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+            if let Some((event_id, message_id)) = fact {
+                let (reference_kind, reference_id) = message_id
+                    .as_deref()
+                    .map_or(("attempt_terminal", event_id.as_str()), |id| {
+                        ("message", id)
+                    });
+                let cursor:Option<i64>=connection.query_row("SELECT position FROM transcript_entries WHERE native_reference_kind=?1 AND native_reference_id=?2 AND position<=?3",params![reference_kind,reference_id,cut.transcript],|row|row.get(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+                if let Some(cursor) = cursor {
+                    earliest = Some(earliest.map_or(cursor, |previous: i64| previous.min(cursor)));
+                }
+            }
+        }
+        earliest
+    };
+    position
+        .map(|position| nonnegative(position, "turn position"))
+        .transpose()
+}
+
+/// Space-joined text blocks with collapsed whitespace, capped at `limit`
+/// characters with a trailing ellipsis when clipped. The same rule shapes the
+/// prompt and the response, so a preview never depends on block layout.
+fn message_preview(
+    connection: &Connection,
+    message_id: &MessageId,
+    limit: usize,
+) -> Result<String, ConversationStoreError> {
+    let position: u64 = connection
+        .query_row_cached(
+            "SELECT position FROM message_ledger WHERE message_id=?1",
+            [message_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            crate::sqlite::sqlite_error(&error, "native turn preview position unavailable")
+        })?;
+    super::observation_turn::preview(connection, position, limit)
+}
+
+/// Only human messages and delegated Agent tasks can open a Turn. Context records
+/// and runtime/external notifications remain ineligible in every lineage.
+pub const OPENING_PROMPT_FILTER: &str = "EXISTS (SELECT 1 FROM transcript_entries oh INDEXED BY transcript_entries_ledger_idx WHERE oh.ledger_position=l.position AND oh.reference_kind='message' AND oh.reference_id=l.message_id AND json_extract(oh.header_json,'$.opening_prompt')=1)";
+
+#[must_use]
+pub fn local_prompt_sql() -> String {
+    adoption_prompt_sql(OPENING_PROMPT_FILTER)
+}
+
+fn adoption_prompt_sql(eligible: &str) -> String {
+    format!(
+        concat!(
+            concat!(
+                "WITH adoptions AS (
+         SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
+         WHERE attempt_key = ",
+                crate::sqlite::event_owner_key::attempt_parameter!("?1"),
+                " AND event_kind='inbound_turn_adopted' AND sequence<=?3
+         UNION ALL
+         SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
+         WHERE attempt_key IS NULL AND event_kind='inbound_turn_adopted' AND sequence<?2
+           AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
+             WHERE sequence<?2 AND "
+            ),
+            crate::sql!("event_kind"),
+            "=x'0002'",
+            ")
+        )
+        SELECT m.value FROM adoptions e,json_each(e.event_json,'$.event.message_ids') m
+        JOIN message_ledger l ON l.message_id=m.value
+        WHERE {eligible}
+        ORDER BY e.sequence,CAST(m.key AS INTEGER) LIMIT 1"
+        ),
+        eligible = eligible
+    )
+}
+
+pub fn attempt_prompt(
+    connection: &Connection,
+    attempt: &AttemptId,
+    through: u64,
+) -> Result<Option<MessageId>, ConversationStoreError> {
+    let started:Option<i64>=connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND event_kind='attempt_started' ORDER BY sequence LIMIT 1"),params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    let Some(sequence) = started else {
+        return Ok(None);
+    };
+    // Native C captures ordinary_user and opening_preview outside optional
+    // presentation savepoints. Their exact Unicode-text eligibility plus the
+    // original source excludes notices, Context and text-free media. Retry and
+    // lineage must not depend on a generated display header or its preview.
+    connection.prepare_cached(&adoption_prompt_sql(
+        "l.ordinary_user=1 AND l.opening_preview IS NOT NULL AND (json_extract(l.message_json,'$.source')='human' OR json_type(l.message_json,'$.source.agent')='object')",
+    )).map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?
+        .query_row(params![attempt.as_str(),sequence,seq_to_i64(through)?], |row| row.get::<_,String>(0))
+        .optional().map(|id|id.map(MessageId::new)).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))
+}
+
+/// The earliest eligible input adopted by this Attempt or while idle between
+/// the previous and current starts. Previous-Attempt steering keeps its owner.
+fn local_prompt(
+    connection: &Connection,
+    attempt: &AttemptId,
+    start: i64,
+    through: u64,
+) -> Result<Option<(MessageId, String)>, ConversationStoreError> {
+    let mut statement = connection
+        .prepare_cached(&local_prompt_sql())
+        .map_err(|error| crate::sqlite::sqlite_error(&error, format!("turn prompt: {error}")))?;
+    let ids = statement
+        .query_map(
+            params![attempt.as_str(), start, seq_to_i64(through)?],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, format!("turn prompt: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("turn prompt: {error}")))?;
+    for id in ids.into_iter().map(MessageId::new) {
+        let preview = message_preview(connection, &id, TURN_PROMPT_PREVIEW_MAX)?;
+        if !preview.is_empty() {
+            return Ok(Some((id, preview)));
+        }
+    }
+    Ok(None)
+}
+
+/// The newest text-bearing Assistant message of a settled turn, newest first.
+fn final_response(
+    connection: &Connection,
+    members: impl Iterator<Item = MessageId>,
+) -> Result<String, ConversationStoreError> {
+    for id in members {
+        let preview = message_preview(connection, &id, TURN_RESPONSE_PREVIEW_MAX)?;
+        if !preview.is_empty() {
+            return Ok(preview);
+        }
+    }
+    Ok(String::new())
+}
+
+/// Prompt and response of a local turn at the cut. A turn still running at
+/// the cut has no final response yet.
+fn local_previews(
+    connection: &Connection,
+    attempt: &AttemptId,
+    start: i64,
+    cut: &ConversationReadCut,
+) -> Result<(String, String), ConversationStoreError> {
+    let prompt = local_prompt(connection, attempt, start, cut.journal)?
+        .map_or_default(|(_, preview)| preview);
+    let settled: bool = connection
+        .query_row(
+            concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2
+             AND event_kind IN ('attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded'))"),
+            params![attempt.as_str(), seq_to_i64(cut.journal)?],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error,format!("turn settlement: {error}")))?;
+    if !settled {
+        return Ok((prompt, String::new()));
+    }
+    let mut statement = connection
+        .prepare_cached(
+            concat!("SELECT event_message_id FROM events INDEXED BY events_attempt_kind_idx
+             WHERE attempt_key = ", crate::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND event_kind='assistant_message_committed'
+             AND EXISTS(SELECT 1 FROM transcript_entries h WHERE h.reference_kind='message' AND h.reference_id=event_message_id AND json_extract(h.header_json,'$.has_text_preview')=1)
+             ORDER BY sequence DESC LIMIT 1"),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error,format!("turn response: {error}")))?;
+    let members = statement
+        .query_map(params![attempt.as_str(), seq_to_i64(cut.journal)?], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| crate::sqlite::sqlite_error(&error, format!("turn response: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("turn response: {error}")))?;
+    Ok((
+        prompt,
+        final_response(connection, members.into_iter().map(MessageId::new))?,
+    ))
+}
+
+/// Prompt and response of an inherited turn from its immutable provenance.
+/// Both reading ownership and completed-response replay ownership explicitly
+/// name retained eligible opening inputs. Their earliest text-bearing input is the preview;
+/// transcript adjacency and the source's current state are never evidence.
+fn inherited_previews(
+    connection: &Connection,
+    turn: &TurnReadingProvenance,
+) -> Result<(String, String), ConversationStoreError> {
+    let responses = super::provenance::selected_responses(connection, &turn.process_message_ids)?;
+    let inputs: Vec<_> = turn
+        .prompt_message_id
+        .iter()
+        .cloned()
+        .chain(
+            responses
+                .into_iter()
+                .filter(|response| {
+                    response.origin.conversation_id == turn.id.conversation_id
+                        && response.origin.attempt_id == turn.id.attempt_id
+                })
+                .filter_map(|response| response.retry_message_id),
+        )
+        .collect();
+    // Only the selected Turn's validated response owners enter this lookup.
+    // Never scan the normalized inherited response directory for a preview.
+    let mut statement = connection
+        .prepare_cached(&format!(
+            "SELECT l.message_id FROM json_each(?1) i JOIN message_ledger l ON l.message_id=i.value
+             WHERE {OPENING_PROMPT_FILTER} ORDER BY l.position"
+        ))
+        .map_err(|error| {
+            crate::sqlite::sqlite_error(&error, format!("inherited prompt owners: {error}"))
+        })?;
+    let inputs = statement
+        .query_map(
+            params![super::encode(&inputs, "inherited prompt owners")?],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| {
+            crate::sqlite::sqlite_error(&error, format!("inherited prompt owners: {error}"))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(format!("inherited prompt owners: {error}")))?;
+    let mut prompt = String::new();
+    for id in inputs {
+        prompt = message_preview(connection, &MessageId::new(id), TURN_PROMPT_PREVIEW_MAX)?;
+        if !prompt.is_empty() {
+            break;
+        }
+    }
+    let response = if matches!(turn.outcome, InheritedTurnOutcome::IncompleteAtCut) {
+        String::new()
+    } else {
+        final_response(connection, turn.process_message_ids.iter().rev().cloned())?
+    };
+    Ok((prompt, response))
+}
+
+pub fn index_inherited_turn(
+    connection: &Connection,
+    ordinal: i64,
+    turn: &TurnReadingProvenance,
+) -> Result<(), ConversationStoreError> {
+    let conversation = turn.id.conversation_id.clone();
+    let mut native = cut(connection, &conversation)?;
+    // Location is destination ordering, while the historical identity remains source-owned.
+    native.conversation_id = conversation;
+    let cursor = location(connection, &turn.id, Some(turn), &native)?;
+    let (prompt, response) = inherited_previews(connection, turn)?;
+    let header = ConversationTurn {
+        id: turn.id.clone(),
+        ordinal: usize::try_from(ordinal).map_err(|error| storage(error.to_string()))? + 1,
+        cursor: cursor.map(crate::TranscriptCursor::new),
+        prompt,
+        response,
+    };
+    super::provenance::write_turn_header(
+        connection,
+        ordinal,
+        super::provenance::TurnHeaderKind::Native,
+        &header,
+    )
+}
+fn inherited_turn_header(
+    connection: &Connection,
+    ordinal: i64,
+) -> Result<ConversationTurn, ConversationStoreError> {
+    let header: ConversationTurn = super::provenance::read_turn_header(
+        connection,
+        ordinal,
+        super::provenance::TurnHeaderKind::Native,
+    )?;
+    if header.ordinal
+        != usize::try_from(ordinal).map_err(|_| storage("turn ordinal exhausted"))? + 1
+    {
+        return Err(storage("inherited turn header ordinal differs"));
+    }
+    super::provenance::validate_turn_cursor(connection, header.cursor)?;
+    Ok(header)
+}
+pub fn turns(
+    connection: &Connection,
+    conversation: &ConversationId,
+    offset: usize,
+    limit: usize,
+) -> Result<ConversationTurnPage, ConversationStoreError> {
+    if limit == 0 || limit > TURN_PAGE_MAX {
+        return Err(storage("turn page limit must be between 1 and 64"));
+    }
+    let cut = cut(connection, conversation)?;
+    let inherited_count = super::provenance::turn_count(connection)?;
+    let (total, count, first, last): (usize,i64,Option<i64>,Option<i64>) = connection
+        .query_row(
+            &format!("{OWNERS}SELECT COUNT(*),COALESCE(SUM(source=0),0),MIN(CASE WHEN source=0 THEN ordering END),MAX(CASE WHEN source=0 THEN ordering END) FROM owners"),
+            [seq_to_i64(cut.journal)?],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    if count != inherited_count || (count > 0 && (first != Some(0) || last != Some(count - 1))) {
+        return Err(storage("inconsistent inherited Turn directory metadata"));
+    }
+    let offset = offset.min(total.saturating_sub(1) / limit * limit);
+    let mut statement = connection
+        .prepare(&format!(
+            "{OWNERS}SELECT source,ordering FROM owners ORDER BY source,ordering LIMIT ?2 OFFSET ?3"
+        ))
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    let rows = statement
+        .query_map(params![seq_to_i64(cut.journal)?, limit, offset], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    let mut turns = Vec::with_capacity(limit);
+    for (index, row) in rows.enumerate() {
+        let (source, start) = row.map_err(|error| storage(error.to_string()))?;
+        if source == 0 {
+            let mut header = inherited_turn_header(connection, start)?;
+            header.ordinal = offset + index + 1;
+            if header
+                .cursor
+                .is_some_and(|cursor| cursor.get() > cut.transcript)
+            {
+                header.cursor = None;
+            }
+            turns.push(header);
+            continue;
+        }
+        let inherited: Option<TurnReadingProvenance> = None;
+        let id = if let Some(turn) = &inherited {
+            turn.id.clone()
+        } else {
+            connection
+                .query_row(
+                    "SELECT conversation_id,attempt_id FROM events WHERE sequence=?1",
+                    [start],
+                    |row| {
+                        Ok(ConversationTurnId {
+                            conversation_id: ConversationId::new(row.get::<_, String>(0)?),
+                            attempt_id: AttemptId::new(row.get::<_, String>(1)?),
+                        })
+                    },
+                )
+                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
+        };
+        let cursor = location(connection, &id, inherited.as_ref(), &cut)?;
+        let (prompt, response) = match inherited.as_ref() {
+            Some(inherited) => inherited_previews(connection, inherited)?,
+            None => local_previews(connection, &id.attempt_id, start, &cut)?,
+        };
+        turns.push(ConversationTurn {
+            id,
+            ordinal: offset + index + 1,
+            cursor: cursor.map(crate::TranscriptCursor::new),
+            prompt,
+            response,
+        });
+    }
+    Ok(ConversationTurnPage {
+        cut,
+        total,
+        offset,
+        turns,
+    })
+}
+
+fn message_location(
+    connection: &Connection,
+    id: &MessageId,
+    cut: &ConversationReadCut,
+) -> Result<u64, ConversationStoreError> {
+    let cursor: Option<i64> = connection.query_row(
+        "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1 AND position<=?2",
+        params![id.as_str(),seq_to_i64(cut.transcript)?], |row| row.get(0),
+    ).optional().map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    let cursor = cursor.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "message is absent from this Conversation read cut".into(),
+        )
+    })?;
+    nonnegative(cursor, "message location")
+}
+
+/// Select forward from one authoritative position without reading its prefix.
+pub fn forward_window_before(
+    connection: &Connection,
+    cursor: u64,
+    cut: &ConversationReadCut,
+    limit: usize,
+) -> Result<crate::TranscriptCursor, ConversationStoreError> {
+    let last: i64 = connection.query_row(
+        "SELECT MAX(position) FROM (SELECT position FROM transcript_entries WHERE position>=?1 AND position<=?3 ORDER BY position LIMIT ?2)",
+        params![seq_to_i64(cursor)?,limit,seq_to_i64(cut.transcript)?], |row| row.get(0),
+    ).map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    Ok(crate::TranscriptCursor::new(
+        nonnegative(last, "target window")? + 1,
+    ))
+}
+fn require_message_target(
+    page: &crate::TranscriptPage,
+    id: &MessageId,
+    cursor: Option<crate::TranscriptCursor>,
+) -> Result<(), ConversationStoreError> {
+    if page.entries.iter().any(|entry| Some(entry.cursor) == cursor
+        && matches!(&entry.item, crate::TranscriptItem::Message { message } if message.id() == id)) {
+        Ok(())
+    } else {
+        Err(ConversationStoreError::InvalidReference(
+            "message is not readable at its native transcript position".into(),
+        ))
+    }
+}
+pub struct WindowSelection {
+    pub observed_target: Option<crate::observation::turn::ObservedTurnIdentity>,
+    pub cut: ConversationReadCut,
+    pub before: Option<crate::TranscriptCursor>,
+    pub target: Option<ConversationTurnId>,
+    pub target_cursor: Option<crate::TranscriptCursor>,
+}
+pub fn select_window(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ConversationWindowAt,
+    limit: usize,
+) -> Result<WindowSelection, ConversationStoreError> {
+    let cut = window_cut(connection, conversation, at)?;
+    let mut target = None;
+    let mut observed_target = None;
+    let mut target_cursor = None;
+    let before = match at {
+        ConversationWindowAt::Latest => None,
+        ConversationWindowAt::Older { before, .. } => Some(*before),
+        ConversationWindowAt::Canonical { locator, .. } => {
+            let ledger = crate::sqlite::content::canonical_position(connection, locator)?;
+            if ledger > cut.ledger_through {
+                return Err(ConversationStoreError::InvalidReference(
+                    "canonical locator is outside native cut".into(),
+                ));
+            }
+            let cursor:Option<u64>=connection.query_row("SELECT native_transcript FROM message_ledger WHERE position=?1 AND native_transcript<=?2",params![ledger,cut.transcript],|row|row.get(0)).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
+            let cursor = cursor.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "canonical locator has no visible native position".into(),
+                )
+            })?;
+            target_cursor = Some(crate::TranscriptCursor::new(cursor));
+            Some(forward_window_before(connection, cursor, &cut, limit)?)
+        }
+        ConversationWindowAt::Message { id, .. } => {
+            let cursor = message_location(connection, id, &cut)?;
+            target_cursor = Some(crate::TranscriptCursor::new(cursor));
+            Some(forward_window_before(connection, cursor, &cut, limit)?)
+        }
+        ConversationWindowAt::Newer { after, .. } => {
+            let last: Option<i64> = connection.query_row(
+                "SELECT MAX(position) FROM (SELECT position FROM transcript_entries WHERE position>?1 AND position<=?3 ORDER BY position LIMIT ?2)",
+                params![seq_to_i64(after.get())?,limit,seq_to_i64(cut.transcript)?], |row| row.get(0),
+            ).map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+            Some(crate::TranscriptCursor::new(
+                last.map_or(after.get(), |last| {
+                    u64::try_from(last).expect("nonnegative transcript")
+                }) + 1,
+            ))
+        }
+        ConversationWindowAt::Turn { id, .. } => {
+            let header = super::observation_turn::by_identity(connection, conversation, &cut, id)?;
+            let cursor = header.cursor.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "turn has no published transcript location yet".into(),
+                )
+            })?;
+            target = Some(id.clone());
+            observed_target = Some(header.id);
+            target_cursor = Some(cursor);
+            Some(forward_window_before(
+                connection,
+                cursor.get(),
+                &cut,
+                limit,
+            )?)
+        }
+        ConversationWindowAt::TurnOrdinal { ordinal, .. } => {
+            let header =
+                super::observation_turn::selected(connection, conversation, &cut, *ordinal)?;
+            let cursor = header.cursor.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "turn has no published transcript location yet".into(),
+                )
+            })?;
+            observed_target = Some(header.id);
+            target_cursor = Some(cursor);
+            Some(forward_window_before(
+                connection,
+                cursor.get(),
+                &cut,
+                limit,
+            )?)
+        }
+    };
+    Ok(WindowSelection {
+        observed_target,
+        cut,
+        before,
+        target,
+        target_cursor,
+    })
+}
+
+pub fn window(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ConversationWindowAt,
+    limit: usize,
+) -> Result<DurableConversationWindow, ConversationStoreError> {
+    if limit == 0 || limit > TURN_PAGE_MAX {
+        return Err(storage("conversation window limit must be 1 to 64"));
+    }
+    let WindowSelection {
+        observed_target: _,
+        cut,
+        before,
+        target,
+        target_cursor,
+    } = select_window(connection, conversation, at, limit)?;
+    let upper = crate::TranscriptCursor::new(cut.transcript + 1);
+    let mut page = load_transcript_page(
+        connection,
+        Some(before.map_or(upper, |before| before.min(upper))),
+        limit,
+    )?;
+    bound_tool_results(connection, &mut page, &cut)?;
+    if let ConversationWindowAt::Newer { after, .. } = at {
+        page.entries
+            .retain(|entry| entry.cursor.get() > after.get());
+    }
+    if let Some(cursor) = target_cursor {
+        page.entries.retain(|entry| entry.cursor >= cursor);
+    }
+    if let ConversationWindowAt::Message { id, .. } = at {
+        require_message_target(&page, id, target_cursor)?;
+    }
+    if let Some(first) = page.entries.first() {
+        let older: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM transcript_entries WHERE position>0 AND position<?1)",
+                [seq_to_i64(first.cursor.get())?],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        page.next_cursor = older.then_some(first.cursor);
+    }
+    let newer_cursor = newer_cursor(
+        connection,
+        &cut,
+        page.entries.last().map(|entry| entry.cursor),
+    )?;
+    Ok(DurableConversationWindow {
+        cut,
+        page,
+        newer_cursor,
+        target,
+        target_cursor,
+    })
+}
+
+fn newer_cursor(
+    connection: &Connection,
+    cut: &ConversationReadCut,
+    last: Option<crate::TranscriptCursor>,
+) -> Result<Option<crate::TranscriptCursor>, ConversationStoreError> {
+    let Some(cursor) = last else {
+        return Ok(None);
+    };
+    let newer: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM transcript_entries WHERE position>?1 AND position<=?2)",
+            params![seq_to_i64(cursor.get())?, seq_to_i64(cut.transcript)?],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    Ok(newer.then_some(cursor))
+}
+
+// Tool result links may have completed after C; their canonical positions
+// must belong to C just like the entries themselves.
+fn bound_tool_results(
+    connection: &Connection,
+    page: &mut crate::TranscriptPage,
+    cut: &ConversationReadCut,
+) -> Result<(), ConversationStoreError> {
+    for entry in &mut page.entries {
+        for tool in &mut entry.tool_calls {
+            let position: Option<i64> = connection.query_row(
+                "SELECT t.position FROM canonical_tool_calls c JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=c.result_message_id WHERE c.assistant_message_id=?1 AND c.block_index=?2",
+                params![tool.message_id.as_str(),tool.block_index.get()], |row| row.get(0),
+            ).optional().map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+            if position.is_some_and(|position| {
+                position > i64::try_from(cut.transcript).expect("validated cut")
+            }) {
+                tool.result = None;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One local Attempt's additive execution totals through the lineage cut,
+/// folded exactly as whole-conversation statistics and occupancy fold them.
+fn turn_execution(
+    connection: &Connection,
+    conversation: &ConversationId,
+    attempt: &AttemptId,
+    through: u64,
+) -> Result<TurnExecution, ConversationStoreError> {
+    use rustx_types::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+    use rustx_types::model::finish::ModelFinishReason;
+    let mut execution = TurnExecution::default();
+    let mut activity = crate::response::timing::ActivityFold::default();
+    // The newest occupancy boundary: a request and its reported usage, or a
+    // compaction that invalidates the previous reading.
+    let mut boundary: Option<(
+        rustx_types::runtime::identity::RequestId,
+        Option<rustx_types::model::types::ModelUsage>,
+    )> = None;
+    let mut closing = false;
+    let mut statement = connection
+        .prepare_cached(&attempt_facts::EXECUTION)
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    let rows = statement
+        .query_map(params![attempt.as_str(), seq_to_i64(through)?], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    for json in rows {
+        let event: RuntimeEventEnvelope = super::decode(
+            &json.map_err(|error| storage(error.to_string()))?,
+            "turn execution fact",
+        )?;
+        match event.event {
+            E::TurnStarted => execution.steps += 1,
+            E::ModelRequestStarted { request_id, .. } => {
+                execution.model_requests += 1;
+                boundary = Some((request_id, None));
+            }
+            E::ModelRequestCompleted {
+                request_id,
+                usage,
+                generation,
+                ..
+            }
+            | E::ModelRequestFailed {
+                request_id,
+                usage,
+                generation,
+                ..
+            } => {
+                activity.request(generation.as_ref(), usage.as_ref());
+                if let Some(usage) = usage {
+                    execution.requests_with_usage += 1;
+                    crate::response::add_usage(&mut execution.reported_usage, &usage);
+                    if let Some((current, reading)) = &mut boundary
+                        && *current == request_id
+                    {
+                        *reading = Some(usage);
+                    }
+                }
+            }
+            E::ToolExecutionStarted { tool_call_id, .. } => {
+                activity.tool_started(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::ToolExecutionCompleted { tool_call_id, .. }
+            | E::ToolExecutionFailed { tool_call_id, .. } => {
+                activity.tool_settled(attempt.clone(), tool_call_id, event.timestamp);
+            }
+            E::CompactionStarted { .. } | E::CompactionCompleted { .. } => boundary = None,
+            E::AssistantMessageCommitted { .. } => closing = true,
+            E::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
+                ..
+            } => execution.completed_response = closing,
+            _ => {}
+        }
+    }
+    activity.record(&mut execution);
+    if let Some((request, Some(usage))) = boundary {
+        execution.occupancy = crate::context_resources::measure(
+            &usage,
+            &super::request::snapshot::load_request_snapshot(connection, conversation, &request)?,
+        )?;
+    }
+    Ok(execution)
+}
+
+/// Lineage carries immutable summaries and member references, never executable facts.
+pub fn inherited_turns(
+    connection: &Connection,
+) -> Result<Vec<crate::reading::TurnReadingProvenance>, ConversationStoreError> {
+    super::provenance::turns(connection)
+}
+
+pub fn lineage_turns(
+    connection: &Connection,
+    conversation: &ConversationId,
+    through: u64,
+) -> Result<Vec<crate::reading::TurnReadingProvenance>, ConversationStoreError> {
+    use rustx_types::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+    let mut turns = inherited_turns(connection)?;
+    let mut statement = connection.prepare("SELECT event_json,sequence FROM events WHERE sequence<=?1 AND event_kind='attempt_started' ORDER BY sequence").map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    let starts = statement
+        .query_map([seq_to_i64(through)?], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| storage(error.to_string()))?;
+    for (json, sequence) in starts {
+        let start: RuntimeEventEnvelope = super::decode(&json, "turn start")?;
+        let id = start
+            .attempt_id
+            .ok_or_else(|| storage("Attempt start has no identity"))?;
+        let mut turn = TurnReadingProvenance {
+            id: ConversationTurnId {
+                conversation_id: conversation.clone(),
+                attempt_id: id.clone(),
+            },
+            process_message_ids: Vec::new(),
+            preceding_message_id: None,
+            prompt_message_id: local_prompt(connection, &id, sequence, through)?.map(|(id, _)| id),
+            outcome: InheritedTurnOutcome::IncompleteAtCut,
+            started_at: Some(start.timestamp),
+            ended_at: None,
+            execution: Some(turn_execution(connection, conversation, &id, through)?),
+        };
+        let mut facts = connection
+            .prepare_cached(&attempt_facts::LINEAGE)
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        let events = facts
+            .query_map(params![id.as_str(), seq_to_i64(through)?], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        for json in events {
+            let event: RuntimeEventEnvelope = super::decode(
+                &json.map_err(|error| storage(error.to_string()))?,
+                "turn fact",
+            )?;
+            match event.event {
+                RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                    turn.process_message_ids.push(message_id);
+                }
+                RuntimeEvent::AttemptCompleted { .. } => {
+                    turn.outcome = InheritedTurnOutcome::Completed;
+                }
+                RuntimeEvent::AttemptCancelled { .. } => {
+                    turn.outcome = InheritedTurnOutcome::Cancelled;
+                }
+                RuntimeEvent::AttemptFailed { .. } => turn.outcome = InheritedTurnOutcome::Failed,
+                RuntimeEvent::AttemptTimedOut { .. } => {
+                    turn.outcome = InheritedTurnOutcome::TimedOut;
+                }
+                RuntimeEvent::AttemptLimitExceeded { .. } => {
+                    turn.outcome = InheritedTurnOutcome::LimitExceeded;
+                }
+                _ => continue,
+            }
+            if !matches!(turn.outcome, InheritedTurnOutcome::IncompleteAtCut) {
+                turn.ended_at = Some(event.timestamp);
+                turn.preceding_message_id = connection.query_row("SELECT t.native_reference_id FROM transcript_entries t JOIN message_ledger m ON m.message_id=t.native_reference_id WHERE t.native_reference_kind='message' AND t.position<(SELECT position FROM transcript_entries WHERE native_reference_kind='attempt_terminal' AND native_reference_id=?1) ORDER BY t.position DESC LIMIT 1", [event.event_id.as_str()], |row| row.get::<_,String>(0)).optional().map_err(|error| crate::sqlite::sqlite_error(&error,error.to_string()))?.map(MessageId::new);
+            }
+        }
+        if !turn.process_message_ids.is_empty()
+            || !matches!(
+                turn.outcome,
+                InheritedTurnOutcome::IncompleteAtCut | InheritedTurnOutcome::Completed
+            )
+        {
+            turns.push(turn);
+        }
+    }
+    Ok(turns)
+}
