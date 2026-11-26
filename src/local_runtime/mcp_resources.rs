@@ -150,8 +150,8 @@ fn resolve_stdio_paths(
             continue;
         }
         let required = std::mem::take(&mut input_next) || script_index == Some(index);
-        let Some((prefix, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg)
-            .or_else(|| required.then_some((None, arg.as_str())))
+        let Some((prefix, value)) =
+            rustx_execution_protocol::mcp::stdio_path_operand(arg, required)
         else {
             continue;
         };
@@ -322,6 +322,42 @@ impl McpCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_options_and_url_inputs_keep_their_argument_roles() {
+        let workspace = Path::new("/work/project");
+        let catalog = load_with_workspace(None, Some(workspace), |_| {
+            Ok(Some(
+                br#"
+[mcp_servers.shell]
+command = "bash"
+args = ["-O", "extglob", "./server.sh"]
+[mcp_servers.feed]
+command = "feed"
+args = ["--input", "https://example.test/feed", "--input=https://example.test/two"]
+"#
+                .to_vec(),
+            ))
+        });
+        let args = |name| {
+            &catalog.definitions[&McpServerId::new(name)]
+                .as_ref()
+                .unwrap()
+                .args
+        };
+        assert_eq!(
+            args("shell"),
+            &["-O", "extglob", "/work/project/.agents/server.sh"]
+        );
+        assert_eq!(
+            args("feed"),
+            &[
+                "--input",
+                "https://example.test/feed",
+                "--input=https://example.test/two"
+            ]
+        );
+    }
 
     #[test]
     fn relative_stdio_paths_stay_with_their_client_workspace() {

@@ -22,7 +22,7 @@ pub fn foreign_stdio_path(value: &str) -> bool {
 /// Recognize path-shaped stdio operands without treating URLs or package names as files.
 /// The optional prefix is the option name of a `--option=PATH` argument.
 #[must_use]
-pub fn stdio_path_operand(arg: &str) -> Option<(Option<&str>, &str)> {
+pub fn stdio_path_operand(arg: &str, required: bool) -> Option<(Option<&str>, &str)> {
     let (prefix, value) = if arg.starts_with('-') {
         let (name, value) = arg.split_once('=')?;
         (Some(name), value)
@@ -36,7 +36,9 @@ pub fn stdio_path_operand(arg: &str) -> Option<(Option<&str>, &str)> {
         .is_some_and(|extension| extension.bytes().any(|byte| byte.is_ascii_alphabetic()));
     (!value.contains("://")
         && !value.starts_with('@')
-        && (value.contains('/')
+        && (required
+            || prefix.is_some_and(stdio_input_option)
+            || value.contains('/')
             || value.starts_with('.')
             || filename_like
             || foreign_stdio_path(value)))
@@ -92,6 +94,7 @@ pub fn stdio_script_index(program: &Path, args: &[String]) -> Option<usize> {
     } else {
         0
     };
+    let shell = matches!(name, "sh" | "bash" | "dash" | "zsh");
     let mut option_value = false;
     for (index, argument) in args.iter().enumerate().skip(start) {
         if option_value {
@@ -102,7 +105,11 @@ pub fn stdio_script_index(program: &Path, args: &[String]) -> Option<usize> {
             return None;
         }
         if (name.starts_with("python") && matches!(argument.as_str(), "-W" | "-X"))
-            || (matches!(name, "sh" | "bash" | "dash" | "zsh") && argument == "-o")
+            || (shell
+                && matches!(
+                    argument.as_str(),
+                    "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file"
+                ))
             || (matches!(name, "node" | "nodejs")
                 && matches!(
                     argument.as_str(),
@@ -115,7 +122,7 @@ pub fn stdio_script_index(program: &Path, args: &[String]) -> Option<usize> {
         if argument == "--" {
             return (index + 1 < args.len()).then_some(index + 1);
         }
-        if !argument.starts_with('-') {
+        if !(argument.starts_with('-') || shell && argument.starts_with('+')) {
             return Some(index);
         }
     }
@@ -127,13 +134,36 @@ pub fn stdio_script_index(program: &Path, args: &[String]) -> Option<usize> {
 pub fn stdio_input_option(name: &str) -> bool {
     matches!(
         name,
-        "--config" | "--config-file" | "--input" | "--input-file" | "--script"
+        "--config"
+            | "--config-file"
+            | "--input"
+            | "--input-file"
+            | "--script"
+            | "--rcfile"
+            | "--init-file"
     )
 }
 
 #[cfg(test)]
 mod stdio_path_tests {
     use super::*;
+
+    #[test]
+    fn input_urls_and_shell_option_values_remain_arguments() {
+        for option in ["-O", "+O", "-o", "--rcfile"] {
+            let args = [option, "extglob", "./server.sh"].map(str::to_owned);
+            assert_eq!(stdio_script_index(Path::new("bash"), &args), Some(2));
+        }
+        assert_eq!(stdio_path_operand("https://example.test/feed", true), None);
+        assert_eq!(
+            stdio_path_operand("--input=https://example.test/feed", false),
+            None
+        );
+        assert_eq!(
+            stdio_path_operand("--config=settings", false),
+            Some((Some("--config"), "settings"))
+        );
+    }
 
     #[test]
     fn combined_shell_flags_and_interpreter_options_keep_their_meaning() {

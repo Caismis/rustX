@@ -494,26 +494,14 @@ fn client_arguments(
             continue;
         }
         let required = std::mem::take(&mut input_next) || script_index == Some(index);
-        let Some((prefix, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg)
-            .or_else(|| required.then_some((None, arg.as_str())))
+        let Some((prefix, value)) =
+            rustx_execution_protocol::mcp::stdio_path_operand(arg, required)
         else {
             continue;
         };
         let path = std::path::Path::new(value);
-        let required = required
-            || prefix.is_some_and(rustx_execution_protocol::mcp::stdio_input_option)
-            || (prefix.is_none()
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| {
-                        [
-                            "py", "pyw", "js", "mjs", "cjs", "ts", "sh", "bash", "zsh", "jar",
-                            "wasm",
-                        ]
-                        .iter()
-                        .any(|known| extension.eq_ignore_ascii_case(known))
-                    }));
+        let required =
+            required || prefix.is_some_and(rustx_execution_protocol::mcp::stdio_input_option);
         if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
             return None;
         }
@@ -827,6 +815,33 @@ mod launch_tests {
     use super::{client_arguments, client_program};
 
     #[test]
+    fn client_accepts_named_shell_options_and_url_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().canonicalize().unwrap();
+        let root = rustx_confined_fs::PackageDirectory::open(&workspace).unwrap();
+        let script = workspace.join("server.sh");
+        std::fs::write(&script, "exit 0").unwrap();
+        let args = vec![
+            "-O".into(),
+            "extglob".into(),
+            script.into_os_string().into_string().unwrap(),
+        ];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("/bin/bash"), args.clone()),
+            Some(args)
+        );
+        let urls = vec![
+            "--input".into(),
+            "https://example.test/feed".into(),
+            "--input=https://example.test/two".into(),
+        ];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("feed"), urls.clone()),
+            Some(urls)
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)] // One Client-side path and interpreter admission matrix.
     fn path_valued_programs_stay_in_the_client_workspace() {
         let temporary = tempfile::tempdir().unwrap();
@@ -873,7 +888,7 @@ mod launch_tests {
                 Path::new("fixture"),
                 vec![base.join("missing.py").display().to_string()]
             )
-            .is_none()
+            .is_some()
         );
         assert!(
             client_arguments(
