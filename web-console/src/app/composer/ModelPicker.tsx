@@ -2,7 +2,6 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { modelEffortChoices, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
 import { useTranslation } from '../../locale/react';
 import menuCss from '../commands/Commands.module.css';
-import css from './ModelPicker.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** `profile` is the configured (pinned) Profile, absent while following the
@@ -52,14 +51,14 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
     else if (row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight;
   }, [active, query]);
   const provider = (id: string) => id.includes('/') ? id.slice(0, id.indexOf('/')) : '';
-  return <div ref={root} className={`${menuCss.menu} ${css.root}`} data-model-picker onKeyDown={event => {
+  return <div ref={root} className={`${menuCss.menu} overflow-hidden`} data-model-picker onKeyDown={event => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
     if (rows.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setActive(rows[(index + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length].key); }
     if (event.key === 'Enter') { event.preventDefault(); if (rows[index]) void select(rows[index]); }
   }}>
-    <TextInput unstyled autoFocus className={css.search} aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} value={query} onChange={event => { setQuery(event.target.value); setActive(undefined); }} role="combobox" aria-expanded="true" aria-controls="composer-models" aria-activedescendant={rows[index] ? `composer-model-${index}` : undefined}/>
-    <div id="composer-models" role="listbox" aria-label={tx('agent:model-select.model')} className={css.options}>
+    <TextInput unstyled autoFocus className="block w-full p-[8px] border-0 outline-none bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[13px] placeholder:[color:var(--dsw-alias-label-tertiary)] focus-visible:outline-none" aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} value={query} onChange={event => { setQuery(event.target.value); setActive(undefined); }} role="combobox" aria-expanded="true" aria-controls="composer-models" aria-activedescendant={rows[index] ? `composer-model-${index}` : undefined}/>
+    <div id="composer-models" role="listbox" aria-label={tx('agent:model-select.model')} className="relative max-h-[min(320px,40vh)] overflow-y-auto overscroll-contain">
       {rows.map((row, i) => <Fragment key={row.key}>
         {(i === 0 || provider(row.intent.model) !== provider(rows[i - 1].intent.model)) && provider(row.intent.model) && <div className={menuCss.sectionTitle} role="presentation">{provider(row.intent.model)}</div>}
         <button type="button" tabIndex={-1} id={`composer-model-${i}`} role="option" aria-label={row.label} aria-selected={i === index} disabled={state.disabled || pending} className={menuCss.menuRow}
