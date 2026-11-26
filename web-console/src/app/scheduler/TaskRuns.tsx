@@ -7,7 +7,7 @@ import { useTaskCopy, type TaskManagerKey } from './copy';
 import { type SchedulerModel, taskKey, taskRef } from './model';
 import { displayInstant } from './timing';
 import css from './TaskManager.module.css';
-import extra from './scheduler.module.css';
+import { schedCss } from './schedCss';
 
 export function TaskRuns({ record, model, connected, generation }: { record: ScheduleHeader; model: SchedulerModel; connected: boolean; generation: number }) {
   const t = useTaskCopy(), locale = useLocale().active;
@@ -66,16 +66,16 @@ export function TaskRuns({ record, model, connected, generation }: { record: Sch
           {(shown.capacity_blocked || shown.start.recovery_blocked) && <p className={css.detailNotice}>{t('records.blocked')}</p>}
           {shown.start.state.type === 'settled' && shown.start.state.outcome.type === 'outcome_unknown' && <p>{t('records.unknown-detail')}</p>}
           {shown.start.state.type === 'settled' && shown.start.state.outcome.type === 'rejected_before_start' && <p>{t('records.failed-start')}</p>}
-          <div className={extra.inlineActions}>
+          <div className={schedCss.inlineActions}>
             <Button size="sm" disabled={!connected || !!busy} onClick={() => void manage('reconcile')}>{t(busy === 'reconcile' ? 'records.checking' : 'records.check')}</Button>
             {shown.start.state.type !== 'settled' && <Button size="sm" disabled={!connected || !!busy || !!shown.start.cancellation_requested_at} onClick={() => void manage('cancel')}>{t(busy === 'cancel' ? 'records.stopping' : 'records.stop')}</Button>}
           </div>
-          {!!shown.effects.length && <section><h3 className={extra.sectionTitle}>{t('records.operations')}</h3><ul className={extra.steps}>{shown.effects.map(effect => <li key={effect.ordinal}>
+          {!!shown.effects.length && <section><h3 className={schedCss.sectionTitle}>{t('records.operations')}</h3><ul className={schedCss.steps}>{shown.effects.map(effect => <li key={effect.ordinal}>
             <span>{effect.node.node}</span><span>{t(effect.physical_settlement_proven ? 'records.step-done' : 'records.step-waiting')}</span>
           </li>)}</ul></section>}
           {shown.next_effect_ordinal != null && <Button size="sm" disabled={loading || !connected} onClick={() => void read(shown.next_effect_ordinal!)}>{t('records.more')}</Button>}
-          {shown.result != null && <section><h3 className={extra.sectionTitle}>{t('records.result')}</h3><pre className={extra.result}>{JSON.stringify(shown.result, null, 2)}</pre></section>}
-          <details className={extra.technical}><summary>{t('records.details')}</summary><dl>
+          {shown.result != null && <section><h3 className={schedCss.sectionTitle}>{t('records.result')}</h3><pre className={schedCss.result}>{JSON.stringify(shown.result, null, 2)}</pre></section>}
+          <details className={schedCss.technical}><summary>{t('records.details')}</summary><dl>
             <dt>{t('records.run-id')}</dt><dd>{JSON.stringify(shown.start.run_id)}</dd>
             <dt>{t('records.start-id')}</dt><dd>{shown.start.id}</dd>
           </dl>{shown.start.recovery_blocked && <p>{shown.start.recovery_blocked}</p>}

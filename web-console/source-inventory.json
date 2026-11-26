@@ -2800,7 +2800,7 @@
       "retained_dependencies": [
         "../app/scheduler/copy",
         "../app/scheduler/model",
-        "../app/scheduler/scheduler.module.css",
+        "../app/scheduler/schedCss",
         "../app/scheduler/timing",
         "../bindings/action-error",
         "../bindings/session-product",
@@ -2858,7 +2858,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b98f9dc8e6600a7e022405174ce2350980ce6e9a4ca19a546afbc65a33a9534b"
+      "local_sha256": "ed7e88e085cb05d359b13a82d312e4a5253a032ad47905ca81f1ee1c08483483"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -6777,7 +6777,7 @@
         "./TaskRuns",
         "./copy",
         "./model",
-        "./scheduler.module.css",
+        "./schedCss",
         "react"
       ],
       "excluded_dependencies": [
@@ -6785,7 +6785,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "842386bce968e4aabdec9146a24ef5ed4c31c5623d0ee19151aa11073825fc79"
+      "local_sha256": "b38b1a2d2c3559a9376345d28531c6c7c99d6fc2a27bbc0c86a3f0d2df2b0717"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -6804,7 +6804,7 @@
         "./TimingEditor",
         "./copy",
         "./model",
-        "./scheduler.module.css",
+        "./schedCss",
         "./timing",
         "@/components/ui/textarea",
         "@/presentation/primitives/Input",
@@ -6815,7 +6815,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "d7f774924e51d16fedc806aebc0717e5424c1eefa85bf256917b6a61fcf4f86a"
+      "local_sha256": "335204affdaafdbb6e78680bec6eb000e2bc59457db133e63605e3516fe73b53"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -6836,7 +6836,7 @@
         "./TaskManager.module.css",
         "./copy",
         "./cron",
-        "./scheduler.module.css",
+        "./schedCss",
         "./timing",
         "@/components/ui/autocomplete",
         "clsx",
@@ -6847,7 +6847,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "7c28e65f61fe759f61fa830f7f45d10d92a1e45d0c77a9081090205b725c199f"
+      "local_sha256": "a20e2a3f0a6b1d6cfc027519352cd057589304842c5ceb8e001b3e9266d5b6eb"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -6895,7 +6895,7 @@
         "./copy",
         "./creation",
         "./model",
-        "./scheduler.module.css",
+        "./schedCss",
         "./timing",
         "@tanstack/react-virtual",
         "clsx",
@@ -6906,7 +6906,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "ecc8d68d0c257da37c6e78e957bd5333b4981d1995d96a7ddca1c469425dcc92"
+      "local_sha256": "3f4df09efb7c3c8697248193e968c76057884ea501ef4ffbadc09bd4be40831d"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

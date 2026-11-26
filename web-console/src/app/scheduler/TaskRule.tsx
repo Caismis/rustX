@@ -8,7 +8,7 @@ import { useTaskCopy } from './copy';
 import { timingValue, sameTiming, TimingInputError, displayInstant } from './timing';
 import { TimingEditor } from './TimingEditor';
 import css from './TaskManager.module.css';
-import extra from './scheduler.module.css';
+import { schedCss } from './schedCss';
 import { hasUnrepresentableProperty, readJson } from '../../../shared/json-numbers';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Textarea } from '@/components/ui/textarea';
@@ -79,7 +79,7 @@ export function TaskRule({ value, record, model, connected, reload }: {
     {record.state === 'disabled' && <p className={css.detailNotice} role="status">{t('task.paused-note')}</p>}
     {instant && <div className={css.nextRun}><span>{t('detail.nextRun')}</span><span>{instant.absolute} <span className={css.nextRunRelative}>({instant.relative})</span></span></div>}
     <div className={css.ruleCard}>
-      <label className={extra.instructionLabel} htmlFor={'task-content-' + record.id.ordinal}>{t(value.target.type === 'workflow' ? 'content.arguments' : 'content.label')}</label>
+      <label className={schedCss.instructionLabel} htmlFor={'task-content-' + record.id.ordinal}>{t(value.target.type === 'workflow' ? 'content.arguments' : 'content.label')}</label>
       {finished ? <pre className={css.readonlyPrompt}>{readOnlyArguments ? t('content.unsafe-saved') : draft.content}</pre> : <Textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={readOnlyArguments ? '' : draft.content} disabled={disabled || readOnlyArguments} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
     </div>
     {readOnlyArguments && !finished && <p className={css.detailNotice} role="status">{t('content.unsafe-saved')}</p>}
@@ -90,13 +90,13 @@ export function TaskRule({ value, record, model, connected, reload }: {
     {savedRefreshError && <p role="status" className={css.detailNotice}>{t('edit.saved-refresh')}</p>}
     {incoming && <section className={css.saveFailure} role="alert">
       <p>{t('edit.conflict')}</p><strong>{t('edit.latest')}</strong><p>{incoming.values.title}</p>
-      <pre className={extra.savedVersion}>{incoming.unsafeArguments ? t('content.unsafe-saved') : incoming.values.content}</pre>
-      <div className={extra.inlineActions}><Button size="sm" onClick={cancel}>{t('edit.use-latest')}</Button><Button size="sm" onClick={editor.rebase}>{t('edit.keep-edits')}</Button></div>
+      <pre className={schedCss.savedVersion}>{incoming.unsafeArguments ? t('content.unsafe-saved') : incoming.values.content}</pre>
+      <div className={schedCss.inlineActions}><Button size="sm" onClick={cancel}>{t('edit.use-latest')}</Button><Button size="sm" onClick={editor.rebase}>{t('edit.keep-edits')}</Button></div>
     </section>}
     {dirty && !finished && <footer className={css.saveFooter}>
       <div className={css.saveNotice}>{t('edit.unsaved')}</div>
       {(validation || error) && <p className={css.saveFailure} role="alert">{validation ?? t(error === 'conflict' ? 'edit.conflict' : error === 'uncertain' ? 'edit.uncertain' : 'edit.invalid')}</p>}
-      <div className={extra.inlineActions}><Button disabled={saving} onClick={cancel}>{t('action.cancel')}</Button>
+      <div className={schedCss.inlineActions}><Button disabled={saving} onClick={cancel}>{t('action.cancel')}</Button>
         <Button variant="primary" disabled={disabled || !!validation || !!incoming} onClick={() => void save()}>{t(saving ? 'action.saving' : 'action.save')}</Button></div>
     </footer>}
   </>;

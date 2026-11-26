@@ -27,7 +27,7 @@ import { useTaskCatalog } from '../app/scheduler/model';
 import { useTaskCopy } from '../app/scheduler/copy';
 import { frequency, displayInstant } from '../app/scheduler/timing';
 import { useLocale } from '../locale/react';
-import taskCss from '../app/scheduler/scheduler.module.css';
+import { schedCss } from '../app/scheduler/schedCss';
 import type { WorkspaceAssociations, WorkspaceMutation } from './associations';
 
 
@@ -215,7 +215,7 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
   const running = activity.runtimeStatus ? activity.running : lastKnown?.running ?? false;
   const statusUnavailable = !activity.connected || (activity.synchronized && !runtimeStatus);
   return children({ ...node, running, runtimeStatus, statusUnavailable, pendingInteraction: undefined, observation: activity.observation,
-    taskMark: tasks.length ? <span className={taskCss.clockMark} role="img" aria-label={taskCopy('header.count', { count: tasks.length })}><IconClockOutline16 size={14}/></span> : undefined,
-    taskHover: tasks.length ? <section className={taskCss.hoverTasks}><strong>{taskCopy('title')}</strong>{tasks.slice(0, 2).map(task => <p key={task.id.conversation_id + ':' + task.id.ordinal}>{task.title}<small>{frequency(task.spec, taskCopy, locale)}</small>{task.next_due_utc && <small>{displayInstant(task.next_due_utc, locale).absolute}</small>}</p>)}{tasks.length > 2 && <p>{taskCopy('sidebar.more', { count: tasks.length - 2 })}</p>}</section> : undefined,
+    taskMark: tasks.length ? <span className={schedCss.clockMark} role="img" aria-label={taskCopy('header.count', { count: tasks.length })}><IconClockOutline16 size={14}/></span> : undefined,
+    taskHover: tasks.length ? <section className={schedCss.hoverTasks}><strong>{taskCopy('title')}</strong>{tasks.slice(0, 2).map(task => <p key={task.id.conversation_id + ':' + task.id.ordinal}>{task.title}<small>{frequency(task.spec, taskCopy, locale)}</small>{task.next_due_utc && <small>{displayInstant(task.next_due_utc, locale).absolute}</small>}</p>)}{tasks.length > 2 && <p>{taskCopy('sidebar.more', { count: tasks.length - 2 })}</p>}</section> : undefined,
   });
 }

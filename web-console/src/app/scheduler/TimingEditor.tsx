@@ -13,7 +13,7 @@ import type { TaskTranslate } from './copy';
 import { browserZone, secondPrecision, zoneLabel, type TimingDraft, type TimingKind } from './timing';
 import { cronPreview, parseCronExpression } from './cron';
 import css from './TaskManager.module.css';
-import custom from './scheduler.module.css';
+import { schedCss } from './schedCss';
 
 const choices = ['weekly', 'weekdays', 'daily', 'hour', 'minute', 'second', 'once', 'cron'] as const;
 type Choice = typeof choices[number];
@@ -54,11 +54,11 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
           {([1, 2, 3, 4, 5, 6, 7] as const).map(day => <button key={day} type="button" disabled={disabled} aria-pressed={value.weekdays.includes(day)} onClick={() => update({ weekdays: value.weekdays.includes(day) ? value.weekdays.filter(value => value !== day) : [...value.weekdays, day] })}>{t(('frequency.weekday.' + day) as 'frequency.weekday.1')}</button>)}
         </div></div>}
         {value.kind === 'once' && <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.date')}</span>
-          <button ref={date} type="button" className={clsx(css.pickerTrigger, custom.pickerButton)} disabled={disabled} aria-label={t('timing.date')} aria-haspopup="dialog" aria-expanded={picker === 'date'} onClick={() => setPicker(picker === 'date' ? undefined : 'date')}><span>{value.date.replaceAll('-', '/')}</span><IconCalendarOutlineRegular/></button>
+          <button ref={date} type="button" className={clsx(css.pickerTrigger, schedCss.pickerButton)} disabled={disabled} aria-label={t('timing.date')} aria-haspopup="dialog" aria-expanded={picker === 'date'} onClick={() => setPicker(picker === 'date' ? undefined : 'date')}><span>{value.date.replaceAll('-', '/')}</span><IconCalendarOutlineRegular/></button>
           <DatePicker open={picker === 'date'} anchorRef={date} value={value.date} onPick={date => update({ date })} onClose={() => setPicker(undefined)} t={t}/>
         </div>}
         {value.kind !== 'cron' && <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.time')}</span>
-          <button ref={clock} type="button" className={clsx(css.pickerTrigger, custom.pickerButton)} disabled={disabled} aria-label={t('timing.time')} aria-haspopup="dialog" aria-expanded={picker === 'time'} onClick={() => setPicker(picker === 'time' ? undefined : 'time')}><span>{value.kind === 'once' ? secondPrecision(value.time) : value.time.slice(0, 5)}</span><IconClockOutline16/></button>
+          <button ref={clock} type="button" className={clsx(css.pickerTrigger, schedCss.pickerButton)} disabled={disabled} aria-label={t('timing.time')} aria-haspopup="dialog" aria-expanded={picker === 'time'} onClick={() => setPicker(picker === 'time' ? undefined : 'time')}><span>{value.kind === 'once' ? secondPrecision(value.time) : value.time.slice(0, 5)}</span><IconClockOutline16/></button>
           <ClockPicker open={picker === 'time'} anchorRef={clock} value={value.time} seconds={value.kind === 'once'} onPick={time => update({ time })} onClose={() => setPicker(undefined)} t={t}/>
         </div>}
         {value.kind === 'cron' && <div className={css.ruleRow}><label className={css.ruleLabel} htmlFor={id + '-cron'}>{t('timing.expression')}</label><div className={css.ruleControl}>
@@ -66,13 +66,13 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
           <p className={parsed ? css.ruleHint : css.ruleHintError}>{parsed ? cronPreview(parsed, t, locale) : t('timing.invalid-cron')}</p>
         </div></div>}
         <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.zone')}</span>
-          <div className={custom.zoneCombo}><Autocomplete items={zoneLabels} filteredItems={zoneQuery === undefined ? zoneLabels : undefined}
+          <div className={schedCss.zoneCombo}><Autocomplete items={zoneLabels} filteredItems={zoneQuery === undefined ? zoneLabels : undefined}
             value={zoneQuery ?? zoneLabel(value.zone, locale)} onValueChange={setZoneQuery} openOnInputClick disabled={disabled}>
             <AutocompleteInput aria-label={t('timing.zone')} placeholder={t('timing.zone-search')} showTrigger onBlur={() => setZoneQuery(undefined)} />
-            <AutocompletePopup className={custom.zonePopup} align="end"><AutocompleteList className={custom.zoneList} aria-label={t('timing.zone')}>
+            <AutocompletePopup className={schedCss.zonePopup} align="end"><AutocompleteList className={schedCss.zoneList} aria-label={t('timing.zone')}>
               {(label: string, index: number) => {
                 const zone = zoneByLabel.get(label)!;
-                return <AutocompleteItem key={zone.id} value={zone.label} index={index} className={custom.zoneOption}
+                return <AutocompleteItem key={zone.id} value={zone.label} index={index} className={schedCss.zoneOption}
                   onClick={() => { update({ zone: zone.id }); setZoneQuery(undefined); }}>{zone.label}</AutocompleteItem>;
               }}
             </AutocompleteList></AutocompletePopup>

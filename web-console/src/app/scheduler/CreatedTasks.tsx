@@ -14,7 +14,7 @@ import { useTaskCopy } from './copy';
 import { useTaskNavigation } from './SessionTasks';
 import { taskRef, useTaskCatalog } from './model';
 import { frequency } from './timing';
-import css from './scheduler.module.css';
+import { schedCss } from './schedCss';
 
 /** Native Tool JSON is opaque to the wire codec. Preserve decimal identities
  * from its original UTF-8 instead of rounding them through JavaScript numbers. */
@@ -78,7 +78,7 @@ function CreatedTask({ tool }: { tool: ForegroundToolExecution }) {
   useEffect(() => shown && session ? model.watchSession(session) : undefined, [model, session, !!shown]);
   if (!shown) return null;
   const record = records.find(row => row.binding.session_id === session && row.id.conversation_id === shown.receipt.id.conversation_id && row.id.ordinal === shown.receipt.id.ordinal);
-  return <article className={css.created} aria-label={t('task.created')}><IconClockOutline16/>
+  return <article className={schedCss.created} aria-label={t('task.created')}><IconClockOutline16/>
     <div><strong>{record?.title || shown.title || t('task.created')}</strong><small>{frequency(record?.spec ?? shown.receipt.spec, t, locale)}</small></div>
     <Button size="sm" disabled={!record} onClick={() => record && navigation?.openTask(taskRef(record), record.title)}>{t('task.open')}</Button>
   </article>;

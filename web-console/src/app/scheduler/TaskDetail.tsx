@@ -13,7 +13,7 @@ import { useTaskCopy } from './copy';
 import { TaskRule } from './TaskRule';
 import { TaskRuns } from './TaskRuns';
 import css from './TaskManager.module.css';
-import extra from './scheduler.module.css';
+import { schedCss } from './schedCss';
 
 export function TaskTabTitle({ client, identity, fallback }: { client: AppServerClient; identity: string; fallback: string }) {
   const { records } = useTaskCatalog(client);
@@ -125,7 +125,7 @@ export function TaskDetail({ client, task, title, close, openSession }: {
       {row && <div id={tabId + '-panel-' + tab} role="tabpanel" aria-labelledby={tabId + '-tab-' + tab}>
         <div hidden={tab !== 'rule'}><TaskRule value={loaded} record={record} model={model} connected={verified && !unresolved && !changing} reload={reload}/></div>
         {tab === 'records' && <TaskRuns record={record} model={model} connected={connected} generation={connection.generation}/>}
-        {tab === 'rule' && <details className={extra.technical}><summary>{t('records.details')}</summary><dl>
+        {tab === 'rule' && <details className={schedCss.technical}><summary>{t('records.details')}</summary><dl>
           <dt>{t('task.identifier')}</dt><dd>{record.id.ordinal}</dd><dt>{t('scope.original')}</dt><dd>{task.session_id}</dd><dt>{t('scope.node')}</dt><dd>{task.node_id}</dd>
         </dl>{record.last_failure && <p>{record.last_failure}</p>}</details>}
       </div>}

@@ -16,7 +16,7 @@ import { TaskCreateDialog } from './TaskCreateDialog';
 import { useTaskCopy } from './copy';
 import { frequency, displayInstant } from './timing';
 import css from './TaskManager.module.css';
-import extra from './scheduler.module.css';
+import { schedCss } from './schedCss';
 
 type Filter = 'enabled' | 'disabled' | 'completed' | 'all';
 export function TaskManagerPage({ client, host, authority, openSession }: { client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; openSession: (ref: TaskRef) => void }) {
@@ -66,9 +66,9 @@ export function TaskManagerPage({ client, host, authority, openSession }: { clie
       </div></div>
       {!connected && <p className={css.notice} role="status">{t('connection.disconnected')}</p>}
       {issue && <div className={css.notice} role="alert"><p>{t('list.partial')}</p><Button size="sm" disabled={!connected || loading} onClick={() => void model.refresh()}>{t('list.retry')}</Button></div>}
-      {loading && !records.length && <p role="status" className={extra.loading}>{t('list.loading')}</p>}
-      {searching && !rows.length && <p role="status" className={extra.loading}>{t('search.content-loading')}</p>}
-      {searchFailed && <p role="alert" className={extra.loading}>{t('search.content-error')}</p>}
+      {loading && !records.length && <p role="status" className={schedCss.loading}>{t('list.loading')}</p>}
+      {searching && !rows.length && <p role="status" className={schedCss.loading}>{t('search.content-loading')}</p>}
+      {searchFailed && <p role="alert" className={schedCss.loading}>{t('search.content-error')}</p>}
       {!loading && !searching && rows.length === 0 && <div className={css.empty}><span className={css.emptyGlyph}><IconClockOutline16 size={32}/></span>
         <h2>{t(search ? 'list.noMatches' : filter === 'disabled' ? 'list.paused-empty' : filter === 'completed' ? 'list.ended-empty' : 'list.empty')}</h2>
         {!search && <Button className={css.emptyAction} onClick={newTask}>{t('empty.action')}</Button>}
