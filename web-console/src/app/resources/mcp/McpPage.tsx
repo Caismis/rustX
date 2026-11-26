@@ -20,12 +20,12 @@ import { useNavigationGuard } from '../../settings/forms/guard';
 import { PageTransactionFooter } from '../../settings/forms/bridge';
 import { SettingsBackButton, SettingsPageShell } from '../../../presentation/settings/SettingsPageShell';
 import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
-import css from './McpPage.module.css';
+import { mcpCss } from './mcpCss';
 
 export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: (focus: McpFocus) => void }) {
   const tx = useTranslation();
   const [menu, setMenu] = useState(false);
-  return <div className={css.actions}>
+  return <div className={mcpCss.actions}>
     <Button variant="primary" icon={<IconPlusOutline16 />} disabled={disabled} onClick={() => onFocus({kind:'mcp'})}
       aria-label={`＋ ${tx('settings:mcp.new')}`}>{tx('settings:mcp.new')}</Button>
     <Menu open={menu} onClose={() => setMenu(false)}
@@ -49,7 +49,7 @@ export function McpDetail({ source, scope, revision, focus, scopeControl, bodyDi
     breadcrumb={<SettingsBackButton label={tx('settings:mcp.back')} current={title} onClick={() => guard.guard(onClose)} />}
     toolbar={scopeControl} footer={<PageTransactionFooter cancelAlwaysEnabled={!focus.name} />}>
     {entry?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
-    <div className={css.page}>
+    <div className={mcpCss.page}>
     <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
       scopeControl={scopeControl} close={onClose} />
     </div>

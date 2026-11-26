@@ -12,7 +12,7 @@ import { Advanced,ConfirmAction } from '../../settings/primitives/aria';
 import { McpFormFields } from './McpFormFields';
 import { formatMcpJson, parseMcpJson } from './json';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
-import css from './McpPage.module.css';
+import { mcpCss } from './mcpCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 interface EditorProps {
@@ -205,27 +205,27 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
       () => commitJsonRef.current());
   }, [setLocal, localDirty, focus.name]);
   return <>
-    <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
+    <div className={mcpCss.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={mcpCss.modes} role="group" aria-label={tx('settings:mcp.form')}>
       <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || duplicate || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
-    <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => event.preventDefault()}>
-      <fieldset disabled={blocked} className={css.formBody}>
+    <form ref={card} tabIndex={-1} className={mcpCss.form} aria-label={title} data-definition={unit.definition} onSubmit={event => event.preventDefault()}>
+      <fieldset disabled={blocked} className={mcpCss.formBody}>
         <DefinitionNotice unit={unit}/>
-        <div className={css.sectionHead}><h4>{tx('settings:mcp.connection')}</h4><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
-        {duplicate && <p role="alert" className={css.error}>{tx('settings:mcp.duplicate')}</p>}
+        <div className={mcpCss.sectionHead}><h4>{tx('settings:mcp.connection')}</h4><div className={mcpCss.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
+        {duplicate && <p role="alert" className={mcpCss.error}>{tx('settings:mcp.duplicate')}</p>}
         {mode === 'json' ? <>
           <JsonCodeEditor label={tx('settings:mcp.json')} value={json} allowEmpty={false} minHeight={280}
             error={error ? tx('settings:mcp.invalid-json',{error}) : ''} onChange={updateJson}/>
-          <p className={css.hint}>{tx('settings:mcp.json-help')}</p>
-          {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} disabled={reviewNeeded} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
-        </> : <fieldset className={css.formBody}>
+          <p className={mcpCss.hint}>{tx('settings:mcp.json-help')}</p>
+          {Object.keys(imports).length > 1 && <div className={mcpCss.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} disabled={reviewNeeded} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
+        </> : <fieldset className={mcpCss.formBody}>
           <McpFormFields key={formReset} value={value} change={unit.edit} invalidFields={invalidFields} validity={validity} disabled={duplicate || !unit.writable}
             identity={<label>{tx('settings:mcp.name')}<TextInput value={name} placeholder={tx('settings:mcp.name-placeholder')}
               disabled={!!focus.name || reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}/>
         </fieldset>}
-        {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
-        {reviewNeeded && <div className={css.notice}><p role="status">{tx(unit.committed && !unit.draft && !pendingImport && !jsonEdit ? 'settings:forms.committed-changed-elsewhere' : 'settings:mcp.review')}</p><Button onClick={review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
+        {unit.override && <div className={mcpCss.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
+        {reviewNeeded && <div className={mcpCss.notice}><p role="status">{tx(unit.committed && !unit.draft && !pendingImport && !jsonEdit ? 'settings:forms.committed-changed-elsewhere' : 'settings:mcp.review')}</p><Button onClick={review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
         <UnitOutcomeNotice title={identityTitle} outcome={unit.outcome}/>
-        {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
+        {error && mode !== 'json' && <p role="alert" className={mcpCss.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>
     </form>
     {focus.name && <Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail embedded source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}

@@ -2146,26 +2146,6 @@
       ]
     },
     {
-      "upstream": "packages/client/ui-primitives/src/Modal.module.css",
-      "destination": "web-console/src/presentation/primitives/Modal.module.css",
-      "treatment": "A: upstream card geometry/elevation; max-height and scroll bounds keep large native reports dismissible",
-      "upstream_sha256": "0e1de6a6cfcd5333e6b02c8b2583c09ad90f98a618f3b80ec60acfc5c59ee68c",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "2ed15ca4d391a1ea7e8e5562c059c57d608d6ce34a4d1bdb8a9196878a06fc1a",
-      "classification": "A"
-    },
-    {
       "destination": "web-console/src/presentation/primitives/Modal.tsx",
       "upstream": "packages/client/ui-primitives/src/Modal.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
