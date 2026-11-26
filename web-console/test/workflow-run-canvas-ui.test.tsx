@@ -838,8 +838,11 @@ describe('WorkflowRunCanvas UI and integration', () => {
     );
 
     const loadMoreBtn = await screen.findByRole('button', { name: 'Load more trace visits' });
+    // The visits button and the canvas mount on separate async chains: the
+    // button appearing does not mean React Flow has laid out yet, so the
+    // mount itself is the awaited condition here.
+    await waitFor(() => expect(document.querySelector('.react-flow')).toBeTruthy());
     const flowBefore = document.querySelector('.react-flow');
-    expect(flowBefore).toBeTruthy();
     expect(readHeaderSpy).toHaveBeenCalledTimes(1);
     const organizeCallsBefore = organizeSpy.mock.calls.length;
 
