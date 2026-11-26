@@ -1414,6 +1414,9 @@ jobs:
         working-directory: web-console
         # The fresh install already built the native Node addons.
         run: pnpm exec vitest run
+      - name: Deterministic incremental rendering counters
+        working-directory: web-console
+        run: pnpm test:issue-420-performance
       - name: Product UI translation ownership
         working-directory: web-console
         run: pnpm check:i18n
