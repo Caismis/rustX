@@ -169,7 +169,13 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
         const targets = closing.current === 'confirmed' ? [settle.current] : [trigger.current, settle.current];
         // A trigger hidden out of layout (e.g. a responsive navigation swap)
         // cannot take the keyboard: viability includes being rendered.
-        return targets.find(target => target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && target.getClientRects().length > 0) ?? false;
+        // A trigger hidden out of layout (e.g. a responsive navigation swap)
+        // cannot take the keyboard: viability includes being rendered. The
+        // rect probe applies only where layout measurement exists at all --
+        // environments without layout (jsdom) report zero rects for every
+        // element, which would dead-end the restoration.
+        const measurable = document.documentElement.getClientRects().length > 0;
+        return targets.find(target => target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && (!measurable || target.getClientRects().length > 0)) ?? false;
       }}>
       <h2>{title}</h2>
       {description}

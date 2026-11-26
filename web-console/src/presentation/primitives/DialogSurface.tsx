@@ -73,15 +73,25 @@ export function DialogSurface({ open, onClose, title, role = 'dialog', overlayCl
     const target = finalFocus();
     if (target !== false && target?.isConnected && !target.matches(':disabled, [aria-disabled="true"]')) {
       const ownerDocument = target.ownerDocument;
-      setTimeout(() => {
+      // Inert removal and the close lifecycle settle over the frames after
+      // this callback: a single deferred attempt races them under load, so
+      // restoration retries across the settling window. Focus that already
+      // moved to another control is newer user intent and still wins every
+      // attempt.
+      let attempts = 0;
+      const tryRestore = () => {
+        attempts += 1;
+        if (ownerDocument.activeElement === target) return;
         const active = ownerDocument.activeElement;
         // The close lifecycle owns focus only while it is still disappearing
-        // with this popup (or has nowhere else to be). Focus that already
-        // moved to another control is newer user intent and must win.
+        // with this popup (or has nowhere else to be).
         const closeOwned = active === ownerDocument.body || active === ownerDocument.documentElement || active === target
           || popupRef.current?.contains(active) === true;
-        if (closeOwned && target.isConnected && !target.matches(':disabled, [aria-disabled="true"]') && !target.closest('[inert]')) target.focus({ preventScroll: true });
-      }, 0);
+        if (!closeOwned || !target.isConnected || target.matches(':disabled, [aria-disabled="true"]')) return;
+        if (!target.closest('[inert]')) target.focus({ preventScroll: true });
+        if (ownerDocument.activeElement !== target && attempts < 10) requestAnimationFrame(tryRestore);
+      };
+      setTimeout(tryRestore, 0);
     }
     return false;
   } : undefined;
