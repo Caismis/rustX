@@ -15,7 +15,6 @@ import { SettingsPageShell, SettingsGroup } from '../../../presentation/settings
 import { PageScopeToolbar, PageRefreshButton } from '../ScopeToolbar';
 import { WorkspaceFollowGlobal } from '../WorkspaceFollowGlobal';
 import css from '../../../presentation/settings/SettingsContent.module.css';
-import toolsCss from './ToolsPage.module.css';
 
 /** The Tools & Permissions product page. */
 export function ToolsPage({ source, document, scope, revision, bodyDisabled = false }: {
@@ -82,10 +81,10 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
             mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}
           >
             {(value, change) => (
-              <div className={toolsCss.toolsGrid}>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-[8px]">
                 {nativeTools.map(tool => (
-                  <div key={tool} className={toolsCss.toolTile}>
-                    <code className={toolsCss.toolName}>{tool}</code>
+                  <div key={tool} className="flex items-center justify-between gap-[12px] px-[12px] py-[10px] [border:1px_solid_var(--dsw-alias-border-l2)] rounded-[var(--dsw-radius-md,10px)] bg-[var(--dsw-alias-bg-base)]">
+                    <code className="[font-family:var(--dsw-font-family-mono,ui-monospace,monospace)] text-[13px] font-medium [color:var(--dsw-alias-label-primary)] overflow-hidden text-ellipsis whitespace-nowrap">{tool}</code>
                     <Switch
                       label={tool}
                       checked={value.includes(tool)}
@@ -111,13 +110,13 @@ export function ToolsPage({ source, document, scope, revision, bodyDisabled = fa
               {(value, change) => <Selection label={id} value={value} change={change} />}
             </UnitForm>
           ))}
-          <div className={toolsCss.sourceAdder}>
+          <div className="flex items-end gap-[10px] px-[16px] py-[14px]">
             <TextField label={tx('settings:tools-page.source-identity')} value={source_} change={setSource} />
             <Button size="sm" variant="outline" disabled={!source_} onClick={() => { setAdded(current => [...current, `python:${source_}`]); setSource(''); }}>
               {tx('settings:tools-page.add-source-selection')}
             </Button>
           </div>
-          {scopeNotice && <div className={toolsCss.sourceNotice}><SettingsNotice text={scopeNotice} /></div>}
+          {scopeNotice && <div className="px-[16px] pt-0 pb-[14px] empty:hidden"><SettingsNotice text={scopeNotice} /></div>}
         </SettingsGroup>
       </WorkspaceFollowGlobal>
     </SettingsPageShell>

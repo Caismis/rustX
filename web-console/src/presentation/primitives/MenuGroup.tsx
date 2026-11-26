@@ -1,7 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source port; see PROVENANCE.md. */
 /** Accessible menu groups with shared sticky-heading presentation and viewport observation. */
 import { useId, type ReactNode } from 'react'
-import css from './MenuGroup.module.css'
 
 /**
  * Render a named group with an instance-owned heading id and an inaccessible position sentinel.
@@ -11,9 +10,9 @@ import css from './MenuGroup.module.css'
 export function MenuGroup({ label, children }: { label: string; children?: ReactNode }) {
   const headingId = useId()
   return (
-    <section role="group" aria-labelledby={headingId} data-menu-group="" className={css.group}>
-      <span aria-hidden="true" data-menu-group-start="" className={css.start} />
-      <div id={headingId} data-menu-group-heading="" className={css.heading}>{label}</div>
+    <section role="group" aria-labelledby={headingId} data-menu-group="" className="relative [section+&]:mt-[3px]">
+      <span aria-hidden="true" data-menu-group-start="" className="absolute top-0 left-0 w-[1px] h-[1px] opacity-0 pointer-events-none" />
+      <div id={headingId} data-menu-group-heading="" className="sticky top-0 z-[1] pt-[4px] px-[7px] pb-[2px] bg-transparent [color:var(--dsw-alias-label-tertiary)] text-[11px] leading-[16px] font-medium [&[data-stuck]]:bg-[var(--dsw-alias-menu-group-header-fill)] [html:not([data-platform=darwin])_&]:rounded-[var(--dsw-radius-md)]">{label}</div>
       {children}
     </section>
   )
