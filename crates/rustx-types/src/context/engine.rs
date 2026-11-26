@@ -44,7 +44,7 @@ pub struct CompactionBudgets {
     /// The frozen summary invocation's effective input limit: the largest
     /// selected span estimate one summary request may carry.
     ///
-    /// This budget is never scaled by an [`EstimateCorrection`]. A
+    /// This budget is never scaled by an `EstimateCorrection`. A
     /// correction is the ratio between one *primary* request's estimate and
     /// what the provider counted for that same request — a measurement of
     /// that request, not a calibration of a tokenizer. The two requests do
