@@ -53,7 +53,7 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
               <div className="px-[12px] py-0 text-[16px] leading-[24px] font-medium [color:var(--dsw-alias-label-primary)]">{tx('settings:settings.settings')}</div>
               <TabsList activateOnFocus className={clsx('flex flex-col gap-[4px] overflow-y-auto min-h-0 pb-[20px]', settingsWorkflowCss.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
                 {pages.map(page => (
-                  <TabsTab key={page.id} value={page.id} className={clsx('flex items-center gap-[8px] h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font-family:inherit] text-[14px] leading-[22px] font-normal [color:var(--dsw-alias-label-primary)] text-left', settingsWorkflowCss.pageTab)}>
+                  <TabsTab key={page.id} value={page.id} className={clsx('flex items-center gap-[8px] h-[40px] sm:h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font-family:inherit] text-[14px] leading-[22px] font-normal [color:var(--dsw-alias-label-primary)] text-left', settingsWorkflowCss.pageTab)}>
                     <span className="flex-none inline-flex w-[16px] h-[16px] items-center justify-center [color:var(--dsw-alias-label-secondary)]" aria-hidden="true">{page.icon}</span>
                     <span className={clsx('flex-1 min-w-0 overflow-hidden whitespace-nowrap text-ellipsis', settingsWorkflowCss.pageTabLabel)}>{page.label}</span>
                   </TabsTab>

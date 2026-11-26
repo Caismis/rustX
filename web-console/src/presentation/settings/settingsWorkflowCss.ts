@@ -1,7 +1,7 @@
 /* rustX-owned presentation for Settings workflows — Tailwind utilities replacing SettingsWorkflow.module.css. */
 export const settingsWorkflowCss = {
   pageTabs: 'outline-none',
-  pageTab: 'flex items-center gap-[8px] h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font:inherit] text-[14px] leading-[22px] [color:var(--dsw-alias-label-primary)] text-left outline-none data-[hovered]:bg-[var(--dsw-specific-sidebar-nav-item-hover)] data-[selected]:bg-[var(--dsw-specific-sidebar-nav-item-active)] data-[selected]:font-medium data-[focus-visible]:[outline:2px_solid_var(--dsw-alias-state-business-primary)] data-[focus-visible]:-outline-offset-2',
+  pageTab: 'flex items-center gap-[8px] h-[40px] sm:h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font:inherit] text-[14px] leading-[22px] [color:var(--dsw-alias-label-primary)] text-left outline-none data-[hovered]:bg-[var(--dsw-specific-sidebar-nav-item-hover)] data-[selected]:bg-[var(--dsw-specific-sidebar-nav-item-active)] data-[selected]:font-medium data-[focus-visible]:[outline:2px_solid_var(--dsw-alias-state-business-primary)] data-[focus-visible]:-outline-offset-2',
   pageTabLabel: 'flex-1 min-w-0 overflow-hidden whitespace-nowrap text-ellipsis',
   pageTabPanel: 'outline-none min-w-0 data-[focus-visible]:[outline:2px_solid_var(--dsw-alias-state-business-primary)] data-[focus-visible]:outline-offset-4 data-[focus-visible]:rounded-[8px]',
   filterTabPanel: 'flex flex-col gap-[24px] mt-[16px] outline-none min-w-0 data-[focus-visible]:[outline:2px_solid_var(--dsw-alias-state-business-primary)] data-[focus-visible]:outline-offset-4 data-[focus-visible]:rounded-[8px]',
