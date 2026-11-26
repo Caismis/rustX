@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const subagentCatalogCss = {
   root: 'relative inline-flex items-center gap-[10px] min-w-0',
   switcherRoot: 'min-w-0 ml-[6px]',

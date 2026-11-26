@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const inputFieldsCss = {
   headActions: 'inline-flex items-center gap-[6px] [&_button]:w-[24px] [&_button]:h-[24px]',
   empty: 'w-full min-h-[42px] [border:0.5px_dashed_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-tertiary)] [font:inherit] text-[12px] cursor-pointer hover:[color:var(--dsw-alias-label-secondary)] hover:[border-color:var(--dsw-alias-border-l2)]',

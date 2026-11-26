@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const messageCss = {
   assistant: 'flex flex-col min-w-0 [&>:where(:not([hidden]))~:where(:not([hidden]))]:mt-[4px] [&>[data-markdown-variant=normal]:not(:first-child)]:mt-[12px] [&>[data-markdown-variant=normal]+:not([hidden])]:mt-[12px]',
   userRow: 'flex flex-col items-end gap-[6px]',

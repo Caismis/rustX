@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Harness ModelsSection settings materials; see PROVENANCE.md. */
 export const mcpCss = {
   page: "w-full min-w-0 flex flex-col gap-[16px] [container:mcp-editor/inline-size] [&_h3]:text-[20px] [&_h3]:leading-[28px] [&_h3]:font-medium [&_h3]:m-0 [&_h3]:wrap-anywhere",
   actions: "flex gap-[8px] items-center [&>button]:whitespace-nowrap",

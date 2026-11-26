@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 export const workbenchFilesCss = {
   root: 'flex flex-auto flex-col h-full min-h-0 [color:var(--dsw-alias-label-primary)] text-[length:var(--dsh-content-font-size-secondary,13px)] leading-normal [--dsw-radius-md:8px] [--dsw-radius-sm:8px]',
   header: 'flex flex-none gap-[4px] items-center box-border h-[38px] pr-[6px] pl-[16px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l3)]',

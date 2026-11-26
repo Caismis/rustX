@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const menuCss = {
   root: 'relative inline-flex',
   list: 'box-border p-0 flex flex-col gap-0 border-0 rounded-[20px] bg-[var(--dsw-specific-menu)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] min-w-[min(var(--menu-min-width),var(--available-width,var(--menu-min-width)))] max-w-[min(360px,var(--available-width,360px))] max-h-(--available-height,none) z-[1100] [--menu-min-width:218px]',

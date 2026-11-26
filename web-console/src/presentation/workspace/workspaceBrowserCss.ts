@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const workspaceBrowserCss = {
   root: 'flex-1 min-h-0 flex flex-col box-border pr-(--dsh-session-list-edge-inset) [--dsh-session-list-edge-inset:var(--dsh-sidebar-inline-padding)] [--dsh-session-list-scrollbar-width:5px] [--dsh-session-list-scrollbar-offset:2px]',
   iconButton: 'flex-none inline-flex items-center justify-center w-[28px] h-[28px] border-none rounded-[var(--dsw-radius-sm)] p-0 bg-transparent cursor-pointer [color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2',

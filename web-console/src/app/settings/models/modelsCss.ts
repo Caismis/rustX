@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const modelsCss = {
   section: "[container-type:inline-size] flex flex-col gap-[20px]",
   providerList: "flex flex-col gap-[10px]",

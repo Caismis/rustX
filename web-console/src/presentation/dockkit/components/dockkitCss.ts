@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const dockkitCss = {
   split: 'flex flex-1 min-w-0 min-h-0',
   splitRow: 'dk-row flex-row',

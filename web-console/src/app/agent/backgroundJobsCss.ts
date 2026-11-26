@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const backgroundJobsCss = {
   marker: 'before:hidden',
   spinner: 'flex-none [color:var(--dsw-alias-label-tertiary)]',

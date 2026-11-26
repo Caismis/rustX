@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const dataPanelsCss = {
   panel: "min-w-0 [&>section]:py-[16px] [&>section]:m-0 [&>section]:[border-bottom:0.5px_solid_var(--dsw-alias-border-l3)] [&>section:first-child]:pt-0 [&_h3]:text-[13px] [&_h3]:font-medium",
   input: "[&>div]:mb-0 [&>div>button]:w-full [&>div>button]:min-h-[32px] [&>div>button]:border-0 [&>div>button]:rounded-[var(--dsw-radius-sm)] [&>div>button]:px-[10px] [&>div>button]:py-[4px] [&>div>button]:bg-[var(--dsw-alias-interactive-bg-hover-solid)] [&[data-empty]>div>button]:[color:var(--dsw-alias-label-tertiary)] [&[data-empty]>div>button]:before:content-['{x}'] [&[data-empty]>div>button]:before:[font-family:var(--ds-font-family-code)] [&[data-empty]>div>button]:before:mr-[6px]",

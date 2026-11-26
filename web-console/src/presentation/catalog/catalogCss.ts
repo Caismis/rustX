@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const catalogCss = {
   surface: 'flex flex-col h-full min-h-0 bg-[var(--dsw-alias-bg-base)] [color:var(--dsw-alias-label-primary)]',
   library: 'flex-1 min-h-0 overflow-auto pt-[24px] px-[clamp(20px,4vw,40px)] pb-[32px] box-border [&>*]:max-w-[960px] [&>*]:mx-auto max-[760px]:px-[16px] max-[760px]:py-[24px]',

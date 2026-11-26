@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. PDF page presentation adapted; see PROVENANCE.md. */
 export const pdfPreviewCss = {
   body: 'flex flex-col gap-[12px] box-border w-full min-h-full min-w-full p-[12px] overflow-visible bg-[var(--dsw-alias-bg-document-preview)] [font-family:var(--dsw-font,sans-serif)] whitespace-normal [[data-document-zoom-mode=fixed]_&]:w-max [&_.pdf-status]:[color:var(--dsw-alias-label-document-preview)]',
   page: 'box-border w-full min-w-0 overflow-x-visible',

@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const structuredOutputCss = {
   dialog: 'w-[min(960px,calc(100vw-24px))] h-[min(800px,calc(100dvh-24px))] max-h-[calc(100dvh-24px)] flex-shrink-0 gap-0 p-0 rounded-[var(--dsw-radius-lg)] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-bg-layer-2)] max-[600px]:w-[calc(100vw-16px)] max-[600px]:h-[calc(100dvh-24px)]',
   header: 'flex items-center justify-between pt-[20px] px-[24px] pb-[12px] [&_h2]:m-0 [&_h2]:text-[18px] [&_h2]:font-medium [&_h2]:leading-[28px] max-[600px]:pt-[16px] max-[600px]:px-[16px] max-[600px]:pb-[12px] max-[600px]:[&_h2]:text-[16px]',

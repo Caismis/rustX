@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived FilesBody navigator layout; see PROVENANCE.md. */
 export const workbenchNavigatorCss = {
   root: 'flex flex-1 h-full min-w-0 min-h-0 [&:has(>.wb-navigator.wb-fill)>:not(.wb-navigator)]:invisible max-[767px]:[&:has(>.wb-navigator:not(.wb-whole-page))>:not(.wb-navigator)]:invisible',
   navigator: 'wb-navigator relative flex flex-none flex-col box-border w-[var(--files-navigator-width)] h-full min-w-0 min-h-0 [color:var(--dsw-alias-label-primary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-normal bg-[var(--dsw-alias-bg-base)] [border-left:0.5px_solid_var(--dsw-alias-border-l3)] max-[767px]:absolute max-[767px]:inset-0 max-[767px]:z-2 max-[767px]:w-auto max-[767px]:h-auto max-[767px]:border-l-0',

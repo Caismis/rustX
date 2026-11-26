@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const modalCss = {
   root: 'fixed inset-0 z-[1000] flex items-center justify-center p-[24px]',
   mask: 'overscroll-contain absolute inset-0 bg-[var(--dsw-alias-bg-mask-1)] [backdrop-filter:var(--dsw-mask-blur)]',

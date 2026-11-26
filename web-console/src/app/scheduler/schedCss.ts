@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 /* Tailwind utility strings replacing scheduler.module.css — shared across scheduler surfaces. */
 export const schedCss = {
   loading: '[color:var(--dsw-alias-label-tertiary)] text-[12px]',

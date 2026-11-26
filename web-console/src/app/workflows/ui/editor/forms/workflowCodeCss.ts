@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const workflowCodeCss = {
   panel: 'min-w-0 [&_h3]:text-[13px] [&_h3]:font-medium [&>section]:py-[16px] [&>section]:[border-bottom:0.5px_solid_var(--dsw-alias-border-l3)] [&>section]:m-0 [&>section:first-child]:pt-0 [&>div]:py-[16px] [&>div]:[border-bottom:0.5px_solid_var(--dsw-alias-border-l3)]',
   variables: 'grid gap-[6px]',

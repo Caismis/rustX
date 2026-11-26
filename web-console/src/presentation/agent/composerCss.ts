@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
 export const composerCss = {
   root: 'flex flex-col items-center px-[var(--dsh-composer-side-clearance)] pb-[4px] pt-0',
   dock: 'flex items-center justify-center gap-[12px] max-w-full pt-[4px] [color:var(--dsw-alias-label-tertiary)] text-[12px] empty:hidden [@container(max-width:560px)]:gap-[8px] [container-type:inline-size]',

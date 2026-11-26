@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const trajectoryTimelineCss = {
   root: 'relative z-1 isolate flex-none [border-bottom:0.5px_solid_var(--dsw-alias-border-l2)] select-none [&_[role=tooltip]]:[font:var(--dsw-font-xxxs-11)]',
   plot: 'grid grid-cols-[44px_minmax(0,1fr)] h-[50px] overflow-hidden bg-[var(--dsw-alias-bg-layer-2)]',

@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Harness guide and dockkit styles adapted to rustX; see PROVENANCE.md. */
 export const workbenchCss = {
   guide: 'flex flex-col gap-[14px] items-center justify-center box-border min-h-full px-[24px] h-full flex-1 after:content-[""] after:flex-[0_1_10%] [--dsl-guide-entry-radius:var(--dsw-radius-xl)]',
   hero: 'flex mb-[16px] [color:var(--dsw-static-neutral-200)] [[body[data-ds-dark-theme]]_&]:[color:var(--dsw-static-neutral-700)]',

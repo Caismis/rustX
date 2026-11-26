@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const modelSelectCss = {
   root: 'relative min-w-0 flex items-start',
   trigger: 'flex items-center gap-[4px] min-w-0 max-w-[min(360px,45cqw)] h-[28px] pr-[4px] pl-[8px] border-none rounded-[var(--dsw-radius-sm)] outline-none bg-transparent [color:var(--dsw-alias-label-secondary)] text-[13px] leading-[20px] font-normal cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:outline-none focus-visible:not-data-[selection-focus]:shadow-[0_0_0_2px_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] data-[selection-focus]:focus-visible:shadow-none disabled:[color:var(--dsw-alias-label-dimmed)] disabled:cursor-default',

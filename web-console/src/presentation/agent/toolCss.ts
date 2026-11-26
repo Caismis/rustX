@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const toolCss = {
   root: 'group/tool flex flex-col min-w-0 focus-within:[&_.tl-inspect]:opacity-100 hover:[&_.tl-inspect]:opacity-100 [@media(hover:none)]:[&_.tl-inspect]:opacity-100',
   row: 'overflow-hidden [color:var(--dsw-alias-label-tertiary)] transition-colors duration-100 motion-reduce:transition-none focus-visible:[color:var(--dsw-alias-label-secondary)] hover:[color:var(--dsw-alias-label-secondary)]',

@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-commands/PopupSelectView and ui-input-trigger/MenuView; see PROVENANCE.md. */
 export const commandsCss = {
   menu: 'absolute bottom-[calc(100%+4px)] left-0 right-0 z-100 p-[4px] max-h-[400px] overflow-y-auto overscroll-contain [scrollbar-width:thin] rounded-[var(--dsw-radius-xl)] bg-[var(--dsw-specific-menu)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)]',
   menuRow: 'flex items-center gap-[6px] w-full min-h-[34px] px-[8px] py-[6px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] text-left cursor-pointer text-[13px] leading-[20px] aria-selected:bg-[var(--dsw-alias-interactive-bg-hover)]',

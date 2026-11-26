@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const heroShellCss = {
   root: 'flex items-center justify-center h-full min-w-0 px-[24px]',
   stack: 'flex flex-col items-stretch gap-[12px] w-full max-w-[var(--dsh-composer-card-max-width)] overflow-visible',

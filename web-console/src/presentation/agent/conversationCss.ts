@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const conversationCss = {
   root: 'cv-root relative flex flex-col h-full min-w-0 bg-[var(--dsw-alias-bg-base)] data-[phase=active]:overflow-clip',
   header: 'cv-header flex-none box-border min-h-[76px] pt-[10px] pr-[28px] pb-0 pl-[20px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l3)] not-has-[.cv-tabs]:min-h-0 not-has-[.cv-tabs]:pb-[10px]',

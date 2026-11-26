@@ -1,4 +1,3 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 export const chatCss = {
   root: 'relative flex flex-col min-h-0 flex-1 [[data-conversation-scroll]_&]:flex-none [[data-conversation-scroll]_&]:min-h-auto [[data-conversation-scroll]_&]:h-auto',
   scroll: 'flex-1 min-h-0 overflow-x-clip overflow-y-auto p-[16px] px-[calc(var(--dsh-composer-side-clearance)+16px)] [container-type:inline-size] [[data-conversation-scroll]_&]:overflow-x-clip [[data-conversation-scroll]_&]:overflow-y-visible [[data-conversation-scroll]_&]:flex-none [[data-conversation-scroll]_&]:min-h-auto',
