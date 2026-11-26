@@ -330,7 +330,7 @@
       "retained_dependencies": [
         "../../locale/react",
         "./CommandIcons",
-        "./Commands.module.css",
+        "./commandsCss",
         "./registry",
         "react"
       ],
@@ -342,7 +342,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7b5beb43b037e3c57fb718bfd319a6fe4a07169d07343d3b5e532464e35a666f"
+      "local_sha256": "59bec03d639646e09b119167774a9fc9fb3640efc0c78e7312551719b789f682"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
@@ -357,7 +357,7 @@
         "../../locale/translation",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Modal",
-        "./Commands.module.css",
+        "./commandsCss",
         "./native",
         "./registry",
         "@/presentation/primitives/Input",
@@ -371,7 +371,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "317a058df134eebfd1c2d99694fb203c376e4e93509663b7b8dceeed6379f425"
+      "local_sha256": "86de17e4d1a9fa6e92d66ecbd332e8f4333a3f7227fa6ea708702b4c0f415bdf"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",

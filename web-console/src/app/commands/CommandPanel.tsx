@@ -9,7 +9,7 @@ import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from './native';
 import type { CommandId } from './registry';
-import css from './Commands.module.css';
+import { commandsCss } from './commandsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export type Choice = { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
@@ -88,13 +88,13 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     {!busy && stale && <p role="status">{tx('commands:command-panel.attachment-changed-close-and-reopen-to-read-current-native-state')}</p>}
     {busy && <p role="status">{tx('commands:command-panel.waiting-for-native-acknowledgement')}</p>}
     {!busy && !error && !rows.length && (historical || request.id === 'tree') && <p role="status">{tx('commands:command-panel.no-native-choices-available')}</p>}
-    {!!rows.length && <><TextInput unstyled autoFocus className={css.search} aria-label={tx('commands:command-panel.filter-options')} value={query} disabled={busy}
+    {!!rows.length && <><TextInput unstyled autoFocus className={commandsCss.search} aria-label={tx('commands:command-panel.filter-options')} value={query} disabled={busy}
       onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
       onKeyDown={event => {
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && filtered.length) { event.preventDefault(); setActive(index => (index + (event.key === 'ArrowDown' ? 1 : filtered.length - 1)) % filtered.length); }
         if (event.key === 'Enter' && filtered[active] && !event.nativeEvent.isComposing) { event.preventDefault(); void choose(filtered[active].choice); }
       }} />
-      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? tx('commands:command-panel.historical-boundaries') : tx('commands:command-panel.native-choices')}>{filtered.map((row, index) => <button type="button" role="option" data-choice-id={row.id} id={`choice-${index}`} aria-selected={active === index} disabled={busy || stale || blocked} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
+      <div ref={options} className={commandsCss.options} id="command-options" role="listbox" aria-label={historical ? tx('commands:command-panel.historical-boundaries') : tx('commands:command-panel.native-choices')}>{filtered.map((row, index) => <button type="button" role="option" data-choice-id={row.id} id={`choice-${index}`} aria-selected={active === index} disabled={busy || stale || blocked} key={row.id} className={commandsCss.row} onClick={() => void choose(row.choice)}>
         <span>{displayText(tx, row.label)}</span><small>{displayText(tx, row.detail ?? '')}</small>
       </button>)}</div></>}
     {(historical || request.id === 'tree') && next != null && !request.messageId && <Button disabled={busy} onClick={() => { setBusy(true); void (request.id === 'tree' ? loadTree(next) : loadBoundaries(next)).catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); }); }}>{tx('commands:command-panel.more')}{' '}{historical ? tx('commands:command-panel.boundaries') : tx('commands:command-panel.nodes')}</Button>}
