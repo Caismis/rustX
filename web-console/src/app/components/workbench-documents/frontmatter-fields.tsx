@@ -6,7 +6,6 @@
  */
 import { useMemo, type ReactNode } from 'react'
 import { isMap, isNode, isScalar, parseDocument } from 'yaml'
-import css from './frontmatter-fields.module.css'
 
 /** One top-level entry; `block` marks the authored YAML of a collection or alias value. */
 interface FrontmatterField {
@@ -61,11 +60,11 @@ export function FrontmatterFields({ source, fallback }: FrontmatterFieldsProps):
   if (fields === undefined) return fallback
   if (fields.length === 0) return null
   return (
-    <dl className={css.fields}>
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-[16px] gap-y-[4px] m-0">
       {fields.map((field, index) => (
-        <div key={index} className={css.field}>
-          <dt className={css.key}>{field.key}</dt>
-          <dd className={field.block ? css.block : css.value}>{field.value}</dd>
+        <div key={index} className="contents">
+          <dt className="[color:var(--dsw-alias-label-secondary)] [font-family:var(--ds-font-family-code)]">{field.key}</dt>
+          <dd className={field.block ? 'm-0 [font-family:var(--ds-font-family-code)]' : 'm-0'}>{field.value}</dd>
         </div>
       ))}
     </dl>
