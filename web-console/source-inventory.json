@@ -3762,11 +3762,10 @@
         "../../locale/react",
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/icons",
-        "./AgentStatus.module.css",
         "react"
       ],
       "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
-      "local_sha256": "939c4b284257513996dbcc6148150021ab2e19e27df0fda39125816ccc1d89fc"
+      "local_sha256": "7f1ca5197eae67a888e39ea401d7f54377135950787929c91b4096b8f6148dbc"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4639,19 +4638,6 @@
       "local_sha256": "45d82058f6af479fdf5f05d97e05380294ebf25d2a0558dd630c66b1fbec85e8"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/FileTypeIcon.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "bc5756f2834772d4c7cc661d15417aafe0af8d00c959cdfe2dcde19bebcf62fe",
-      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
-      "destination": "web-console/src/presentation/primitives/FileTypeIcon.module.css",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness runtime, slot/store authority and remote transport"
-      ],
-      "retained_dependencies": [],
-      "local_sha256": "9017722b8fa2e0c1f6bcbf9ede30b655a464b07a319c1d4ad04d97606602a0b8"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/CodeFileIcon.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "882db02f0af7a6624006166c781cb03119e96febe445278941732a1320ecbbdf",
@@ -5304,19 +5290,6 @@
         "react-dom"
       ],
       "local_sha256": "2b51b3c72c2dbad4831bacfe3d17fc7f5debf966712d549cc34856844062f8c8"
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/MenuSurface.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "6230cfabdb5294b5cf174bc79842a9596f6aee6cd76a8cd5e183c67279bca9ae",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
-      "destination": "web-console/src/presentation/primitives/MenuSurface.module.css",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Cordis runtime, slots and resource transport"
-      ],
-      "retained_dependencies": [],
-      "local_sha256": "ecb368c33cecc28856b182814c9c0d259335b30a152bd93ae249057773ca9415"
     },
     {
       "upstream": "packages/client/ui-primitives/src/focus.ts",
@@ -6126,15 +6099,14 @@
       "treatment": "Ported three preference cubes and selected appearance from Harness. Browser preference remains separate from resolved system color scheme.",
       "upstream_sha256": "88778d6678654a337ade450289ada6e51aa5bcd19f4e8f5e9b135f7f4da3585e",
       "retained_dependencies": [
-        "../primitives/icons",
-        "./AppearanceRow.module.css"
+        "../primitives/icons"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness Host preference storage and Cordis slots"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "bb58170191b1b011c84bc183ae9d86b37f5d17b0ace02c18c5d083f665d180b8",
+      "local_sha256": "0aff608d2c2e97f0b30ab80d1e7c631e104b84dce8d6a112de36380444e45439",
       "classification": "A"
     },
     {
@@ -6794,13 +6766,12 @@
       "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./DropOverlay.module.css",
         "react-dom"
       ],
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "0c48bd9ba686ec84520b12519e54ddba067992d4fc9ef6943daf2a1125186a9e"
+      "local_sha256": "8559c5d40b6b895b3ae47be6dfc6878fca19b16631607d37fbd44b5c2d0a6c6b"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6840,14 +6811,13 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./DialogSurface",
-        "./ImageLightbox.module.css",
         "./icons/index.tsx",
         "react"
       ],
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "8a5dccf3157b6abe07e0cf5e050e3ea6bb1a3ba2c27be40e76722431665e89d4"
+      "local_sha256": "ac0b29829493c317bc0851896d153c9f235bbe75ac834d8953ddd1a35b85d5b4"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -7431,22 +7401,6 @@
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
-      "upstream": "packages/client/ui-schedule/src/client/ClockPicker.module.css",
-      "destination": "web-console/src/app/scheduler/ClockPicker.module.css",
-      "upstream_sha256": "bf20e3208b54e14706fb6c0105608ab16349f825ad77195363347f6c293f13c0",
-      "classification": "B",
-      "treatment": "Harness task layout, pickers, cron descriptions and bilingual copy adapted to exact native task bindings and bounded reads. rustX owns CAS edits, pause/resume, Workflow results and cancellation; original Host stores, RPCs and runtime authority are excluded.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Host and Peer services",
-        "Cordis slots and stores",
-        "Harness schedule mutation and delivery authority"
-      ],
-      "local_sha256": "7f98225d19a4f77040144cf85f724c8839d4a246e9812c163e34067770a1b3f6"
-    },
-    {
-      "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
       "upstream": "packages/client/ui-schedule/src/client/PickerPopover.tsx",
       "destination": "web-console/src/app/scheduler/PickerPopover.tsx",
       "upstream_sha256": "655e7c6ae2fc91a47aa847921deeb797c0acb7e3b5958c1a2bff4cbbe6fef529",
@@ -7749,20 +7703,6 @@
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/image/ImageBody.module.css",
-      "upstream_sha256": "774643afb1d231e35caac6a4d91cf57bda6d112078ee7314cbdd4b425e802538",
-      "destination": "web-console/src/app/components/documents/ImagePreview.module.css",
-      "classification": "B",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis, Remote, plugin slots/store and resource-address authority"
-      ],
-      "local_sha256": "0e9ac91fefc1096dec49dabb5207a2018f5a79a0c9f33a9081ece1225a0e299d"
-    },
-    {
-      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
       "upstream": "packages/client/ui-sidebar-files/src/client/FileNavigator.tsx",
       "upstream_sha256": "82467f970878752c685c99b6a53a3d74ffe8d9e8e5a7826fdcc514c6bafea675",
       "destination": "web-console/src/app/components/WorkbenchNavigator.tsx",
@@ -8024,18 +7964,6 @@
       ],
       "excluded_dependencies": [],
       "local_sha256": "27efbf7286684768cc58ba4d3478a4c017268127e4d1e09525eeb40e93c844b6"
-    },
-    {
-      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
-      "upstream": "packages/client/ui-session-panel/src/client/SessionPanelToggle.module.css",
-      "destination": "web-console/src/app/agent/SessionPanelToggle.module.css",
-      "classification": "B",
-      "treatment": "Session panel toggle button active/disabled states and top-right indicator dot geometry, adapted from ui-session-panel SessionPanelToggle.module.css.",
-      "upstream_sha256": "c273fe32090dd28895ec7f45d2a37dac89a8db40e36731a88a2789a55d756ee3",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "fe588f897e38b8f46fb3bed8fc00a2376222bd6681452d86dc1c79c403350d33"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",

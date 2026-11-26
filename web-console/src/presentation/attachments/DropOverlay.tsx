@@ -1,6 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 import { createPortal } from 'react-dom'
-import css from './DropOverlay.module.css'
 
 /** Drop-overlay strings the owner resolves from its own locale namespace. */
 export interface DropOverlayLabels {
@@ -27,13 +26,13 @@ export function DropOverlay({ disabled, labels }: {
   labels: DropOverlayLabels
 }) {
   return createPortal(
-    <div className={css.mask} role="status">
-      <div className={css.wrap}>
-        <div className={css.illustration} aria-hidden="true">
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center pointer-events-none bg-[var(--dsw-alias-bg-mask-drop)] backdrop-blur-[10px] animate-fade-in motion-reduce:animate-none" role="status">
+      <div className="flex flex-col items-center -mt-[3%] px-[40px] py-0 [color:var(--dsw-alias-label-primary)] text-center">
+        <div className="w-[115px] h-[84px]" aria-hidden="true">
           {disabled ? <UploadDisabledIllustration /> : <UploadIllustration />}
         </div>
-        <div className={css.title}>{labels.title}</div>
-        {!disabled && labels.desc !== undefined && <div className={css.desc}>{labels.desc}</div>}
+        <div className="mt-[16px] [font:var(--dsw-font-l-20)]">{labels.title}</div>
+        {!disabled && labels.desc !== undefined && <div className="mt-[16px] [font:var(--dsw-font-s-14)] [color:var(--dsw-alias-label-tertiary)] whitespace-pre-wrap">{labels.desc}</div>}
       </div>
     </div>,
     document.body,

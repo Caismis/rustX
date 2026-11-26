@@ -6,7 +6,6 @@ import type { AgentStatusView } from '../../../../protocol/app-server/v80';
 import { agentStatusFacets, agentStatusSummary } from '../../bindings/agent-status';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconContextInjectionOutline16 } from '../../presentation/primitives/icons';
-import css from './AgentStatus.module.css';
 
 /** One composed Agent Status, drawn subordinate to the runtime-published anchor
  * the transcript placed it at.
@@ -21,14 +20,14 @@ export function AgentStatusAnnotation({ status }: { status: AgentStatusView }) {
   const [expanded, setExpanded] = useState(false);
   const facets = agentStatusFacets(tx, status);
   const summary = agentStatusSummary(tx, status);
-  return <div className={css.root} role="note" aria-label={tx('agent:agent-status.agent-status')} data-agent-status={statusIdentity(status)}>
-    <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
+  return <div className="self-start max-w-full min-w-0 [color:var(--dsw-alias-label-tertiary)]" role="note" aria-label={tx('agent:agent-status.agent-status')} data-agent-status={statusIdentity(status)}>
+    <DisclosureRow rowClassName="min-h-[24px] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))]" leadingClassName="[color:var(--dsw-alias-label-tertiary)]" titleClassName="flex-none font-medium [color:var(--dsw-alias-label-secondary)]" chevronClassName="[color:var(--dsw-alias-label-tertiary)]"
       icon={<IconContextInjectionOutline16 size={14} />} title={tx('agent:agent-status.agent-status')} open={expanded} expandable={facets.length > 0} expandOnRowClick
       keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
-      collapsedContent={summary ? <><span className={css.sep} aria-hidden/><span className={css.summary}>{summary}</span></> : undefined}>
-      <dl className={css.sections}>{facets.map(facet => <div key={facet.kind} className={css.section} data-status-section={facet.kind}>
-        <dt className={css.label}>{facet.label}</dt>
-        <dd className={css.values}>{facet.values.map((value, index) => <span key={index}>{value}</span>)}</dd>
+      collapsedContent={summary ? <><span className="flex-none w-[2px] h-[2px] mx-[8px] my-0 rounded-[var(--dsw-radius-xs)] bg-[var(--dsw-alias-label-caption)]" aria-hidden/><span className="flex-auto min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{summary}</span></> : undefined}>
+      <dl className="flex flex-col gap-[2px] mt-[4px] mr-0 mb-0 ml-[calc(22px+var(--dsh-content-font-delta,0px))] p-0 text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))]">{facets.map(facet => <div key={facet.kind} className="flex gap-[8px] min-w-0" data-status-section={facet.kind}>
+        <dt className="flex-none min-w-[72px] [color:var(--dsw-alias-label-caption)]">{facet.label}</dt>
+        <dd className="flex flex-col min-w-0 m-0 wrap-anywhere">{facet.values.map((value, index) => <span key={index}>{value}</span>)}</dd>
       </div>)}</dl>
     </DisclosureRow>
   </div>;
