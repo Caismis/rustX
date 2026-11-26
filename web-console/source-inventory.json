@@ -2035,28 +2035,6 @@
       "classification": "A"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
-      "destination": "web-console/src/presentation/primitives/DisclosureRow.module.css",
-      "treatment": "retained mostly intact",
-      "upstream_sha256": "4f153362045d4d374b5f52f21a39373e9c8d41cfab06978130e588dede447b91",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [],
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "local_sha256": "8c96765f8b71ef9327b4dcf5813140a9cccdfc5e8ca190637c0776668d069a2f",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "ab01c441fccaba51ebfa1769f73cee4a87fa28e09d09fcdee311052d9540dc32",
-          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
-        }
-      ]
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
       "destination": "web-console/src/presentation/primitives/DisclosureRow.tsx",
       "treatment": "retained mostly intact",
