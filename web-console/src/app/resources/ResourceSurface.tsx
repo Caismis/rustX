@@ -33,7 +33,6 @@ import { AgentEditor, type AgentDraft } from './subagents/AgentEditor';
 import type { LoadMcpTools } from './subagents/AgentToolFields';
 import { SubagentList } from './subagents/SubagentList';
 import type { McpFocus, ResourceModule } from './types';
-import css from './ResourceSurface.module.css';
 
 interface Props {
   module: ResourceModule; visible: boolean; client: AppServerClient; host: ProductHostWorkspaces;
@@ -253,8 +252,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const detailErrors = [editorError, maintenanceError, convergenceError].filter(Boolean);
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}
     data-lifecycle={available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading'} hidden={!visible} inert={!visible}>
-    {agentEditor ? <div className={css.detailSurface} key={lifetime}><SettingsFeedback active={visible}>
-      {!!detailErrors.length && <div className={css.detailNotices}>{detailErrors.map((error, index) => <SettingsNotice text={error} key={index} />)}</div>}
+    {agentEditor ? <div className="flex-1 min-w-0 min-h-0 h-full flex flex-col overflow-hidden" key={lifetime}><SettingsFeedback active={visible}>
+      {!!detailErrors.length && <div className="flex-none px-[clamp(20px,4vw,40px)] pt-[10px] pb-0 [&>*]:max-w-[960px] [&>*]:mx-auto">{detailErrors.map((error, index) => <SettingsNotice text={error} key={index} />)}</div>}
       {editorAvailable && editorSource ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
         <PageTransactionProvider>
         <AgentEditor source={editorSource} target={editorTarget} host={host} name={resourceFocus} initialDraft={newAgent} editable={editorEditable}
@@ -266,13 +265,13 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         breadcrumb={<SettingsBackButton label={tx('resources:subagents.title')} onClick={closeAgent} />}
         footer={null}
       >
-        <div className={css.detailLoadingBody}>
+        <div className="py-[8px] px-0">
           {editorAvailable ? <DetailFormSkeleton label={tx('resources:loading')} />
             : <p className={catalogCss.state} role="status">{tx('resources:scope.unavailable')}</p>}
         </div>
       </SettingsPageShell>}
-    </SettingsFeedback></div> : detail ? <div className={css.detailSurface} key={lifetime}>
-      {!!detailErrors.length && <div className={css.detailNotices}>{detailErrors.map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}</div>}
+    </SettingsFeedback></div> : detail ? <div className="flex-1 min-w-0 min-h-0 h-full flex flex-col overflow-hidden" key={lifetime}>
+      {!!detailErrors.length && <div className="flex-none px-[clamp(20px,4vw,40px)] pt-[10px] pb-0 [&>*]:max-w-[960px] [&>*]:mx-auto">{detailErrors.map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}</div>}
       {editorSource && mcpFocus ? <SettingsActorContext value={editorActor}><SourceContext value={editorSource}>
         <PageTransactionProvider>
         <McpDetail source={editorSource} scope={editorTarget.kind} revision={editorConfig.state === 'structured' ? editorConfig.revision : undefined}
@@ -283,16 +282,16 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         breadcrumb={<SettingsBackButton label={tx('settings:mcp.back')} onClick={() => focusMcp(undefined)} />}
         footer={null}
       >
-        <div className={css.detailLoadingBody}><DetailFormSkeleton label={tx('resources:loading')} /></div>
+        <div className="py-[8px] px-0"><DetailFormSkeleton label={tx('resources:loading')} /></div>
       </SettingsPageShell>}
-    </div> : <div className={skillFocused ? css.detailSurface : catalogCss.library}>
-      {!skillFocused && <header className={clsx(catalogCss.pageHead, css.heading)}>
+    </div> : <div className={skillFocused ? 'flex-1 min-w-0 min-h-0 h-full flex flex-col overflow-hidden' : catalogCss.library}>
+      {!skillFocused && <header className={clsx(catalogCss.pageHead, '[&>button]:whitespace-nowrap max-[600px]:flex-wrap max-[600px]:pb-[12px]')}>
         <div><h1 ref={listTitle} tabIndex={-1}>{title}</h1><p className={catalogCss.muted}>{tx(`resources:${module}.description`)}</p></div>
         {module === 'mcp' && <McpActions disabled={!editable || !(scope === 'user' ? source?.user_mcp : source?.workspace_mcp)?.authored} onFocus={focusMcp} />}
         {module === 'subagents' && <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!editable} onClick={() => setNewAgent({})}>{tx('resources:subagents.new')}</Button>}
       </header>}
-      <div className={skillFocused ? css.detailSurface : undefined}>
-        {!skillFocused && <div className={clsx(catalogCss.controls, css.controls)}>
+      <div className={skillFocused ? 'flex-1 min-w-0 min-h-0 h-full flex flex-col overflow-hidden' : undefined}>
+        {!skillFocused && <div className={clsx(catalogCss.controls, 'max-[760px]:min-h-0 max-[760px]:py-[4px]')}>
           <div className={catalogCss.controlsLeft}>
             <div className={catalogCss.tabs} role="tablist" aria-label={tx('resources:scope.label')}>
               {(['workspace', 'global'] as const).map(value => (
@@ -302,7 +301,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
                   role="tab"
                   aria-selected={tab === value}
                   tabIndex={tab === value ? 0 : -1}
-                  className={clsx(catalogCss.tab, css.tab, tab === value && catalogCss.tabActive)}
+                  className={clsx(catalogCss.tab, 'grid place-items-center', tab === value && catalogCss.tabActive)}
                   onClick={() => { resetScope(); setTab(value); }}
                   onKeyDown={event => {
                     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
@@ -323,17 +322,17 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
               onSelect={id => { chosen.current = true; resetScope(); setWorkspace(id); setWorkspaceMenu(false); }}
               anchor={<button type="button" className={catalogCss.chooser} aria-label={tx('resources:scope.choose')}
                 aria-haspopup="menu" aria-expanded={workspaceMenu} onClick={() => setWorkspaceMenu(value => !value)}>
-                <span className={catalogCss.chooserValue}><IconFolderClose16 size={14} /><span className={css.workspaceName}>{workspace?.displayName ?? tx('resources:scope.choose')}</span></span><IconChevronDownOutline14 />
+                <span className={catalogCss.chooserValue}><IconFolderClose16 size={14} /><span className="max-w-[170px] max-[600px]:max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap">{workspace?.displayName ?? tx('resources:scope.choose')}</span></span><IconChevronDownOutline14 />
               </button>} />}
           </div>
-          <div className={clsx(catalogCss.controlsRight, css.tools)}>
+          <div className={clsx(catalogCss.controlsRight, 'max-[760px]:basis-full max-[760px]:justify-end')}>
             <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
             <CatalogViewSwitch view={view} onChange={setView} />
             <button type="button" className={shellCss.refreshButton} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
               disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></button>
           </div>
         </div>}
-        <div role="tabpanel" aria-label={tx(`resources:scope.${tab}`)} className={skillFocused ? css.detailSurface : undefined}>
+        <div role="tabpanel" aria-label={tx(`resources:scope.${tab}`)} className={skillFocused ? 'flex-1 min-w-0 min-h-0 h-full flex flex-col overflow-hidden' : undefined}>
           {!skillFocused && !showingWorkspace && <p className={catalogCss.context}>{scopeLabel}</p>}
           {!available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>
             {!skillFocused && [readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
@@ -342,12 +341,12 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
                 query={query} view={view} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
                 bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled}
                 onFocusChange={setSkillFocused} bodyDisabled={!editable} />
-                : <fieldset className={css.editor} disabled={!editable} key={lifetime}>{renderResources(source, scope)}</fieldset>}
+                : <fieldset className="border-0 p-0 m-0 min-w-0" disabled={!editable} key={lifetime}>{renderResources(source, scope)}</fieldset>}
             </SourceContext></SettingsActorContext>}
           </>}
           {showingWorkspace && module !== 'skills' && (globalError ? <p className={catalogCss.banner} role="alert">{globalError}</p>
             : globalSource ? <SettingsActorContext value={globalActor}><SourceContext value={globalSource}>
-              <fieldset className={clsx(css.editor, catalogCss.scopeGroup)} disabled={!globalEditable}>{renderResources(globalSource, 'user', true)}</fieldset>
+              <fieldset className={clsx('border-0 p-0 m-0 min-w-0', catalogCss.scopeGroup)} disabled={!globalEditable}>{renderResources(globalSource, 'user', true)}</fieldset>
             </SourceContext></SettingsActorContext> : <CatalogListSkeleton label={tx('resources:loading')} />)}
         </div>
       </div>
