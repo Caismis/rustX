@@ -1,7 +1,7 @@
 export const conversationCss = {
   root: 'cv-root relative flex flex-col h-full min-w-0 bg-[var(--dsw-alias-bg-base)] data-[phase=active]:overflow-clip',
   header: 'cv-header flex-none box-border min-h-[76px] pt-[10px] pr-[28px] pb-0 pl-[20px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l3)] not-has-[.cv-tabs]:min-h-0 not-has-[.cv-tabs]:pb-[10px]',
-  headerBlank: 'min-h-0 pb-0 border-b-none [&_.cv-corner]:ml-auto',
+  headerBlank: 'min-h-0 pb-0 border-b-0 [&_.cv-corner]:ml-auto',
   titleRow: '[[data-platform=darwin]_&]:[-webkit-app-region:drag] [[data-platform=darwin]_&_button]:[-webkit-app-region:no-drag] [[data-platform=darwin]_&_a]:[-webkit-app-region:no-drag] [container-type:inline-size] flex items-center gap-0 min-h-[30px]',
   titleCluster: 'flex flex-1 items-center gap-[10px] min-w-0',
   headerLeading: 'flex flex-none items-center gap-[8px] empty:hidden [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',

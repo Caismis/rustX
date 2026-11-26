@@ -38,7 +38,7 @@ export const dockkitCss = {
   dockHintLabel: 'max-w-full overflow-hidden [font-size:var(--dsh-content-font-size-secondary,13px)] font-medium leading-[1.4] whitespace-nowrap text-ellipsis',
   float: 'dk-float fixed flex flex-col overflow-hidden bg-[var(--dsw-alias-bg-layer-2)] rounded-[var(--dsw-radius-panel)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2)] shadow-[var(--dsw-elevation-prominent)] pointer-events-auto focus:outline-none [html[data-windows-titlebar]_&]:[--dsh-dockkit-float-top:calc(var(--dsh-windows-titlebar-height)+20px)] [html[data-windows-titlebar][data-fullscreen]_&]:[--dsh-dockkit-float-top:20px] [html[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',
   floatHeader: 'cursor-move select-none',
-  floatTitle: 'dk-float-title flex-[0_1_auto] cursor-inherit hover:bg-transparent',
+  floatTitle: 'dk-float-title flex-[0_1_auto] [cursor:inherit] hover:bg-transparent',
   dockGlyph: '-scale-x-100',
   floatBody: 'flex-1 min-h-0 overflow-auto [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)]',
   floatResize: 'absolute right-0 bottom-0 w-[20px] h-[20px] cursor-nwse-resize touch-none after:content-[""] after:absolute after:right-[4px] after:bottom-[4px] after:w-[calc(var(--dsw-radius-panel)-4px)] after:h-[calc(var(--dsw-radius-panel)-4px)] after:border-r-[1.5px] after:border-b-[1.5px] after:border-[var(--dsw-alias-label-caption)] after:rounded-br-[calc(var(--dsw-radius-panel)-4px)] after:opacity-0 after:transition-opacity after:duration-120 after:ease-out [.dk-float:hover_&]:after:opacity-100 active:after:opacity-100 hover:after:border-[var(--dsw-alias-label-tertiary)]',
