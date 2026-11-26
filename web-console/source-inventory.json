@@ -3785,7 +3785,6 @@
         "../../client/selectors",
         "../../client/transcript",
         "../../locale/react",
-        "./TurnNavigator.module.css",
         "./turn-rail-items",
         "react"
       ],
@@ -3795,7 +3794,7 @@
         "Harness scroll ownership",
         "Total-sized virtualizer measurement cache"
       ],
-      "local_sha256": "753cb224784860a95c59bcd3add8dd4a5510faae4ea4afde543070197dfcbd0a"
+      "local_sha256": "485d70d553bd7eb2d95c018d2675b546634586284feb28d76aa8b46976080377"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",
@@ -3932,26 +3931,6 @@
       ],
       "excluded_dependencies": [],
       "local_sha256": "5e9763e7fe435f21f24192ee532164dc24582c3e34ce6eb15f93fc84bc3cb783"
-    },
-    {
-      "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "destination": "web-console/src/app/agent/UsageStats.module.css",
-      "upstream_sha256": "05e0331a05f12215343a46bba97dd191cf338fdc7b5cc8ad3ba8e0f247154c66",
-      "classification": "A",
-      "treatment": "Harness StatsPills, TurnUsagePanel and ContextMeter styles combined; radius tokens inlined. InputBar non-wrapping dock row with shrinkable statistic labels and a non-shrinking context meter shared by main and child composer seats.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "6dd1e5d5246899c81b9734ed4582a56d6ff211e836e9eadad2ea7cd703af2f3f",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
-          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-          "upstream_sha256": "3728d67da4e1d1c2dd102d66f42f0c129a5c1e17e6a1167d738c999d0d87f60b",
-          "treatment": "Retain the centered, non-wrapping composer dock and 12px spacing."
-        }
-      ]
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",
