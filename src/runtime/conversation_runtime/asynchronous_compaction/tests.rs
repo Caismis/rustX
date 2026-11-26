@@ -595,6 +595,13 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
     assert!(checkpoint.candidate.summary_generation.is_some());
     // The actual idle commit re-arms the reminder after the older frozen
     // primary has settled. Only the next started primary consumes it.
+    // The terminal status wakes observers before the installer returns the
+    // foreground slot and updates the reminder under the coordinator lock.
+    within_liveness_guard(
+        "idle installer returns foreground ownership",
+        runtime.inner.wait_for_foreground_operation(),
+    )
+    .await;
     assert_eq!(
         runtime
             .inner

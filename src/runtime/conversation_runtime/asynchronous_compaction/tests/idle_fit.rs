@@ -193,6 +193,11 @@ async fn install_at_idle(fixture: &IdleFixture) {
         }
     })
     .await;
+    within_liveness_guard(
+        "idle installer returns foreground ownership",
+        fixture.runtime.inner.wait_for_foreground_operation(),
+    )
+    .await;
 }
 
 fn set_input_limit(fixture: &IdleFixture, limit: u64) {
