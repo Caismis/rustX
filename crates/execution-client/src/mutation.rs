@@ -372,9 +372,12 @@ impl FileWritePolicy {
                     .map(std::ffi::OsString::as_os_str)
                     .chain(std::iter::once(leaf))
                     .collect();
+                // With the same physical parent, either tail can name an
+                // ancestor of the other even when the collection is absent.
                 if (protected_stat.st_dev, protected_stat.st_ino)
                     == (target_stat.st_dev, target_stat.st_ino)
-                    && protected_tail.starts_with(&target_tail)
+                    && (protected_tail.starts_with(&target_tail)
+                        || target_tail.starts_with(protected_tail))
                 {
                     return Ok(false);
                 }
@@ -994,6 +997,45 @@ mod tests {
                     &parent,
                     &[],
                     std::ffi::OsStr::new("other")
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_skill_descendants_are_protected_through_an_aliased_user_root() {
+        let (dir, _root) = fixture();
+        let base = dir.path().canonicalize().unwrap();
+        let home = base.join("home");
+        let physical = base.join("user-root");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&physical).unwrap();
+        std::os::unix::fs::symlink(&physical, home.join("rustx")).unwrap();
+        let policy = FileWritePolicy {
+            workspace: base,
+            protected_roots: vec![home.join("rustx/.agents/skills")],
+        };
+        let parent = PackageDirectory::open(&physical).unwrap();
+        let leaf = std::ffi::OsStr::new("SKILL.md");
+        let protected_tail = [".agents".into(), "skills".into(), "package".into()];
+        assert!(
+            !policy
+                .permits(
+                    &physical.join(".agents/skills/package/SKILL.md"),
+                    &parent,
+                    &protected_tail,
+                    leaf,
+                )
+                .unwrap()
+        );
+        let sibling_tail = [".agents".into(), "skills-backup".into(), "package".into()];
+        assert!(
+            policy
+                .permits(
+                    &physical.join(".agents/skills-backup/package/SKILL.md"),
+                    &parent,
+                    &sibling_tail,
+                    leaf,
                 )
                 .unwrap()
         );
