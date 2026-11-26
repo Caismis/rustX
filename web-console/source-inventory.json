@@ -1639,34 +1639,6 @@
       "local_sha256": "b5db856fccbea6211a909964b7832db841795246bdac4f931c22b93928ed8ac0"
     },
     {
-      "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
-      "destination": "web-console/src/presentation/layout/AppFrame.module.css",
-      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
-      "upstream_sha256": "d3ecfc590ff09208e9f939c2a43faaa0de1bb41ba329d79725cbe6f98790d9f8",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ef6b43514510104eea16f0de4488f353edbb8966dd3c29381c3383b17b799933",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
-          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-          "upstream_sha256": "f0bce7eb34595a249c7865b5e0542cfae175a50804060af46344aba906e6789c",
-          "treatment": "Align the ordinary Web frame with the viewport top, square conversation corner and half-pixel sidebar separator; retain the native Windows caption exception and the local narrow-overlay owner."
-        }
-      ],
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.tsx",
       "destination": "web-console/src/presentation/layout/AppFrame.tsx",
       "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
@@ -3956,11 +3928,10 @@
         "../../locale/translation",
         "../../presentation/primitives/StatDialog",
         "../../presentation/primitives/icons",
-        "./UsageStats.module.css",
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "da337f191db5adcaf6bc6c88ef4643499af6b6fc8e1f70aa5398192f4d30068a"
+      "local_sha256": "5e9763e7fe435f21f24192ee532164dc24582c3e34ce6eb15f93fc84bc3cb783"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
