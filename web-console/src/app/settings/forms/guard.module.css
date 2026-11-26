@@ -1,6 +1,0 @@
-/* The discard guard owns the top layer: a dirty dialog's leave gesture raises
- * it ABOVE that dialog (model/provider overlays sit at z-index 1200, popups at
- * 1500) — under it, the confirm buttons would be unreachable. */
-.aboveDialogs {
-  z-index: 1600;
-}

@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import { useTranslation } from '../../../locale/react';
 import { Modal } from '../../../presentation/primitives/Modal';
 import { Button } from '../../../presentation/primitives/Button';
-import css from './guard.module.css';
 
 /** One navigation guard shared by every surface that can hold unsaved
  * drafts (Settings pages, the resource surface, detail editors). Each mounted
@@ -67,7 +66,7 @@ export function NavigationGuardProvider({ children }: { children: ReactNode }) {
   return <GuardContext.Provider value={value}>
     {children}
     <Modal open={confirming} onClose={keepEditing} title={tx('settings:unsaved.title')}
-      rootClassName={css.aboveDialogs}
+      rootClassName="z-[1600]"
       // Keep editing must not hand the keyboard back to the rail tab that
       // asked for the navigation: focus there reads as another request and
       // the prompt reopens. The still-selected tab is active already, so it
