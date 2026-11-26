@@ -261,8 +261,10 @@ source replacement/mutation requires an authoritative reread. Native blocking
 jobs retain host admission through completion after a waiter disconnects.
 To browse the Workspace as seen by a selected Session, pass its
 `execution_session` on both reads. The Session must own that exact Workspace.
-Discovery and instruction pages come from its authenticated Client. User Skills
-continue to use their authored source. A missing or detached binding reports
+Workspace discovery and instruction pages come from its authenticated Client.
+User Skill definitions and authoring reads remain Host-authoritative, while
+their model-visible paths address the synchronized Client copy or verified
+shared root. A missing or detached binding reports
 `execution_unavailable`. Live Workspace descriptors omit authoring operation
 revisions and optional display files. The explicit source-authoring view keeps
 its separate document roots.

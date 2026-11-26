@@ -2879,8 +2879,9 @@ equal roots, nested roots, and symlink-resolved overlap are rejected at
 construction, so runtime-private output files are not included in the default
 cwd-based Glob/Grep traversal. An explicit absolute path still resolves
 under the ordinary native file-tool contract: Write/Edit treat it as a
-host path, while Read, Glob, and Grep refuse one outside the Session's
-admitted Client workspace.
+Client path subject to the Client's file-tool authorization. Global User
+Skill files have Client-visible paths after eager bind synchronization;
+the Host remains their authoring authority.
 The explicit `ToolEnvironment` and the authoritative
 `ConversationBackgroundRegistry` complete the bundle. Background
 executions own a deterministic `exec_N` `ToolExecutionId`, a lifecycle

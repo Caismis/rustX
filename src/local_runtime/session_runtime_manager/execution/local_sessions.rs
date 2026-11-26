@@ -283,6 +283,28 @@ impl SessionRuntimeManager {
                 return Err(error);
             }
         };
+        // A Client is not handed to session creation until its User Skills
+        // are available at Client-visible paths. The blocking transfer keeps
+        // the independent control lane available for revoke and health.
+        let sync_endpoint = endpoint.clone();
+        let sync_home = self.configuration.sources.home_directory.clone();
+        let sync_grant = grant.clone();
+        let sync = tokio::task::spawn_blocking(move || {
+            sync_endpoint.sync_user_skills(
+                &sync_home,
+                &sync_grant,
+                std::time::Instant::now() + std::time::Duration::from_secs(120),
+            )
+        })
+        .await
+        .map_err(error)
+        .and_then(|result| result.map_err(error));
+        if let Err(failure) = sync {
+            self.execution.close_session_admission(&session);
+            self.reap_local_client(client, &session).await;
+            self.execution.retire(&session);
+            return Err(failure);
+        }
         let admitted_lane = || {
             endpoint
                 .control()

@@ -235,6 +235,14 @@ async fn proxied_client_with_listener(fixture: &Fixture) -> (ProxiedClient, Unix
         .arg("--workspace")
         .arg(endpoint.workspace())
         .env_clear()
+        .env(
+            "HOME",
+            &fixture
+                .manager
+                .configuration
+                .source_bindings()
+                .home_directory,
+        )
         .env("TMPDIR", scratch.path())
         .kill_on_drop(true)
         .spawn()

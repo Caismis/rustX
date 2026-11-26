@@ -430,6 +430,10 @@ impl Fixture {
             .arg(endpoint.workspace())
             .current_dir("/")
             .env_clear()
+            .env(
+                "HOME",
+                &self.manager.configuration.source_bindings().home_directory,
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

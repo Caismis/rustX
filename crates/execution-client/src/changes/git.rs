@@ -135,7 +135,7 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn invocation(args: &[&str]) -> String {
+pub(super) fn invocation(args: &[&str]) -> String {
     [
         "git",
         "-c",
@@ -156,7 +156,7 @@ fn invocation(args: &[&str]) -> String {
     .join(" ")
 }
 
-fn environment() -> Vec<(String, String)> {
+pub(super) fn environment() -> Vec<(String, String)> {
     let mut environment = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(key, _)| {

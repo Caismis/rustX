@@ -18,6 +18,7 @@ pub(super) mod local_sessions;
 mod mcp;
 mod output;
 mod sibling;
+mod skill_sync;
 pub(crate) use mcp::{ReceiveExchange, StdioMcpBinding};
 pub(crate) use output::OutputBinding;
 use sibling::SiblingClient;
@@ -100,6 +101,7 @@ pub struct LocalExecutionEndpoint {
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
     managed_output: std::sync::OnceLock<bool>,
     stdio_mcp: std::sync::OnceLock<bool>,
+    user_skill_flights: skill_sync::SyncFlights,
     recovery_fence: Option<rustx_execution_server::RecoveryFence>,
 }
 
@@ -338,6 +340,7 @@ impl LocalExecutionEndpoint {
             admission: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
+            user_skill_flights: skill_sync::SyncFlights::default(),
             recovery_fence: None,
             workspace,
         })
@@ -349,7 +352,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v9`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v10`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -399,6 +402,7 @@ impl LocalExecutionEndpoint {
             admission: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
+            user_skill_flights: skill_sync::SyncFlights::default(),
             recovery_fence: None,
             workspace,
         })
@@ -817,6 +821,31 @@ impl LocalExecutionEndpoint {
             let _data = wait_for_execution_permit(self.data_slots.clone(), deadline).await?;
             self.wait_for_connection(deadline, dispatch).await
         })
+    }
+
+    pub(crate) fn user_skills_inquiry(
+        &self,
+        request: &rustx_execution_protocol::skills::Request,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::skills::Reply> {
+        self.with_bounded_data_connection(deadline, |connection| {
+            connection.user_skills_until(request, deadline)
+        })
+    }
+
+    /// Inspect the Client-visible `~/rustx` root and an optional fresh probe.
+    pub(crate) fn inspect_user_skill_root(
+        &self,
+        probe: Option<String>,
+        deadline: Instant,
+    ) -> io::Result<(PathBuf, Option<rustx_execution_protocol::skills::Probe>)> {
+        match self.user_skills_inquiry(
+            &rustx_execution_protocol::skills::Request::Root { probe },
+            deadline,
+        )? {
+            rustx_execution_protocol::skills::Reply::Root { path, probe } => Ok((path, probe)),
+            _ => Err(io::ErrorKind::InvalidData.into()),
+        }
     }
 
     pub(crate) fn read_workspace_source<T>(
@@ -3585,6 +3614,9 @@ impl SessionExecutionRegistry {
 }
 
 impl SessionRuntimeManager {
+    pub(crate) fn execution_user_home(&self) -> PathBuf {
+        self.configuration.sources.home_directory.clone()
+    }
     /// A private binding for a trusted local Workspace observation. The caller
     /// owns it through shutdown. It has no durable Session or Agent identity.
     pub(crate) async fn start_local_workspace_probe(

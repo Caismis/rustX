@@ -1338,6 +1338,179 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${4%/*}"
 
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn user_skill_shared_root_survives_client_cleanup() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let home = fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory
+            .clone();
+        let package = home.join("rustx/.agents/skills/shared");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\nname: shared\ndescription: shared Skill\n---\nbody\n",
+        )
+        .unwrap();
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture
+            .manager
+            .configuration_runtime(&fixture.sessions[0].id)
+            .unwrap();
+        let resources = runtime.runtime_resources();
+        let skill = resources
+            .capability()
+            .skills()
+            .catalog_entries()
+            .iter()
+            .find(|entry| entry.name == "shared")
+            .unwrap();
+        assert_eq!(
+            std::path::Path::new(&skill.location),
+            package.join("SKILL.md")
+        );
+        assert!(!home.join("rustx/.agents/skills/.rustx-sync").exists());
+        fixture.close().await;
+        let _ = client.kill().await;
+        assert!(package.join("SKILL.md").is_file());
+    }))
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one multi-bind filesystem view and cache lifetime proof"
+)]
+async fn user_skill_sync_uses_separate_home_view_and_preserves_live_versions() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 4).await;
+        let home = fixture.manager.configuration.source_bindings().home_directory.clone();
+        let package = home.join("rustx/.agents/skills/global");
+        std::fs::create_dir_all(package.join("scripts")).unwrap();
+        let marker = package.join("SKILL.md");
+        std::fs::write(&marker, format!("---\nname: global\ndescription: Global Skill\n---\nfirst\n{}", "x".repeat(1024 * 1024 + 1))).unwrap();
+        std::fs::write(package.join("scripts/run"), "first attachment").unwrap();
+        let collection = package.parent().unwrap();
+        let oversized = collection.join("oversized");
+        std::fs::create_dir_all(&oversized).unwrap();
+        std::fs::write(oversized.join("SKILL.md"), "---\nname: oversized\ndescription: excluded\n---\n").unwrap();
+        std::fs::File::create(oversized.join("large"))
+            .unwrap().set_len(513 * 1024 * 1024).unwrap();
+        std::fs::write(collection.join(".ignore"), "oversized/\n").unwrap();
+        let malformed = collection.join("malformed");
+        std::fs::create_dir_all(&malformed).unwrap();
+        std::fs::write(malformed.join("SKILL.md"), "---\nname: malformed\n---\n").unwrap();
+        nix::unistd::mkfifo(&malformed.join("attachment"), nix::sys::stat::Mode::S_IRUSR).unwrap();
+        let physical = tempfile::Builder::new().prefix("rustx-skill-client-").tempdir_in("/dev/shm").unwrap();
+        assert_ne!(std::fs::metadata(&home).unwrap().dev(), std::fs::metadata(physical.path()).unwrap().dev());
+        let mount = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(physical.path(), mount.path().join("client-home")).unwrap();
+        let binary = std::env::current_exe().unwrap().with_file_name("rustx-execution-client");
+        std::os::unix::fs::symlink(binary, mount.path().join("client-real")).unwrap();
+        let launcher = mount.path().join("client");
+        std::fs::write(&launcher, r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+unset RUSTX_CLIENT_DOMAIN_STAGING
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --bind "$bin/client-home" "$HOME" --dev /dev -- "$bin/client-real" "$@"
+"#).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut clients = Vec::new();
+        let catalog_path = |index: usize| {
+            let runtime = fixture.manager.configuration_runtime(&fixture.sessions[index].id).unwrap();
+            let resources = runtime.runtime_resources();
+            std::path::PathBuf::from(&resources.capability().skills().catalog_entries().iter().find(|entry| entry.name == "global").unwrap().location)
+        };
+        clients.push(fixture.start_execution_via(0, Some(&launcher)).await);
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        assert!(runtime.runtime_resources().capability().skills().diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            crate::skills::SkillDiagnostic::PackageInvalid { source: crate::skills::SkillSource::User, package, .. }
+                if package.ends_with("malformed/SKILL.md")
+        )));
+        let first = catalog_path(0);
+        assert!(first.starts_with(home.join("rustx/.agents/skills/.rustx-sync")));
+        let first_physical = physical.path().join(first.strip_prefix(&home).unwrap());
+        assert!(std::fs::read_to_string(&first_physical).unwrap().contains("first"));
+        let first_asset = first_physical.parent().unwrap().join("scripts/run");
+        assert_eq!(std::fs::read_to_string(&first_asset).unwrap(), "first attachment");
+        std::fs::write(package.join("scripts/run"), "changed attachment").unwrap();
+        clients.push(fixture.start_execution_via(1, Some(&launcher)).await);
+        fixture.load(1).await.unwrap().unwrap();
+        assert_eq!(catalog_path(1), first);
+        assert_eq!(std::fs::read_to_string(&first_asset).unwrap(), "first attachment");
+        std::fs::remove_file(&first_physical).unwrap();
+        clients.push(fixture.start_execution_via(2, Some(&launcher)).await);
+        fixture.load(2).await.unwrap().unwrap();
+        let repaired = catalog_path(2);
+        assert_ne!(repaired, first);
+        let repaired_physical = physical.path().join(repaired.strip_prefix(&home).unwrap());
+        assert_eq!(std::fs::read_to_string(repaired_physical.parent().unwrap().join("scripts/run")).unwrap(), "changed attachment");
+        std::fs::write(&marker, "---\nname: global\ndescription: Global Skill\n---\nsecond\n").unwrap();
+        clients.push(fixture.start_execution_via(3, Some(&launcher)).await);
+        fixture.load(3).await.unwrap().unwrap();
+        let second = catalog_path(3);
+        assert_ne!(second, repaired);
+        let second_physical = physical.path().join(second.strip_prefix(&home).unwrap());
+        assert!(std::fs::read_to_string(second_physical).unwrap().contains("second"));
+        assert_eq!(std::fs::read_to_string(&first_asset).unwrap(), "first attachment");
+        fixture.close().await;
+        for client in &mut clients { let _ = client.kill().await; }
+        assert!(marker.is_file());
+    })).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn user_skill_shared_root_uses_the_clients_different_path_spelling() {
+    use std::os::unix::fs::PermissionsExt as _;
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let home = fixture.manager.configuration.source_bindings().home_directory.clone();
+        let package = home.join("rustx/.agents/skills/shared-alias");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("SKILL.md"), "---\nname: shared-alias\ndescription: Shared root\n---\nbody\n").unwrap();
+        let mount = tempfile::tempdir().unwrap();
+        let client_home = mount.path().join("client-home");
+        std::fs::create_dir(&client_home).unwrap();
+        let binary = std::env::current_exe().unwrap().with_file_name("rustx-execution-client");
+        std::os::unix::fs::symlink(binary, mount.path().join("client-real")).unwrap();
+        let launcher = mount.path().join("client");
+        std::fs::write(&launcher, r#"#!/bin/sh
+set -eu
+bin=${0%/*}
+server_home=$HOME
+export HOME="$bin/client-home"
+unset RUSTX_CLIENT_DOMAIN_STAGING
+exec /usr/bin/bwrap --die-with-parent --ro-bind / / --bind "$server_home" "$HOME" --dev /dev -- "$bin/client-real" "$@"
+"#).unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
+        let resources = runtime.runtime_resources();
+        let skill = resources.capability().skills().catalog_entries().iter().find(|entry| entry.name == "shared-alias").unwrap();
+        assert_eq!(std::path::Path::new(&skill.location), client_home.join("rustx/.agents/skills/shared-alias/SKILL.md"));
+        assert!(!home.join("rustx/.agents/skills/.rustx-sync").exists());
+        fixture.close().await;
+        let _ = client.kill().await;
+        assert!(package.join("SKILL.md").is_file());
+    })).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn bound_configuration_load_and_reconcile_without_any_server_workspace_directory() {
     use super::super::protocol::{call, initialize};
@@ -3312,6 +3485,7 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
             .arg(endpoint.workspace())
             .current_dir("/")
             .env_clear()
+            .env("HOME", &fixture.manager.configuration.source_bindings().home_directory)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

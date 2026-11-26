@@ -95,6 +95,12 @@ cargo test -p rustx --all-features --locked --lib \
     bound_configuration_load_and_reconcile_without_any_server_workspace_directory \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \
+    user_skill_sync_uses_separate_home_view_and_preserves_live_versions \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    user_skill_shared_root_uses_the_clients_different_path_spelling \
+    -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
     bound_reconcile_keeps_the_admitted_agent_when_its_workspace_source_is_lost \
     -- --ignored --nocapture
 cargo test -p rustx --all-features --locked --lib \

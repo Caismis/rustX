@@ -15,8 +15,9 @@ bound Workspace, the Client resolves the link target under the admitted
 Workspace and offers its real path to ordinary Read and Bash. It observes
 both the authored link and its resolved target. Broken links, external
 Workspace targets and directory cycles are skipped. Unbound discovery
-retains the authored package path. Package bodies and supporting files
-are opened on demand beside the offered instruction file.
+retains the authored package path. The model receives metadata and a
+Client-visible path; it opens the instruction file and its supporting files
+only when needed.
 
 `skills/frontmatter.rs` reads up to 2 MiB of frontmatter with 4 KiB cancellable
 read-ahead and stops at the closing YAML delimiter. Two matching prefix reads verify the
@@ -34,7 +35,7 @@ uninterpreted text.
 `SkillSnapshot` publishes immutable catalog metadata, bindings, provenance and
 diagnostics. `all`, `exact` and `none` remain visibility choices, never filesystem
 ACLs. During agent execution, normal Tools read or execute bodies and resource
-files at their host paths under the existing authorization rules.
+files at the Client-visible catalog paths under the existing authorization rules.
 
 ## Skill display information
 
@@ -76,6 +77,72 @@ Package transfer accepts regular files and directories, with limits of
 4,096 entries, 64 nested levels, and 256 MiB of files. Symlinked installs
 and standalone Markdown files remain browseable.
 
+## Global User Skills on a Client
+
+The Host's `~/rustx/.agents/skills` is the User authority. At Client bind,
+rustX synchronizes its valid discoverable packages before publishing their Client
+paths. Malformed definitions retain their diagnostics; their attachment trees
+are not opened or copied. A fresh random file in the Host `~/rustx` must be observed with the
+same device, inode, and contents by the Client before a shared root can skip
+copying. Equal path strings alone are insufficient. Discarding a Client never
+removes the standing User root.
+
+Separate filesystems use an ownership-marked cache under
+`<client-home>/rustx/.agents/skills/.rustx-sync`. An immutable package version
+is staged and published as a whole, so an already bound session can continue
+using its earlier paths. The Host stores a random, owner-only authority ID in
+its standing `~/rustx` root and combines it with the collection's filesystem
+identity. A read-only root without that ID uses a process-local identity, so
+its cache can be reused only during that Server process. One authority's binds
+serialize during synchronization;
+live sessions retain leases on their versions. Unleased versions are evicted
+when necessary to keep that authority's cache under 4 GiB and 1,024 versions.
+The Client admits at most 64 cached authorities.
+If live leases exhaust that bound, a new synchronization fails rather than
+deleting a live version or personal files. Client cleanup removes only its
+private staging directory and releases its leases.
+
+The Client inquiry stream-hashes only the named package's `SKILL.md`, up to
+the 512 MiB per-package bound.
+A matching digest skips the package without examining attachments. Attachments
+can consequently remain stale when `SKILL.md` is unchanged; this is an
+intentional performance tradeoff. A missing or different digest causes a whole
+package copy. Copies stream regular files and directories with a 512 MiB
+per-package and 1 GiB per-bind payload cap; executable files remain executable.
+A collection-level link to a package directory is resolved and pinned; links
+inside a package and special files are refused. Neither hardlinks nor writable
+bind mounts are used. A User can exclude a
+legitimately oversized package by adding its path to the User collection's
+`.ignore` file; the same discovery ignore rules then omit it from both sync
+and the catalog. Standalone root Markdown Skills are copied as individual files.
+
+File tools deny writes into the official global Skill tree, whether it is the
+shared standing root or the synced cache. Bash can still modify a shared
+standing root; this residual risk is accepted. The Client cache is not a
+second authoring authority. Unknown transfer outcomes are not retried as
+ordinary failures. Synchronization uses bounded data records while health,
+cancel and revoke use the independent control lane. Each exchange has its own
+deadline; a healthy transfer can continue making progress beyond the inquiry
+and admission budget.
+
+The execution-boundary change and User Skill sync share one release gate:
+do not ship the boundary without both this behavior and #612 in place.
+
+## Workspace change hints
+
+A bound Client starts one asynchronous fingerprint observation for its
+Workspace. Configuration watches share this sample and can schedule a fresh
+one after five seconds. A changed observation requests an exact resource
+rescan. The data lane and Session startup continue while the observation runs.
+
+Git workspaces use `git rev-parse --verify --quiet HEAD` and
+`git diff-index --quiet` for tracked index and worktree changes. The latter
+uses Git's stat information and produces a dirty bit. Both commands share
+a 750 ms deadline. Non-Git workspaces and repositories without a first
+commit use the root path and root modification time. The initial sample
+establishes the baseline. An unavailable sample preserves the last known one.
+Native watches continue to detect individual resource edits.
+
 ## Version and configuration semantics
 
 `SkillVersionId` is `sha256:<64 lowercase hex>` over the domain
@@ -105,8 +172,10 @@ in its admission budget, including hidden entries, so their creation/removal
 also invalidates source discovery. Hidden subtrees remain unobserved and package
 assets remain outside configuration scanning.
 
-A body/asset edit or semantically identical YAML produces no configuration
-revision, capability preparation or `configuration_applied` fact. Changes outside
+The definition version ignores body and asset edits. In a bound session a
+changed `SKILL.md` produces a new Client cache path even when frontmatter is
+unchanged; an attachment-only edit can remain cached until `SKILL.md` changes.
+Changes outside
 the Root/admitted Named Agent/Workflow Skill selection closure do not prepare
 Session capabilities. The inert discovery catalog still publishes at the same
 fenced safe boundary, so future invocation overrides observe additions, edits,
@@ -146,7 +215,7 @@ environment.
 
 | Path | Authoritative implementation | Excluded work and evidence |
 | --- | --- | --- |
-| Discovery | `skills/package.rs`, `frontmatter.rs`, `identity.rs` | Collection traversal and instruction-file prefix only. Tests use 10 GiB assets, a 4 GiB body, 4,200 nested files and an internal resource symlink; actual file-open/read counters admit only SKILL.md, with no package directory listing. |
+| Discovery | `skills/package.rs`, `frontmatter.rs`, `identity.rs` | Definition discovery reads instruction-file prefixes only. Bind synchronization separately traverses a package when its instruction digest does not match. |
 | Revision / rescan | `local_runtime/resource_directory.rs`, `resource_directory/evidence.rs` | Skill discovery owns its revision separately from generic resource traversal. Revision tests assert only two SKILL.md opens and zero resource-directory listings. |
 | Configuration preparation | `configuration/capture.rs`, `prospective.rs`, `capabilities/coordinator.rs` | Captured definitions are passed by value. No dependency merge and no environment writes. Tests cover inert body edits, conflicting metadata, safe Attempt snapshots, stale successors, source replacement and Journal differences. |
 | Child initialization | `runtime/subagent/resolver.rs`, `ipc.rs`, `composition/subagent_child.rs` | Frozen metadata and location only. IPC v39 and profile digest v9 carry no dependency manifest. Composition tests retain original host locations across rewritten definitions; no private Skill copy or Skill environment exists. |

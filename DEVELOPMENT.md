@@ -11,7 +11,7 @@ invalidate native selection certificates on same-transaction mutations;
 From the repository root:
 
 ```sh
-cargo build --bins
+cargo build --workspace --bins
 pnpm --dir dev install --frozen-lockfile
 pnpm --dir tui install --frozen-lockfile
 pnpm --dir web-console install --frozen-lockfile
@@ -25,7 +25,7 @@ Build explicitly after native changes; the launcher never builds implicitly.
 an actionable error before any process starts. For the combined Web and TUI
 compositions, `bash-supervisor`,
 `interactive-supervisor` and `workflow-renderer` must be executable beside the resolved `rustx` binary;
-`cargo build --bins` builds them together. The supervisor helpers are the
+`cargo build --workspace --bins` builds them together. The supervisor helpers are the
 independently buildable `rustx-process-supervisor` package
 (`cargo build -p rustx-process-supervisor --bins --locked`): it owns the
 physical process-supervision halves (dedicated `bash-supervisor` and

@@ -23,6 +23,8 @@
 //! model context. Only definition edits publish a later generation at the
 //! existing safe boundary. Bodies and assets remain live Tool inputs.
 
+mod locations;
+
 use std::collections::BTreeMap;
 use std::io;
 
@@ -292,7 +294,7 @@ pub struct SkillDiscovery {
 }
 
 /// A valid definition or an invalid declared file for source inspection.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Candidate {
     source: SkillSource,
     name: String,
@@ -300,6 +302,25 @@ struct Candidate {
     canonical: PathBuf,
     package: Option<SkillPackage>,
     bound: bool,
+}
+
+/// A User-source discovery shared by concurrent work on one binding.
+#[derive(Debug, Clone)]
+pub(crate) struct UserSkillCapture {
+    root: AutomaticSkillRoot,
+    candidates: Vec<Candidate>,
+    diagnostics: Vec<SkillDiagnostic>,
+}
+
+impl UserSkillCapture {
+    pub(crate) fn candidates(&self) -> impl Iterator<Item = (PathBuf, bool)> + '_ {
+        self.candidates.iter().map(|candidate| {
+            (
+                PathBuf::from(&candidate.location),
+                candidate.package.is_some(),
+            )
+        })
+    }
 }
 
 impl SkillDiscovery {
@@ -350,7 +371,7 @@ impl SkillDiscovery {
     /// Panics if the internal native reader returns an uncaught collection error.
     #[must_use]
     pub fn discover(&self) -> SkillDiscoveryOutcome {
-        self.discover_with(None)
+        self.discover_with(None, None)
             .expect("native Skill observation reports collection errors as diagnostics")
     }
 
@@ -367,24 +388,61 @@ impl SkillDiscovery {
         endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
         observed: &mut Option<SkillWatchObservation>,
     ) -> io::Result<SkillDiscoveryOutcome> {
+        // Host User definitions remain authoritative. The Client copy is
+        // synchronized before any Client-visible catalog path is published.
+        let mut user_sync = None;
+        for root in self
+            .config
+            .automatic
+            .iter()
+            .filter(|root| root.source == SkillSource::User)
+        {
+            let home = user_home_from_collection(&root.root)?;
+            if user_sync.is_some() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            user_sync = Some(endpoint.sync_user_skills(
+                home,
+                &self.cancellation,
+                std::time::Instant::now() + std::time::Duration::from_secs(120),
+            )?);
+        }
         let client = Client::new(endpoint, &self.cancellation);
-        let outcome = self.discover_with(Some(&client));
+        let outcome = self.discover_with(
+            Some(&client),
+            user_sync.as_ref().map(|(_, _, capture)| capture),
+        );
         let paths = client.into_observations();
         *observed = Some(SkillWatchObservation {
             paths: paths.clone(),
             complete: outcome.is_ok(),
         });
-        outcome.map(|mut outcome| {
+        outcome.and_then(|mut outcome| {
             outcome.observed_workspace = paths;
-            outcome
+            if let Some((collection, paths, _)) = user_sync {
+                outcome.project_user_locations(&collection, &paths)?;
+            }
+            Ok(outcome)
         })
     }
 
-    fn discover_with(&self, client: Option<&Client<'_>>) -> io::Result<SkillDiscoveryOutcome> {
+    fn discover_with(
+        &self,
+        client: Option<&Client<'_>>,
+        user_capture: Option<&UserSkillCapture>,
+    ) -> io::Result<SkillDiscoveryOutcome> {
         let mut diagnostics = Vec::new();
         let mut candidates = Vec::new();
         let mut roots = Vec::new();
         for source in [SkillSource::Workspace, SkillSource::User] {
+            if source == SkillSource::User
+                && let Some(capture) = user_capture
+            {
+                roots.push(capture.root.clone());
+                candidates.extend(capture.candidates.clone());
+                diagnostics.extend(capture.diagnostics.clone());
+                continue;
+            }
             let workspace_client = client.filter(|_| source == SkillSource::Workspace);
             let tree: &dyn SkillTree = workspace_client.map_or(&Native, |tree| tree);
             for root in self
@@ -414,6 +472,64 @@ impl SkillDiscovery {
         roots.dedup();
         outcome.roots = roots;
         Ok(outcome)
+    }
+}
+
+fn user_home_from_collection(root: &Path) -> io::Result<&Path> {
+    let agents = root
+        .parent()
+        .filter(|_| root.file_name().is_some_and(|name| name == "skills"))
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    let product = agents
+        .parent()
+        .filter(|_| agents.file_name().is_some_and(|name| name == ".agents"))
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    product
+        .parent()
+        .filter(|_| product.file_name().is_some_and(|name| name == "rustx"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "bound User Skills require the official User root",
+            )
+        })
+}
+
+/// Inspect User candidates with the same bounded frontmatter policy used by
+/// discovery. Invalid definitions keep diagnostics, but their attachments
+/// must not be traversed or transferred during bind.
+pub(crate) fn capture_user_skills(
+    root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> io::Result<UserSkillCapture> {
+    let source = AutomaticSkillRoot {
+        source: SkillSource::User,
+        root: Native.canonical(root).unwrap_or_else(|_| root.to_owned()),
+    };
+    let mut diagnostics = Vec::new();
+    let candidates =
+        collect_automatic_source(&source, &mut diagnostics, cancellation, &Native, false)?;
+    Ok(UserSkillCapture {
+        root: source,
+        candidates,
+        diagnostics,
+    })
+}
+
+impl SkillDiscoveryOutcome {
+    fn project_user_locations(
+        &mut self,
+        client_root: &Path,
+        paths: &BTreeMap<PathBuf, PathBuf>,
+    ) -> io::Result<()> {
+        self.publish_user_paths(client_root, |relative| {
+            paths.get(relative).cloned().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "a discovered User Skill was not synchronized",
+                )
+            })
+        })
     }
 }
 
@@ -765,6 +881,62 @@ mod frontmatter_tests {
     use crate::skills::source::automatic_skill_roots;
     use crate::skills::{SkillDiagnosticSeverity, SkillSnapshot};
     use crate::tools::Workspace;
+
+    #[test]
+    fn bound_user_catalog_uses_client_path_without_injecting_the_body() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx/.agents/skills");
+        let package = root.join("example");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\nname: example\ndescription: A useful example\n---\nsecret body sentinel\n",
+        )
+        .unwrap();
+        let mut discovered = SkillDiscovery::user_root(root).discover();
+        let host = PathBuf::from(discovered.packages[0].location());
+        let client =
+            PathBuf::from("/client/rustx/.agents/skills/.rustx-sync/version/data/SKILL.md");
+        let mut preprojected = discovered.clone();
+        preprojected
+            .project_user_locations(
+                Path::new("/client/rustx/.agents/skills"),
+                &std::collections::BTreeMap::from([(
+                    PathBuf::from("example/SKILL.md"),
+                    PathBuf::from("/client/rustx/.agents/skills/example/SKILL.md"),
+                )]),
+            )
+            .unwrap();
+        preprojected
+            .project_user_locations(
+                Path::new("/client/rustx/.agents/skills"),
+                &std::collections::BTreeMap::from([(
+                    PathBuf::from("example/SKILL.md"),
+                    client.clone(),
+                )]),
+            )
+            .unwrap();
+        discovered
+            .project_user_locations(
+                Path::new("/client/rustx/.agents/skills"),
+                &std::collections::BTreeMap::from([(
+                    PathBuf::from("example/SKILL.md"),
+                    client.clone(),
+                )]),
+            )
+            .unwrap();
+        assert_eq!(preprojected, discovered);
+        assert_eq!(Path::new(discovered.packages[0].location()), client);
+        assert_eq!(discovered.packages[0].instruction_source(), host);
+        let snapshot = crate::skills::SkillSnapshot::from_discovery(discovered);
+        let catalog = crate::skills::render_skill_catalog(
+            snapshot.catalog_entries(),
+            crate::skills::SkillReadTool::Read,
+        );
+        assert!(catalog.contains("A useful example"));
+        assert!(catalog.contains(client.to_str().unwrap()));
+        assert!(!catalog.contains("secret body sentinel"));
+    }
 
     fn write_skill(root: &Path, name: &str, description: &str, extra: &str) {
         let directory = root.join(name);

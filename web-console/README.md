@@ -419,7 +419,7 @@ emulator over real HTTP/SSE, with the ordinary App Server and native Tools:
 
 ```sh
 # repository root
-cargo build --bins
+cargo build --workspace --bins
 cd test-support/fake-provider
 uv sync --frozen
 cd ../../web-console
@@ -656,7 +656,7 @@ Host restarts. These are user-operated shells with the Host
 user's filesystem permissions, independent of agent approval policies. Host
 transport/provider secrets are not copied into the shell environment.
 
-Run `cargo build --bins --locked`, `pnpm install --frozen-lockfile` and
+Run `cargo build --workspace --bins --locked`, `pnpm install --frozen-lockfile` and
 `pnpm build:host` after updating. The Product Host launcher supplies the
 `interactive-supervisor` sibling of its selected native binary; an unconfigured
 Host cannot admit terminal execution. The reviewed `node-pty` build

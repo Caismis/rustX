@@ -256,6 +256,11 @@ def main() -> None:
     revision = output("git", "rev-parse", "HEAD")
     if output("git", "status", "--porcelain", "--untracked-files=normal"):
         parser.error("Use a clean source checkout before building a versioned archive.")
+    # A versioned Server, Client or combined archive must speak both halves
+    # of the same Session-bound resource protocol.
+    run("cargo", "run", "--quiet", "--locked", "-p", "rustx-execution-protocol",
+        "--example", "verify_bound_resource_protocol",
+        "--target-dir", str(client if args.product == "rustx-client" else server))
     epoch = int(output("git", "show", "-s", "--format=%ct", revision))
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
     client_version = tomllib.loads((ROOT / "crates/execution-client/Cargo.toml").read_text())["package"]["version"]

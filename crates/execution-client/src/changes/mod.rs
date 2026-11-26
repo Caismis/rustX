@@ -5,6 +5,8 @@ mod command;
 mod comparison;
 use comparison::FileContents;
 use rustx_execution_protocol::changes::FileComparison;
+mod fingerprint;
+pub(super) use fingerprint::WorkspaceObservation;
 mod git;
 mod storage;
 use storage::SnapshotDirectory;

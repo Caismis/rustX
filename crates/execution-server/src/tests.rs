@@ -535,7 +535,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v10"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -3315,7 +3315,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v10"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {

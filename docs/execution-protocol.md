@@ -74,7 +74,8 @@ and directory-page readers —
 The implemented Client supports authenticated local and WebSocket binding,
 bounded file queries and tree mutations, conditional writes and edits,
 supervised processes, workspace observation, file watches, Workspace
-Python, managed output, stdio MCP and Managed Python. The authenticated Hello advertises the
+Python, managed output, stdio MCP, Managed Python and bounded User Skill
+synchronization. The authenticated Hello advertises the
 individual services that this Client implements. The Server checks the
 specific capability before dispatch.
 
@@ -119,7 +120,7 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client opens a pair with a revision 8 Hello. It retains
+The Client opens a pair with a revision 10 Hello. It retains
 `physical_settlement_proven` in terminal process snapshots and requires the
 same-instance recovery handshake after a transport loss. Managed Python
 source capture and generic stdio launch carry exact binding identity in
@@ -507,7 +508,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v9` path. The directory-page entry limit has a distinct
+exact `/execution/v10` path. The directory-page entry limit has a distinct
 wire error from a permission denial or revision conflict. A port may be
 omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
@@ -568,7 +569,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v9]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v10]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
