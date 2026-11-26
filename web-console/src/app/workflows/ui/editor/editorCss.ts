@@ -119,7 +119,7 @@ export const editorCss = {
   fieldLabel: 'ed-fieldlabel text-[11.5px] [color:var(--dsw-alias-label-secondary)]',
   hint: 'text-[11px] [color:var(--dsw-alias-label-tertiary)] leading-[1.5]',
   hintError: '[color:var(--dsw-alias-state-error-primary)]',
-  input: 'ed-input w-full min-h-[32px] px-[9px] py-[6px] box-border [border:0.5px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-2)] [color:var(--dsw-alias-label-primary)] font-inherit text-[12px] focus:outline-0 focus:[border-color:var(--dsw-alias-state-business-primary)] aria-invalid:[border-color:var(--dsw-alias-state-warn-primary)]',
+  input: 'ed-input w-full scroll-mb-[2px] min-h-[32px] px-[9px] py-[6px] box-border [border:0.5px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-2)] [color:var(--dsw-alias-label-primary)] font-inherit text-[12px] focus:outline-0 focus:[border-color:var(--dsw-alias-state-business-primary)] aria-invalid:[border-color:var(--dsw-alias-state-warn-primary)]',
   textarea: 'min-h-[72px] resize-y leading-[1.5]',
   mono: '[font-family:var(--ds-font-family-code)] text-[11.5px]',
   inline: 'flex items-center gap-[6px]',
