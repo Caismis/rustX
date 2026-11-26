@@ -552,9 +552,13 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Same Phase-2 compiler-parallelism experiment as rust-contracts.
-      # Targets, assertions, libtest concurrency, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "4"
+      # jobs=4 crashed this lane's runner mid-compile with no uploaded logs on
+      # the first attempt of three out of four fresh FULL runs (runs
+      # 45569412532, 45618765361, 45651033891); every rerun — warm-cache,
+      # lower memory pressure — passed. Same OOM signature as the macOS
+      # jobs=3 experiment. jobs=2 halves peak compile memory; libtest
+      # concurrency, targets, assertions and the 90-minute ceiling stay.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - name: Checkout
         uses: actions/checkout@v7

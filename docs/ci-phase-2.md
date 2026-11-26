@@ -14,9 +14,16 @@ base `devin/1794960987-macos-ci-build-speed`). The mechanism lives in
   harness by package id + lib src fingerprint, and only falls back to
   bare `-p` enumeration for members no FULL step covers. The ~8-minute
   member rebuild the coverage check used to pay is gone.
-- **CARGO_BUILD_JOBS experiment (B).** `rust-contracts` and
-  `rust-boundaries` run `CARGO_BUILD_JOBS=4` (Linux 4 vCPU runners).
-  Compiler-budget steps record the value, `nproc` and memory each run.
+- **CARGO_BUILD_JOBS experiment (B).** `rust-contracts` runs
+  `CARGO_BUILD_JOBS=4` (Linux 4 vCPU runners) without incident.
+  `rust-boundaries` started at `4` but is back to `2`: its runner died
+  mid-compile with no uploaded logs (BlobNotFound) on the first attempt
+  of three out of four fresh FULL runs (runs 45569412532, 45618765361,
+  45651033891 — every warm-cache rerun passed). The crash signature —
+  the whole runner disappears during the all-features compile rather
+  than a rustc error — matches the macOS jobs=3 OOM experiment, so peak
+  memory is the suspect; jobs=2 halves it. Compiler-budget steps record
+  the value, `nproc` and memory each run.
 - **Build once, test many (C).** `rust-contracts` and `rust-boundaries`
   compile their harnesses once via `prepare_native_tests.py` (the
   artifact JSON stream is captured in-line via
@@ -118,3 +125,24 @@ Takeaway: sharding pays where execution >> compile per runner (Linux
 lanes: ~50m of tests after ~18m of compile). On macOS the single-job
 compile is 51m28s while execution is ~6m, and only two macos-15 slots
 exist, so the serial lane is the optimum on free runners.
+
+## Current state (pre-merge)
+
+- **macOS lanes suspended.** `rust-platform-core`,
+  `rust-platform-boundaries` and `desktop-macos` are never selected
+  (hard-coded `False` in `.github/scripts/verification.py`
+  `selected_jobs`); their job definitions remain in `ci.yml` and the
+  merge gate neither expects nor accepts them. Restore by reinstating
+  the three selection expressions. The serial-lane conclusion above is
+  unchanged — suspension is a cost decision about the free tier's two
+  macos-15 slots, not a verdict on the lane design.
+- **Phase-1 orchestration speedups (run 45651033891, green):** unified
+  `rust-platform-macos` cache key, `rust-contracts-post` decoupled to
+  run in parallel at t=0 (done t+15m, off the critical path), lane
+  coverage check moved into the prepare job it reuses (the 8.8m
+  recompile in contracts-post is gone), third-party debuginfo off
+  (`[profile.{dev,test}.package."*"] debug = false`), zstd -1 packing,
+  browser acceptance sharded 3 → 6. Measured critical paths: browser
+  lane ~31m end-to-end, contracts lane ~30m, boundary lane ~25m —
+  FULL's theoretical wall is ~31m with macOS suspended vs the 94m
+  baseline of run 45588515160.

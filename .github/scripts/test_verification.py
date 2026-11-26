@@ -451,8 +451,10 @@ class Workflow(unittest.TestCase):
         self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-platform-core"])
         for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
-        for job in ("rust-contracts", "rust-boundaries"):
-            self.assertIn('CARGO_BUILD_JOBS: "4"', jobs[job])
+        self.assertIn('CARGO_BUILD_JOBS: "4"', jobs["rust-contracts"])
+        # rust-boundaries is back to -j2: -j4 crashed its runner mid-compile
+        # on three of four fresh first attempts (see ci.yml).
+        self.assertIn('CARGO_BUILD_JOBS: "2"', jobs["rust-boundaries"])
         # macOS lanes overlap two codegen workers; one rustX compilation peaks
         # near 3.5 GB RSS, so -j2 stays under the 7 GB runner (see ci.yml).
         for job in ("rust-platform-core", "rust-platform-boundaries"):
