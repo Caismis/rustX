@@ -54,6 +54,7 @@
   --animate-fade-in: drop-fade-in 160ms ease-out;
   --animate-state-chase: dsh-state-dot-chase 1s infinite;
   --animate-upload-spin: upload-spin 0.8s linear infinite;
+  --animate-file-card-progress: file-card-progress 1.2s ease-in-out infinite alternate;
   --animate-row-shimmer-sweep: dsh-row-shimmer-sweep 1.5s steps(48, end) 0.3s infinite;
   --animate-row-shimmer-highlight: dsh-row-shimmer-highlight 1.5s steps(48, end) 0.3s infinite;
   --animate-indicator-enter: indicator-enter 150ms ease-out;
@@ -98,6 +99,10 @@
   @keyframes dsh-row-shimmer-highlight {
     0% { transform: translateX(100%); }
     66.6667%, 100% { transform: translateX(-100%); }
+  }
+  @keyframes file-card-progress {
+    from { transform: translateX(-70%); }
+    to { transform: translateX(220%); }
   }
   @keyframes upload-spin {
     to { transform: rotate(360deg); }

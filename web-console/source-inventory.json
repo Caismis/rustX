@@ -435,20 +435,6 @@
       "local_sha256": "c3ef82e570b04efb01f1d2d9bddf77d923619e824ade25036687a4335fc408d7"
     },
     {
-      "upstream": "packages/client/ui-goal/src/client/GoalBar.module.css",
-      "destination": "web-console/src/app/composer/GoalDock.module.css",
-      "treatment": "adapted: dock column, strip, labels, inline input and icon buttons; meta, note and narrow-wrap rules added",
-      "upstream_sha256": "63b8f2ce75d6336ed07f2295afd0dd109a96690956625ac50688761d6b54eeb2",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "73a73f3b1737fca7096af4fa21d42baf81e8406cc1cc3a4da01c3379c0e8e6d1"
-    },
-    {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
       "destination": "web-console/src/app/composer/GoalDock.tsx",
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds the rustX durable GoalPhase as the sole lifecycle authority (one Pause-or-Resume control, no activation flag), adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native Goal previews and original-objective read ownership; deferred fields and late revision fences preserve native Goal control authority. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.ream baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Combined App Server v80 imports; upstream pin and licenses retained.",
@@ -4003,27 +3989,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "f1f77ec73ffd167cc1fb24c8eff5bc071872909454b7e23a2192d917f1b48004"
-    },
-    {
-      "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "destination": "web-console/src/presentation/agent/StepGroup.module.css",
-      "upstream_sha256": "4273e37d4a94e5b0fe71e5f91fcf168d32eedf4843e57906f5b66782bacf9c81",
-      "classification": "A",
-      "treatment": "Pinned Harness styles.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "c93460881ecaa0abb402713b67909d77c6afc9d4dad3315be14eb6fb84df789d",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "3588ae0f5ab150632e529ffdbdc0883fdab939f1b46ab7bb03b35130297ac8d1",
-          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
-        }
-      ]
+      "local_sha256": "ff3962b1533a27b6e0055d3878e31c76c50b4f11979cfb7d4fbc090535bbd5dd"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.ts",
@@ -6390,13 +6356,12 @@
       "retained_dependencies": [
         "../primitives/FileTypeIcon",
         "../primitives/file-size",
-        "../primitives/icons",
-        "./FileCard.module.css"
+        "../primitives/icons"
       ],
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "876f307018607aaa00b6d925d5886c6b81952799f1384f0dd98b124ae3e14a80"
+      "local_sha256": "b15980be46e3e38e7703a8c0350b651e52c94a2f430060051798f23a386606dc"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
