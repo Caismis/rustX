@@ -557,7 +557,7 @@ jobs:
       # their own staged `-p` scopes so companion binaries sit beside each
       # test harness.
       - name: Run extracted workspace crate tests
-        run: cargo test --workspace --exclude rustx --exclude rustx-execution-client --exclude rustx-process-supervisor --lib --bins --all-features --locked
+        run: cargo test --workspace --exclude rustx --exclude rustx-execution-client --exclude rustx-process-supervisor --lib --bins --examples --all-features --locked
       - name: Stage the Process Supervisor harnesses
         run: >-
           python3 test-support/prepare_native_tests.py --
@@ -1200,7 +1200,7 @@ jobs:
       # slots on the free tier, and a separate member job was measured to
       # delay this lane's start by ~40 minutes (run 45555289930).
       - name: Run extracted workspace crate tests
-        run: cargo test --workspace --exclude rustx --exclude rustx-execution-client --exclude rustx-process-supervisor --lib --bins --all-features --locked
+        run: cargo test --workspace --exclude rustx --exclude rustx-execution-client --exclude rustx-process-supervisor --lib --bins --examples --all-features --locked
 
       - name: Stage the Process Supervisor harnesses
         run: >-
