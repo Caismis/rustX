@@ -25,7 +25,7 @@ import { languageForPath } from '../../presentation/primitives/file-language';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Menu } from '../../presentation/primitives/Menu';
 import { IconFolderClose16, IconFolderOpenOutline16, IconRefreshOutline16, IconWrapLinesOutline16, IconCodeOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
-import css from '../../presentation/right-panel/WorkbenchFiles.module.css';
+import { workbenchFilesCss } from '../../presentation/right-panel/workbenchFilesCss';
 import type { DesktopApplication } from '../../workspaces/desktop';
 export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { openPreview?: (path: string, signal: AbortSignal) => Promise<FilePreviewOperation>; observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
 /** Logical tab state; only inert layout/view metadata is persisted. */
@@ -34,7 +34,7 @@ export const fileTabView = (cache = new PreviewContentCache(), current = () => t
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function Reload({ reload }: { reload: () => void }) {
   const tx = useTranslation(); const label = tx('artifacts:workbench.refresh');
-  return <button type="button" className={css.tool} aria-label={label} title={label} onClick={reload}><IconRefreshOutline16/></button>;
+  return <button type="button" className={workbenchFilesCss.tool} aria-label={label} title={label} onClick={reload}><IconRefreshOutline16/></button>;
 }
 export function WorkspaceFiles({ call, view, onOpen, embedded = false, current }: { call: WorkbenchCall; view: FileTabView; onOpen: (path: string) => void; embedded?: boolean; current?: string }) {
   const tx = useTranslation(), [, redraw] = useReducer(n => n + 1, 0);
@@ -49,9 +49,9 @@ export function WorkspaceFiles({ call, view, onOpen, embedded = false, current }
     };
   }, [view]);
   const loaded = useCallback((result: WorkbenchResult) => { view.cwd = result.cwd ?? ''; redraw(); }, [view]);
-  return <section className={css.root} aria-label={tx('artifacts:workbench.files')} data-workbench-files>
-    {!embedded && <div className={css.header}><PathLabel path={view.cwd} className={css.path}/><Reload reload={() => { view.revision++; view.levels.clear(); setRevision(view.revision); }}/><OpenFileApp call={call} path="" directory/></div>}
-    <div className={css.body} ref={body} data-files-body><Directory path="" {...{ call, view, revision, onOpen, loaded, current }}/></div>
+  return <section className={workbenchFilesCss.root} aria-label={tx('artifacts:workbench.files')} data-workbench-files>
+    {!embedded && <div className={workbenchFilesCss.header}><PathLabel path={view.cwd} className={workbenchFilesCss.path}/><Reload reload={() => { view.revision++; view.levels.clear(); setRevision(view.revision); }}/><OpenFileApp call={call} path="" directory/></div>}
+    <div className={workbenchFilesCss.body} ref={body} data-files-body><Directory path="" {...{ call, view, revision, onOpen, loaded, current }}/></div>
   </section>;
 }
 function Directory({ path, call, view, revision, onOpen, loaded, current }: { path: string; call: WorkbenchCall; view: FileTabView; revision: number; onOpen: (path: string) => void; loaded: (result: WorkbenchResult) => void; current?: string }) {
@@ -67,13 +67,13 @@ function Directory({ path, call, view, revision, onOpen, loaded, current }: { pa
     return () => abort.abort();
   }, [call, path, view, revision, loaded]);
   const value = view.levels.get(path);
-  return <ul className={css.level}>
-    {error ? <li className={css.note} role="alert">{error}</li> : !value ? <li className={css.note}>{tx('artifacts:workbench.loading')}</li> : !value.entries?.length ? <li className={css.note}>{tx('artifacts:workbench.empty')}</li> : [...value.entries].sort((a,b) => Number(b.directory) - Number(a.directory) || byName.compare(a.name,b.name)).map(entry => {
+  return <ul className={workbenchFilesCss.level}>
+    {error ? <li className={workbenchFilesCss.note} role="alert">{error}</li> : !value ? <li className={workbenchFilesCss.note}>{tx('artifacts:workbench.loading')}</li> : !value.entries?.length ? <li className={workbenchFilesCss.note}>{tx('artifacts:workbench.empty')}</li> : [...value.entries].sort((a,b) => Number(b.directory) - Number(a.directory) || byName.compare(a.name,b.name)).map(entry => {
       const child = [path, entry.name].filter(Boolean).join('/'), expanded = view.expanded.has(child);
-      return <li className={css.item} key={entry.name} data-files-path={child}>
-        <button type="button" className={css.row} aria-current={child === current ? 'page' : undefined} disabled={entry.link} title={entry.link ? tx('artifacts:workbench.symlink') : entry.name} aria-expanded={entry.directory ? expanded : undefined} onClick={() => {
+      return <li className={workbenchFilesCss.item} key={entry.name} data-files-path={child}>
+        <button type="button" className={workbenchFilesCss.row} aria-current={child === current ? 'page' : undefined} disabled={entry.link} title={entry.link ? tx('artifacts:workbench.symlink') : entry.name} aria-expanded={entry.directory ? expanded : undefined} onClick={() => {
           if (entry.directory) { if (expanded) view.expanded.delete(child); else view.expanded.add(child); redraw(); } else onOpen(child);
-        }}>{entry.directory ? expanded ? <IconFolderOpenOutline16 className={css.icon}/> : <IconFolderClose16 className={css.icon}/> : <FileTypeIcon path={entry.name} size={16} className={css.fileIcon}/>}<span className={css.name}>{entry.name}</span></button>
+        }}>{entry.directory ? expanded ? <IconFolderOpenOutline16 className={workbenchFilesCss.icon}/> : <IconFolderClose16 className={workbenchFilesCss.icon}/> : <FileTypeIcon path={entry.name} size={16} className={workbenchFilesCss.fileIcon}/>}<span className={workbenchFilesCss.name}>{entry.name}</span></button>
         {entry.directory && expanded && <Directory path={child} {...{ call, view, revision, onOpen, loaded, current }}/ >}
       </li>;
     })}
@@ -145,11 +145,11 @@ export function WorkspaceFile({ path, call, view, onOpen, visible = true, naviga
   const bytes = value.data ?? new Uint8Array();
   const fullPath = view.cwd ? `${view.cwd.replace(/\/$/, '')}/${path}` : path;
   const more = value.page && !value.page.eof && <Button disabled={value.loading} onClick={() => owner.more()}>{tx(value.loading ? 'artifacts:document.loading' : 'artifacts:artifact-preview.load-more')}</Button>;
-  return <PreviewFrame path={fullPath} data-workbench-file={path} navigator={navigator} tools={<><ViewerMenu choices={viewersForPath(path)} mode={mode} select={next => { view.mode = next; setMode(next); }}/><button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/>{tools}</>}>
-    {failure !== undefined && <div className={css.note} role="alert"><p>{tx(`artifacts:document.${failure}`)}</p>{!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure) && !(failure === 'too_large' && value.text === undefined) && <Button onClick={() => owner.retry()}>{tx('artifacts:artifact-preview.retry-preview')}</Button>}</div>}
-    {mode !== 'geometry' && !owner.automaticRefresh && <p className={css.note} role="note">{tx('artifacts:document.manual-refresh')}</p>}
-    {value.text === '' && value.page?.eof && <p className={css.note}>{tx('artifacts:document.empty')}</p>}
-    {!mode ? <p className={css.note}>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p> : !loaded ? error === undefined && <LoadingIndicator label={mode === 'geometry' && value.loading ? <GeometryLoading stage="reading"/> : tx('artifacts:workbench.loading')}/> : mode !== 'text' && mode !== 'code' ? <div ref={scroll} className={css.document} onScroll={reading.onScroll}><DocumentBody key={mode} visible={visible} call={call} onOpen={onOpen} mode={mode} text={value.text ?? ''} bytes={bytes} path={path} view={view} signal={lifetime.signal} retry={() => owner.retry()}/>{more}</div> : mode === 'code' ? <div className={css.renderer} data-wrap={wrap}><CodeBlock className={css.code} contentRef={scroll} code={value.text ?? ''} lang={languageForPath(path)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')} toolbarLabel={tx('artifacts:workbench.code')}/>{more}</div> : <div ref={scroll} className={css.plainText} data-wrap={wrap} onScroll={event => {
+  return <PreviewFrame path={fullPath} data-workbench-file={path} navigator={navigator} tools={<><ViewerMenu choices={viewersForPath(path)} mode={mode} select={next => { view.mode = next; setMode(next); }}/><button hidden={mode !== 'text' && mode !== 'code'} type="button" className={workbenchFilesCss.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/>{tools}</>}>
+    {failure !== undefined && <div className={workbenchFilesCss.note} role="alert"><p>{tx(`artifacts:document.${failure}`)}</p>{!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure) && !(failure === 'too_large' && value.text === undefined) && <Button onClick={() => owner.retry()}>{tx('artifacts:artifact-preview.retry-preview')}</Button>}</div>}
+    {mode !== 'geometry' && !owner.automaticRefresh && <p className={workbenchFilesCss.note} role="note">{tx('artifacts:document.manual-refresh')}</p>}
+    {value.text === '' && value.page?.eof && <p className={workbenchFilesCss.note}>{tx('artifacts:document.empty')}</p>}
+    {!mode ? <p className={workbenchFilesCss.note}>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p> : !loaded ? error === undefined && <LoadingIndicator label={mode === 'geometry' && value.loading ? <GeometryLoading stage="reading"/> : tx('artifacts:workbench.loading')}/> : mode !== 'text' && mode !== 'code' ? <div ref={scroll} className={workbenchFilesCss.document} onScroll={reading.onScroll}><DocumentBody key={mode} visible={visible} call={call} onOpen={onOpen} mode={mode} text={value.text ?? ''} bytes={bytes} path={path} view={view} signal={lifetime.signal} retry={() => owner.retry()}/>{more}</div> : mode === 'code' ? <div className={workbenchFilesCss.renderer} data-wrap={wrap}><CodeBlock className={workbenchFilesCss.code} contentRef={scroll} code={value.text ?? ''} lang={languageForPath(path)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')} toolbarLabel={tx('artifacts:workbench.code')}/>{more}</div> : <div ref={scroll} className={workbenchFilesCss.plainText} data-wrap={wrap} onScroll={event => {
       const node = event.currentTarget; reading.onScroll(event);
       if (value.page && !value.page.eof && !value.loading && error === undefined && node.scrollHeight - node.scrollTop - node.clientHeight < 160) owner.more();
     }}><TextLines text={value.text ?? ''}/>{more}</div>}
@@ -171,9 +171,9 @@ function OpenFileApp({ call, path, directory }: { call: WorkbenchCall; path: str
     catch (cause) { if (live.current) setError(String(cause)); }
     finally { pending.current = false; if (live.current) setBusy(false); }
   };
-  return <div className={css.openApp}>
-    <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus items={apps.map(a => ({ id: a.id, label: a.label }))} selectedId={app?.id} onSelect={id => { setSelected(id); setMenu(false); void launch(id as 'files' | 'code'); }} anchor={<div className={css.split}>
+  return <div className={workbenchFilesCss.openApp}>
+    <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus items={apps.map(a => ({ id: a.id, label: a.label }))} selectedId={app?.id} onSelect={id => { setSelected(id); setMenu(false); void launch(id as 'files' | 'code'); }} anchor={<div className={workbenchFilesCss.split}>
       <button type="button" disabled={!app || busy} aria-label={label} title={label} onClick={() => void launch()}>{app?.id === 'code' ? <IconCodeOutline16/> : <IconFolderOpenOutline16/>}</button><button type="button" disabled={!apps.length || busy} aria-label={tx(directory ? 'agent:desktop.choose' : 'artifacts:workbench.choose-application')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconChevronDownOutline14 size={10}/></button>
-    </div>}/>{error && <span role="alert" className={css.launchError}>{error}</span>}
+    </div>}/>{error && <span role="alert" className={workbenchFilesCss.launchError}>{error}</span>}
   </div>;
 }

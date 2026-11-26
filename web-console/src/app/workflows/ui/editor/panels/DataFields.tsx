@@ -12,7 +12,7 @@ import { IconPencil } from '../../icons';
 import type { Edit } from './shared';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 import css from '../Editor.module.css';
-import styles from './DataPanels.module.css';
+import { dataPanelsCss } from './dataPanelsCss';
 
 export function DataOutputs({ items }: { items: { name: string; type: string; description: string }[] }) {
   const tx = useTranslation(),
@@ -98,7 +98,7 @@ export function ScalarInput({
           ? [{ type: 'literal' as const, value: String(value.value ?? '') }]
           : [];
   return (
-    <div className={styles.scalar} data-list-scalar>
+    <div className={dataPanelsCss.scalar} data-list-scalar>
       <TemplateInput
         parts={parts}
         address={address}

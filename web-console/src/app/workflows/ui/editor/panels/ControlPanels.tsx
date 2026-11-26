@@ -14,7 +14,7 @@ import { ConditionList } from './Conditions';
 import { RouteId, SliderField } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
-import fieldCss from '../forms/InputFields.module.css';
+import { inputFieldsCss } from '../forms/inputFieldsCss';
 
 /** Dify's `LOOP_NODE_MAX_COUNT` and `MAX_PARALLEL_LIMIT`. */
 const LOOP_MAX_COUNT = 100, PARALLEL_LIMIT = 10;
@@ -70,7 +70,7 @@ export function LoopPanel(props: PanelProps) {
             ? <ReferencePicker address={within(base, ['value'])} path={variable.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
             : <ConstantField label={tx('workflows:loop.value')} type={variable.var_type} value={variable.value} address={within(base, ['value'])} edit={props.edit} />}
         </div>;
-      }) : <button type="button" className={fieldCss.empty} onClick={add}>{tx('workflows:loop.no-variables')}</button>}
+      }) : <button type="button" className={inputFieldsCss.empty} onClick={add}>{tx('workflows:loop.no-variables')}</button>}
     </Section>
     <Section title={tx('workflows:loop.break-condition')} help={tx('workflows:loop.break-condition-tip')}>
       <ConditionList {...props} base={at('break_condition')} condition={node.break_condition ?? undefined}

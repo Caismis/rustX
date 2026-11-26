@@ -8,7 +8,7 @@ import { IconQuestionOutline14, IconSendOutline14, IconStopFill16 } from '../../
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
-import composerCss from '../../presentation/agent/Composer.module.css';
+import { composerCss } from '../../presentation/agent/composerCss';
 import { Textarea } from '@/components/ui/textarea';
 const states = {
   submitting: 'agent:btw.submitting', uncertain: 'agent:btw.uncertain', preparing: 'agent:btw.preparing', running: 'agent:btw.running', retrying: 'agent:btw.retrying', settling: 'agent:btw.settling', complete: 'agent:btw.complete', cancelled: 'agent:btw.cancelled', failed: 'agent:btw.failed', incomplete: 'agent:btw.incomplete', unavailable: 'agent:btw.unavailable', notAdmitted: 'agent:btw.notAdmitted',

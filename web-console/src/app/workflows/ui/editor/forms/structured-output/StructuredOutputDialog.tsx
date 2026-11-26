@@ -15,7 +15,7 @@ import { schemaObject } from '../../../../document/schema';
 import { emptySchema, readSchema, replaceSchema, schemaAt, schemaFromExample, type SchemaEdit } from './schema';
 import { VisualEditor } from './VisualEditor';
 import { DraftOwner } from '../drafts';
-import css from './StructuredOutput.module.css';
+import { structuredOutputCss } from './structuredOutputCss';
 
 /** A dialog owns its working copy. Only Save sends one document edit; Escape,
  * Cancel and the close button discard everything in this editing session. */
@@ -75,26 +75,26 @@ export function StructuredOutputDialog({ document: original, address, root, edit
     } catch { setError(tx('workflows:structured.validation-failed')); }
     finally { setSaving(false); }
   };
-  return <Modal open headless title={tx('workflows:structured.title')} onClose={onClose} className={css.dialog}>
-    <div className={css.header}><h2>{tx('workflows:structured.title')}</h2><button type="button" className={css.iconButton} aria-label={tx('workflows:dialog.close')} onClick={onClose}><IconCloseOutline16 /></button></div>
-    <Tabs className={css.tabs} value={view} onValueChange={switchView} inert={saving}>
-      <div className={css.toolbar}>
-        <TabsList activateOnFocus className={css.tabList} aria-label={tx('workflows:structured.title')}>
-          <TabsTab className={css.tab} value="visual"><IconListPenOutline16 />{tx('workflows:structured.visual')}</TabsTab>
-          <TabsTab className={css.tab} value="json"><IconBraces />{/* i18n-raw: JSON Schema format name */ 'JSON Schema'}</TabsTab>
+  return <Modal open headless title={tx('workflows:structured.title')} onClose={onClose} className={structuredOutputCss.dialog}>
+    <div className={structuredOutputCss.header}><h2>{tx('workflows:structured.title')}</h2><button type="button" className={structuredOutputCss.iconButton} aria-label={tx('workflows:dialog.close')} onClick={onClose}><IconCloseOutline16 /></button></div>
+    <Tabs className={structuredOutputCss.tabs} value={view} onValueChange={switchView} inert={saving}>
+      <div className={structuredOutputCss.toolbar}>
+        <TabsList activateOnFocus className={structuredOutputCss.tabList} aria-label={tx('workflows:structured.title')}>
+          <TabsTab className={structuredOutputCss.tab} value="visual"><IconListPenOutline16 />{tx('workflows:structured.visual')}</TabsTab>
+          <TabsTab className={structuredOutputCss.tab} value="json"><IconBraces />{/* i18n-raw: JSON Schema format name */ 'JSON Schema'}</TabsTab>
         </TabsList>
-        <button type="button" className={css.importButton} onClick={() => { if (editing) setError(tx('workflows:structured.finish-field')); else setImporting(true); }}>{tx('workflows:structured.import-json')}</button>
+        <button type="button" className={structuredOutputCss.importButton} onClick={() => { if (editing) setError(tx('workflows:structured.finish-field')); else setImporting(true); }}>{tx('workflows:structured.import-json')}</button>
       </div>
-      <TabsPanel className={css.workspace} value="visual"><VisualEditor document={staged.document} address={address} root={root} change={change} editing={editing} setEditing={value => { setEditing(value); setError(''); }} /></TabsPanel>
-      <TabsPanel className={css.workspace} value="json"><JsonCodeEditor panel label="JSON" value={json} onChange={value => { setJson(value); setError(''); }} allowEmpty={false}
+      <TabsPanel className={structuredOutputCss.workspace} value="visual"><VisualEditor document={staged.document} address={address} root={root} change={change} editing={editing} setEditing={value => { setEditing(value); setError(''); }} /></TabsPanel>
+      <TabsPanel className={structuredOutputCss.workspace} value="json"><JsonCodeEditor panel label="JSON" value={json} onChange={value => { setJson(value); setError(''); }} allowEmpty={false}
         headerActions={<button type="button" aria-label={tx(copied === json ? 'workflows:structured.copied' : 'workflows:structured.copy')} onClick={async () => {
           try { await navigator.clipboard.writeText(json); setCopied(json); } catch { setError(tx('workflows:structured.copy-failed')); }
         }}>{copied === json ? <IconCheckOutline16 /> : <IconCopyOutline16 />}</button>} /></TabsPanel>
     </Tabs>
-    {error && <p className={css.error} role="alert">{error}</p>}
-    <div className={css.footer}>
+    {error && <p className={structuredOutputCss.error} role="alert">{error}</p>}
+    <div className={structuredOutputCss.footer}>
       <Button variant="outline" size="sm" disabled={saving} onClick={() => { setEditing(undefined); change(replaceSchema(address, emptySchema())); setJson(JSON.stringify(emptySchema(), null, 2)); }}>{tx('workflows:structured.clear')}</Button>
-      <span className={css.separator} /><Button variant="outline" size="sm" onClick={onClose}>{tx('workflows:dialog.cancel')}</Button>
+      <span className={structuredOutputCss.separator} /><Button variant="outline" size="sm" onClick={onClose}>{tx('workflows:dialog.cancel')}</Button>
       <Button variant="primary" size="sm" disabled={saving} onClick={save}>{tx(saving ? 'workflows:structured.validating' : 'workflows:structured.save')}</Button>
     </div>
     {importing && <JsonImporter onClose={() => setImporting(false)} onImport={schema => {
@@ -112,9 +112,9 @@ function JsonImporter({ onClose, onImport }: { onClose: () => void; onImport: (s
     try { onImport(schemaFromExample(result.value)); }
     catch { setError(tx('workflows:structured.example-shape')); }
   };
-  return <Modal open title={tx('workflows:structured.import-json')} closeLabel={tx('workflows:dialog.close')} onClose={onClose} className={css.importDialog}
+  return <Modal open title={tx('workflows:structured.import-json')} closeLabel={tx('workflows:dialog.close')} onClose={onClose} className={structuredOutputCss.importDialog}
     footer={<><Button variant="outline" size="sm" onClick={onClose}>{tx('workflows:dialog.cancel')}</Button><Button variant="primary" size="sm" onClick={submit}>{tx('workflows:structured.import')}</Button></>}>
-    <p className={css.importHint}>{tx('workflows:structured.import-hint')}</p>
+    <p className={structuredOutputCss.importHint}>{tx('workflows:structured.import-hint')}</p>
     <JsonCodeEditor label="JSON" value={json} onChange={value => { setJson(value); setError(''); }} allowEmpty={false} error={error} placeholder={tx('workflows:structured.example-placeholder')} minHeight={220} />
   </Modal>;
 }

@@ -9,7 +9,7 @@ import { Choice } from '../primitives/aria';
 import { useBusyEnter } from '../../composer/preferences';
 import { SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
 import { PageRefreshButton } from '../ScopeToolbar';
-import shellCss from '../../../presentation/settings/SettingsPageShell.module.css';
+import { settingsPageShellCss } from '../../../presentation/settings/settingsPageShellCss';
 import { conversationPreferencesCss } from './conversationPreferencesCss';
 
 /** The General product page.
@@ -34,7 +34,7 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
     <SettingsGroup title={tx('settings:general-page.appearance')}>
       <SettingsRow
         label={tx('settings:general-page.appearance')}
-        control={<div className={shellCss.scopeSegment} role="group" aria-label={tx('settings:general-page.appearance')}>
+        control={<div className={settingsPageShellCss.scopeSegment} role="group" aria-label={tx('settings:general-page.appearance')}>
           {(['light', 'dark', 'system'] as const).map(id => <button key={id} type="button" aria-pressed={theme === id}
             onClick={() => setTheme?.(id)}>
             {tx(id === 'light' ? 'settings:copy.light' : id === 'dark' ? 'settings:copy.dark' : 'settings:appearance.system')}

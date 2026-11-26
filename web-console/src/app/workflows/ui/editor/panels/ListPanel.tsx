@@ -11,7 +11,7 @@ import { NumberField } from '../forms/fields';
 import { BooleanInput, DataOutputs, DataSection, ScalarInput } from './DataFields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
-import styles from './DataPanels.module.css';
+import { dataPanelsCss } from './dataPanelsCss';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
 export function ListPanel(props: PanelProps) {
@@ -29,10 +29,10 @@ export function ListPanel(props: PanelProps) {
   const changeFilter = (next: WorkflowListFilter) => update((current) => ({ ...current, filter: next }), at('filter'));
   const changeSort = (next: WorkflowListSort) => update((current) => ({ ...current, sort: next }), at('sort'));
   return (
-    <div className={styles.panel}>
+    <div className={dataPanelsCss.panel}>
       <DataSection title={tx('workflows:data.inputs')} required>
-        <div className={styles.inputRow}>
-          <div className={styles.input} data-empty={!path.length || undefined}>
+        <div className={dataPanelsCss.inputRow}>
+          <div className={dataPanelsCss.input} data-empty={!path.length || undefined}>
             <ReferencePicker
               token
               address={at('input')}
@@ -122,7 +122,7 @@ export function ListPanel(props: PanelProps) {
                 options={fields.map((field) => ({ value: JSON.stringify(field.path), label: field.path.join(' / ') }))}
               />
             )}
-            <div className={styles.condition}>
+            <div className={dataPanelsCss.condition}>
               <EnumSelect
                 label={tx('workflows:data.operator')}
                 value={filter.operator}
@@ -196,7 +196,7 @@ export function ListPanel(props: PanelProps) {
                 )
               }
             />
-            <p className={styles.help}>{tx('workflows:list.serial-help')}</p>
+            <p className={dataPanelsCss.help}>{tx('workflows:list.serial-help')}</p>
           </>
         )}
       </DataSection>
@@ -213,9 +213,9 @@ export function ListPanel(props: PanelProps) {
         }
       >
         {node.limit != null && (
-          <div className={styles.limit}>
+          <div className={dataPanelsCss.limit}>
             <input
-              className={styles.slider}
+              className={dataPanelsCss.slider}
               type="range"
               min={1}
               max={20}
@@ -257,7 +257,7 @@ export function ListPanel(props: PanelProps) {
                 options={fields.map((field) => ({ value: JSON.stringify(field.path), label: field.path.join(' / ') }))}
               />
             )}
-            <div className={styles.options} role="radiogroup" aria-label={tx('workflows:data.order')}>
+            <div className={dataPanelsCss.options} role="radiogroup" aria-label={tx('workflows:data.order')}>
               {(['asc', 'desc'] as const).map((order) => (
                 <button
                   type="button"

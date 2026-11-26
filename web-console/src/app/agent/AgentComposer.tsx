@@ -25,7 +25,7 @@ import { ComposerAttachments } from '../composer/ComposerAttachments';
 import { Toast } from '../../presentation/primitives/Toast';
 import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { Button } from '../../presentation/primitives/Button';
-import css from '../../presentation/agent/Composer.module.css';
+import { composerCss } from '../../presentation/agent/composerCss';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 import { Textarea } from '@/components/ui/textarea';
 const emptyContent: UserInputBlock[] = [];
@@ -195,10 +195,10 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       if (owner.snapshot()?.incarnation === ticket.incarnation) setError(actionError(cause));
     }
   };
-  return <div ref={root} className={css.root} data-file-drop-owner="">
+  return <div ref={root} className={composerCss.root} data-file-drop-owner="">
     {notice && <Toast key={notice.sequence} text={notice.text} holdMs={6000} icon={<IconWarningOutline16/>} anchor={root.current} onDone={() => setError('')}/>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
-    <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}
+    <div className={composerCss.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}
       onClick={event => { if (event.target === event.currentTarget) input.current?.focus({ preventScroll: true }); }}>
       {modelMenu && <ModelPicker state={modelPicker!} close={() => { modelInvocation.current = undefined; setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { if (modelRevision) owner.consumeRevision(modelRevision.incarnation, modelRevision.revision); setModelRequested(false); trigger.dismiss(); modelInvocation.current = undefined; trigger.restore(); }}/>}
       {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
@@ -208,8 +208,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         onRemove={firstSubmission && onRetainedRemove ? onRetainedRemove : disabled || busy ? undefined : id => { intake.remove(id); if (editor) owner.attachmentsEdited(editor.incarnation); }}
         onRetry={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(true); else void intake.upload(id, port); }}
         onReconcile={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(false); else void intake.reconcile(id, port); }}/>
-      <div className={css.editor}>
-        <Textarea unstyled ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
+      <div className={composerCss.editor}>
+        <Textarea unstyled ref={input} className={composerCss.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
           value={draft} disabled={disabled && !cancellationEditor} readOnly={busy || cancellationEditor} rows={1} onChange={event => { if (cancellationEditor) return; setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
           onPaste={event => {
@@ -269,27 +269,27 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
             }
           }} />
       </div>
-      <div ref={row} className={css.row} data-composer-controls>
-        <div className={css.tools}>
-          <button type="button" className={css.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}><span aria-hidden="true"><IconPlusOutline16 /></span></button>
+      <div ref={row} className={composerCss.row} data-composer-controls>
+        <div className={composerCss.tools}>
+          <button type="button" className={composerCss.add} aria-label={tx('commands:menu.add')} title={tx('commands:menu.add')} aria-haspopup="listbox" aria-expanded={!!menu} disabled={disabled || busy} onMouseDown={event => event.preventDefault()} onClick={trigger.toggle}><span aria-hidden="true"><IconPlusOutline16 /></span></button>
           <input ref={picker} type="file" hidden multiple aria-label={tx('agent:agent-composer.attach-files')} disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? []).map(file => ({ file }))); event.target.value = ''; }}/>
           {permission}
         </div>
-        <div className={css.trailing}>
+        <div className={composerCss.trailing}>
           {model}
           {/* A continuable child always keeps Stop beside Send. An ordinary
               running session does the same only while the message waits for
               acceptance, so Stop is not replaced by the sending spinner. */}
-          {active && (separateStop || sending) && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
+          {active && (separateStop || sending) && <button type="button" className={composerCss.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
             disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
           </button>}
-          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(primaryLabel)} title={tx(primaryTitle)}
+          <button type="button" className={composerCss.primary} data-composer-primary={primary.kind} aria-label={tx(primaryLabel)} title={tx(primaryTitle)}
             aria-busy={sending || preparing || undefined} data-sending={sending || undefined} data-preparing={preparing || undefined}
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : sending || preparing ? <svg className={css.sendingSpinner} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              : sending || preparing ? <svg className={composerCss.sendingSpinner} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                 <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2"/>
                 <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
               </svg> : <span aria-hidden="true"><IconSendOutline14 /></span>}

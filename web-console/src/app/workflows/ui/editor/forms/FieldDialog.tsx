@@ -14,7 +14,7 @@ import { renameSchemaField, schemaObject, schemaTarget, schemaTemplate, type Sch
 import type { WorkflowDocument } from '../../../document/model';
 import { WorkflowIcon } from '../../WorkflowIcon';
 import editorCss from '../Editor.module.css';
-import css from './InputFields.module.css';
+import { inputFieldsCss } from './inputFieldsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Radio, RadioGroup } from '@/components/ui/radio-group';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
@@ -26,7 +26,7 @@ const TYPE_ICONS: Record<FieldType, string> = {
   string: 'lucide:type', number: 'lucide:hash', integer: 'lucide:binary', boolean: 'lucide:square-check', array: 'lucide:brackets', object: 'lucide:braces',
 };
 export function FieldTypeIcon({ type }: { type: FieldType }) {
-  return <WorkflowIcon icon={TYPE_ICONS[type]} size={14} className={css.typeIcon} />;
+  return <WorkflowIcon icon={TYPE_ICONS[type]} size={14} className={inputFieldsCss.typeIcon} />;
 }
 
 /** Add or edit one input field, as Dify's variable dialog: a type, a name,
@@ -86,36 +86,36 @@ export function FieldDialog({ document, address, keys, original, schema, require
     {problem(name) ? <small id={`${id}-${name}`} role="alert" className={clsx(editorCss.hint, editorCss.hintError)}>{problem(name)}</small> : hint && <small className={editorCss.hint}>{hint}</small>}
   </div>;
 
-  return <Modal open onClose={close} title={tx(original ? 'workflows:fields.edit-title' : 'workflows:fields.add-title')} closeLabel={tx('workflows:dialog.close')} className={css.dialog}
+  return <Modal open onClose={close} title={tx(original ? 'workflows:fields.edit-title' : 'workflows:fields.add-title')} closeLabel={tx('workflows:dialog.close')} className={inputFieldsCss.dialog}
     footer={<><Button variant="outline" onClick={close}>{tx('workflows:dialog.cancel')}</Button><Button variant="primary" onClick={save}>{tx('workflows:fields.save')}</Button></>}>
-    <form className={css.form} onSubmit={event => { event.preventDefault(); save(); }} noValidate>
+    <form className={inputFieldsCss.form} onSubmit={event => { event.preventDefault(); save(); }} noValidate>
       {type !== 'raw' && <div className={editorCss.field}>
         <span id={`${id}-type`} className={editorCss.fieldLabel}>{tx('workflows:fields.type-label')}</span>
-        <Menu open={choosing} onClose={() => setChoosing(false)} autoFocus selectedId={type} onSelect={value => choose(value as FieldType)} className={css.typeMenu}
-          items={FIELD_TYPES.map(option => ({ id: option, icon: <FieldTypeIcon type={option} />, label: <span className={css.typeOption}><span>{tx(`workflows:fields.type.${option}`)}</span><code>{option}</code></span> }))}
-          anchor={<button type="button" className={css.typeTrigger} aria-labelledby={`${id}-type ${id}-type-value`} aria-haspopup="menu" aria-expanded={choosing} onClick={() => setChoosing(value => !value)}>
-            <FieldTypeIcon type={type} /><span id={`${id}-type-value`}>{tx(`workflows:fields.type.${type}`)}</span><code>{type}</code><span className={css.chevron} aria-hidden>⌄</span>
+        <Menu open={choosing} onClose={() => setChoosing(false)} autoFocus selectedId={type} onSelect={value => choose(value as FieldType)} className={inputFieldsCss.typeMenu}
+          items={FIELD_TYPES.map(option => ({ id: option, icon: <FieldTypeIcon type={option} />, label: <span className={inputFieldsCss.typeOption}><span>{tx(`workflows:fields.type.${option}`)}</span><code>{option}</code></span> }))}
+          anchor={<button type="button" className={inputFieldsCss.typeTrigger} aria-labelledby={`${id}-type ${id}-type-value`} aria-haspopup="menu" aria-expanded={choosing} onClick={() => setChoosing(value => !value)}>
+            <FieldTypeIcon type={type} /><span id={`${id}-type-value`}>{tx(`workflows:fields.type.${type}`)}</span><code>{type}</code><span className={inputFieldsCss.chevron} aria-hidden>⌄</span>
           </button>} />
       </div>}
 
       {field('name', tx('workflows:fields.name'), controlId => <TextInput id={controlId} className={clsx(editorCss.input, editorCss.mono)} value={form.name} data-modal-autofocus spellCheck={false}
         placeholder={tx('workflows:fields.name-placeholder')} {...invalid('name')} onChange={event => change({ name: event.target.value })} />)}
 
-      {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <Textarea id={controlId} className={clsx(editorCss.input, css.textarea)} value={form.description}
+      {type !== 'raw' && field('description', tx('workflows:fields.description'), controlId => <Textarea id={controlId} className={clsx(editorCss.input, inputFieldsCss.textarea)} value={form.description}
         placeholder={tx('workflows:fields.description-placeholder')} onChange={event => change({ description: event.target.value })} />)}
 
       {type === 'string' && <>
         {field('maxLength', tx('workflows:fields.max-length'), controlId => <TextInput id={controlId} className={editorCss.input} type="number" min={1} max={MAX_LENGTH_LIMIT} step={1} inputMode="numeric"
           value={form.maxLength} placeholder={tx('workflows:fields.max-length-placeholder')} {...invalid('maxLength')} onChange={event => change({ maxLength: event.target.value })} />, tx('workflows:fields.max-length-hint', { p0: MAX_LENGTH_LIMIT }))}
-        <fieldset className={css.options} aria-describedby={problem('options') ? `${id}-options` : undefined}>
+        <fieldset className={inputFieldsCss.options} aria-describedby={problem('options') ? `${id}-options` : undefined}>
           <legend className={editorCss.fieldLabel}>{tx('workflows:fields.options')}</legend>
-          {form.options.map((option, index) => <div key={index} className={css.option}>
+          {form.options.map((option, index) => <div key={index} className={inputFieldsCss.option}>
             <TextInput className={editorCss.input} value={option} aria-label={tx('workflows:fields.option', { p0: index + 1 })} placeholder={tx('workflows:fields.option-placeholder')}
               onChange={event => change({ options: form.options.map((current, at) => at === index ? event.target.value : current) })} />
             <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:fields.option-remove', { p0: index + 1 })}
               onClick={() => { const options = form.options.filter((_, at) => at !== index); change({ options, defaultText: options.includes(form.defaultText) ? form.defaultText : '' }); }}><IconCloseOutline16 /></button>
           </div>)}
-          <button type="button" className={css.addOption} onClick={() => change({ options: [...form.options, ''] })}><IconPlusOutline16 />{tx('workflows:fields.option-add')}</button>
+          <button type="button" className={inputFieldsCss.addOption} onClick={() => change({ options: [...form.options, ''] })}><IconPlusOutline16 />{tx('workflows:fields.option-add')}</button>
           {problem('options') ? <small id={`${id}-options`} role="alert" className={clsx(editorCss.hint, editorCss.hintError)}>{problem('options')}</small> : <small className={editorCss.hint}>{tx('workflows:fields.options-hint')}</small>}
         </fieldset>
       </>}
@@ -123,17 +123,17 @@ export function FieldDialog({ document, address, keys, original, schema, require
       {type === 'array' && field('items', tx('workflows:fields.items'), controlId => <EnumSelect id={controlId} className={editorCss.input} label={tx('workflows:fields.items')} value={form.itemType} onChange={itemType => change({ itemType })}
         options={ITEM_TYPES.map(item => ({ value: item, label: item ? `${tx(`workflows:fields.type.${item as FieldType}`)} · ${item}` : tx('workflows:fields.items-any') }))} />)}
 
-      {(type === 'object' || type === 'raw') && <div className={css.code}>
+      {(type === 'object' || type === 'raw') && <div className={inputFieldsCss.code}>
         <JsonCodeEditor label={tx(type === 'raw' ? 'workflows:fields.json' : 'workflows:fields.object-schema')} value={form.schemaJson} allowEmpty={false} minHeight={160}
           error={problem('schema')} onChange={schemaJson => change({ schemaJson })} />
         <small className={editorCss.hint}>{tx('workflows:fields.json-hint')}</small>
       </div>}
 
       {type !== 'raw' && <>
-        <fieldset className={css.requirement}>
+        <fieldset className={inputFieldsCss.requirement}>
           <legend className={editorCss.fieldLabel}>{tx('workflows:fields.requirement')}</legend>
           <RadioGroup value={String(form.required)} onValueChange={next => change({ required: next === 'true' })}>
-          {([true, false] as const).map(value => <label key={String(value)} className={clsx(css.requirementOption, form.required === value && css.requirementActive)}>
+          {([true, false] as const).map(value => <label key={String(value)} className={clsx(inputFieldsCss.requirementOption, form.required === value && inputFieldsCss.requirementActive)}>
             <Radio value={String(value)} />
             <span><b>{tx(value ? 'workflows:schema.required' : 'workflows:fields.optional')}</b><small>{tx(value ? 'workflows:fields.required-hint' : 'workflows:fields.optional-hint')}</small></span>
           </label>)}
@@ -152,7 +152,7 @@ function DefaultValue({ id, form, change, problem }: { id: string; form: FieldFo
   const control = `${id}-default-control`;
   const described = { 'aria-invalid': !!problem || undefined, 'aria-describedby': problem ? `${id}-default` : undefined };
   const hint = problem ? <small id={`${id}-default`} role="alert" className={clsx(editorCss.hint, editorCss.hintError)}>{problem}</small> : <small className={editorCss.hint}>{tx('workflows:fields.default-hint')}</small>;
-  if (form.type === 'array' || form.type === 'object') return <div className={css.code}>
+  if (form.type === 'array' || form.type === 'object') return <div className={inputFieldsCss.code}>
     <JsonCodeEditor label={label} value={form.defaultJson} allowEmpty={false} minHeight={96} error={problem} onChange={defaultJson => change({ defaultJson })} />
   </div>;
   const options = form.options;

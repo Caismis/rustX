@@ -6,7 +6,7 @@ import { IconChevronDownOutline14, IconFolderClose16, IconRefreshOutline16 } fro
 import { useSelector } from '@xstate/react';
 import { useSettingsActor } from './machines/react';
 import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './projection';
-import css from '../../presentation/settings/SettingsPageShell.module.css';
+import { settingsPageShellCss } from '../../presentation/settings/settingsPageShellCss';
 
 /** What a page's own toolbar needs to switch scope: the active target, the
  * workspace catalog, and the guarded retarget gesture. Provided once per
@@ -30,7 +30,7 @@ export function PageRefreshButton({ disabled = false }: { disabled?: boolean }) 
   return (
     <button
       type="button"
-      className={css.refreshButton}
+      className={settingsPageShellCss.refreshButton}
       aria-label={tx('settings:settings.reload-configuration')}
       title={tx('settings:settings.reload-configuration')}
       disabled={disabled || busy}
@@ -66,8 +66,8 @@ export function ScopeToolbar({ target, host, onSelect, userLabel, disabled = fal
     setOpen(false);
     if (`workspace:${workspace.id}` !== settingsTargetKey(target)) onSelect(workspaceSettingsTarget(workspace.id, workspace.displayName));
   };
-  return <div className={css.scopeBar}>
-    <div className={css.scopeSegment} role="group" aria-label={tx('settings:catalog.scope')}>
+  return <div className={settingsPageShellCss.scopeBar}>
+    <div className={settingsPageShellCss.scopeSegment} role="group" aria-label={tx('settings:catalog.scope')}>
       <button type="button" aria-pressed={workspaceActive} disabled={disabled || !workspaceActive && workspaces.length === 0}
         onClick={() => { const next = activeWorkspace ?? workspaces[0]; if (!workspaceActive && next) onSelect(workspaceSettingsTarget(next.id, next.displayName)); }}>
         {tx('settings:catalog.workspaces')}
@@ -79,7 +79,7 @@ export function ScopeToolbar({ target, host, onSelect, userLabel, disabled = fal
     </div>
     {workspaceActive && <Menu open={open} onClose={() => setOpen(false)} autoFocus
       selectedId={settingsTargetKey(target)}
-      anchor={<button type="button" className={css.scopeChooser} disabled={disabled} aria-haspopup="menu" aria-expanded={open}
+      anchor={<button type="button" className={settingsPageShellCss.scopeChooser} disabled={disabled} aria-haspopup="menu" aria-expanded={open}
         onClick={() => setOpen(value => !value)}>
         <IconFolderClose16 /><span>{activeWorkspace?.displayName ?? target.displayName}</span><IconChevronDownOutline14 />
       </button>}

@@ -9,7 +9,7 @@ import type { WorkflowDocument } from '../../../../document/model';
 import { orderedKeys } from '../../../../document/presentation';
 import { schemaObject, schemaTarget, schemaTemplate, schemaTypes, type Schema } from '../../../../document/schema';
 import { putProperty, removeProperty, schemaAt, type SchemaEdit } from './schema';
-import css from './StructuredOutput.module.css';
+import { structuredOutputCss } from './structuredOutputCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -20,7 +20,7 @@ const types = [...schemaTypes.filter(type => type !== 'array'), ...schemaTypes.f
 export function VisualEditor({ document, address, root, change, editing, setEditing }: {
   document: WorkflowDocument; address: FieldAddress; root: string; change: (apply: SchemaEdit) => boolean; editing: Editing | undefined; setEditing: (editing: Editing | undefined) => void;
 }) {
-  return <div className={css.visual}>
+  return <div className={structuredOutputCss.visual}>
     <SchemaNode name={root} document={document} address={address} depth={0} change={change} editing={editing} setEditing={setEditing} />
   </div>;
 }
@@ -40,23 +40,23 @@ function SchemaNode(props: NodeProps) {
   const keys = target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties);
   const active = !!parent && editing?.name === name && encodeField(editing.parent) === encodeField(parent);
   const adding = objectAddress && editing?.name === undefined && editing && encodeField(editing.parent) === encodeField(objectAddress);
-  return <div className={css.node} data-schema-field={name}>
+  return <div className={structuredOutputCss.node} data-schema-field={name}>
     {active ? <FieldCard key={`${encodeField(parent!)}:${name}`} document={document} parent={parent!} name={name} onCancel={() => setEditing(undefined)} onConfirm={apply => { if (change(apply)) setEditing(undefined); }} />
-      : <div className={css.nodeRow}>
-        {depth > 0 && objectAddress && <button type="button" className={css.expand} aria-label={tx('workflows:structured.expand', { p0: name })} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}</button>}
-        <div className={css.nodeText}><div className={css.nodeName}><b>{name}</b><code>{type}</code>{required && <small>{tx('workflows:schema.required')}</small>}</div>
+      : <div className={structuredOutputCss.nodeRow}>
+        {depth > 0 && objectAddress && <button type="button" className={structuredOutputCss.expand} aria-label={tx('workflows:structured.expand', { p0: name })} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}</button>}
+        <div className={structuredOutputCss.nodeText}><div className={structuredOutputCss.nodeName}><b>{name}</b><code>{type}</code>{required && <small>{tx('workflows:schema.required')}</small>}</div>
           {typeof schema.description === 'string' && schema.description && <p>{schema.description}</p>}
         </div>
-        <div className={css.nodeActions}>
+        <div className={structuredOutputCss.nodeActions}>
           {objectAddress && depth < 16 && <button type="button" disabled={!!editing} aria-label={tx('workflows:structured.add-child', { p0: name })} onClick={() => { setExpanded(true); setEditing({ parent: objectAddress }); }}><IconPlus size={14} /></button>}
           {parent && <><button type="button" disabled={!!editing} aria-label={tx('workflows:structured.edit-field', { p0: name })} onClick={() => setEditing({ parent, name })}><IconEditOutline16 /></button>
             <button type="button" disabled={!!editing} aria-label={tx('workflows:structured.remove-field', { p0: name })} onClick={() => change(removeProperty(parent, name))}><IconTrashOutline16 /></button></>}
         </div>
       </div>}
-    {expanded && objectAddress && depth < 16 && <div className={css.children}>
+    {expanded && objectAddress && depth < 16 && <div className={structuredOutputCss.children}>
       {keys.map(key => <SchemaNode key={key} {...props} name={key} parent={objectAddress} address={within(objectAddress, ['properties', { key }])} depth={depth + 1} required={Array.isArray(object?.required) && object.required.includes(key)} />)}
       {adding && <FieldCard key={encodeField(objectAddress)} document={document} parent={objectAddress} onCancel={() => setEditing(undefined)} onConfirm={apply => { if (change(apply)) setEditing(undefined); }} />}
-      {!depth && !editing && <button type="button" className={css.addField} onClick={() => setEditing({ parent: objectAddress })}><IconPlus size={14} />{tx('workflows:structured.add-field')}</button>}
+      {!depth && !editing && <button type="button" className={structuredOutputCss.addField} onClick={() => setEditing({ parent: objectAddress })}><IconPlus size={14} />{tx('workflows:structured.add-field')}</button>}
     </div>}
   </div>;
 }
@@ -84,32 +84,32 @@ function FieldCard({ document, parent, name, onCancel, onConfirm }: {
     }
     onConfirm(putProperty(parent, name, key, schema, required));
   };
-  return <form className={css.fieldCard} aria-label={tx('workflows:structured.field-editor')} onSubmit={event => { event.preventDefault(); confirm(); }} onKeyDown={event => {
+  return <form className={structuredOutputCss.fieldCard} aria-label={tx('workflows:structured.field-editor')} onSubmit={event => { event.preventDefault(); confirm(); }} onKeyDown={event => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); confirm(); }
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel(); }
   }}>
-    <div className={css.fieldTop}>
-      <TextInput autoFocus className={css.fieldName} aria-label={tx('workflows:schema.name')} placeholder={tx('workflows:schema.name')} value={field} onChange={event => { setField(event.target.value); setError(''); }} />
+    <div className={structuredOutputCss.fieldTop}>
+      <TextInput autoFocus className={structuredOutputCss.fieldName} aria-label={tx('workflows:schema.name')} placeholder={tx('workflows:schema.name')} value={field} onChange={event => { setField(event.target.value); setError(''); }} />
       <TypeSelector value={type} onChange={setType} />
-      <div className={css.fieldActions}><span className={css.required}>{tx('workflows:schema.required')}<Switch className={css.requiredSwitch} label={tx('workflows:schema.required')} checked={required} onChange={setRequired} /></span>
-        <span className={css.separator} /><button type="button" onClick={onCancel}>{tx('workflows:dialog.cancel')}</button>
-        <button type="submit" className={css.confirm} disabled={!field.trim()}>{tx('workflows:structured.confirm')}<kbd>{/* i18n-raw: keyboard shortcut */ 'Ctrl ↵'}</kbd></button>
+      <div className={structuredOutputCss.fieldActions}><span className={structuredOutputCss.required}>{tx('workflows:schema.required')}<Switch className={structuredOutputCss.requiredSwitch} label={tx('workflows:schema.required')} checked={required} onChange={setRequired} /></span>
+        <span className={structuredOutputCss.separator} /><button type="button" onClick={onCancel}>{tx('workflows:dialog.cancel')}</button>
+        <button type="submit" className={structuredOutputCss.confirm} disabled={!field.trim()}>{tx('workflows:structured.confirm')}<kbd>{/* i18n-raw: keyboard shortcut */ 'Ctrl ↵'}</kbd></button>
       </div>
     </div>
-    <TextInput className={css.description} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
-    {type === 'string' && <div className={css.validations}><div className={css.validationTitle}>{tx('workflows:structured.string-validations')}<span /></div>
+    <TextInput className={structuredOutputCss.description} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
+    {type === 'string' && <div className={structuredOutputCss.validations}><div className={structuredOutputCss.validationTitle}>{tx('workflows:structured.string-validations')}<span /></div>
       <label>{tx('workflows:structured.enum')}<Textarea aria-label={tx('workflows:structured.enum')} placeholder={tx('workflows:structured.enum-placeholder')} rows={2} value={enums} onChange={event => setEnums(event.target.value)} /></label>
     </div>}
-    {error && <p role="alert" className={css.error}>{error}</p>}
+    {error && <p role="alert" className={structuredOutputCss.error}>{error}</p>}
   </form>;
 }
 
 function TypeSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const tx = useTranslation();
-  return <Menu modal={false}><MenuTrigger className={css.typeTrigger} aria-label={tx('workflows:schema.type')}>{value}<IconChevronDownOutline14 /></MenuTrigger>
-    <MenuPopup side="bottom" align="start" sideOffset={4} className={css.typeMenu}>
-      {(types.includes(value) ? types : [...types, value]).map(type => <MenuItem key={type} className={css.typeItem} onClick={() => onChange(type)}>{type}</MenuItem>)}
+  return <Menu modal={false}><MenuTrigger className={structuredOutputCss.typeTrigger} aria-label={tx('workflows:schema.type')}>{value}<IconChevronDownOutline14 /></MenuTrigger>
+    <MenuPopup side="bottom" align="start" sideOffset={4} className={structuredOutputCss.typeMenu}>
+      {(types.includes(value) ? types : [...types, value]).map(type => <MenuItem key={type} className={structuredOutputCss.typeItem} onClick={() => onChange(type)}>{type}</MenuItem>)}
     </MenuPopup>
   </Menu>;
 }

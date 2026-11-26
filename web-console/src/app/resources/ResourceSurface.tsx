@@ -16,7 +16,7 @@ import { Menu } from '../../presentation/primitives/Menu';
 import { CatalogListSkeleton, DetailFormSkeleton } from '../../presentation/primitives/Skeleton';
 import { IconChevronDownOutline14, IconFolderClose16, IconPlusOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
 import { SettingsBackButton, SettingsPageShell } from '../../presentation/settings/SettingsPageShell';
-import shellCss from '../../presentation/settings/SettingsPageShell.module.css';
+import { settingsPageShellCss } from '../../presentation/settings/settingsPageShellCss';
 import { SettingsActorContext, useSettingsTarget } from '../settings/machines/react';
 import { SourceContext } from '../settings/source-context';
 import { catalogIdentities, catalogProfiles, configAuthoring, settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../settings/projection';
@@ -328,7 +328,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
           <div className={clsx(catalogCss.controlsRight, 'max-[760px]:basis-full max-[760px]:justify-end')}>
             <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
             <CatalogViewSwitch view={view} onChange={setView} />
-            <button type="button" className={shellCss.refreshButton} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
+            <button type="button" className={settingsPageShellCss.refreshButton} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
               disabled={!available || busy || transport.connection !== 'connected'} onClick={refresh}><IconRefreshOutline16 /></button>
           </div>
         </div>}

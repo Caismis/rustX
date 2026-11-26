@@ -13,7 +13,7 @@ import { RouteId } from './InferencePanels';
 import { DataOutputs, DataSection } from './DataFields';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
-import styles from './DataPanels.module.css';
+import { dataPanelsCss } from './dataPanelsCss';
 
 export function AggregatePanel(props: PanelProps) {
   const tx = useTranslation(),
@@ -31,10 +31,10 @@ export function AggregatePanel(props: PanelProps) {
     else remove(name);
   };
   return (
-    <div className={styles.panel}>
+    <div className={dataPanelsCss.panel}>
       <section className={css.group}>
         {(node.grouped ? node.groups : node.groups.slice(0, 1)).map((group, index) => (
-          <div className={styles.group} key={`${index}:${group.name}`}>
+          <div className={dataPanelsCss.group} key={`${index}:${group.name}`}>
             <h3>
               {node.grouped ? (
                 <div>
@@ -49,7 +49,7 @@ export function AggregatePanel(props: PanelProps) {
                 <span>{tx('workflows:aggregate.variables')}</span>
               )}
               {group.output_type && group.variables.length > 0 && (
-                <span className={styles.badge}>{group.output_type}</span>
+                <span className={dataPanelsCss.badge}>{group.output_type}</span>
               )}
               <ReferencePicker
                 token
@@ -90,12 +90,12 @@ export function AggregatePanel(props: PanelProps) {
               )}
             </h3>
             {!group.variables.length ? (
-              <p className={styles.empty}>{tx('workflows:aggregate.empty')}</p>
+              <p className={dataPanelsCss.empty}>{tx('workflows:aggregate.empty')}</p>
             ) : (
-              <div className={styles.variables}>
+              <div className={dataPanelsCss.variables}>
                 {group.variables.map((path, position) => (
-                  <div className={styles.source} key={position}>
-                    <div className={styles.input}>
+                  <div className={dataPanelsCss.source} key={position}>
+                    <div className={dataPanelsCss.input}>
                       <ReferencePicker
                         token
                         address={at('groups', index, 'variables', position)}
@@ -197,7 +197,7 @@ export function AggregatePanel(props: PanelProps) {
           />
         }
       >
-        <p className={styles.help}>{tx('workflows:aggregate.grouping-help')}</p>
+        <p className={dataPanelsCss.help}>{tx('workflows:aggregate.grouping-help')}</p>
       </DataSection>
       {node.grouped && (
         <DataOutputs

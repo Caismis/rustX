@@ -13,7 +13,7 @@ import type { WorkflowDocument } from '../../../document/model';
 import { JsonField } from './fields';
 import { FieldDialog, FieldTypeIcon } from './FieldDialog';
 import editorCss from '../Editor.module.css';
-import css from './InputFields.module.css';
+import { inputFieldsCss } from './inputFieldsCss';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -45,29 +45,29 @@ export function InputFields({ label, value, address, edit }: { label: string; va
 
   return <section className={editorCss.schemaEditor} data-schema-label={label}>
     <h3 className={editorCss.groupHeading}><span>{label}</span>
-      <span className={css.headActions}>
+      <span className={inputFieldsCss.headActions}>
         {visual && <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:fields.add')} title={tx('workflows:fields.add')} onClick={() => setEditing(null)}><IconPlusOutline16 /></button>}
       </span>
     </h3>
     {!visual
       ? <JsonField label={label} hint={tx('workflows:inspector.schema-hint')} value={value} rows={10} address={address} />
       : keys.length === 0
-        ? <button type="button" className={css.empty} onClick={() => setEditing(null)}>{tx('workflows:fields.empty')}</button>
-        : <ul className={css.list} aria-label={label}>{keys.map((key, index) => {
+        ? <button type="button" className={inputFieldsCss.empty} onClick={() => setEditing(null)}>{tx('workflows:fields.empty')}</button>
+        : <ul className={inputFieldsCss.list} aria-label={label}>{keys.map((key, index) => {
           const field = schemaObject(properties![key]), type = FIELD_TYPES.find(type => type === field?.type);
           const description = typeof field?.description === 'string' ? field.description : '';
-          return <li key={key} className={clsx(css.row, dragging === key && css.dragging)} draggable={keys.length > 1 && !!target}
+          return <li key={key} className={clsx(inputFieldsCss.row, dragging === key && inputFieldsCss.dragging)} draggable={keys.length > 1 && !!target}
             onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; setDragging(key); }} onDragEnd={() => setDragging(undefined)}
             onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => drop(event, key)}>
-            <button type="button" className={css.rowMain} aria-label={tx('workflows:fields.edit', { p0: key })} aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" onClick={() => setEditing(key)}
+            <button type="button" className={inputFieldsCss.rowMain} aria-label={tx('workflows:fields.edit', { p0: key })} aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" onClick={() => setEditing(key)}
               onKeyDown={event => { if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) { event.preventDefault(); move(index, index + (event.key === 'ArrowUp' ? -1 : 1)); } }}>
-              <span className={css.variable} aria-hidden>{'{x}'}</span>
-              <span className={css.name}>{key}</span>
-              {description && <><span className={css.dot} aria-hidden>·</span><span className={css.detail} title={description}>{description}</span></>}
+              <span className={inputFieldsCss.variable} aria-hidden>{'{x}'}</span>
+              <span className={inputFieldsCss.name}>{key}</span>
+              {description && <><span className={inputFieldsCss.dot} aria-hidden>·</span><span className={inputFieldsCss.detail} title={description}>{description}</span></>}
             </button>
-            <span className={css.required}>{tx(required.includes(key) ? 'workflows:schema.required' : 'workflows:fields.optional')}</span>
-            <span className={css.type}>{type ? <><FieldTypeIcon type={type} />{tx(`workflows:fields.type.${type}`)}</> : String(field?.type ?? 'JSON')}</span>
-            <span className={css.rowActions}>
+            <span className={inputFieldsCss.required}>{tx(required.includes(key) ? 'workflows:schema.required' : 'workflows:fields.optional')}</span>
+            <span className={inputFieldsCss.type}>{type ? <><FieldTypeIcon type={type} />{tx(`workflows:fields.type.${type}`)}</> : String(field?.type ?? 'JSON')}</span>
+            <span className={inputFieldsCss.rowActions}>
               <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:fields.edit', { p0: key })} tabIndex={-1} onClick={() => setEditing(key)}><IconEditOutline16 /></button>
               <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:inspector.remove', { p0: key })} onClick={() => remove(key)}><IconTrashOutline16 /></button>
             </span>

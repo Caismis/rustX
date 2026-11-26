@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import { Button } from '../primitives/Button';
 import { IconChevronLeftOutline14, IconChevronRightOutline14 } from '../primitives/icons';
-import css from './SettingsPageShell.module.css';
+import { settingsPageShellCss } from './settingsPageShellCss';
 
 /** Tactile DSH breadcrumb/back pill button for sub-views and resource detail editors. */
 export function SettingsBackButton({
@@ -19,19 +19,19 @@ export function SettingsBackButton({
   className?: string;
 }) {
   return (
-    <div className={clsx(css.breadcrumbBar, className)}>
-      <button type="button" className={css.backButton} onClick={onClick}>
-        <span className={css.backIcon} aria-hidden="true">
+    <div className={clsx(settingsPageShellCss.breadcrumbBar, className)}>
+      <button type="button" className={settingsPageShellCss.backButton} onClick={onClick}>
+        <span className={settingsPageShellCss.backIcon} aria-hidden="true">
           <IconChevronLeftOutline14 />
         </span>
         <span>{label}</span>
       </button>
       {current != null && (
         <>
-          <span className={css.crumbSep} aria-hidden="true">
+          <span className={settingsPageShellCss.crumbSep} aria-hidden="true">
             <IconChevronRightOutline14 />
           </span>
-          <span className={css.crumbCurrent}>{current}</span>
+          <span className={settingsPageShellCss.crumbCurrent}>{current}</span>
         </>
       )}
     </div>
@@ -63,22 +63,22 @@ export function SettingsPageShell({
   className?: string;
 }) {
   return (
-    <section className={clsx(css.shell, className)}>
+    <section className={clsx(settingsPageShellCss.shell, className)}>
       {(title || toolbar || breadcrumb) && (
-        <header className={css.pageHead}>
-          <div className={css.headInner}>
-            <div className={css.headTitle}>
+        <header className={settingsPageShellCss.pageHead}>
+          <div className={settingsPageShellCss.headInner}>
+            <div className={settingsPageShellCss.headTitle}>
               {breadcrumb}
-              {title && <h1 className={css.title}>{title}</h1>}
-              {description && <p className={css.description}>{description}</p>}
+              {title && <h1 className={settingsPageShellCss.title}>{title}</h1>}
+              {description && <p className={settingsPageShellCss.description}>{description}</p>}
             </div>
-            {toolbar && <div className={css.headToolbar}>{toolbar}</div>}
+            {toolbar && <div className={settingsPageShellCss.headToolbar}>{toolbar}</div>}
           </div>
         </header>
       )}
-      <div className={css.pageBody}>
-        <fieldset disabled={bodyDisabled} className={css.bodyFieldset}>
-          <div className={css.canvas}>{children}</div>
+      <div className={settingsPageShellCss.pageBody}>
+        <fieldset disabled={bodyDisabled} className={settingsPageShellCss.bodyFieldset}>
+          <div className={settingsPageShellCss.canvas}>{children}</div>
         </fieldset>
       </div>
       {footer != null && footer}
@@ -116,13 +116,13 @@ export function SettingsPageFooter({
     if (saving && el && el.contains(document.activeElement)) el.focus();
   }, [saving]);
   return (
-    <footer data-settings-footer="" className={css.pageFooter}>
-      <div className={css.footerInner}>
-        <div className={css.footerStatus}>
+    <footer data-settings-footer="" className={settingsPageShellCss.pageFooter}>
+      <div className={settingsPageShellCss.footerInner}>
+        <div className={settingsPageShellCss.footerStatus}>
           {leading}
           {status}
         </div>
-        <div className={css.footerButtons} ref={buttons} tabIndex={-1}>
+        <div className={settingsPageShellCss.footerButtons} ref={buttons} tabIndex={-1}>
           <Button
             variant="outline"
             disabled={(!dirty && !cancelEnabled) || !!saving}
@@ -159,17 +159,17 @@ export function SettingsGroup({
   children: ReactNode;
 }) {
   return (
-    <section className={css.group}>
+    <section className={settingsPageShellCss.group}>
       {(title || description || action) && (
-        <div className={css.groupHead}>
-          <div className={css.groupCopy}>
-            {title && <h2 className={css.groupTitle}>{title}</h2>}
-            {description && <p className={css.groupDescription}>{description}</p>}
+        <div className={settingsPageShellCss.groupHead}>
+          <div className={settingsPageShellCss.groupCopy}>
+            {title && <h2 className={settingsPageShellCss.groupTitle}>{title}</h2>}
+            {description && <p className={settingsPageShellCss.groupDescription}>{description}</p>}
           </div>
           {action}
         </div>
       )}
-      <div className={plain ? css.groupPlain : css.groupCard}>{children}</div>
+      <div className={plain ? settingsPageShellCss.groupPlain : settingsPageShellCss.groupCard}>{children}</div>
     </section>
   );
 }
@@ -195,21 +195,21 @@ export function SettingsRow({
   children?: ReactNode;
 }) {
   return (
-    <div className={clsx(css.row, vertical && css.rowVertical)}>
-      <div className={css.rowHead}>
-        <div className={css.rowText}>
+    <div className={clsx(settingsPageShellCss.row, vertical && settingsPageShellCss.rowVertical)}>
+      <div className={settingsPageShellCss.rowHead}>
+        <div className={settingsPageShellCss.rowText}>
           {label && (
-            <div className={css.rowLabel}>
+            <div className={settingsPageShellCss.rowLabel}>
               {label}
               {badge}
               {resetAction}
             </div>
           )}
-          {description && <div className={css.rowDescription}>{description}</div>}
+          {description && <div className={settingsPageShellCss.rowDescription}>{description}</div>}
         </div>
-        {control && <div className={css.rowControl}>{control}</div>}
+        {control && <div className={settingsPageShellCss.rowControl}>{control}</div>}
       </div>
-      {children && (vertical ? <div className={css.rowBody}>{children}</div> : children)}
+      {children && (vertical ? <div className={settingsPageShellCss.rowBody}>{children}</div> : children)}
     </div>
   );
 }
