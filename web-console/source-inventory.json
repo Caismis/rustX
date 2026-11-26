@@ -3809,18 +3809,6 @@
       "classification": "B"
     },
     {
-      "upstream": "packages/client/ui-chat/src/client/chat/TurnNavigator.module.css",
-      "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
-      "destination": "web-console/src/app/agent/TurnNavigator.module.css",
-      "upstream_sha256": "114ad82f41d9676dfd39ee6c8f9c239fcbbe343f9555dc9fbaea4814d9b8acdc",
-      "classification": "B",
-      "treatment": "Harness rail geometry, ticks, fades, preview card and container hiding; the slot is the rustX reading surface (composer outside), so the frame centers in it instead of a viewport-minus-composer band; radius token inlined; recoverable outline-failure card added.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "391148c8c20478428b8a31dc1ab38492b5504f24cb6ba82901cd562e3da5580e"
-    },
-    {
       "upstream": "packages/client/ui-chat/tests/turn-navigator-fixture.ts",
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
       "destination": "web-console/test/turn-navigator-fixture.ts",
@@ -7324,12 +7312,11 @@
         "../../locale/react",
         "../../presentation/primitives/keyboard-composition",
         "./BackgroundJobs",
-        "./SessionPanel.module.css",
         "./session-panel-state",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c93add7946ed1b14c839686221582046386a80726314d4b2161a05c03fc7ca47"
+      "local_sha256": "da76e87ace7d0ef6fdda934ed48887eb973cf9b2340e859641903273596811c7"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
