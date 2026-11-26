@@ -35,6 +35,24 @@ fn fixture() -> (SqliteConversationStore, ScheduleBinding, Clock) {
         Clock::new(),
     )
 }
+#[test]
+fn schedule_reader_does_not_install_write_workspace() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("schedule.sqlite");
+    let id = ConversationId::generate();
+    drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+    let scope = Arc::new(crate::sqlite::schedule_read::ScheduleReadScope::default());
+    let reader = SqliteConversationStore::open_schedule_reader(id, &path, &scope).unwrap();
+    assert_eq!(reader.schedule_summary().unwrap().enabled, 0);
+    let connection = reader.lock().unwrap();
+    let temporary_objects: u64 = connection
+        .query_row("SELECT COUNT(*) FROM sqlite_temp_schema", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(temporary_objects, 0);
+}
+
 fn command(id: &str, mutation: ScheduleMutation) -> ScheduleCommand {
     ScheduleCommand {
         command_id: id.into(),
