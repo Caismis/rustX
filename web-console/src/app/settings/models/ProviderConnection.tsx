@@ -11,7 +11,7 @@ import { UnitOutcomeNotice, usePageTransaction, useUnitEditing } from '../forms/
 import { Choice, ConfirmAction } from '../primitives/aria';
 import { IconPicker, ProviderIcon } from './ProviderIcon';
 import { providerMutation, providerTemplates } from './ProviderTemplates';
-import cards from './ModelsPage.module.css';
+import { modelsCss } from './modelsCss';
 
 export function ProviderConnection({ id, scope, revision, authored, inherited, hasModels }: {
   id: string; scope: SourceScope; revision: string; authored?: ProviderView; inherited?: ProviderView;
@@ -95,16 +95,16 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     edit({ ...value, display_name: next === id ? undefined : next });
   };
 
-  return <form ref={form} tabIndex={-1} aria-label={title} aria-busy={locked} className={cards.connection} noValidate
+  return <form ref={form} tabIndex={-1} aria-label={title} aria-busy={locked} className={modelsCss.connection} noValidate
     onSubmit={event => event.preventDefault()}
     onKeyDown={event => {
       if (event.key !== 'Enter' || !(event.target instanceof HTMLInputElement) || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       event.preventDefault();
     }}>
-    <div className={cards.detailHeader}>
+    <div className={modelsCss.detailHeader}>
       <h3 title={name} aria-label={title}>
         <ProviderIcon icon={value.icon} size={18}/>
-        {renaming ? <Input ref={nameInput} className={cards.providerRename} type="text" defaultValue={name}
+        {renaming ? <Input ref={nameInput} className={modelsCss.providerRename} type="text" defaultValue={name}
           aria-label={tx('settings:models.provider-display-name')}
           onCompositionStart={() => { nameEditing.current.composing = true; }}
           onCompositionEnd={() => { nameEditing.current.composing = false; }}
@@ -131,7 +131,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
           unit.submit(true);
         }}
         renderTrigger={(open, ref) => <Menu open={menu} align="end" compact autoFocus onClose={() => setMenu(false)}
-          anchor={<button type="button" ref={ref} className={cards.iconButton} aria-label={tx('settings:models.provider-actions')} aria-haspopup="menu" aria-expanded={menu}
+          anchor={<button type="button" ref={ref} className={modelsCss.iconButton} aria-label={tx('settings:models.provider-actions')} aria-haspopup="menu" aria-expanded={menu}
             aria-disabled={locked} onClick={() => { if (!locked) setMenu(!menu); }}><IconEllipsisOutline16/></button>}
           items={inspecting
             ? [{ id: 'customize', label: tx('settings:forms.customize') }]
@@ -159,8 +159,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     </div>
     {iconPicker && <IconPicker value={value.icon} onChange={icon => { if ((icon ?? null) !== (value.icon ?? null)) edit({ ...value, icon }); }} onClose={() => setIconPicker(false)}
       finalFocus={() => actionsTrigger() ?? false}/>}
-    {inspecting && <p className={cards.inherited}>{tx('settings:forms.using-global')}</p>}
-    <fieldset disabled={inspecting} className={cards.connectionFields}>
+    {inspecting && <p className={modelsCss.inherited}>{tx('settings:forms.using-global')}</p>}
+    <fieldset disabled={inspecting} className={modelsCss.connectionFields}>
       <label>{tx('settings:models-page.endpoint')}
         <Input type="url" required value={value.base_url} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && endpointError}
           placeholder={/* i18n-raw: example URL */ 'https://api.example.com/v1'}
@@ -174,8 +174,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
       {credential.kind === 'environment' ? <label>{tx('settings:models-page.environment-variable')}
         <Input required value={credential.variable} readOnly={unit.awaitingObservation} aria-invalid={attempted > 0 && credentialError}
           onChange={event => changeCredential({ kind: 'environment', variable: event.target.value })}/>
-      </label> : <div ref={keyEditor} className={cards.secret}>
-        <div className={cards.keyHeading}>
+      </label> : <div ref={keyEditor} className={modelsCss.secret}>
+        <div className={modelsCss.keyHeading}>
           <label htmlFor={keyId}>{tx('settings:models-page.new-literal-credential')}</label>
           {getKey && !authored && <a href={getKey} target="_blank" rel="noreferrer">{tx('settings:models.get-key')}</a>}
         </div>
@@ -187,7 +187,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
             changeCredential(event.target.value === '' && authored?.credential.type === 'literal'
               ? { kind: 'retain' } : { kind: 'literal', value: event.target.value });
           }}/>
-        <Button size="sm" className={cards.iconButton} disabled={!key} aria-pressed={keyVisible}
+        <Button size="sm" className={modelsCss.iconButton} disabled={!key} aria-pressed={keyVisible}
           aria-label={tx(keyVisible ? 'settings:models.hide-key' : 'settings:models.show-key')} onClick={() => setShowKey(!keyVisible)}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
             <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>{keyVisible && <path d="m3 3 18 18"/>}
@@ -198,7 +198,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     <SettingsNotice occurrence={invalidName} text={invalidName ? tx('settings:models.invalid-provider-display-name') : undefined}/>
     <SettingsNotice occurrence={attempted} text={attempted ? endpointError ? tx('settings:models.invalid-endpoint') : credentialError ? tx('settings:models.invalid-key') : undefined : undefined}/>
     <UnitOutcomeNotice title={title} outcome={unit.outcome}/>
-    {unit.reviewNeeded && <div className={cards.connectionActions}>
+    {unit.reviewNeeded && <div className={modelsCss.connectionActions}>
       <Button size="sm" disabled={locked || !unit.admitted || endpointError || credentialError} onClick={() => unit.review()}>{tx('settings:models.apply-provider-changes')}</Button>
     </div>}
   </form>;

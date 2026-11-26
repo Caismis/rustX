@@ -11,7 +11,7 @@ import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
 import { Bool, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
-import cards from './ModelsPage.module.css';
+import { modelsCss } from './modelsCss';
 
 const inputModalities: readonly Modality[] = ['text', 'image'];
 export function ModelFields({ form, duplicate }: { form: TypedForm<Model>; duplicate?: (provider: string, id: string) => boolean }) {
@@ -19,7 +19,7 @@ export function ModelFields({ form, duplicate }: { form: TypedForm<Model>; dupli
   const resets = useContext(UnitReset);
   const modelParameters = useRef<HTMLDivElement>(null);
   return <>
-    <div className={cards.basicFields}>
+    <div className={modelsCss.basicFields}>
       <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required
         validate={value => duplicate?.(form.state.values.provider, String(value).trim()) ? message('settings:models.duplicate') : undefined} />
       <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} required />
@@ -41,7 +41,7 @@ function InputModalities({ form }: { form: TypedForm<Model> }) {
   const Bound = form.Field as unknown as Field;
   return <Bound name="capabilities.input_modalities">{field => {
     const value = (field.state.value as Modality[] | undefined) ?? [];
-    return <div className={cards.modalityGroup}><span>{tx('settings:models-page.input-modalities')}</span><div className={cards.chips}>{inputModalities.map(modality => <label className={cards.chip} key={modality}>
+    return <div className={modelsCss.modalityGroup}><span>{tx('settings:models-page.input-modalities')}</span><div className={modelsCss.chips}>{inputModalities.map(modality => <label className={modelsCss.chip} key={modality}>
       <Checkbox checked={value.includes(modality)} disabled={modality === 'text'}
         onCheckedChange={checked => field.handleChange((checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{tx(`settings:model-option.${modality}`)}
     </label>)}</div></div>;
@@ -111,9 +111,9 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
       setAdding(false);
       focusAdd();
     };
-    return <fieldset className={cards.profiles}><legend>{tx('settings:models-page.model-profiles')}</legend>
-      <div className={cards.profileChips} ref={chips}>
-        {identities.map(id => <div className={cards.profileChip} key={id} data-selected={id === current}>
+    return <fieldset className={modelsCss.profiles}><legend>{tx('settings:models-page.model-profiles')}</legend>
+      <div className={modelsCss.profileChips} ref={chips}>
+        {identities.map(id => <div className={modelsCss.profileChip} key={id} data-selected={id === current}>
           <Button size="sm" aria-label={tx('settings:models-page.profile-value', { p0: id })} aria-pressed={id === current}
             onClick={() => { if (id !== current && canSwitch()) setSelected(id); }}>{id}</Button>
           <Button size="sm" aria-label={`${tx('settings:models-page.delete-profile')} ${id}`} onClick={() => {
@@ -127,13 +127,13 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
             focusAdd();
           }}>×</Button>
         </div>)}
-        {adding && <Input autoFocus aria-label={tx('settings:models-page.new-profile-identity')} className={cards.profileName}
+        {adding && <Input autoFocus aria-label={tx('settings:models-page.new-profile-identity')} className={modelsCss.profileName}
           value={identity} aria-invalid={duplicate || undefined}
           onChange={event => setIdentity(event.target.value)} onBlur={finishAdd} onKeyDown={event => {
             if (event.key === 'Enter') { event.preventDefault(); finishAdd(); }
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); addingDraft.current = false; setAdding(false); setIdentity(''); focusAdd(); }
           }} />}
-        <Button data-add-profile size="sm" variant="outline" className={cards.profileAdd} aria-label={tx('settings:models-page.add-profile')}
+        <Button data-add-profile size="sm" variant="outline" className={modelsCss.profileAdd} aria-label={tx('settings:models-page.add-profile')}
           onClick={() => { if (canSwitch()) { addingDraft.current = true; setIdentity(''); setAdding(true); } }}>+</Button>
       </div>
       <SettingsNotice text={adding && duplicate ? `${name} ${tx('settings:fields.is-already-listed')}` : undefined}/>
@@ -173,8 +173,8 @@ function ReasoningOrder({ identities, order, appended, change }: {
     focus.current = { id: order[from], direction };
     change(next);
   };
-  return <section className={cards.reasoningOrder} aria-labelledby={label}>
-    <div className={cards.reasoningHeading}><span id={label}>{tx('settings:models-page.reasoning-order')}</span>
+  return <section className={modelsCss.reasoningOrder} aria-labelledby={label}>
+    <div className={modelsCss.reasoningHeading}><span id={label}>{tx('settings:models-page.reasoning-order')}</span>
       {identities.length > 0 && (order
         ? <Button size="sm" onClick={() => change(undefined)}>{tx('settings:models-page.clear-reasoning-order')}</Button>
         : <Button size="sm" variant="outline" onClick={() => change([...identities].sort())}>{tx('settings:models-page.configure-reasoning-order')}</Button>)}
@@ -182,7 +182,7 @@ function ReasoningOrder({ identities, order, appended, change }: {
     {!identities.length ? <p className={css.hint}>{tx('settings:models-page.reasoning-requires-profiles')}</p>
       : !order ? <p className={css.hint}>{tx('settings:models-page.reasoning-not-configured')}</p>
       : <>
-        <ol ref={list} className={cards.reasoningList} aria-label={tx('settings:models-page.reasoning-order')}>
+        <ol ref={list} className={modelsCss.reasoningList} aria-label={tx('settings:models-page.reasoning-order')}>
           {order.map((id, index) => <li key={id} data-profile-order={id}>
             <span>{id}</span>
             <Button size="sm" data-move="up" aria-label={tx('settings:models-page.reasoning-move-up', { p0: id })}

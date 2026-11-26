@@ -29,7 +29,7 @@ import { useModelProbe } from './useModelProbe';
 import { ProviderConnection } from './ProviderConnection';
 import { ProviderNameDialog } from './ProviderTemplates';
 import css from '../../../presentation/settings/SettingsContent.module.css';
-import cards from './ModelsPage.module.css';
+import { modelsCss } from './modelsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 export interface ModelsPageProps {
@@ -138,7 +138,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
     bodyDisabled={bodyDisabled}
     breadcrumb={<SettingsBackButton label={tx('settings:models-page.models')} current={providerName} onClick={() => focusWithGuard(undefined)} />}
     toolbar={listToolbar} footer={<PageTransactionFooter leading={undefined}/>}>
-    <section ref={landing} tabIndex={-1} aria-label={providerName} className={cards.section}>
+    <section ref={landing} tabIndex={-1} aria-label={providerName} className={modelsCss.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
       <SettingsGroup title={tx('settings:models-page.provider-value', { p0: providerName ?? '' })}>
         <ProviderConnection key={selected} scope={scope} revision={revision} id={selected!} authored={providerEntry?.authored}
@@ -148,11 +148,11 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
       <SettingsGroup title={tx('settings:models.list')}
         action={<Button size="sm" variant="outline" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
           disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>}>
-        {selectedModels.length ? <div role="list" className={cards.modelList}>
+        {selectedModels.length ? <div role="list" className={modelsCss.modelList}>
           {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
             scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
             onOpen={() => focusWithGuard({ kind: 'model', id: entry.id, provider: selected! })}/>)}
-        </div> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
+        </div> : <p className={modelsCss.emptyModels}>{tx('settings:models.empty-models')}</p>}
       </SettingsGroup>
     </section>
     {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
@@ -160,7 +160,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
 
   return <SettingsPageShell className={`${css.settings} ${css.page}`} title={tx('settings:models-page.models')}
     description={tx('settings:models.description')} bodyDisabled={bodyDisabled} toolbar={listToolbar}>
-    <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
+    <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={modelsCss.section}>
       <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
       <WorkspaceFollowGlobal scope={scope} hasOverrides={hasWorkspaceOverrides} authoredRemovals={workspaceRemovals} units={['root_model', 'model', 'provider']}>
         <SettingsGroup title={tx('settings:models-page.default-model-for-new-sessions')}>
@@ -174,7 +174,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
         <SettingsGroup plain title={tx('settings:models.custom-providers')}
           action={<Button size="sm" variant="outline" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>}>
           <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
-          <div className={cards.providerList}>
+          <div className={modelsCss.providerList}>
             {navigation.map(entry => <ProviderCard key={entry.id} entry={entry} revision={revision} scope={scope}
               modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
               onOpen={() => focusWithGuard({ kind: 'provider', id: entry.id })}/>)}
@@ -242,26 +242,26 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
   const title = tx('settings:models-page.model-value', { p0: entry.id });
   const removeLabel = tx(restoresGlobal ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: title });
   const removeDisabled = !unit.admitted || unit.busy || unit.awaitingObservation;
-  return <div role="listitem" aria-label={entry.id} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
-    <button type="button" className={cards.modelIdentity} aria-label={tx('settings:models.edit-model-value', { p0: entry.id })} onClick={onOpen}>
-      <span className={cards.modelName} title={model.id}>{model.id}</span>
-      <span className={cards.modelBadges}>
+  return <div role="listitem" aria-label={entry.id} className={modelsCss.modelRow} data-hidden={!!model.hidden || providerHidden}>
+    <button type="button" className={modelsCss.modelIdentity} aria-label={tx('settings:models.edit-model-value', { p0: entry.id })} onClick={onOpen}>
+      <span className={modelsCss.modelName} title={model.id}>{model.id}</span>
+      <span className={modelsCss.modelBadges}>
         <span title={tx('settings:models.context-tokens', { p0: model.context_window })}><Badge>{compactContext.format(context)}</Badge></span>
         {model.capabilities.input_modalities.includes('image') && <Badge>{tx('settings:models.vision')}</Badge>}
       </span>
     </button>
-    <div className={cards.modelActions}
+    <div className={modelsCss.modelActions}
       onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}>
-      <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.test-model', { p0: model.id })}
+      <Button size="sm" className={modelsCss.iconButton} aria-label={tx('settings:models.test-model', { p0: model.id })}
         title={tx('settings:models.test-model', { p0: model.id })} aria-busy={status === 'checking'} data-probe={status}
         disabled={!canProbe || !unit.admitted || !probe.available || status === 'checking'} onClick={() => { void probe.test(entry.id); }}><IconLinkOutline14/></Button>
-      <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.edit-model')} title={tx('settings:models.edit-model')} onClick={onOpen}><IconEditOutline16 size={14}/></Button>
+      <Button size="sm" className={modelsCss.iconButton} aria-label={tx('settings:models.edit-model')} title={tx('settings:models.edit-model')} onClick={onOpen}><IconEditOutline16 size={14}/></Button>
       {entry.authored && <ConfirmAction label={removeLabel} confirm={removeLabel}
         tone={restoresGlobal ? 'restore' : 'destructive'} settle={settle} disabled={removeDisabled} onConfirm={() => unit.submit(true)}
         title={restoresGlobal ? tx('settings:bridge.use-the-global-default-for-value', { p0: title }) : tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: tx(scope === 'workspace' ? 'settings:extension-detail.workspace' : 'settings:extension-detail.user') })}
         description={<p>{tx(restoresGlobal ? 'settings:forms.restore-help' : 'settings:models-page.any-source-that-names-this-model-identity-keeps-naming-it-native')}</p>}
-        renderTrigger={(open, ref) => <Button ref={ref} className={cards.iconButton} aria-label={removeLabel} disabled={removeDisabled} onClick={open}>
+        renderTrigger={(open, ref) => <Button ref={ref} className={modelsCss.iconButton} aria-label={removeLabel} disabled={removeDisabled} onClick={open}>
           {restoresGlobal ? <IconRefreshOutline16 size={14}/> : <IconTrashOutline16 size={14}/>}
         </Button>}/>}
       <Switch checked={!model.hidden && !providerHidden} label={tx('settings:models.show-model', { p0: model.id })}
@@ -293,14 +293,14 @@ function ModelDialog({ source, scope, revision, id, provider, suggestDeepSeek, o
   });
   // Model metadata from the matching DeepSeek template in ZCode's catalog.
   const suggestions = creating && suggestDeepSeek ? ['deepseek-flash', 'deepseek-v4-pro'].filter(id => !duplicate(provider ?? '', id)) : [];
-  return <DialogSurface open title={title} onClose={close} overlayClassName={cards.overlay} className={`${css.settings} ${cards.modelDialog}`} contentRef={dialog}
+  return <DialogSurface open title={title} onClose={close} overlayClassName={modelsCss.overlay} className={`${css.settings} ${modelsCss.modelDialog}`} contentRef={dialog}
     initialFocus={() => {
       const input = dialog.current?.querySelector<HTMLInputElement>(authored ? 'input[type="number"]' : 'input');
       if (input && !input.matches(':disabled')) { input.focus(); input.select(); return false; }
       return dialog.current ?? false;
     }}>
-    <div className={cards.dialogHeader}><h2>{creating ? tx('settings:models-page.add-model') : tx('settings:models.edit-model')}</h2><Button aria-label={tx('settings:models.close')} disabled={unit.busy} onClick={close}><IconCloseOutline16/></Button></div>
-    {!!suggestions.length && <div role="group" className={cards.templates} aria-label={tx('settings:models.model-suggestions')}>
+    <div className={modelsCss.dialogHeader}><h2>{creating ? tx('settings:models-page.add-model') : tx('settings:models.edit-model')}</h2><Button aria-label={tx('settings:models.close')} disabled={unit.busy} onClick={close}><IconCloseOutline16/></Button></div>
+    {!!suggestions.length && <div role="group" className={modelsCss.templates} aria-label={tx('settings:models.model-suggestions')}>
       {suggestions.map(modelId => <Button key={modelId} size="sm" variant="outline" disabled={unit.busy || !unit.writable}
         aria-pressed={unit.displayed.id === modelId} onClick={() => unit.edit({
           ...unit.displayed, id: modelId, context_window: '1000000',
@@ -327,7 +327,7 @@ function DefaultModelSelection({ value, change, models, profiles }: ModelSelecti
   // budget. The auxiliary models are configured independently in the source.
   const { profile, request_params: _params, max_output_tokens: _limit, ...selection } = value;
   return <>
-    <div className={cards.defaultChoices}>
+    <div className={modelsCss.defaultChoices}>
       <Choice label={tx('settings:models-page.model')} value={model} placeholder={tx('settings:copy.select-model')} disabled={choices.size === 0}
         options={[...choices].map(id => [id, id])} onChange={model => change({ ...selection, model })}/>
       {model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[model] ?? []}

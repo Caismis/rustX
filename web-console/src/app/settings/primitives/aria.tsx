@@ -20,7 +20,7 @@ import { Button } from '../../../presentation/primitives/Button';
 import { Input } from '../../../presentation/primitives/Input';
 import { Menu } from '../../../presentation/primitives/Menu';
 import { Switch } from '../../../presentation/primitives/Switch';
-import css from '../../../presentation/settings/SettingsWorkflow.module.css';
+import { settingsWorkflowCss } from '../../../presentation/settings/settingsWorkflowCss';
 import contentCss from '../../../presentation/settings/SettingsContent.module.css';
 
 /** coss ui owns interaction and accessibility semantics here and nothing else:
@@ -40,7 +40,7 @@ export function Choice<T extends string>({ label, value, onChange, options, disa
 }) {
   const disabledSet = new Set(disabledKeys ?? []);
   const labelId = useId();
-  return <div className={css.select}>
+  return <div className={settingsWorkflowCss.select}>
     {!hideLabel && <span id={labelId}>{label}</span>}
     <CossSelect
       items={options.map(([optionValue, optionLabel]) => ({ value: optionValue, label: optionLabel }))}
@@ -63,7 +63,7 @@ export function Choice<T extends string>({ label, value, onChange, options, disa
 export function Search({ label, value, onChange, placeholder }: {
   label: string; value: string; onChange: (value: string) => void; placeholder?: string;
 }) {
-  return <div className={css.search}>
+  return <div className={settingsWorkflowCss.search}>
     <Input value={value} onChange={event => onChange(event.currentTarget.value)} placeholder={placeholder} aria-label={label} type="search" />
   </div>;
 }
@@ -89,15 +89,15 @@ export function ResourceList({ label, rows, selected, onOpen, empty }: {
   onOpen: (id: string) => void; empty?: ReactNode;
 }) {
   const tx = useTranslation();
-  if (!rows.length) return <p className={css.empty}>{empty ?? tx('settings:copy.no-matching-definitions-in-this-native-projection')}</p>;
-  return <GridList className={css.list} aria-label={label} selectionMode="single"
+  if (!rows.length) return <p className={settingsWorkflowCss.empty}>{empty ?? tx('settings:copy.no-matching-definitions-in-this-native-projection')}</p>;
+  return <GridList className={settingsWorkflowCss.list} aria-label={label} selectionMode="single"
     selectedKeys={selected ? [selected] : []} onAction={key => onOpen(String(key))}>
-    {rows.map(row => <GridListItem key={row.id} id={row.id} className={css.row} textValue={row.name} aria-label={row.name}>
-      <div className={css.rowTop}>
-        <span className={css.rowName}>{row.name}</span>
+    {rows.map(row => <GridListItem key={row.id} id={row.id} className={settingsWorkflowCss.row} textValue={row.name} aria-label={row.name}>
+      <div className={settingsWorkflowCss.rowTop}>
+        <span className={settingsWorkflowCss.rowName}>{row.name}</span>
         {!!row.actions?.length && <RowActions label={tx('settings:aria.actions-for-value', { p0: row.name })} actions={row.actions} />}
       </div>
-      <span className={css.rowFacts}>{row.facts}</span>
+      <span className={settingsWorkflowCss.rowFacts}>{row.facts}</span>
       {row.detail}
     </GridListItem>)}
   </GridList>;
@@ -114,11 +114,11 @@ export function RowActions({ label, actions }: { label: string; actions: readonl
 /** An advanced or secondary section. Progressive disclosure is how Settings
  * keeps advanced detail reachable without creating another primary page. */
 export function Advanced({ title, children, expanded }: { title: string; children: ReactNode; expanded?: boolean }) {
-  return <Collapsible className={css.disclosure} defaultOpen={expanded}>
+  return <Collapsible className={settingsWorkflowCss.disclosure} defaultOpen={expanded}>
     <Heading level={4} style={{ margin: 0 }}>
-      <CollapsibleTrigger className={css.disclosureButton}><span className={css.disclosureMarker} aria-hidden="true">▸</span>{title}</CollapsibleTrigger>
+      <CollapsibleTrigger className={settingsWorkflowCss.disclosureButton}><span className={settingsWorkflowCss.disclosureMarker} aria-hidden="true">▸</span>{title}</CollapsibleTrigger>
     </Heading>
-    <CollapsiblePanel keepMounted className={css.disclosurePanel}>{children}</CollapsiblePanel>
+    <CollapsiblePanel keepMounted className={settingsWorkflowCss.disclosurePanel}>{children}</CollapsiblePanel>
   </Collapsible>;
 }
 
@@ -128,12 +128,12 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
 }) {
   // Row clicks actuate the toggle, as the pre-coss React Aria label root did:
   // a wrapping label would fold its text into the switch's accessible name.
-  return <div className={css.switchRow} onClick={event => {
+  return <div className={settingsWorkflowCss.switchRow} onClick={event => {
     if ((event.target as HTMLElement).closest('[role="switch"]') !== null) return
     if (!disabled) onChange(!checked)
   }}>
     <span>{label}</span>
-    <Switch checked={checked} disabled={disabled} onChange={onChange} label={label} className={css.switch} />
+    <Switch checked={checked} disabled={disabled} onChange={onChange} label={label} className={settingsWorkflowCss.switch} />
   </div>;
 }
 
@@ -156,15 +156,15 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
   const closing = useRef<'dismissed' | 'confirmed'>('dismissed');
   const destructive = tone === 'destructive';
   const show = () => { closing.current = 'dismissed'; setOpen(true); };
-  return <span className={css.removal} data-tone={tone}>
+  return <span className={settingsWorkflowCss.removal} data-tone={tone}>
     {renderTrigger ? renderTrigger(show, trigger) : <Button ref={trigger} disabled={disabled} aria-label={label}
-      variant={destructive ? 'danger-outline' : 'outline'} size="sm" className={destructive ? css.dangerTrigger : undefined}
+      variant={destructive ? 'danger-outline' : 'outline'} size="sm" className={destructive ? settingsWorkflowCss.dangerTrigger : undefined}
       icon={destructive ? <IconTrashOutline16 /> : undefined} onClick={show}>
       {triggerText ?? label}
     </Button>}
     <DialogSurface open={open} onClose={() => setOpen(false)} title={title}
-      role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={css.confirmOverlay}
-      panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}
+      role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={settingsWorkflowCss.confirmOverlay}
+      panelClassName={settingsWorkflowCss.confirmModal} className={settingsWorkflowCss.confirmDialog} initialFocus={cancel}
       finalFocus={() => {
         const targets = closing.current === 'confirmed' ? [settle.current] : [trigger.current, settle.current];
         // A trigger hidden out of layout (e.g. a responsive navigation swap)
@@ -179,7 +179,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
       }}>
       <h2>{title}</h2>
       {description}
-      <div className={css.confirmActions}>
+      <div className={settingsWorkflowCss.confirmActions}>
         <Button type="button" ref={cancel} variant="outline" onClick={() => setOpen(false)}>{tx('settings:aria.cancel')}</Button>
         <Button type="button" variant={destructive ? 'danger' : 'primary'}
           onClick={() => { closing.current = 'confirmed'; setOpen(false); onConfirm(); }}>{confirm}</Button>
@@ -194,9 +194,9 @@ export function FilterTabs<T extends string>({ label, value, onChange, options, 
   options: readonly (readonly [T, string])[]; children: ReactNode;
 }) {
   return <CossTabs value={value} onValueChange={next => onChange(String(next) as T)}>
-    <TabsList activateOnFocus className={css.filterTabs} aria-label={label}>
-      {options.map(([key, text]) => <TabsTab key={key} value={key} className={css.filterTab}>{text}</TabsTab>)}
+    <TabsList activateOnFocus className={settingsWorkflowCss.filterTabs} aria-label={label}>
+      {options.map(([key, text]) => <TabsTab key={key} value={key} className={settingsWorkflowCss.filterTab}>{text}</TabsTab>)}
     </TabsList>
-    <TabsContent value={value} className={css.filterTabPanel}>{children}</TabsContent>
+    <TabsContent value={value} className={settingsWorkflowCss.filterTabPanel}>{children}</TabsContent>
   </CossTabs>;
 }

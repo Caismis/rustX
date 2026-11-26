@@ -10,7 +10,7 @@ import { useBusyEnter } from '../../composer/preferences';
 import { SettingsPageShell, SettingsGroup, SettingsRow } from '../../../presentation/settings/SettingsPageShell';
 import { PageRefreshButton } from '../ScopeToolbar';
 import shellCss from '../../../presentation/settings/SettingsPageShell.module.css';
-import preferenceCss from './ConversationPreferences.module.css';
+import { conversationPreferencesCss } from './conversationPreferencesCss';
 
 /** The General product page.
  *
@@ -46,13 +46,13 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
     </SettingsGroup>
     <SettingsGroup title={tx('settings:general-page.conversation')}>
       <SettingsRow label={tx('settings:general-page.font-size')} description={tx('settings:general-page.font-description')}
-        control={<><div className={preferenceCss.stepper}>
-          <output className={preferenceCss.value} aria-label={tx('settings:general-page.font-size')}>{preferences.fontSize}</output>
-          <span className={preferenceCss.arrows}>
-            <button type="button" className={preferenceCss.arrow} aria-label={tx('settings:general-page.font-increase')} disabled={preferences.fontSize >= 22} onClick={() => preferenceStore.update({ fontSize: preferences.fontSize + 1 })}><IconChevronUpOutline14 size={9} /></button>
-            <button type="button" className={preferenceCss.arrow} aria-label={tx('settings:general-page.font-decrease')} disabled={preferences.fontSize <= 10} onClick={() => preferenceStore.update({ fontSize: preferences.fontSize - 1 })}><IconChevronDownOutline14 size={9} /></button>
+        control={<><div className={conversationPreferencesCss.stepper}>
+          <output className={conversationPreferencesCss.value} aria-label={tx('settings:general-page.font-size')}>{preferences.fontSize}</output>
+          <span className={conversationPreferencesCss.arrows}>
+            <button type="button" className={conversationPreferencesCss.arrow} aria-label={tx('settings:general-page.font-increase')} disabled={preferences.fontSize >= 22} onClick={() => preferenceStore.update({ fontSize: preferences.fontSize + 1 })}><IconChevronUpOutline14 size={9} /></button>
+            <button type="button" className={conversationPreferencesCss.arrow} aria-label={tx('settings:general-page.font-decrease')} disabled={preferences.fontSize <= 10} onClick={() => preferenceStore.update({ fontSize: preferences.fontSize - 1 })}><IconChevronDownOutline14 size={9} /></button>
           </span>
-        </div><span className={preferenceCss.unit}>{tx('settings:general-page.font-unit')}</span></>} />
+        </div><span className={conversationPreferencesCss.unit}>{tx('settings:general-page.font-unit')}</span></>} />
       <SettingsRow label={tx('settings:general-page.work-details')} description={tx('settings:general-page.work-description')}
         control={<Choice hideLabel label={tx('settings:general-page.work-details')} value={preferences.transcriptMode}
           options={TRANSCRIPT_MODES.map(mode => [mode, tx(`settings:general-page.${mode}`)] as const)}

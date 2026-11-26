@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTab } from '@/components/ui/tabs';
 import clsx from 'clsx';
 import { Menu } from '../primitives/Menu';
 import { IconChevronDownOutline14 } from '../primitives/icons';
-import workflow from './SettingsWorkflow.module.css';
+import { settingsWorkflowCss } from './settingsWorkflowCss';
 
 /** One primary Settings page as the panel presents it. The icon is a
  * recognition aid only: the label is always the page's accessible name. */
@@ -51,17 +51,17 @@ export function SettingsPanel({ pages, activeId, onSelect, visible = true, child
           <Tabs className="contents" orientation="vertical" value={activeId} onValueChange={key => { onSelect(String(key)); }}>
             <nav className="[border-right:1px_solid_var(--dsw-alias-border-l3)] flex-none flex flex-col gap-[18px] [grid-area:nav] min-h-0 pt-[22px] px-[12px] pb-0 box-border [@container_settings_(max-width:680px)]:hidden" aria-label={tx('settings:navigation.rail')} data-settings-navigation="">
               <div className="px-[12px] py-0 text-[16px] leading-[24px] font-medium [color:var(--dsw-alias-label-primary)]">{tx('settings:settings.settings')}</div>
-              <TabsList activateOnFocus className={clsx('flex flex-col gap-[4px] overflow-y-auto min-h-0 pb-[20px]', workflow.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
+              <TabsList activateOnFocus className={clsx('flex flex-col gap-[4px] overflow-y-auto min-h-0 pb-[20px]', settingsWorkflowCss.pageTabs)} aria-label={tx('settings:settings-root.settings-pages')}>
                 {pages.map(page => (
-                  <TabsTab key={page.id} value={page.id} className={clsx('flex items-center gap-[8px] h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font-family:inherit] text-[14px] leading-[22px] font-normal [color:var(--dsw-alias-label-primary)] text-left', workflow.pageTab)}>
+                  <TabsTab key={page.id} value={page.id} className={clsx('flex items-center gap-[8px] h-[40px] pt-[9px] pr-[16px] pb-[9px] pl-[12px] box-border border-none rounded-[12px] bg-transparent cursor-pointer [font-family:inherit] text-[14px] leading-[22px] font-normal [color:var(--dsw-alias-label-primary)] text-left', settingsWorkflowCss.pageTab)}>
                     <span className="flex-none inline-flex w-[16px] h-[16px] items-center justify-center [color:var(--dsw-alias-label-secondary)]" aria-hidden="true">{page.icon}</span>
-                    <span className={clsx('flex-1 min-w-0 overflow-hidden whitespace-nowrap text-ellipsis', workflow.pageTabLabel)}>{page.label}</span>
+                    <span className={clsx('flex-1 min-w-0 overflow-hidden whitespace-nowrap text-ellipsis', settingsWorkflowCss.pageTabLabel)}>{page.label}</span>
                   </TabsTab>
                 ))}
               </TabsList>
             </nav>
             <div className="[grid-area:options] min-w-0 min-h-0 flex overflow-hidden [@container_settings_(max-width:680px)]:mb-0 [&_[role=tabpanel]]:flex-1 [&_[role=tabpanel]]:min-w-0 [&_[role=tabpanel]]:min-h-0 [&_[role=tabpanel]]:flex [&_[role=tabpanel]]:flex-col [&_[role=tabpanel]]:overflow-hidden">
-              <TabsContent key={activeId} value={activeId} className={workflow.pageTabPanel}>{children}</TabsContent>
+              <TabsContent key={activeId} value={activeId} className={settingsWorkflowCss.pageTabPanel}>{children}</TabsContent>
             </div>
           </Tabs>
       </div>

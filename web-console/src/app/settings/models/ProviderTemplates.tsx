@@ -8,7 +8,7 @@ import { IconCloseOutline16 } from '../../../presentation/primitives/icons';
 import { useUnitEditing } from '../forms/bridge';
 import { ProviderIcon } from './ProviderIcon';
 import css from '../../../presentation/settings/SettingsContent.module.css';
-import cards from './ModelsPage.module.css';
+import { modelsCss } from './modelsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 interface ProviderTemplate {
@@ -48,10 +48,10 @@ export function ProviderNameDialog({ exists, revision, onCreate, onClose }: {
   };
   const unit = useUnitEditing({ blank, revision, mutation: value => providerMutation(name, value) });
   const title = tx('settings:models-page.add-provider');
-  return <DialogSurface open onClose={onClose} title={title} overlayClassName={cards.overlay} className={`${css.settings} ${cards.nameDialog}`} initialFocus={input}>
-    <div className={cards.dialogHeader}><h2>{title}</h2><Button aria-label={tx('settings:models.close')} onClick={onClose}><IconCloseOutline16/></Button></div>
+  return <DialogSurface open onClose={onClose} title={title} overlayClassName={modelsCss.overlay} className={`${css.settings} ${modelsCss.nameDialog}`} initialFocus={input}>
+    <div className={modelsCss.dialogHeader}><h2>{title}</h2><Button aria-label={tx('settings:models.close')} onClick={onClose}><IconCloseOutline16/></Button></div>
     <form onSubmit={event => { event.preventDefault(); if (name && !duplicate && !invalid) { unit.edit(blank); onCreate(name); } }}>
-      <div className={cards.templates} aria-label={tx('settings:models.templates')} role="group">
+      <div className={modelsCss.templates} aria-label={tx('settings:models.templates')} role="group">
         <Button size="sm" variant="outline" aria-pressed={!template} onClick={() => { setTemplate(undefined); setIdentity(''); }}><ProviderIcon size={14}/>{tx('settings:models.custom-template')}</Button>
         {providerTemplates.map(item => <Button key={item.name} size="sm" variant="outline" aria-pressed={template === item}
           onClick={() => { setTemplate(item); setIdentity(item.name); }}><ProviderIcon icon={item.icon} size={14}/>{item.name}</Button>)}
@@ -60,7 +60,7 @@ export function ProviderNameDialog({ exists, revision, onCreate, onClose }: {
         <TextInput ref={input} required value={identity} aria-invalid={duplicate || invalid || undefined} onChange={event => setIdentity(event.target.value)} />
       </label>
       <SettingsNotice text={duplicate ? tx('settings:models.duplicate') : invalid ? tx('settings:models.invalid-provider-name') : undefined}/>
-      <div className={cards.nameActions}><Button onClick={onClose}>{tx('settings:aria.cancel')}</Button><Button type="submit" variant="primary" disabled={!name || duplicate || invalid}>{tx('settings:models.continue')}</Button></div>
+      <div className={modelsCss.nameActions}><Button onClick={onClose}>{tx('settings:aria.cancel')}</Button><Button type="submit" variant="primary" disabled={!name || duplicate || invalid}>{tx('settings:models.continue')}</Button></div>
     </form>
   </DialogSurface>;
 }
