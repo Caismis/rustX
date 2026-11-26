@@ -13,7 +13,6 @@ import { PageTransactionFooter, usePageTransaction } from '../../settings/forms/
 import { useNavigationGuard } from '../../settings/forms/guard';
 import { IconPicker } from '../../workflows/ui/WorkflowIcon';
 import { SkillIcon, skillAssetUrl } from './SkillIcon';
-import css from './SkillDetail.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -177,14 +176,14 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
 
   const title = display?.authored.display_name ?? name;
   const editable = !!write && !!display?.revision;
-  return <SettingsPageShell title={title} className={`${settings.settings} ${settings.page} ${css.detail}`}
+  return <SettingsPageShell title={title} className={`${settings.settings} ${settings.page} min-w-0 [&_input:not([type=checkbox])]:min-w-[180px]`}
     bodyDisabled={bodyDisabled}
     breadcrumb={<SettingsBackButton label={tx('resources:skills.title')} current={title} onClick={() => guard.guard(close)} />}
     footer={editable ? <PageTransactionFooter /> : null}>
-    <div className={css.detailTop}>
+    <div className="flex items-center gap-[14px] min-w-0">
       <SkillIcon icon={preview ?? display?.icon} size={48} />
-      <div className={css.detailMeta}>
-        <span className={css.scopeTag}>{tx(owner === 'user' ? 'resources:scope.global' : 'resources:scope.workspace')}</span>
+      <div className="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-[12px] gap-y-[4px] [&_code]:min-w-0 [&_code]:wrap-anywhere [&_code]:[font:12px/18px_var(--ds-font-family-code)] [&_code]:[color:var(--dsw-alias-label-secondary)]">
+        <span className="flex-none px-[8px] py-[2px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-alias-bg-layer-3)] [color:var(--dsw-alias-label-secondary)] text-[12px] leading-[18px]">{tx(owner === 'user' ? 'resources:scope.global' : 'resources:scope.workspace')}</span>
         {content?.path && <code>{content.path}</code>}
       </div>
       {onDelete && <Button variant="outline" size="sm" icon={<IconTrashOutline16 />} onClick={onDelete}>{tx('resources:skills.delete')}</Button>}
@@ -199,7 +198,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
           onChange={event => update('short_description', event.target.value)} />
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.icon')} vertical description={iconLabel}>
-        <div className={css.iconActions}>
+        <div className="flex items-center flex-wrap gap-[6px]">
           <input ref={fileInput} type="file" hidden accept=".png,.jpg,.jpeg,.webp,.svg"
             aria-label={tx('resources:skills.upload-image')} onChange={event => void chooseImage(event)} />
           <Button variant="outline" size="sm" disabled={reading || saving} onClick={() => fileInput.current?.click()}>
@@ -213,7 +212,7 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
         </div>
       </SettingsRow>
       <SettingsRow label={tx('resources:skills.asset-paths')} vertical>
-        <div className={css.pathFields} id={iconSectionId}>
+        <div className="grid gap-[10px] [&_label]:grid [&_label]:gap-[4px] [&_label]:text-[13px]" id={iconSectionId}>
           <label>{tx('resources:skills.small-icon-path')}
             <TextInput value={draft.icon_small ?? ''} spellCheck={false} maxLength={1024} disabled={saving}
               onChange={event => update('icon_small', event.target.value)} /></label>
@@ -222,12 +221,12 @@ export function SkillDetail({ client, target, name, display, owner, write, onDel
               onChange={event => update('icon_large', event.target.value)} /></label>
         </div>
       </SettingsRow>
-      {failure && <p role="alert" className={css.error}>{failure}</p>}
+      {failure && <p role="alert" className="[color:var(--dsw-alias-state-error-primary)] text-[13px]">{failure}</p>}
     </SettingsGroup>}
     <SettingsGroup title={tx('resources:skills.instructions')}>
-      <div className={css.instructionsBody}>
+      <div className="px-[16px] py-[14px]">
         {error ? <p role="alert">{error}</p> : content ? <>
-          {!!content.description && <p className={css.description}>{content.description}</p>}
+          {!!content.description && <p className="mt-0 mx-0 mb-[8px] text-[13px] leading-[20px]">{content.description}</p>}
           {content.text.trim() ? <MarkdownText text={content.text} /> : <p>{tx('resources:skills.empty-instructions')}</p>}
         </> : <DocumentLinesSkeleton label={tx('resources:loading')} />}
       </div>

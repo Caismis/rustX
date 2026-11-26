@@ -4,7 +4,6 @@ import { useTranslation } from '../../../locale/react';
 import { ZoomViewport, zoomSurfaceClass } from '../workbench-documents/zoom/ZoomViewport';
 import type { PreviewViewStateProps } from '../../../presentation/right-panel/preview-view-state';
 import { bindImagePan } from './image-pan';
-import css from './ImagePreview.module.css';
 import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
 import { useViewScroll } from '../../../presentation/right-panel/use-view-scroll';
 export function ImagePreview({ url, name, signal, decodeError, viewState, onViewStateChange }: PreviewViewStateProps & { url: string; name: string; signal: AbortSignal; decodeError: () => void }) {
@@ -19,6 +18,6 @@ export function ImagePreview({ url, name, signal, decodeError, viewState, onView
   }, []);
   return <ZoomViewport preference={viewState.imageZoom ?? { kind: 'fit-width' }} intrinsicWidth={width} horizontalInset={24} signal={signal} scrollportRef={attach}
     onPreference={imageZoom => onViewStateChange({ imageZoom })} labels={{ controls: tx('artifacts:document.zoom'), menu: tx('artifacts:document.zoom'), out: tx('artifacts:workbench.zoom-out'), into: tx('artifacts:workbench.zoom-in'), fitWidth: tx('artifacts:workbench.fit-width'), value: percent => `${percent}%` }}>
-    <div className={css.frame} data-image-preview>{width === undefined && <LoadingIndicator label={tx('artifacts:workbench.loading')}/>}<div className={`${css.surface} ${zoomSurfaceClass}`} hidden={width === undefined} data-document-zoom-surface style={{ '--document-zoom-width': `${width ?? 0}px` } as import('react').CSSProperties}><img ref={image} key={url} src={url} alt={name} decoding="async" referrerPolicy="no-referrer" onError={decodeError} onLoad={event => { setMetadata({ url, width: event.currentTarget.naturalWidth }); scroll.restore(); }} className={css.image}/></div></div>
+    <div className="flex box-border w-full min-w-full h-max min-h-full p-[12px] [font-family:var(--dsw-font,sans-serif)] whitespace-normal [&:has([data-document-loading])]:h-full" data-image-preview>{width === undefined && <LoadingIndicator label={tx('artifacts:workbench.loading')}/>}<div className={`block flex-none max-w-none m-auto [&[hidden]]:hidden ${zoomSurfaceClass}`} hidden={width === undefined} data-document-zoom-surface style={{ '--document-zoom-width': `${width ?? 0}px` } as import('react').CSSProperties}><img ref={image} key={url} src={url} alt={name} decoding="async" referrerPolicy="no-referrer" onError={decodeError} onLoad={event => { setMetadata({ url, width: event.currentTarget.naturalWidth }); scroll.restore(); }} className="block w-full max-w-none h-auto max-h-none rounded-[var(--dsw-radius-md)] select-none data-[pan=available]:cursor-grab data-[pan=active]:cursor-grabbing"/></div></div>
   </ZoomViewport>;
 }

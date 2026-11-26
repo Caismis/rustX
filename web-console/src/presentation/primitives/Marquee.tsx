@@ -1,7 +1,6 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { HTMLAttributes, PointerEvent, RefObject } from 'react';
 import clsx from 'clsx';
-import css from './Marquee.module.css';
 
 /* Overflow this small hides no meaningful tail; travelling for it reads as an
    accidental jitter, so the text stays put. */
@@ -80,8 +79,8 @@ export type MarqueeTextProps = HTMLAttributes<HTMLSpanElement>;
  */
 export const MarqueeText = forwardRef<HTMLSpanElement, MarqueeTextProps>(function MarqueeText({ className, children, ...attributes }, ref) {
   return (
-    <span {...attributes} ref={ref} className={clsx(css.text, className)}>
-      <span className={css.travel}>{children}</span>
+    <span {...attributes} ref={ref} className={clsx('block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [&[data-marquee]]:text-clip [&[data-marquee]]:[mask-image:linear-gradient(to_right,transparent,#000_12px,#000_calc(100%-12px),transparent)] [&[data-marquee]]:animate-marquee-arrive motion-reduce:[&[data-marquee]]:[mask-image:linear-gradient(to_right,transparent,#000_12px)] motion-reduce:[&[data-marquee]]:animate-none', className)}>
+      <span className="[span[data-marquee]>&]:inline-block [span[data-marquee]>&]:animate-marquee-travel motion-reduce:[span[data-marquee]>&]:animate-none motion-reduce:[span[data-marquee]>&]:[transform:translateX(calc(-1*var(--dsh-marquee-range)))]">{children}</span>
     </span>
   );
 });

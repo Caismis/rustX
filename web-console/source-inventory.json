@@ -1699,29 +1699,6 @@
       ]
     },
     {
-      "upstream": "packages/client/ui-attachment/src/MessageImage.module.css",
-      "destination": "web-console/src/presentation/attachments/AttachmentCard.module.css",
-      "treatment": "adapted",
-      "upstream_sha256": "a46e6b258a6d8e711d59ec3c2c47683a7563fc45ac90dcdb61796fccc0e96cc7",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Session/Host/Remote authority",
-        "Cordis slots and lifecycle",
-        "Harness attachment identity and storage"
-      ],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d3f5987c4551cdc8e41efc1ef9200a359d2e0f2a47ac6c4f2f46527f9c0c05a2",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-attachment/src/MessageImage.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "21278a1b8b8303d8e7817e59b416cb9a11317fdd5ac0f7490bd0e67bbdc99e67",
-          "treatment": "Style inline gallery images and compact thumbnails."
-        }
-      ]
-    },
-    {
       "upstream": "packages/client/ui-attachment/src/MessageImage.tsx",
       "destination": "web-console/src/presentation/attachments/AttachmentCard.tsx",
       "treatment": "rewritten from Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
@@ -4654,13 +4631,12 @@
       ],
       "retained_dependencies": [
         "./CodeFileIcon.tsx",
-        "./FileTypeIcon.module.css",
         "./code-file-types.ts",
         "./icons/props.ts",
         "clsx",
         "react"
       ],
-      "local_sha256": "edef0a274ba74127920d50442b1639fdbdca3b8ac6d949f9711a1a3c6cf4456b"
+      "local_sha256": "45d82058f6af479fdf5f05d97e05380294ebf25d2a0558dd630c66b1fbec85e8"
     },
     {
       "upstream": "packages/client/ui-primitives/src/FileTypeIcon.module.css",
@@ -5323,12 +5299,11 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [
-        "./MenuSurface.module.css",
         "clsx",
         "react",
         "react-dom"
       ],
-      "local_sha256": "9db8f3048ac3c7d6571bc450f1cbfd0b11cc93499d03195a5891bfe97226ecc3"
+      "local_sha256": "2b51b3c72c2dbad4831bacfe3d17fc7f5debf966712d549cc34856844062f8c8"
     },
     {
       "upstream": "packages/client/ui-primitives/src/MenuSurface.module.css",
@@ -6071,20 +6046,6 @@
       "classification": "A"
     },
     {
-      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
-      "destination": "web-console/src/presentation/agent/TurnError.module.css",
-      "treatment": "Ported persistent terminal error row; native normalized failure owns message and code. Long native codes wrap on narrow screens.",
-      "upstream_sha256": "e52ee9df23a65396983f2f22b3186a1e6fd72e4ba4fd0f48d5bee746205870f1",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness runtime authority"
-      ],
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "396b8bc43d2863a83e49736a5a509f7184b0902cbe50c21da9c6f2c84ac53c3a",
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
       "destination": "web-console/src/app/agent/ModelRetry.tsx",
       "treatment": "Adapted Harness durable retry disclosure and shimmer. Places each native timeout retry before its own first retained request publication, preserves independent collapsed records and disclosure state while the publication moves seats; no browser retry scheduling or inferred delays/limits. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.ne retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Combined App Server v80 imports; upstream pin and licenses retained.",
@@ -6381,18 +6342,6 @@
         }
       ],
       "local_sha256": "2481425c91a268995eef2a55ce569b1f5551449f071ab121eaab46632e6a12fe"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-tool/src/client/tool/components/ToolDetails.module.css",
-      "destination": "web-console/src/presentation/agent/ToolDetails.module.css",
-      "classification": "B",
-      "treatment": "Harness compact recorded-result card, list, fields, badge, code output, scroll bounds and navigation affordance adapted for native Job, Agent, Goal and Todo results. Runtime/slots, Todo history comparison and file navigation excluded. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
-      "upstream_sha256": "ba9603a9c3d90b24fcd0ae2ddb41bff1b5a60a74cd6dd698c46d15e69638d907",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "a8370dc48ab2411214d8538c4613c66a8946f247b78217094142526dc4a060b6"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -6714,20 +6663,6 @@
         "DSH model directory and Remote selection authority"
       ],
       "local_sha256": "a2a7db2fb68b1bbb28c5ec3048166ab2ddc4f2121e2f5f8d6aaf91a4b2372fb2"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-primitives/src/MenuGroup.module.css",
-      "destination": "web-console/src/presentation/primitives/MenuGroup.module.css",
-      "upstream_sha256": "d0b927d0df0026de5211e8ba8bec81e9f1960eeb914dea57bb0dc440bd71fd59",
-      "classification": "B",
-      "treatment": "Model selector alignment: shared DSH provider groups, sticky headings and model search ranking. Native rustX catalog and exact model/profile identities remain authoritative; no DSH directory or remote runtime retained.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "DSH model directory and Remote selection authority"
-      ],
-      "local_sha256": "d4627b90958f3f95fe48758e7b7a399ed1218ff3e4be56f77f848f36c25ef29c"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -7237,22 +7172,6 @@
       "local_sha256": "b59e0197c813d6f50f71c0453107b5c1a27f11638886760c5d955f578b3e7584"
     },
     {
-      "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css",
-      "destination": "web-console/src/app/agent/ConfigurationChangeRow.module.css",
-      "treatment": "Issue #518: the Tool-change disclosure geometry (24px row, separator, 141px opaque scrollport) on existing theme tokens; names wrap instead of scrolling sideways.",
-      "upstream_sha256": "1877c8962bf9462e9763517873e13660e9e8ef3d3e385853b388a377cdd3c808",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness context injection history and runtime authority"
-      ],
-      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "local_sha256": "4cafddf3576cd0715ba703f8f5aad9a0d93b89b897e324ee80ee42974056d5ed"
-    },
-    {
       "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx",
       "destination": "web-console/src/app/agent/ConfigurationChangeRow.tsx",
       "treatment": "Issue #518: Harness Tool add/remove row rendered from one committed native configuration_applied fact (bounded names with exact totals); a single change is one non-expandable row, several show counts collapsed and grouped names expanded. System-prompt and ordinary Context rows stay hidden, as in the Harness hidden-rows contract. Combined App Server v80 imports; upstream pin and licenses retained.",
@@ -7362,22 +7281,6 @@
       ]
     },
     {
-      "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.module.css",
-      "destination": "web-console/src/presentation/attachments/ChangedFiles.module.css",
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream_sha256": "9195a2c60f3987266176a4b1d877ba022bb2b6c1bd9c8fabfc1f41f6277f1e67",
-      "local_sha256": "e1fa2ffb996f9198b1f766b9e156abcd87aa4f4461757ff7b10b991bc977a547",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "classification": "A",
-      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Session events and Host services",
-        "Cordis injection and slot lifecycle",
-        "Harness review/tab and diff-store authority"
-      ]
-    },
-    {
       "destination": "web-console/src/app/DocumentTitle.tsx",
       "upstream": "packages/client/ui-layout/src/client/DocumentTitle.tsx",
       "upstream_sha256": "b2bef9a37e736e49ff4dab129fcd46b47aa6cf63c930ebf68d7e4ab2300bee53",
@@ -7424,7 +7327,6 @@
         "../../../presentation/right-panel/preview-view-state",
         "../../../presentation/right-panel/use-view-scroll",
         "../workbench-documents/zoom/ZoomViewport",
-        "./ImagePreview.module.css",
         "./image-pan",
         "react"
       ],
@@ -7432,7 +7334,7 @@
         "Cordis slots/store and resource addresses",
         "SVG/ICO decoding and broader filesystem authority"
       ],
-      "local_sha256": "3e55825af7a47c0fe51a90082e6d074e0236949efb09ca50de2d10c12a167709"
+      "local_sha256": "76b04619b800c6d62c89cb3c9792f0e38991a57bda135d6615c0b9028d7de249"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7514,7 +7416,6 @@
       "treatment": "Harness task layout, pickers, cron descriptions and bilingual copy adapted to exact native task bindings and bounded reads. rustX owns CAS edits, pause/resume, Workflow results and cancellation; original Host stores, RPCs and runtime authority are excluded.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./ClockPicker.module.css",
         "./PickerPopover.tsx",
         "./copy",
         "./timing",
@@ -7526,7 +7427,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "a87ee57a5beb6f80a48854e3e78aff86a45179ae7f7389ce0513cafb7c48feed"
+      "local_sha256": "5e16cb1d0b601db9a7e793433db56f2038d0df2d718012f36f961cdb3b063bbc"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8118,12 +8019,11 @@
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "./BackgroundJobs",
-        "./SessionPanelToggle.module.css",
         "./session-panel-state",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "234dcce0f075d249f42e00e366921a3103a5ba0bf468a7bdbf03621bb94b58e5"
+      "local_sha256": "27efbf7286684768cc58ba4d3478a4c017268127e4d1e09525eeb40e93c844b6"
     },
     {
       "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",

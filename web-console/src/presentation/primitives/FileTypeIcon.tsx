@@ -6,9 +6,22 @@ import {
   classifyCodeFileType, isCodeFileType, type CodeFileType, type FileTypeProjectContext,
 } from './code-file-types.ts'
 import type { IconProps } from './icons/props.ts'
-import css from './FileTypeIcon.module.css'
 
 /** File categories with distinct 28px glyphs. */
+const FILE_TYPE_COLORS = {
+  code: '[--dsh-file-type-default-color:var(--dsw-static-deepseek-500)]',
+  excel: '[--dsh-file-type-default-color:var(--dsw-static-green-500)]',
+  folder: '[--dsh-file-type-default-color:var(--dsw-static-amber-400)]',
+  html: '[--dsh-file-type-default-color:var(--dsw-static-deepseek-500)]',
+  image: '[--dsh-file-type-default-color:var(--dsh-file-type-violet)]',
+  markdown: '[--dsh-file-type-default-color:var(--dsw-static-deepseek-500)]',
+  other: '[--dsh-file-type-default-color:var(--dsw-static-neutral-bluish-300)]',
+  pdf: '[--dsh-file-type-default-color:var(--dsw-static-red-600)]',
+  ppt: '[--dsh-file-type-default-color:var(--dsw-static-amber-500)]',
+  video: '[--dsh-file-type-default-color:var(--dsh-file-type-violet)]',
+  word: '[--dsh-file-type-default-color:var(--dsw-static-deepseek-450)]',
+} as const;
+
 export type FileType =
   | CodeFileType
   | 'code'
@@ -280,5 +293,5 @@ export function FileTypeIcon(props: FileTypeIconProps): ReactNode {
     : props.kind
   return isCodeFileType(resolvedType)
     ? <CodeFileIcon type={resolvedType} size={size} className={className} />
-    : glyph(resolvedType, size, clsx(css.icon, css[resolvedType], className))
+    : glyph(resolvedType, size, clsx('[--dsh-file-type-violet:rgb(139,118,246)] [color:var(--dsh-file-type-icon-color,var(--dsh-file-type-default-color))]', FILE_TYPE_COLORS[resolvedType], className))
 }

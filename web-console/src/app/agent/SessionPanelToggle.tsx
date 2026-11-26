@@ -7,7 +7,6 @@ import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconFlatListOutline16 } from '../../presentation/primitives/icons';
 import { JobsRunningIndicator } from './BackgroundJobs';
 import { panelElementId, presentationOf, toggleElementId, useSessionPanelState } from './session-panel-state';
-import css from './SessionPanelToggle.module.css';
 
 export function SessionPanelToggle({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const tx = useTranslation();
@@ -28,7 +27,7 @@ export function SessionPanelToggle({ client, sessionId }: { client: AppServerCli
       <Button
         size="sm"
         id={toggleElementId(sessionId)}
-        className={css.trigger}
+        className="relative w-[28px] min-w-[28px] p-0 aria-expanded:[color:var(--dsw-alias-label-primary)] aria-expanded:bg-[var(--dsw-alias-button-ghost-bg-active)] aria-disabled:[color:var(--dsw-alias-label-disabled)] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
         aria-expanded={open}
         aria-controls={open ? panelElementId(sessionId) : undefined}
         aria-disabled={available ? undefined : true}
@@ -37,8 +36,8 @@ export function SessionPanelToggle({ client, sessionId }: { client: AppServerCli
         onClick={() => { state.toggle(sessionId); }}
       >
         <IconFlatListOutline16 size={16} />
-        <span id={nameId} className={css.name}>{tx('common:session-panel.name')}</span>
-        <span id={indicatorsId} className={css.indicators}>
+        <span id={nameId} className="absolute overflow-hidden w-[1px] h-[1px] m-[-1px] p-0 border-0 whitespace-nowrap [clip-path:inset(50%)]">{tx('common:session-panel.name')}</span>
+        <span id={indicatorsId} className="[&>*]:absolute [&>*]:top-[5px] [&>*]:right-[5px] [&>*]:box-border [&>*]:rounded-full [&>*]:pointer-events-none [&>*]:[box-shadow:0_0_0_1.5px_var(--dsw-alias-bg-base)]">
           <JobsRunningIndicator client={client} sessionId={sessionId} panelShown={open} />
         </span>
       </Button>

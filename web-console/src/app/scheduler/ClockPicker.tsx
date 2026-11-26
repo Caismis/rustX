@@ -12,7 +12,6 @@ import type { TaskTranslate } from './copy'
 import { secondPrecision } from './timing'
 import { PickerPopover } from './PickerPopover.tsx'
 import type { TaskManagerKey } from './copy'
-import css from './ClockPicker.module.css'
 
 /** Row copy of the task manager namespace, as the pickers receive it. */
 type Translate = TaskTranslate
@@ -187,11 +186,11 @@ export function ClockPicker({ open, anchorRef, value, onPick, onClose, seconds =
     open={open}
     anchorRef={anchorRef}
     label={t('timing.time')}
-    className={css.clock}
+    className="flex-row gap-[2px] p-[3px]"
     onClose={onClose}
   >
     {columns.map((column, at) => (
-      <div key={column.copyKey} role="listbox" aria-label={t(column.copyKey)} className={css.column}>
+      <div key={column.copyKey} role="listbox" aria-label={t(column.copyKey)} className="flex flex-col w-[52px] max-h-[216px] overflow-y-auto overscroll-contain">
         {column.options.map((option, index) => (
           <div
             key={option}
@@ -205,7 +204,7 @@ export function ClockPicker({ open, anchorRef, value, onPick, onClose, seconds =
             tabIndex={
               (cursor.column === at ? cursor.index : columnIndices[at]) === index ? 0 : -1
             }
-            className={clsx(css.option, option === picked[at] && css.selected)}
+            className={clsx('flex flex-none items-center justify-center min-h-[32px] rounded-[var(--dsw-radius-md)] [color:var(--dsw-alias-label-primary)] text-[13px] tabular-nums leading-[1.6] cursor-pointer outline-none hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-[-2px]', option === picked[at] && '[color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-button-ghost-active-fill)] [box-shadow:inset_0_0_0_1px_var(--dsw-alias-button-ghost-active-border)]')}
             onClick={() => { pick(at, option, index) }}
             onKeyDown={(event) => { onOptionKeyDown(event, at, index, option, column.options.length) }}
           >{option}</div>

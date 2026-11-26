@@ -3,7 +3,6 @@
 import { forwardRef, useId, useLayoutEffect, useRef, type ComponentPropsWithoutRef, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
-import css from './MenuSurface.module.css'
 
 /** Menu containers preserve native div props and refs. */
 export interface MenuSurfaceProps extends ComponentPropsWithoutRef<'div'> {
@@ -34,12 +33,12 @@ export const MenuSurface = forwardRef<HTMLDivElement, MenuSurfaceProps>(function
   }
   return <>
     <div {...props} ref={ref} data-menu-material="translucent"
-      className={clsx(css.surface, compact && css.compact, className)} style={{ ...style, ...anchorStyle }}>
-      <div aria-hidden="true" className={css.material} />
+      className={clsx('relative isolate rounded-[var(--dsw-radius-lg)] [anchor-name:var(--dsh-menu-anchor)]', compact && 'rounded-[var(--dsw-radius-md)]', className)} style={{ ...style, ...anchorStyle }}>
+      <div aria-hidden="true" className="absolute inset-0 z-[-1] rounded-[inherit] bg-[var(--dsw-menu-surface-fill)] [backdrop-filter:var(--dsw-menu-backdrop-filter)] pointer-events-none" />
       {children}
     </div>
     {createPortal(
-      <div ref={backingRef} aria-hidden="true" data-menu-backing="" className={clsx(css.backing, compact && css.compact)}
+      <div ref={backingRef} aria-hidden="true" data-menu-backing="" className={clsx('hidden rounded-[var(--dsw-radius-lg)] [html[data-platform=darwin]_&]:block [html[data-platform=darwin]_&]:fixed [html[data-platform=darwin]_&]:[position-anchor:var(--dsh-menu-anchor)] [html[data-platform=darwin]_&]:top-[anchor(top)] [html[data-platform=darwin]_&]:left-[anchor(left)] [html[data-platform=darwin]_&]:w-[anchor-size(width,0px)] [html[data-platform=darwin]_&]:h-[anchor-size(height,0px)] [html[data-platform=darwin]_&]:z-[-1] [html[data-platform=darwin]_&]:bg-[var(--dsw-alias-bg-base)] [html[data-platform=darwin]_&]:pointer-events-none', compact && 'rounded-[var(--dsw-radius-md)]')}
         style={{ ...anchorStyle, visibility: style?.visibility }} />,
       document.body,
     )}
