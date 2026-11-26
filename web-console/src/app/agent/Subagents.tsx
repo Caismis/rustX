@@ -7,7 +7,6 @@ import { useTranslation } from '../../locale/react';
 import { SubagentMenu } from './SubagentCatalog';
 import { SubagentObservationNotice } from './SubagentObservationNotice';
 import { AgentCard } from '../components/ActivityCards';
-import css from './Subagents.module.css';
 import conversationCss from '../../presentation/agent/Conversation.module.css';
 
 import { SubagentContext as Context, useSubagents } from './subagent-context';
@@ -157,20 +156,20 @@ export function SubagentHeader({ title }: { title: string }) {
   const children = selected ? agents.filter(agent => agent.parent_agent_id === selected.agent_id) : [];
   const count = siblings.length + workflowEntries.length;
   const countLabel = limited && count === 0 ? tx('common:subagents.records') : tx(limited ? 'common:subagents.count-at-least' : 'common:subagents.count', { count });
-  return <div className={css.lineage}>
-    {selected ? <><button className={css.parent} onClick={() => open()}>{title}</button><span className={css.separator}>/</span>
-      {ancestors.map(agent => <span key={agent.agent_id} className={css.ancestor}><SubagentMenu agents={agents.filter(sibling => sibling.parent_agent_id === agent.parent_agent_id)} selected={agent.agent_id} label={agent.title} openTitle={() => open(agent.agent_id)} openChild={open}/><span className={css.separator}>/</span></span>)}
+  return <div className="flex flex-1 items-center gap-[10px] min-w-0">
+    {selected ? <><button className="overflow-hidden text-ellipsis whitespace-nowrap max-w-[min(360px,40%)] max-[640px]:max-w-[35%] inline-flex items-center min-w-0 min-h-[28px] px-[2px] py-[3px] border-0 bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer text-[14px] hover:[color:var(--dsw-alias-label-primary)]" onClick={() => open()}>{title}</button><span className="[color:var(--dsw-alias-label-tertiary)]">/</span>
+      {ancestors.map(agent => <span key={agent.agent_id} className="inline-flex items-center gap-[10px] min-w-0"><SubagentMenu agents={agents.filter(sibling => sibling.parent_agent_id === agent.parent_agent_id)} selected={agent.agent_id} label={agent.title} openTitle={() => open(agent.agent_id)} openChild={open}/><span className="[color:var(--dsw-alias-label-tertiary)]">/</span></span>)}
       <SubagentMenu agents={scope.oneShot?.has(selected.agent_id) ? [] : siblings} workflowChildren={workflowSiblings} selected={selected.agent_id} label={selected.title} openChild={open}/>
       {!!children.length && <SubagentMenu agents={children} label={tx('common:subagents.count', { count: children.length })} openChild={open}/>}</>
-      : <><span id="session-title" aria-label={tx(scope.sessionId ? 'agent:conversation-header.session-title' : 'agent:conversation-header.product-title')} className={css.title}>{title}</span>
+      : <><span id="session-title" aria-label={tx(scope.sessionId ? 'agent:conversation-header.session-title' : 'agent:conversation-header.product-title')} className="overflow-hidden text-ellipsis whitespace-nowrap max-w-[360px] max-[640px]:max-w-[150px]">{title}</span>
         {(count > 0 || limited) && <SubagentMenu agents={siblings} workflowChildren={workflowEntries} limited={limited} label={countLabel} openChild={open}/>}</>}
   </div>;
 }
 /** Eight resident Child views retain drafts until explicitly closed. */
 export function SubagentSurface({ children, mode = 'chat' }: { children: ReactNode; mode?: 'chat' | 'trajectory' }) {
   const scope = useSubagents(), tx = useTranslation();
-  return <>{scope?.full && <p role="status">{tx('common:subagents.view-capacity')}</p>}{scope?.headerError && <p role="alert">{scope.headerError}</p>}<div className={css.parentSurface} hidden={!!scope?.selected}>{children}</div>
-    {scope?.opened.map(agent => <div key={`${scope.sessionId}:${agent.agent_id}`} hidden={scope.selected?.agent_id !== agent.agent_id} className={`${conversationCss.scrollBody} ${css.childSurface}`} data-conversation-scroll>
+  return <>{scope?.full && <p role="status">{tx('common:subagents.view-capacity')}</p>}{scope?.headerError && <p role="alert">{scope.headerError}</p>}<div className="contents [&[hidden]]:hidden" hidden={!!scope?.selected}>{children}</div>
+    {scope?.opened.map(agent => <div key={`${scope.sessionId}:${agent.agent_id}`} hidden={scope.selected?.agent_id !== agent.agent_id} className={`${conversationCss.scrollBody} [&[hidden]]:hidden`} data-conversation-scroll>
       <AgentCard oneShot={scope.oneShot?.has(agent.agent_id)} close={() => scope.close(agent.agent_id)} onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
     </div>)}</>;
 }
@@ -220,6 +219,6 @@ function SubagentAsideView({ agent, visible, oneShot }: { agent: RuntimeClientAg
   const [mode, setMode] = useState<'chat' | 'trajectory'>('chat');
   return <section className={`conversation-panel ${conversationCss.body} ${conversationCss.embeddedBody}`} data-content-phase="active">
     <div className={conversationCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')}>{(['chat', 'trajectory'] as const).map(value => <button type="button" key={value} role="tab" aria-selected={value === mode} className={`${conversationCss.tab} ${value === mode ? conversationCss.tabActive : ''}`} onClick={() => setMode(value)}>{tx(value === 'chat' ? 'agent:conversation-header.chat' : 'agent:conversation-header.trajectory')}</button>)}</div>
-    <div className={`${conversationCss.scrollBody} ${css.aside}`} data-conversation-scroll><AgentCard oneShot={oneShot} onMode={setMode} mode={mode} embedded visible={visible} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/></div>
+    <div className={`${conversationCss.scrollBody} relative h-full min-h-0`} data-conversation-scroll><AgentCard oneShot={oneShot} onMode={setMode} mode={mode} embedded visible={visible} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/></div>
   </section>;
 }

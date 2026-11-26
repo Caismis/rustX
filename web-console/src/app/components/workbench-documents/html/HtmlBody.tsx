@@ -8,7 +8,6 @@ import { relativeDocumentPath } from '../resources';
 import { useInteractiveHtml } from './preferences';
 import { useTranslation } from '../../../../locale/react';
 import type { WorkbenchCall } from '../../WorkbenchFiles';
-import css from './HtmlBody.module.css';
 import { DocumentDependencies } from '../dependencies';
 import { documentFailure } from '../../documents/errors';
 
@@ -21,7 +20,7 @@ export function BasicHtmlFrame({ data }: Pick<Props, 'data'>) {
   const tx = useTranslation();
   const html = useMemo(() => { try { return createBasicHtmlDocument(data); } catch { return undefined; } }, [data]);
   if (html === undefined) return <p role="alert">{tx('artifacts:workbench.html-failed')}</p>;
-  return <iframe className={css.frame} srcDoc={html} sandbox="" title="HTML" data-html-preview/>;
+  return <iframe className="block w-full h-full min-h-[240px] border-0 bg-[var(--dsw-alias-bg-base)]" srcDoc={html} sandbox="" title="HTML" data-html-preview/>;
 }
 function HtmlFrame({ data, path, call, signal, dependencies: retained }: Props) {
   const tx = useTranslation();
@@ -48,5 +47,5 @@ function HtmlFrame({ data, path, call, signal, dependencies: retained }: Props) 
   }, [data, path, dependencies, signal]);
   if (frame?.data !== data) return <LoadingIndicator label={tx('artifacts:workbench.loading')}/>;
   if (frame.error !== undefined) return <p role="alert">{tx(`artifacts:document.${documentFailure(frame.error)}`)}</p>;
-  return <iframe key={frame.url} className={css.frame} src={frame.url} sandbox="allow-scripts" title="HTML" data-html-preview/>;
+  return <iframe key={frame.url} className="block w-full h-full min-h-[240px] border-0 bg-[var(--dsw-alias-bg-base)]" src={frame.url} sandbox="allow-scripts" title="HTML" data-html-preview/>;
 }

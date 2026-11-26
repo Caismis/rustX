@@ -9,7 +9,6 @@ import { UserMessage, AssistantMessage } from '../../presentation/agent/Message'
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import composerCss from '../../presentation/agent/Composer.module.css';
-import css from './BtwPanel.module.css';
 import { Textarea } from '@/components/ui/textarea';
 const states = {
   submitting: 'agent:btw.submitting', uncertain: 'agent:btw.uncertain', preparing: 'agent:btw.preparing', running: 'agent:btw.running', retrying: 'agent:btw.retrying', settling: 'agent:btw.settling', complete: 'agent:btw.complete', cancelled: 'agent:btw.cancelled', failed: 'agent:btw.failed', incomplete: 'agent:btw.incomplete', unavailable: 'agent:btw.unavailable', notAdmitted: 'agent:btw.notAdmitted',
@@ -34,26 +33,26 @@ export function BtwPanel({ client, sessionId, visible, close }: { client: AppSer
   const run = (work: () => Promise<void>) => { setError(undefined); void work().catch(cause => setError(String(cause).slice(0, 512))); };
   const submit = () => { if (!active && available) run(() => client.auxiliary.submit(sessionId, draft)); };
   if (!client.getSnapshot().capabilities?.delivery_access && !question) return null;
-  return <form ref={root} className={css.panel} aria-label={tx('agent:btw.title')} tabIndex={-1} onSubmit={event => { event.preventDefault(); submit(); }} onKeyDown={event => {
+  return <form ref={root} className="flex flex-col w-full h-full min-w-0 min-h-0 overflow-hidden" aria-label={tx('agent:btw.title')} tabIndex={-1} onSubmit={event => { event.preventDefault(); submit(); }} onKeyDown={event => {
     if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation(); if (!event.repeat) close();
   }}>
-      <header className={css.header}>
-        <span className={css.badge}><IconQuestionOutline14/>{tx('agent:btw.temporary')}</span>
+      <header className="flex items-center flex-none gap-[8px] px-[16px] py-[12px] [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]">
+        <span className="inline-flex items-center gap-[4px] px-[7px] py-[2px] [border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[var(--dsw-radius-sm)] [color:var(--dsw-alias-label-secondary)]"><IconQuestionOutline14/>{tx('agent:btw.temporary')}</span>
         <span title={tx('agent:btw.context')}>{tx('agent:btw.snapshot')}</span>
       </header>
-      <div className={css.messages} data-btw-transcript>
+      <div className="relative flex flex-1 min-h-0 min-w-0 overflow-hidden [&_.conversation-scroll]:min-h-0 [&_.conversation-scroll]:px-[16px] [&_.conversation-scroll]:pt-[12px] [&_.conversation-scroll]:pb-[24px] [&_.conversation-scroll>div]:flex [&_.conversation-scroll>div]:flex-col [&_.conversation-scroll>div]:min-h-full [&_.chat-return-latest]:right-[16px] [&_.chat-return-latest]:bottom-[12px]" data-btw-transcript>
         <ChatViewport resetKey={question?.correlation ?? sessionId} chromeVisible={visible} latestLabel={tx('agent:agent-transcript.return-to-latest')}>
-          {question ? <div className={css.exchange}>
+          {question ? <div className="flex flex-col gap-[24px] min-w-0 wrap-anywhere">
             <div data-chat-anchor-key={`${question.correlation}:question`} data-chat-flow-kind="user"><UserMessage label={tx('agent:message.your-message')}>{question.question}</UserMessage></div>
             {question.text && <div data-chat-anchor-key={`${question.correlation}:answer`}><AssistantMessage label={tx('agent:message.assistant-response')}><div data-btw-complete={question.complete}><MarkdownText text={question.text} streaming={!question.settled}/></div></AssistantMessage></div>}
-          </div> : <div className={css.empty}><IconQuestionOutline14 size={28}/><p>{tx('agent:btw.context')}</p></div>}
+          </div> : <div className="flex flex-col items-center justify-center flex-1 gap-[12px] px-[12px] py-[24px] [color:var(--dsw-alias-label-tertiary)] text-[13px] leading-[20px] text-center [&_p]:max-w-[320px] [&_p]:m-0"><IconQuestionOutline14 size={28}/><p>{tx('agent:btw.context')}</p></div>}
         </ChatViewport>
       </div>
-      <div className={css.composer} data-btw-composer>
-        {question && <div className={css.status}><p role="status" aria-live="polite">{tx(states[question.phase])}</p><Button size="sm" type="button" disabled={!available || question.settled} onClick={() => run(() => client.auxiliary.reconcile(sessionId))}>{tx('agent:btw.check')}</Button></div>}
-        {question?.diagnostic && question.diagnostic !== 'cancelled' && <p className={css.error} role="alert">{failures[question.diagnostic] ? tx(failures[question.diagnostic]) : question.diagnostic}</p>}
-        {error && <p className={css.error} role="alert">{error}</p>}
+      <div className="[--dsh-composer-text-max-height:min(128px,25vh)] flex flex-col flex-none gap-[8px] px-[12px] pt-[10px] pb-[12px] [border-top:0.5px_solid_var(--dsw-alias-border-l2)]" data-btw-composer>
+        {question && <div className="flex items-center justify-between gap-[8px] min-w-0 text-[12px] leading-[18px] [color:var(--dsw-alias-label-tertiary)] [&_p]:min-w-0 [&_p]:m-0 [&_p]:wrap-anywhere [&_button]:flex-none"><p role="status" aria-live="polite">{tx(states[question.phase])}</p><Button size="sm" type="button" disabled={!available || question.settled} onClick={() => run(() => client.auxiliary.reconcile(sessionId))}>{tx('agent:btw.check')}</Button></div>}
+        {question?.diagnostic && question.diagnostic !== 'cancelled' && <p className="max-h-[64px] m-0 overflow-auto wrap-anywhere [color:var(--dsw-alias-state-error-primary)] text-[12px] leading-[18px]" role="alert">{failures[question.diagnostic] ? tx(failures[question.diagnostic]) : question.diagnostic}</p>}
+        {error && <p className="max-h-[64px] m-0 overflow-auto wrap-anywhere [color:var(--dsw-alias-state-error-primary)] text-[12px] leading-[18px]" role="alert">{error}</p>}
         <div className={composerCss.card}>
           <div className={composerCss.editor}><Textarea unstyled className={composerCss.input} aria-label={tx('agent:btw.question')} aria-describedby={hintId} placeholder={tx('agent:btw.question')} value={active ? '' : draft} disabled={!!active || !available} maxLength={16_384} rows={1} onChange={event => { try { client.auxiliary.setDraft(sessionId, event.target.value); setError(undefined); } catch (cause) { setError(String(cause).slice(0, 512)); } }} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); submit(); } }}/></div>
           <div className={composerCss.row}>
@@ -63,7 +62,7 @@ export function BtwPanel({ client, sessionId, visible, close }: { client: AppSer
             </div>
           </div>
         </div>
-        <p id={hintId} className={css.hint}>{tx('agent:btw.hint')}</p>
+        <p id={hintId} className="m-0 [color:var(--dsw-alias-label-tertiary)] text-[11px] leading-[16px]">{tx('agent:btw.hint')}</p>
       </div>
       </form>;
 }
