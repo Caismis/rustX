@@ -64,6 +64,32 @@ it('retries a failed physical request read for the selected Call', async () => {
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+it('ignores a failed retry after switching away from a Call and back', async () => {
+  const a = call('A'), b = call('B', '20');
+  const retry = deferred<void>();
+  const read = vi.fn<TraceFieldReader['page']>(async (_cut, requested) => requested === a.requests_domain
+    ? requestPage(cut, a, 'provider-A') : requestPage(cut, b, 'provider-B'))
+    .mockRejectedValueOnce(new Error('initial read failed'))
+    .mockImplementationOnce(async () => {
+      await retry.promise;
+      throw Error('expired retry failed');
+    });
+  render(<CompactionInspection initial={calls([a, b])} cut={cut} reader={reader('scope', read)}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Read again' }));
+  expect(screen.getByRole('status').textContent).toContain('Reading native evidence');
+
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'B' } });
+  expect(await screen.findByText('provider-B')).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'A' } });
+  expect(await screen.findByText('provider-A')).toBeTruthy();
+
+  await act(async () => retry.resolve());
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Read again' })).toBeNull();
+  expect(screen.getByText('provider-A')).toBeTruthy();
+  expect(read).toHaveBeenCalledTimes(4);
+});
+
 it('retries a continuation at the same offset while retaining the first page', async () => {
   const selected = { ...call('A'), request_count: '2' };
   const first = page(cut, selected.requests_domain, [{ id: 'request-A', offset: '0', value: request(selected) }], '2', '1');

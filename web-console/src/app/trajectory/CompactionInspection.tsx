@@ -100,21 +100,24 @@ function PhysicalRequests({ call, cut, reader, owner }: { call: TraceInspectionC
   const latest = useRef({ identity, reader, requestOwner }); latest.current = { identity, reader, requestOwner };
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const latestRead = useRef(0);
   const [state, setState] = useState<{ identity: string; owner: string; items?: CompactionPhysicalRequest[]; next?: string | null; busy?: boolean;
     failure?: { message: string; offset: string; append: boolean } }>();
   const shown = state?.owner === requestOwner ? state : undefined;
   const current = () => alive.current && latest.current.identity === identity && latest.current.reader === reader && latest.current.requestOwner === requestOwner;
   const load = async (offset: string, append: boolean, owned: () => boolean) => {
     if (!owned()) return;
+    const read = ++latestRead.current;
+    const ownsRead = () => latestRead.current === read && owned();
     setState(previous => ({ identity, owner: requestOwner, busy: true,
       items: previous?.owner === requestOwner ? previous.items : undefined }));
     try {
-      const page = await reader.page(cut, call.requests_domain, compactionPageOffset(offset), owned);
+      const page = await reader.page(cut, call.requests_domain, compactionPageOffset(offset), ownsRead);
       const requests = compactionRequestsPage(page, cut, call, offset);
-      if (owned()) setState(previous => ({ identity, owner: requestOwner,
+      if (ownsRead()) setState(previous => ({ identity, owner: requestOwner,
         items: [...(append && previous?.identity === identity ? previous.items ?? [] : []), ...requests.items], next: requests.next }));
     } catch (error) {
-      if (owned()) setState(previous => ({ identity, owner: requestOwner,
+      if (ownsRead()) setState(previous => ({ identity, owner: requestOwner,
         items: previous?.owner === requestOwner ? previous.items : undefined,
         failure: { message: String(error).slice(0, 512), offset, append } }));
     }
