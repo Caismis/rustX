@@ -1240,7 +1240,6 @@
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/Button",
-        "./Approval.module.css",
         "react"
       ],
       "excluded_dependencies": [
@@ -1249,7 +1248,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "e55d80a020f26c7ac8eb427510d2ebca2a924ae8299df83188e508e26fada340",
+      "local_sha256": "5af4e243e8179aa564fa04f8f38ed44d2a0f5395ddff1d671ab512f41efc8636",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-approval/src/client/ApprovalCard.tsx",
@@ -1593,7 +1592,6 @@
         "../primitives/DisclosureRow",
         "../primitives/TextShimmer",
         "../primitives/icons",
-        "./Reasoning.module.css",
         "react"
       ],
       "excluded_dependencies": [
@@ -1602,7 +1600,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "8515f0c288e7178172107ea32a4827074f7ec8c92996dc1268a58f89c1064c3b",
+      "local_sha256": "685f89cd51a5ff69eba00040b6a6b552a5a0d82638b7c720d5daaed57e8a8f66",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
@@ -4126,13 +4124,12 @@
         "../../locale/react",
         "../primitives/DisclosureRow",
         "../primitives/icons",
-        "./AskQuestionCard.module.css",
         "./Tool.module.css",
         "./ToolCard",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "665808bd49def8a07e88bf26245d79e6420df16bdb8e552e79608b6c9504ea77",
+      "local_sha256": "d27fdc2f56fd7df8c20eb062372d348c72315403a4ff330db0f62e9594f5acee",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/QuestionToolRow.tsx",
@@ -4215,12 +4212,11 @@
       "treatment": "Harness trigger-anchored stat dialog seat (top side, 8px gap, 12px viewport margin, Escape and outside-press close) and its heading row; Base UI Popover replaces useAnchoredPosition/useDismissOnOutsidePointer.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./StatDialog.module.css",
         "@/components/ui/popover",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "a385434b04ab83483d7e6990c64b98f191c19a6d87e17a9e7162fefe331d3fa1"
+      "local_sha256": "8969594b98fdf122034e0d6ae02fd0847a5fb551d5e874ce3f0bc6aa05386358"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.module.css",
@@ -4319,17 +4315,6 @@
           "treatment": "Use the existing rustX toast owner for per-gesture failures; successful opening is silent and no persistent header status is rendered."
         }
       ]
-    },
-    {
-      "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "destination": "web-console/src/app/agent/OpenWorkspace.module.css",
-      "upstream_sha256": "cc8959182293fb47bab6006a24c0d12e5981667343859937ba0310d5ad6418cc",
-      "treatment": "Compact 24px hairline split geometry adapted; large/skeleton variants excluded. Header simplification: transient gesture feedback replaces persistent opening status and duplicate retry controls.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "193c3ec79b68d0fd129a0085459e5cd2f623ce9583da64356c42e5ec92d79718"
     },
     {
       "destination": "web-console/src/app/components/Workbench.tsx",
@@ -6553,7 +6538,6 @@
         "../../client/uploads",
         "../../locale/react",
         "../../presentation/attachments/AttachmentRail",
-        "../../presentation/attachments/ComposerAttachments.module.css",
         "../../presentation/attachments/DropOverlay",
         "../../presentation/attachments/FileCard",
         "../../presentation/primitives/ImageLightbox",
@@ -6564,7 +6548,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "72b70c00176d87a49aae2d43457f2a5d3f17142eb8c21c75fd07afbb7f0c6c59"
+      "local_sha256": "53b2b3df35478cdb5fcf99839ea649e4b96d1715352e93233e08d72cc7959173"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
