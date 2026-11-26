@@ -468,7 +468,8 @@ fn client_program(
         .then(|| workspace.join(resolved.relative_path))
 }
 
-/// Path operands are proved on the Client before any child can start.
+/// Required input operands must exist; other path operands may name a new leaf
+/// beneath a writable, existing Client directory.
 fn client_arguments(
     root: &rustx_confined_fs::PackageDirectory,
     workspace: &std::path::Path,
@@ -476,8 +477,10 @@ fn client_arguments(
     args: Vec<String>,
 ) -> Option<Vec<String>> {
     let interpreter = rustx_execution_protocol::mcp::stdio_interpreter(program, &args);
+    let script_index = rustx_execution_protocol::mcp::stdio_script_index(program, &args);
     let mut script_next = false;
-    for arg in &args {
+    let mut input_next = false;
+    for (index, arg) in args.iter().enumerate() {
         if script_next {
             script_next = false;
             continue;
@@ -486,20 +489,97 @@ fn client_arguments(
             script_next = true;
             continue;
         }
-        let Some((_, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg) else {
+        if rustx_execution_protocol::mcp::stdio_input_option(arg) {
+            input_next = true;
+            continue;
+        }
+        let required = std::mem::take(&mut input_next) || script_index == Some(index);
+        let Some((prefix, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg)
+            .or_else(|| required.then_some((None, arg.as_str())))
+        else {
             continue;
         };
         let path = std::path::Path::new(value);
+        let required = required
+            || prefix.is_some_and(rustx_execution_protocol::mcp::stdio_input_option)
+            || (prefix.is_none()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        [
+                            "py", "pyw", "js", "mjs", "cjs", "ts", "sh", "bash", "zsh", "jar",
+                            "wasm",
+                        ]
+                        .iter()
+                        .any(|known| extension.eq_ignore_ascii_case(known))
+                    }));
         if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
             return None;
         }
         if let Ok(relative) = path.strip_prefix(workspace) {
-            root.resolve_resource(workspace, relative).ok()?.entry?;
+            let resolution = root.resolve_resource(workspace, relative).ok()?;
+            if resolution.entry.is_none()
+                && (required
+                    || !std::fs::symlink_metadata(path)
+                        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                    || !writable_parent(root, workspace, path))
+            {
+                return None;
+            }
         } else {
-            std::fs::metadata(path).ok()?;
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => {
+                    std::fs::metadata(path).ok()?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound && !required => {
+                    if !writable_parent(root, workspace, path) {
+                        return None;
+                    }
+                }
+                Err(_) => return None,
+            }
         }
     }
     Some(args)
+}
+
+fn writable_parent(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &std::path::Path,
+    path: &std::path::Path,
+) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let parent = if let Ok(relative) = parent.strip_prefix(workspace) {
+        if relative.as_os_str().is_empty() {
+            if root.verify().is_err() {
+                return false;
+            }
+            workspace.to_path_buf()
+        } else {
+            let Some(entry) = root
+                .resolve_resource(workspace, relative)
+                .ok()
+                .and_then(|result| result.entry)
+            else {
+                return false;
+            };
+            if !entry.metadata.is_directory {
+                return false;
+            }
+            workspace.join(entry.relative_path)
+        }
+    } else {
+        parent.to_path_buf()
+    };
+    std::fs::metadata(&parent).is_ok_and(|metadata| metadata.is_dir())
+        && nix::unistd::access(
+            &parent,
+            nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK,
+        )
+        .is_ok()
 }
 
 struct Negotiator(ClientInfo);
@@ -747,6 +827,7 @@ mod launch_tests {
     use super::{client_arguments, client_program};
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One Client-side path and interpreter admission matrix.
     fn path_valued_programs_stay_in_the_client_workspace() {
         let temporary = tempfile::tempdir().unwrap();
         let base = temporary.path().canonicalize().unwrap();
@@ -780,6 +861,15 @@ mod launch_tests {
             client_arguments(
                 &root,
                 &workspace,
+                Path::new("python3"),
+                vec![base.join("missing.py").display().to_string()]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
                 Path::new("fixture"),
                 vec![base.join("missing.py").display().to_string()]
             )
@@ -802,6 +892,54 @@ mod launch_tests {
                 vec!["-c".into(), "printf 'x/y'".into()]
             )
             .is_some()
+        );
+        for program in ["/bin/sh", "/usr/bin/env"] {
+            for flag in ["-lc", "-ic"] {
+                let args = if program.ends_with("env") {
+                    vec!["bash".into(), flag.into(), "exec /some/server.py".into()]
+                } else {
+                    vec![flag.into(), "exec /some/server.py".into()]
+                };
+                assert_eq!(
+                    client_arguments(&root, &workspace, Path::new(program), args.clone()),
+                    Some(args)
+                );
+            }
+        }
+        for path in [commands.join("new.log"), base.join("new.log")] {
+            let args = vec![format!("--log-file={}", path.display())];
+            assert_eq!(
+                client_arguments(&root, &workspace, Path::new("fixture"), args.clone()),
+                Some(args)
+            );
+        }
+        let missing_parent = base.join("absent/new.log");
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec![format!("--log-file={}", missing_parent.display())]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec![format!("--config={}", base.join("missing.toml").display())]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec!["--input".into(), base.join("missing").display().to_string()]
+            )
+            .is_none()
         );
         assert!(
             client_arguments(

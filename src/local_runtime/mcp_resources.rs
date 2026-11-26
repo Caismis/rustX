@@ -132,8 +132,11 @@ fn resolve_stdio_paths(
     let interpreter =
         rustx_execution_protocol::mcp::stdio_interpreter(Path::new(program), &definition.args)
             .to_path_buf();
+    let script_index =
+        rustx_execution_protocol::mcp::stdio_script_index(Path::new(program), &definition.args);
     let mut script_next = false;
-    for arg in &mut definition.args {
+    let mut input_next = false;
+    for (index, arg) in definition.args.iter_mut().enumerate() {
         if script_next {
             script_next = false;
             continue;
@@ -142,7 +145,14 @@ fn resolve_stdio_paths(
             script_next = true;
             continue;
         }
-        let Some((prefix, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg) else {
+        if rustx_execution_protocol::mcp::stdio_input_option(arg) {
+            input_next = true;
+            continue;
+        }
+        let required = std::mem::take(&mut input_next) || script_index == Some(index);
+        let Some((prefix, value)) = rustx_execution_protocol::mcp::stdio_path_operand(arg)
+            .or_else(|| required.then_some((None, arg.as_str())))
+        else {
             continue;
         };
         let prefix = prefix.map(str::to_owned);
@@ -372,6 +382,21 @@ command = "fixture-server"
         script.args = vec!["-c".into(), "printf 'x/y'".into()];
         resolve_stdio_paths(&mut script, user, None).unwrap();
         assert_eq!(script.args, ["-c", "printf 'x/y'"]);
+        for command in ["/bin/sh", "/usr/bin/env"] {
+            for flag in ["-lc", "-ic"] {
+                let mut script = allowed.clone();
+                script.command = Some(command.into());
+                script.cwd = None;
+                script.args = if command.ends_with("env") {
+                    vec!["bash".into(), flag.into(), "exec /some/server.py".into()]
+                } else {
+                    vec![flag.into(), "exec /some/server.py".into()]
+                };
+                let expected = script.args.clone();
+                resolve_stdio_paths(&mut script, user, None).unwrap();
+                assert_eq!(script.args, expected);
+            }
+        }
 
         let mut escaped = allowed.clone();
         escaped.args = vec!["--config=../../outside.toml".into()];

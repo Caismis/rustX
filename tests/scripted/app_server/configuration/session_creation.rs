@@ -3070,6 +3070,27 @@ async fn bound_workspace_mcp_catalog_uses_client_definitions_and_rejects_server_
         assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
         assert_eq!(result.revision, revision);
         assert!(result.page.is_none());
+        let MethodResult::WorkflowToolCatalog { catalog } = call(
+            &connection,
+            102,
+            Method::WorkflowToolCatalog {
+                target: SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+                execution_session: Some(fixture.sessions[0].id.clone()),
+                source: Some("inventory".into()),
+                cursor: None,
+                expected_scope: Some(crate::runtime::resources::SourceScope::Workspace),
+            },
+        )
+        .await
+        else {
+            panic!("bound Workflow MCP catalog");
+        };
+        assert_eq!(
+            catalog.sources[0].state,
+            crate::local_runtime::workflow_tools::WorkflowToolSourceState::ConnectionFailed
+        );
         assert_eq!(control.catalog_reads(), 0);
         assert_eq!(control.accepted_calls(), 0);
         assert_eq!(
@@ -3191,12 +3212,19 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${{4%/*}
         assert_eq!(probe.outcome, McpProbeOutcome::Reachable,
             "authorized requests: {}; unauthorized requests: {}", accepted.load(Ordering::SeqCst), denied.load(Ordering::SeqCst));
         let MethodResult::McpProbe { result: catalog } = call(&connection, 702, Method::McpCatalog {
-            target, execution_session: Some(fixture.sessions[0].id.clone()),
+            target: target.clone(), execution_session: Some(fixture.sessions[0].id.clone()),
             id: crate::runtime::identity::McpServerId::new("inventory"), expected_revision: revision,
             kind: CatalogKind::Tools,
         }).await else { panic!("Client-scoped workspace MCP catalog"); };
         assert_eq!(catalog.outcome, McpProbeOutcome::Reachable);
         assert_eq!(catalog.page.unwrap().tools.len(), 5);
+        let MethodResult::WorkflowToolCatalog { catalog } = call(&connection, 703, Method::WorkflowToolCatalog {
+            target, execution_session: Some(fixture.sessions[0].id.clone()),
+            source: Some("inventory".into()), cursor: None,
+            expected_scope: Some(crate::runtime::resources::SourceScope::Workspace),
+        }).await else { panic!("Client-scoped Workflow MCP catalog"); };
+        assert_eq!(catalog.sources[0].state, crate::local_runtime::workflow_tools::WorkflowToolSourceState::Listed);
+        assert_eq!(catalog.sources[0].tools.len(), 5);
         fixture.load(0).await.unwrap().unwrap();
         let runtime = fixture.manager.configuration_runtime(&fixture.sessions[0].id).unwrap();
         let tools = runtime.runtime_resources().capability().tool_registry().definitions();

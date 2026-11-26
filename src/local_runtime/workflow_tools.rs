@@ -293,22 +293,21 @@ fn capture(
     };
     let mut plans = Vec::new();
     for (id, definition) in &mcp.definitions {
+        let source_scope = scope_of(mcp.locations.get(id));
         let binding = definition.as_ref().ok().and_then(|definition| {
-            super::config::resolve_mcp_bindings(&BTreeMap::from([(
-                id.clone(),
-                definition.clone().resolve(),
-            )]))
-            .ok()?
-            .remove(id)
+            mcp_binding(
+                id,
+                definition,
+                source_scope,
+                endpoint.as_deref(),
+                &credentials,
+            )
         });
         plans.push(Plan {
             source_id: id.to_string(),
             kind: WorkflowToolSourceKind::Mcp,
-            scope: scope_of(mcp.locations.get(id)),
-            connect: binding.map_or(Connect::Invalid, |mut binding| {
-                binding.credentials.capture(credentials.clone());
-                Connect::Mcp(Box::new(binding))
-            }),
+            scope: source_scope,
+            connect: binding.map_or(Connect::Invalid, |binding| Connect::Mcp(Box::new(binding))),
         });
     }
     let python = match &endpoint {
@@ -340,6 +339,27 @@ fn capture(
     }
     .map_err(|_| SettingsError::Invalid)?;
     Ok((plans, workspace))
+}
+
+fn mcp_binding(
+    id: &McpServerId,
+    definition: &super::authoring::McpAuthoring,
+    scope: SourceScope,
+    endpoint: Option<&super::session_runtime_manager::LocalExecutionEndpoint>,
+    host_credentials: &crate::credentials::CredentialSnapshot,
+) -> Option<McpServerBinding> {
+    let mut definition = definition.clone().resolve();
+    if scope == SourceScope::Workspace {
+        super::configuration::capture::bind_workspace_mcp(&mut definition, id, endpoint);
+    }
+    let mut binding =
+        super::config::resolve_mcp_bindings(&BTreeMap::from([(id.clone(), definition)]))
+            .ok()?
+            .remove(id)?;
+    if !binding.credentials.client_owned {
+        binding.credentials.capture(host_credentials.clone());
+    }
+    Some(binding)
 }
 
 async fn list(
@@ -449,6 +469,28 @@ mod tests {
     use super::*;
     use rustx_workflow::WorkflowToolResult;
     use serde_json::json;
+
+    #[test]
+    fn workflow_mcp_bindings_preserve_winning_scope_and_credential_authority() {
+        let id = McpServerId::new("shared");
+        let definition: super::super::authoring::McpAuthoring = crate::toml_authoring::parse(
+            b"url = 'https://example.invalid/mcp'\nsensitive_headers = { Authorization = '$TOKEN' }\n",
+        ).unwrap();
+        let host =
+            crate::credentials::CredentialSnapshot::new([("TOKEN".into(), "host-value".into())]);
+        let host_binding = mcp_binding(&id, &definition, SourceScope::User, None, &host).unwrap();
+        assert!(!host_binding.credentials.client_owned);
+        assert_eq!(
+            host_binding.credentials.resolve().unwrap().headers["Authorization"].expose(),
+            "host-value"
+        );
+        let workspace_binding =
+            mcp_binding(&id, &definition, SourceScope::Workspace, None, &host).unwrap();
+        assert!(workspace_binding.credentials.client_owned);
+        assert!(workspace_binding.credentials.workspace_source);
+        assert!(workspace_binding.credentials.resolve().is_err());
+        assert!(!format!("{workspace_binding:?}").contains("host-value"));
+    }
 
     fn large() -> WorkflowToolCatalog {
         let properties = (0..64)

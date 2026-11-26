@@ -3160,6 +3160,100 @@ fn detaching_client_connection_stops_the_stdio_process_group() {
     expect_success(&mut child);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn stdio_combined_shell_flags_allow_a_new_output_but_reject_missing_inputs() {
+    use rustx_execution_protocol::mcp::{Failure, Launch, Reply, Request};
+    use rustx_execution_protocol::process::{OperationId, ProcessOperationKey};
+
+    for flag in ["-lc", "-ic"] {
+        let rig = rig_with(BTreeSet::from([
+            Capability::Connection,
+            Capability::StdioMcp,
+        ]));
+        let mut child = spawn_client(&rig);
+        let mut connection = admit_pair(&rig, &mut child);
+        let admission = connection.admission().clone();
+        let key = ProcessOperationKey {
+            incarnation: admission.server_incarnation,
+            session: admission.session.clone(),
+            instance: admission.instance.clone(),
+            generation: admission.generation,
+            operation: OperationId::new(),
+        };
+        let output = rig.workspace_path.join("new-output.log");
+        let launch = Launch {
+            program: std::fs::canonicalize("/bin/sh").unwrap(),
+            args: vec![
+                flag.into(),
+                "printf ready > \"${1#--log-file=}\"; exec /bin/sleep 30".into(),
+                "fixture".into(),
+                format!("--log-file={}", output.display()),
+            ],
+            cwd: PathBuf::new(),
+            environment: std::collections::BTreeMap::new(),
+            versions: vec![rmcp::model::ProtocolVersion::V_2025_06_18.as_str().into()],
+            legacy_version: None,
+            python_source: None,
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        assert!(matches!(
+            connection
+                .mcp_by(
+                    Request::Open {
+                        key: key.clone(),
+                        source_id: "output".into(),
+                        launch,
+                    },
+                    deadline,
+                    || Ok(())
+                )
+                .unwrap(),
+            Reply::Opening
+        ));
+        while !output.exists() {
+            assert!(Instant::now() < deadline, "shell did not create its output");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(fs::read(&output).unwrap(), b"ready");
+        let missing = Launch {
+            program: std::fs::canonicalize("/bin/sh").unwrap(),
+            args: vec![
+                rig.workspace_path
+                    .join("missing-input.sh")
+                    .display()
+                    .to_string(),
+            ],
+            cwd: PathBuf::new(),
+            environment: std::collections::BTreeMap::new(),
+            versions: vec![rmcp::model::ProtocolVersion::V_2025_06_18.as_str().into()],
+            legacy_version: None,
+            python_source: None,
+        };
+        let missing_key = ProcessOperationKey {
+            operation: OperationId::new(),
+            ..key
+        };
+        assert!(matches!(
+            connection
+                .mcp_by(
+                    Request::Open {
+                        key: missing_key,
+                        source_id: "missing".into(),
+                        launch: missing,
+                    },
+                    deadline,
+                    || Ok(())
+                )
+                .unwrap(),
+            Reply::Failed(Failure::Invalid)
+        ));
+        connection.control().unwrap().request_revoke().unwrap();
+        drop(connection);
+        expect_success(&mut child);
+    }
+}
+
 /// The real Client searches one shared file universe for both `Glob` and
 /// `Grep`: the traversal never follows a link outside the binding, keeps
 /// hidden files visible, refuses a symlinked root, skips a file whose

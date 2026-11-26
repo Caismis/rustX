@@ -1167,7 +1167,10 @@ Workspace stdio resolves path operands against the configuration directory
 and checks the executable, cwd and path arguments on the Client before launch.
 Path operands include slash-containing names, filename-like values such as
 `server.py`, and `--option=PATH`. URLs and inline interpreter programs are
-passed as arguments. A relative Host configuration path without a Client
+passed as arguments. Shell options such as `-lc` and `-ic` preserve the
+following command string. Interpreter scripts and explicit configuration
+inputs must exist. A generic output operand may name a new leaf under an
+existing writable Client directory. A relative Host configuration path without a Client
 Workspace base fails admission.
 
 Release packaging checks both the Workspace MCP environment contract and the

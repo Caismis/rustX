@@ -50,11 +50,16 @@ pub fn stdio_inline_script(program: &Path, argument: &str) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    ((matches!(
-        executable,
-        "sh" | "bash" | "dash" | "zsh" | "node" | "nodejs"
-    ) || executable.starts_with("python"))
-        && matches!(argument, "-c" | "-e" | "--eval"))
+    let shell = matches!(executable, "sh" | "bash" | "dash" | "zsh");
+    let shell_command = shell
+        && argument.strip_prefix('-').is_some_and(|options| {
+            !options.is_empty()
+                && options.bytes().all(|byte| byte.is_ascii_alphabetic())
+                && options.contains('c')
+        });
+    shell_command
+        || ((matches!(executable, "node" | "nodejs") || executable.starts_with("python"))
+            && matches!(argument, "-c" | "-e" | "--eval"))
         || (executable.starts_with("python") && argument == "-m")
 }
 
@@ -67,6 +72,80 @@ pub fn stdio_interpreter<'a>(program: &'a Path, args: &'a [String]) -> &'a Path 
             .map_or(program, |arg| Path::new(arg))
     } else {
         program
+    }
+}
+
+/// Index of an interpreter's positional script, excluding inline code and module names.
+#[must_use]
+pub fn stdio_script_index(program: &Path, args: &[String]) -> Option<usize> {
+    let interpreter = stdio_interpreter(program, args);
+    let name = interpreter.file_name()?.to_str()?;
+    if !matches!(name, "sh" | "bash" | "dash" | "zsh" | "node" | "nodejs")
+        && !name.starts_with("python")
+    {
+        return None;
+    }
+    let start = if program.file_name().is_some_and(|name| name == "env") {
+        args.iter()
+            .position(|arg| !arg.starts_with('-') && !arg.contains('='))?
+            + 1
+    } else {
+        0
+    };
+    let mut option_value = false;
+    for (index, argument) in args.iter().enumerate().skip(start) {
+        if option_value {
+            option_value = false;
+            continue;
+        }
+        if stdio_inline_script(interpreter, argument) {
+            return None;
+        }
+        if (name.starts_with("python") && matches!(argument.as_str(), "-W" | "-X"))
+            || (matches!(name, "sh" | "bash" | "dash" | "zsh") && argument == "-o")
+            || (matches!(name, "node" | "nodejs")
+                && matches!(
+                    argument.as_str(),
+                    "-r" | "--require" | "--import" | "--loader"
+                ))
+        {
+            option_value = true;
+            continue;
+        }
+        if argument == "--" {
+            return (index + 1 < args.len()).then_some(index + 1);
+        }
+        if !argument.starts_with('-') {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// Common options that explicitly identify a pre-existing input file.
+#[must_use]
+pub fn stdio_input_option(name: &str) -> bool {
+    matches!(
+        name,
+        "--config" | "--config-file" | "--input" | "--input-file" | "--script"
+    )
+}
+
+#[cfg(test)]
+mod stdio_path_tests {
+    use super::*;
+
+    #[test]
+    fn combined_shell_flags_and_interpreter_options_keep_their_meaning() {
+        for flag in ["-c", "-lc", "-ic"] {
+            assert!(stdio_inline_script(Path::new("bash"), flag));
+            let args = vec![flag.into(), "printf 'x/y'".into()];
+            assert_eq!(stdio_script_index(Path::new("bash"), &args), None);
+        }
+        let args = vec!["-W".into(), "ignore".into(), "server.py".into()];
+        assert_eq!(stdio_script_index(Path::new("python3"), &args), Some(2));
+        let args = vec!["python3".into(), "-m".into(), "package.server".into()];
+        assert_eq!(stdio_script_index(Path::new("/usr/bin/env"), &args), None);
     }
 }
 
