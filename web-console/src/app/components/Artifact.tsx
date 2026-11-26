@@ -7,7 +7,6 @@ import { PreviewContext } from './ArtifactPreview';
 import { AttachmentCard, InlineImage } from '../../presentation/attachments/AttachmentCard';
 import { MessageFile } from '../../presentation/agent/Message';
 import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
-import cardCss from '../../presentation/attachments/Deliverables.module.css';
 import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
 import type { PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
@@ -53,7 +52,7 @@ export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:
   return <PresentedFiles files={deliveries.map(delivery => ({ key: delivery.key, name: delivery.file.name, path: delivery.file.path, description: delivery.file.description }))}
     card={view => { const delivery = deliveries.find(item => item.key === view.key)!;
       return <PresentedFileCard file={view} onPreview={preview ? () => { if (!owned || owned()) preview.openPreview(intent(delivery)); } : undefined} actions={preview &&
-        <button type="button" className={cardCss.action} aria-label={`${tx('artifacts:attachment-card.download')} ${delivery.file.name}`}
+        <button type="button" className="grid place-items-center w-[28px] h-[28px] p-0 border-0 rounded-[8px] bg-transparent [color:var(--dsw-alias-label-secondary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-primary)] focus-visible:[outline:1px_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))]" aria-label={`${tx('artifacts:attachment-card.download')} ${delivery.file.name}`}
           title={tx('artifacts:attachment-card.download')} onClick={() => { if (!owned || owned()) preview.download(intent(delivery)); }}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
 }
 

@@ -9,7 +9,6 @@ import { useTranslation } from '../../locale/react';
 // intents from its existing PreviewWorkspace owners.
 import { FileTypeIcon, fileExtension } from '../primitives/FileTypeIcon';
 import { IconChevronDownOutline14, IconChevronUpOutline14 } from '../primitives/icons';
-import css from './Deliverables.module.css';
 
 const COLLAPSED_PRESENTED_COUNT = 4;
 
@@ -29,19 +28,19 @@ export interface PresentedFileView {
 export function PresentedFileCard({ file, onPreview, actions }: { file: PresentedFileView; onPreview?: () => void; actions: ReactNode }) {
   const tx = useTranslation();
   const metadata = fileExtension(file.name).toUpperCase() || tx('artifacts:presented.file');
-  return <div className={css.file} data-presented-file data-delivery-card role="group" aria-label={file.name}>
-    <button type="button" className={css.cardPreview} title={file.path}
+  return <div className="group relative box-border flex items-center gap-[10px] min-w-0 h-[60px] px-[10px] py-[8px] overflow-hidden [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[16px] bg-[var(--deliverable-fill)] [color:var(--dsw-alias-label-primary)] transition-colors duration-[120ms] hover:bg-[var(--deliverable-hover)]" data-presented-file data-delivery-card role="group" aria-label={file.name}>
+    <button type="button" className="absolute z-[1] inset-0 w-full p-0 border-0 rounded-[inherit] bg-transparent cursor-pointer focus-visible:outline-none focus-visible:[box-shadow:inset_0_0_0_2px_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] disabled:cursor-default" title={file.path}
       aria-label={tx('artifacts:presented.preview-card', { name: file.name })} disabled={!onPreview} onClick={onPreview}/>
-    <span className={css.fileIcon}><FileTypeIcon path={file.name} size={20}/></span>
-    <div className={css.fileBody}>
-      <div className={css.details}>
-        <span className={css.fileName} data-presented-name>{file.name}</span>
-        <span className={css.description} data-presented-description>
-          <span className={css.secondaryText}>{cardDescription(file.description, metadata)}</span>
-          {onPreview && <span className={css.previewHint}>{tx('artifacts:presented.preview')}</span>}
+    <span className="relative z-[2] box-border flex-none grid place-items-center w-[40px] h-[40px] overflow-hidden pointer-events-none [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[10px] bg-[color-mix(in_srgb,var(--dsw-static-neutral-00)_50%,transparent)] dark:bg-[color-mix(in_srgb,var(--dsw-static-neutral-00)_5%,transparent)] [color:var(--dsw-alias-link)]"><FileTypeIcon path={file.name} size={20}/></span>
+    <div className="relative z-[2] flex flex-1 items-center justify-between gap-[12px] min-w-0 pointer-events-none">
+      <div className="flex flex-1 flex-col justify-center gap-[2px] min-w-0">
+        <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-medium leading-[20px]" data-presented-name>{file.name}</span>
+        <span className="overflow-hidden [color:var(--dsw-alias-label-tertiary)] text-[10px] font-normal leading-[16px] text-ellipsis whitespace-nowrap" data-presented-description>
+          <span className="group-hover:hidden">{cardDescription(file.description, metadata)}</span>
+          {onPreview && <span className="hidden group-hover:inline">{tx('artifacts:presented.preview')}</span>}
         </span>
       </div>
-      <div className={css.actions}>{actions}</div>
+      <div className="inline-flex flex-none pointer-events-auto">{actions}</div>
     </div>
   </div>;
 }
@@ -53,11 +52,11 @@ export function PresentedFiles({ files, card }: { files: readonly PresentedFileV
   if (!files.length) return null;
   const collapsible = files.length > COLLAPSED_PRESENTED_COUNT;
   const shown = collapsible && !expanded ? files.slice(0, COLLAPSED_PRESENTED_COUNT) : files;
-  return <div className={css.root}>
-    <div className={css.presented} data-presented-files-row data-single={files.length === 1 || undefined}>
+  return <div className="[--deliverable-fill:var(--dsw-static-neutral-50)] [--deliverable-hover:var(--dsw-static-neutral-100)] dark:[--deliverable-fill:var(--dsw-static-neutral-850)] dark:[--deliverable-hover:var(--dsw-static-neutral-800)] @container flex flex-col gap-[16px] min-w-0 mt-[4px]">
+    <div className="grid grid-cols-2 @max-[620px]:grid-cols-1 gap-[10px] min-w-0 [&[data-single=true]]:grid-cols-1" data-presented-files-row data-single={files.length === 1 || undefined}>
       {shown.map(file => <Fragment key={file.key}>{card(file)}</Fragment>)}
     </div>
-    {collapsible && <button type="button" className={css.toggle} aria-expanded={expanded}
+    {collapsible && <button type="button" className="self-center inline-flex items-center gap-[4px] min-w-0 px-[11px] py-[1px] border-0 rounded-[8px] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-[12px] leading-[18px] hover:bg-[var(--dsw-alias-interactive-bg-hover)] [&_svg]:flex-none [&_svg]:w-[14px] [&_svg]:h-[14px]" aria-expanded={expanded}
       aria-label={tx(expanded ? 'artifacts:presented.collapse-aria' : 'artifacts:presented.expand-aria', { count: files.length })}
       onClick={() => setExpanded(value => !value)}>
       <span>{tx(expanded ? 'artifacts:presented.collapse' : 'artifacts:presented.all', { count: files.length })}</span>
