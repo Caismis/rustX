@@ -65,8 +65,10 @@ function Emitter({ text, icon, anchor, label, tone, foreground, holdMs, actions,
 }
 
 // Base UI only accepts a real Element anchor. This zero-size probe reproduces
-// the legacy virtual point: top-centered globally, or horizontally centered
-// over the owner surface while remaining fixed to the top announcement lane.
+// the legacy virtual point: horizontally centered over the owner surface while
+// remaining fixed to the top announcement lane. The lane sits below the
+// product header (76px in the session view) so the card never covers the
+// surface title.
 function AnchorProbe({ anchor, onProbe }: { anchor?: HTMLElement | null; onProbe: (element: HTMLElement | null) => void }) {
   const probe = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
@@ -91,7 +93,7 @@ function AnchorProbe({ anchor, onProbe }: { anchor?: HTMLElement | null; onProbe
     onProbe(probe.current);
     return () => onProbe(null);
   }, [onProbe]);
-  return createPortal(<span ref={probe} aria-hidden style={{ position: 'fixed', top: 32, width: 0, height: 0, pointerEvents: 'none', opacity: 0 }} />, document.body);
+  return createPortal(<span ref={probe} aria-hidden style={{ position: 'fixed', top: 84, width: 0, height: 0, pointerEvents: 'none', opacity: 0 }} />, document.body);
 }
 
 /** Non-blocking announcement, centered horizontally over its owner's composer.
