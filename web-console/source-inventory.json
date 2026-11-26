@@ -523,20 +523,6 @@
       "local_sha256": "e85d7495aff78873bbf28801fd13c2c977a08ab7f0c242616435ee0b677ec813"
     },
     {
-      "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
-      "destination": "web-console/src/app/composer/TodoDock.module.css",
-      "treatment": "adapted: card, header, bounded list and glyph colors; dependency label added",
-      "upstream_sha256": "52dfc34ccc56b06bf4badee35a3997ee499f023374a45a548ce40a8f960ce6eb",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "09af7ca9c33b002dbfb9d88ce3c6fecbef1f80fb0b90ebc1c273d2cdaa305919"
-    },
-    {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
       "destination": "web-console/src/app/composer/TodoDock.tsx",
       "treatment": "adapted: Harness empty-renders-nothing, collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds blocked_by and active_form. Issue #377 removes the composed-empty strip so extension-absent and composed-empty share one visual result; Harness turn-scoped plan clearing is deliberately excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.ream baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Combined App Server v80 imports; upstream pin and licenses retained.",
@@ -6431,20 +6417,6 @@
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-attachment/src/AttachmentRail.module.css",
-      "destination": "web-console/src/presentation/attachments/AttachmentRail.module.css",
-      "upstream_sha256": "328127d897bc3c1b4a414919f5a8de0a75a333006d948178a38ddc8d53d4888a",
-      "classification": "A",
-      "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
-      ],
-      "local_sha256": "4aad7f6b569e3b20f5d87049e21364a2d605ef7b0c17d34c24eb719c6de46c19"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-attachment/src/FileCard.tsx",
       "destination": "web-console/src/presentation/attachments/FileCard.tsx",
       "upstream_sha256": "0b855e0c7833073ce599609bead66d772e05185ab3ea8b7ca2571885803625c1",
@@ -6806,7 +6778,6 @@
       "treatment": "Compact reconnect control and recovery confirmation; native connection state and explicit callbacks, with accessible collapsed-rail presentation.",
       "upstream_sha256": "66a34a4ebf606353f307fd07d9119ab774f7cc9ae784a62bdabc7c7992f70169",
       "retained_dependencies": [
-        "./ConnectionIndicator.module.css",
         "./StateDot",
         "./icons",
         "react"
@@ -6816,7 +6787,7 @@
         "Harness request assembly, event history and runtime authority"
       ],
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "local_sha256": "b59e0197c813d6f50f71c0453107b5c1a27f11638886760c5d955f578b3e7584"
+      "local_sha256": "b40c976cb8f9fd9c2dcec28a7480f20e6871fbd2545ed28dc1182d64b127b06d"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx",

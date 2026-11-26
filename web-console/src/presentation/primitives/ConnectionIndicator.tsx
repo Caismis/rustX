@@ -2,7 +2,6 @@
 import { useEffect, useState } from 'react'
 import { IconCheckOutline16, IconRefreshOutline16 } from './icons'
 import { StateDot } from './StateDot'
-import css from './ConnectionIndicator.module.css'
 
 /** Visual state rendered by {@link ConnectionIndicator}. */
 export type ConnectionIndicatorState =
@@ -59,16 +58,16 @@ export function ConnectionIndicator({
   }, [state, rendered])
 
   if (rendered === undefined) return null
-  const leavingClass = `${leaving ? ` ${css.leaving}` : ''}${compact ? ` ${css.compact}` : ''}`
+  const leavingClass = `${leaving ? ' opacity-0' : ''}${compact ? ' grid-cols-[14px]! w-[28px] justify-center p-0! [&_.label]:absolute [&_.label]:w-[1px] [&_.label]:h-[1px] [&_.label]:p-0 [&_.label]:-m-[1px] [&_.label]:overflow-hidden [&_.label]:[clip-path:inset(50%)] [&_.label]:whitespace-nowrap' : ''}`
   if (rendered === 'recovered') {
     return (
       <div
-        className={`${css.indicator} ${css.success}${leavingClass}`}
+        className={`flex-none inline-grid grid-cols-[14px_max-content] items-center gap-x-[4px] h-[28px] px-[8px] py-0 box-border [border:1px_solid_transparent] rounded-[var(--dsw-radius-sm)] [font-family:inherit] text-[12px] font-medium leading-[18px] whitespace-nowrap transition-[background-color,color,border-color,opacity] duration-150 animate-indicator-enter motion-reduce:animate-none motion-reduce:transition-none bg-[var(--dsw-alias-state-success-tertiary)] [color:var(--dsw-alias-state-success-primary)] [border-color:color-mix(in_srgb,var(--dsw-alias-state-success-primary)_20%,transparent)]!${leavingClass}`}
         role="status"
         aria-label={recoveredLabel}
       >
-        <span className={css.icon} aria-hidden="true"><IconCheckOutline16 size={14} /></span>
-        <span className={css.label}>{recoveredLabel}</span>
+        <span className="grid place-items-center w-[14px] h-[14px] [&>svg]:[color:inherit]" aria-hidden="true"><IconCheckOutline16 size={14} /></span>
+        <span className="label text-left">{recoveredLabel}</span>
       </div>
     )
   }
@@ -77,25 +76,25 @@ export function ConnectionIndicator({
   return (
     <button
       type="button"
-      className={`${css.indicator} ${css.warning}${leavingClass}`}
+      className={`flex-none inline-grid grid-cols-[14px_max-content] items-center gap-x-[4px] h-[28px] px-[8px] py-0 box-border [border:1px_solid_transparent] rounded-[var(--dsw-radius-sm)] [font-family:inherit] text-[12px] font-medium leading-[18px] whitespace-nowrap transition-[background-color,color,border-color,opacity] duration-150 animate-indicator-enter motion-reduce:animate-none motion-reduce:transition-none bg-[var(--dsw-alias-state-warn-tertiary)] [color:var(--dsw-alias-state-warn-label)] [border-color:color-mix(in_srgb,var(--dsw-alias-state-warn-label)_20%,transparent)]! cursor-pointer hover:bg-[color-mix(in_srgb,var(--dsw-alias-state-warn-tertiary),var(--dsw-alias-state-warn-primary)_6%)] active:bg-[color-mix(in_srgb,var(--dsw-alias-state-warn-tertiary),var(--dsw-alias-state-warn-primary)_10%)] focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:outline-offset-2${leavingClass}`}
       data-phase={rendered}
       aria-label={connecting ? restartActionLabel : reconnectActionLabel}
       onClick={onReconnect}
     >
-      <span className={css.icon} aria-hidden="true">
+      <span className="grid place-items-center w-[14px] h-[14px] [&>svg]:[color:inherit]" aria-hidden="true">
         {connecting
           ? <StateDot state="ongoing" />
           : <IconRefreshOutline16 size={14} />}
       </span>
-      <span className={css.label}>
+      <span className="label text-left">
         {connecting
           ? (
             <>
               {connectingLabel}
-              <span className={css.dots} aria-hidden="true">
+              <span className="inline-block w-[1em] text-left" aria-hidden="true">
                 <span>.</span>
-                <span className={css.secondDot}>.</span>
-                <span className={css.thirdDot}>.</span>
+                <span className="animate-reveal-second-dot motion-reduce:animate-none">.</span>
+                <span className="animate-reveal-third-dot motion-reduce:animate-none">.</span>
               </span>
             </>
           )
