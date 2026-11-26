@@ -461,20 +461,6 @@
       "local_sha256": "d167fc0a7cb4b46e6a65bb6536d4c2752e450e5d0c4911b08c610f6a82dfb173"
     },
     {
-      "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
-      "destination": "web-console/src/app/composer/QueueDock.module.css",
-      "treatment": "adapted: standalone card, editor and row actions with wrapping mobile controls; no input-card tuck or attachment thumbnail rules",
-      "upstream_sha256": "7b1a8a0d48ac401316db13d8d8b51530b15174ab6b6c49b699beef3967d42f81",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7f40178b3afe43c2f3120d0000f429caaf523e6edc136c262f209af4044826ac"
-    },
-    {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
       "destination": "web-console/src/app/composer/QueueDock.tsx",
       "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Use latest version conflict copy; exact expected revision remains native. Native authority unchanged. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: native sequence/revision cancellation and edit ownership; deferred partial previews cannot be submitted as complete editor content. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.ream baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. UI experience: retain accepted queue echoes until exact native observation, including after the running attempt ends. Combined App Server v80 imports; upstream pin and licenses retained.",
@@ -1686,7 +1672,6 @@
       "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "98abc310aaf2a764fae01235278c4e363ae042102806d752f15a9f68b840675e",
       "retained_dependencies": [
-        "./AppFrame.module.css",
         "./columns",
         "react"
       ],
@@ -1698,7 +1683,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "292d8e3d8b7b6d00966b8cd0c155b71985eadd86b1a52e0e6791f582a399426a",
+      "local_sha256": "c09e027df169e562733292dfe1439853368e29b65a1262cf9eafc0c11350e461",
       "classification": "A"
     },
     {
