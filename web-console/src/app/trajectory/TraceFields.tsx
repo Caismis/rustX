@@ -5,7 +5,7 @@ import { readTraceFieldWindow, readTraceSelectedWindow, type TraceValueSelector,
 import type { TraceFieldReader } from '../../client/trace';
 import { SourceContent } from '../agent/SourceContent';
 import { useTranslation } from '../../locale/react';
-import css from './Trajectory.module.css';
+import { trajectoryCss } from './trajectoryCss';;
 
 /** Opening a detail owns its reads; byte windows never become user controls. */
 export function TraceFields({ fields, cut, reader, owned }: { fields: readonly TraceFieldSource[]; cut?: CheckpointReadCut; reader?: TraceFieldReader; owned: () => boolean }) {
@@ -14,7 +14,7 @@ export function TraceFields({ fields, cut, reader, owned }: { fields: readonly T
 function TraceField({ field, cut, reader, owned }: { field: TraceFieldSource; cut?: CheckpointReadCut; reader?: TraceFieldReader; owned: () => boolean }) {
   const key = JSON.stringify(cut), stableCut = useMemo(() => cut, [key]);
   const read = useCallback((reference: Parameters<TraceFieldReader['content']>[1], offset: number, current: () => boolean) => reader!.content(stableCut!, reference, offset, current), [reader, stableCut]);
-  return field.type === 'content' ? <SourceContent explicit bindings={[field.binding]} owned={owned} read={reader && stableCut ? read : undefined}>{text => <pre className={css.payload}>{text}</pre>}</SourceContent>
+  return field.type === 'content' ? <SourceContent explicit bindings={[field.binding]} owned={owned} read={reader && stableCut ? read : undefined}>{text => <pre className={trajectoryCss.payload}>{text}</pre>}</SourceContent>
     : <TraceValue field={field} cut={cut} reader={reader} owned={owned}/>;
 }
 export function TraceValue({ field, cut, reader, owned }: { field: TraceValueField | TraceValueSelector; cut?: CheckpointReadCut; reader?: TraceFieldReader; owned: () => boolean }) {
@@ -45,5 +45,5 @@ export function TraceValue({ field, cut, reader, owned }: { field: TraceValueFie
     })().catch(error => { if (current()) setState({ identity, reader, error: String(error).slice(0, 512) }); });
     return () => { mounted = false; };
   }, [identity, reader, active]);
-  return loaded?.error ? <p role="alert">{loaded.error}</p> : loaded?.text !== undefined ? <pre className={css.payload}>{loaded.text}</pre> : <p role="status">{tx(!reader || !cut ? 'trajectory:source.cut-unavailable' : 'trajectory:details.loading')}</p>;
+  return loaded?.error ? <p role="alert">{loaded.error}</p> : loaded?.text !== undefined ? <pre className={trajectoryCss.payload}>{loaded.text}</pre> : <p role="status">{tx(!reader || !cut ? 'trajectory:source.cut-unavailable' : 'trajectory:details.loading')}</p>;
 }

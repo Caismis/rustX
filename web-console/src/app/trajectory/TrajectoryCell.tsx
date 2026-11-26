@@ -8,7 +8,7 @@ import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../p
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { recordLabel, type InspectableDisplayItem } from './layout';
 import { markdownPreviewText } from '../../presentation/markdown/preview';
-import css from './Trajectory.module.css';
+import { trajectoryCss } from './trajectoryCss';;
 import { isWorkflowCall } from './workflow';
 import { workflowStatus } from '../agent/workflow-state';
 import { modelToolArgumentPreview } from './tool-arguments';
@@ -61,12 +61,12 @@ export function KindTag({ kind, label: suppliedLabel }: { kind: CellKind; label?
   const tx = useTranslation();
   const label = suppliedLabel ?? cellLabel(tx, kind);
   const short = narrowLabel(tx, kind);
-  return <span className={css.kindSlot}>
-    <span className={css.kindTag} data-role-kind={kind}>
+  return <span className={trajectoryCss.kindSlot}>
+    <span className={trajectoryCss.kindTag} data-role-kind={kind}>
       {short === undefined
-        ? <Tooltip label={label} side="right"><span className={css.kindTagIcon} aria-hidden="true"><CellIcon kind={kind} /></span></Tooltip>
-        : <span className={css.kindTagShort} aria-hidden="true">{short}</span>}
-      <span className={css.kindTagLabel}>{label}</span>
+        ? <Tooltip label={label} side="right"><span className={trajectoryCss.kindTagIcon} aria-hidden="true"><CellIcon kind={kind} /></span></Tooltip>
+        : <span className={trajectoryCss.kindTagShort} aria-hidden="true">{short}</span>}
+      <span className={trajectoryCss.kindTagLabel}>{label}</span>
     </span>
   </span>;
 }
@@ -114,24 +114,24 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
   if (item.type === 'WorkflowNode') {
     const node = item.workflowNode, path = [...node.instance.block.definition.blocks, ...node.instance.block.invocations.map(String), node.instance.node].join(' / ');
     const kind = node.kind ? tx(`common:workflow.kind.${node.kind}`) : cellLabel(tx, 'workflow_node');
-    return <span className={css.resultPreview} title={path}>
-      <span className={`${css.resultRequest} ${css.workflowNodeRequest}`}>
-        <span className={css.workflowNodeKind} data-node-kind={node.kind ?? undefined} title={kind}>{kind}</span>
-        <span className={css.workflowNodeInput}><span className={css.toolCallNameTypeface}>{node.instance.node}</span>
-          {node.instance.block.invocations.length > 0 && <span className={css.workflowPath}>[{node.instance.block.invocations.join('/')}]</span>}
-          <span className={css.toolCallPayload}>{node.input_preview ?? tx(node.input_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.input-not-recorded')}</span>
+    return <span className={trajectoryCss.resultPreview} title={path}>
+      <span className={`${trajectoryCss.resultRequest} ${trajectoryCss.workflowNodeRequest}`}>
+        <span className={trajectoryCss.workflowNodeKind} data-node-kind={node.kind ?? undefined} title={kind}>{kind}</span>
+        <span className={trajectoryCss.workflowNodeInput}><span className={trajectoryCss.toolCallNameTypeface}>{node.instance.node}</span>
+          {node.instance.block.invocations.length > 0 && <span className={trajectoryCss.workflowPath}>[{node.instance.block.invocations.join('/')}]</span>}
+          <span className={trajectoryCss.toolCallPayload}>{node.input_preview ?? tx(node.input_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.input-not-recorded')}</span>
         </span>
       </span>
-      <span className={css.inlineResult}><span className={css.arrow}>→</span><span className={css.inlineResultText}>{node.output_preview ?? (node.state.type === 'settled' ? tx(node.output_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.output-not-recorded') : workflowStatus(node.state, tx))}</span></span>
+      <span className={trajectoryCss.inlineResult}><span className={trajectoryCss.arrow}>→</span><span className={trajectoryCss.inlineResultText}>{node.output_preview ?? (node.state.type === 'settled' ? tx(node.output_omitted ? 'trajectory:workflow.body-omitted' : 'trajectory:workflow.output-not-recorded') : workflowStatus(node.state, tx))}</span></span>
     </span>;
   }
   if (item.type === 'SystemPromptCell') {
     // As in Harness, the row names the change; the prompt itself is inspected.
-    return <span className={css.contentText} title={item.label} data-system-prompt-state={record.request?.system_prompt.state} data-tool-catalog-state={record.request?.tool_catalog}>{item.label}</span>;
+    return <span className={trajectoryCss.contentText} title={item.label} data-system-prompt-state={record.request?.system_prompt.state} data-tool-catalog-state={record.request?.tool_catalog}>{item.label}</span>;
   }
   if (item.type === 'ContextRow') {
     const text = item.context.preview?.text ? markdownPreviewText(item.context.preview.text) : '';
-    return <span className={css.contentText} title={text}>{text || '—'}</span>;
+    return <span className={trajectoryCss.contentText} title={text}>{text || '—'}</span>;
   }
   if (record.tool) {
     const name = record.tool.name ?? record.tool.tool_id;
@@ -140,20 +140,20 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
     const imageRead = record.tool.tool_id === READ_IMAGE_TOOL && record.tool.outcome === 'success' && record.attachments.some(artifact => artifact.image);
     const result = (imageRead && (!preview || preview === READ_IMAGE_RECEIPT) ? attachmentSummary(tx, record) || preview : preview) ?? record.tool.detail?.text;
     const request = [name, args].filter(Boolean).join(' ');
-    return <span className={result === undefined ? css.contentText : css.resultPreview} title={result === undefined ? request : `${request} → ${result}`}>
-      <span className={result === undefined ? undefined : css.resultRequest}>
-        <span className={css.toolCallNameTypeface}>{name}</span>
-        {args !== undefined && <span className={css.toolCallPayload}>{args}</span>}
+    return <span className={result === undefined ? trajectoryCss.contentText : trajectoryCss.resultPreview} title={result === undefined ? request : `${request} → ${result}`}>
+      <span className={result === undefined ? undefined : trajectoryCss.resultRequest}>
+        <span className={trajectoryCss.toolCallNameTypeface}>{name}</span>
+        {args !== undefined && <span className={trajectoryCss.toolCallPayload}>{args}</span>}
       </span>
-      {result !== undefined && <span className={isErrorRecord(record) ? `${css.inlineResult} ${css.error}` : css.inlineResult}>
-        <span className={css.arrow}>→</span>
-        <span className={css.inlineResultText}>{result}</span>
+      {result !== undefined && <span className={isErrorRecord(record) ? `${trajectoryCss.inlineResult} ${trajectoryCss.error}` : trajectoryCss.inlineResult}>
+        <span className={trajectoryCss.arrow}>→</span>
+        <span className={trajectoryCss.inlineResultText}>{result}</span>
       </span>}
     </span>;
   }
   const text = recordText(tx, record);
   if (text === '' && record.kind === 'assistant' && record.calls.length) {
-    return <span className={css.contentText}><span className={css.toolCallOnly}>{tx('trajectory:record.tool-call-only')}</span></span>;
+    return <span className={trajectoryCss.contentText}><span className={trajectoryCss.toolCallOnly}>{tx('trajectory:record.tool-call-only')}</span></span>;
   }
-  return <span className={css.contentText} title={text}>{text || '—'}</span>;
+  return <span className={trajectoryCss.contentText} title={text}>{text || '—'}</span>;
 }

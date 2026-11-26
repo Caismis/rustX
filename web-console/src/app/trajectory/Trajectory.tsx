@@ -12,7 +12,7 @@ import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, withHistoryGaps, completeHistoryThrough, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
-import css from './Trajectory.module.css';
+import { trajectoryCss } from './trajectoryCss';;
 import { workflowCalls, withWorkflowNodes } from './workflow';
 import { useWorkflowNodes } from './useWorkflowNodes';
 import { useWorkflowRunCanvas } from '../workflows/run-canvas/context';
@@ -253,36 +253,36 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
   const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.ownerKey] : []);
   const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));
   const allCallsCollapsed = callOwners.size > 0 && [...callOwners].every(id => calls.has(id));
-  return <section className={css.root} data-conversation-composer-overlay="" aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {
+  return <section className={trajectoryCss.root} data-conversation-composer-overlay="" aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {
     focusedDisplay.current = (event.target as HTMLElement).closest<HTMLElement>('[data-display-key]')?.dataset.displayKey;
   }}>
-    <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:toolbar.aria')}>
-      <div className={css.toolbarActions}>
-        {cache.located && onLatest && <button type="button" className={css.action} onClick={() => { select(); ledger.current?.followTail(); onLatest(); }}>{tx('agent:agent-transcript.return-to-latest')}</button>}
-        <button type="button" className={css.toggle} aria-label={tx('trajectory:toolbar.use-actual-duration')} aria-pressed={mode === 'duration'}
+    <div className={trajectoryCss.toolbar} role="toolbar" aria-label={tx('trajectory:toolbar.aria')}>
+      <div className={trajectoryCss.toolbarActions}>
+        {cache.located && onLatest && <button type="button" className={trajectoryCss.action} onClick={() => { select(); ledger.current?.followTail(); onLatest(); }}>{tx('agent:agent-transcript.return-to-latest')}</button>}
+        <button type="button" className={trajectoryCss.toggle} aria-label={tx('trajectory:toolbar.use-actual-duration')} aria-pressed={mode === 'duration'}
           title={mode === 'duration' ? tx('trajectory:toolbar.use-equal-width') : tx('trajectory:toolbar.use-actual-duration')}
           onClick={() => { setMode(mode === 'duration' ? 'sequence' : 'duration'); setRange(null); }}>
-          <svg className={css.toggleIcon} viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" /><path d="M8 4.75V8l2.25 1.5" /></svg>
+          <svg className={trajectoryCss.toggleIcon} viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" /><path d="M8 4.75V8l2.25 1.5" /></svg>
           {tx('trajectory:toolbar.duration')}
         </button>
-        <button type="button" className={css.action} aria-label={allTurnsCollapsed ? tx('trajectory:toolbar.expand-turns') : tx('trajectory:toolbar.collapse-turns')} aria-pressed={allTurnsCollapsed}
+        <button type="button" className={trajectoryCss.action} aria-label={allTurnsCollapsed ? tx('trajectory:toolbar.expand-turns') : tx('trajectory:toolbar.collapse-turns')} aria-pressed={allTurnsCollapsed}
           title={allTurnsCollapsed ? tx('trajectory:toolbar.expand-turns') : tx('trajectory:toolbar.collapse-turns')}
           onClick={() => setCollapsedTurns(allTurnsCollapsed ? new Set() : new Set(turnIds))}>
-          <span className={css.actionIcon} aria-hidden="true">{allTurnsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.turns')}
+          <span className={trajectoryCss.actionIcon} aria-hidden="true">{allTurnsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.turns')}
         </button>
-        <button type="button" className={css.action} aria-label={allCallsCollapsed ? tx('trajectory:toolbar.expand-calls') : tx('trajectory:toolbar.collapse-calls')} aria-pressed={allCallsCollapsed}
+        <button type="button" className={trajectoryCss.action} aria-label={allCallsCollapsed ? tx('trajectory:toolbar.expand-calls') : tx('trajectory:toolbar.collapse-calls')} aria-pressed={allCallsCollapsed}
           title={allCallsCollapsed ? tx('trajectory:toolbar.expand-calls') : tx('trajectory:toolbar.collapse-calls')}
           onClick={() => setCalls(allCallsCollapsed ? new Set() : new Set(callOwners))}>
-          <span className={css.actionIcon} aria-hidden="true">{allCallsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.calls')}
+          <span className={trajectoryCss.actionIcon} aria-hidden="true">{allCallsCollapsed ? '⊞' : '⊟'}</span>{tx('trajectory:toolbar.calls')}
         </button>
       </div>
-      <div className={css.search}>
-        <IconSearchOutline16 size={11} className={css.searchIcon} />
-        <TextInput unstyled type="search" className={css.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
+      <div className={trajectoryCss.search}>
+        <IconSearchOutline16 size={11} className={trajectoryCss.searchIcon} />
+        <TextInput unstyled type="search" className={trajectoryCss.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
       </div>
     </div>
-    {(cache.error || context.error) && <p role="alert" className={css.error}>{cache.error || context.error}</p>}
-    {[...workflowNodes.values()].filter(value => value.error && !(unresolvedWorkflow && value.root.id === selection?.owner_record_id)).map(value => <p role="alert" className={css.error} key={value.root.id}>{value.error} <button type="button" className={css.action} onClick={() => retryWorkflowNodes(value.root.id)}>{tx('interactions:interactions.retry-details')}</button></p>)}
+    {(cache.error || context.error) && <p role="alert" className={trajectoryCss.error}>{cache.error || context.error}</p>}
+    {[...workflowNodes.values()].filter(value => value.error && !(unresolvedWorkflow && value.root.id === selection?.owner_record_id)).map(value => <p role="alert" className={trajectoryCss.error} key={value.root.id}>{value.error} <button type="button" className={trajectoryCss.action} onClick={() => retryWorkflowNodes(value.root.id)}>{tx('interactions:interactions.retry-details')}</button></p>)}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
     <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range}
@@ -300,14 +300,14 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
         const key = span?.displayKey ?? preferredItem(allItems, id)?.display_key;
         if (key) ledger.current?.reveal(key);
       }} />
-    <div className={css.split} style={splitStyle}>
-      <div className={css.ledgerPane}>
+    <div className={trajectoryCss.split} style={splitStyle}>
+      <div className={trajectoryCss.ledgerPane}>
         <TrajectoryLedger ref={ledger} rows={rows} first={records[0]?.id} activeKey={activeKey} focusKey={pendingFocus} onFocused={() => setPendingFocus(undefined)}
           folded={collapsedTurns} focusedIds={focusedIds} actions={actions} close={close}
           loadEarlier={loadEarlier} canLoadEarlier={canLoadEarlier} loading={cache.loading === true} searching={matches !== null} />
       </div>
-      {inspector && <aside className={css.details} aria-label={tx('trajectory:details.event')} style={detailsWidth === null ? undefined : { width: detailsWidth }}>
-        <div className={css.detailsResizeHandle} role="separator" aria-label={tx('trajectory:details.resize')} aria-orientation="vertical" tabIndex={0}
+      {inspector && <aside className={trajectoryCss.details} aria-label={tx('trajectory:details.event')} style={detailsWidth === null ? undefined : { width: detailsWidth }}>
+        <div className={trajectoryCss.detailsResizeHandle} role="separator" aria-label={tx('trajectory:details.resize')} aria-orientation="vertical" tabIndex={0}
           title={tx('trajectory:details.resize-title')}
           onDoubleClick={() => { setDetailsWidth(null); setToolRequestOffset(null); }}
           onPointerDown={event => {

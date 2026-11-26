@@ -708,58 +708,6 @@
       "local_sha256": "e6cc73f400cc92c078021bcfc534a4636664297c58d575b6937b8f7461e34bd7"
     },
     {
-      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
-      "destination": "web-console/src/app/trajectory/Trajectory.module.css",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Harness ledger boundaries: Request markers on the boundary above their Step's first output, label-only System rows, TTFT/decoding timeline colours and 系统提示词 wording. Harness ledger: Steps have no chrome, seats or navigation targets; the Turn label is the only selectable structure. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout.",
-      "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
-      "retained_dependencies": [
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis",
-        "Harness Session Controller and event assembly",
-        "Host/Remote services",
-        "dynamic view registry",
-        "Harness client-side turn/step inference",
-        "provider configuration authority"
-      ],
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "242d32f80c17f888899bab1c4a9eb2130311c92c462341ec2c9211c32f3c9428",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
-          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
-          "upstream_sha256": "e9740dcd1b98cfd92b68bfe3d2f1f968623542b7e0ce2c6697be0b3c79180fc5",
-          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
-        },
-        {
-          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryGroupHeader.module.css",
-          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
-          "upstream_sha256": "b08362f0a3525131a9764d523c4b6bac5d9a9ee0a3b8aeec4c70253c5cb764e8",
-          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
-        },
-        {
-          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
-          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
-          "upstream_sha256": "dba4683d768a518704f13bbd8acc4d00e5ae23c1db147d5b66d610c39dfe6d88",
-          "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
-        },
-        {
-          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryToolbar.module.css",
-          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-          "upstream_sha256": "b512e1c52f397ef81775295ae779e95dbf7682d53ce7a9b48e2f1f01dd714c8c",
-          "treatment": "Toolbar strip, toggle/switch/action controls and trailing search field adapted."
-        },
-        {
-          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
-          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-          "upstream_sha256": "dba4683d768a518704f13bbd8acc4d00e5ae23c1db147d5b66d610c39dfe6d88",
-          "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
-        }
-      ]
-    },
-    {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/Trajectory.tsx",
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #407 projection revision repair: coordinate gestures owned by semantic projection geometry independently of epoch-owned committed native-ID focus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. PR #424: project per-Step seats in native Turn group order; preserve exact logical focus and structural ownership. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Harness ledger: Steps have no chrome, seats or navigation targets; the Turn label is the only selectable structure. Timeline interaction alignment: measured sequence phase ratio, exact selection edges, pointer cursor/dimming, double-click clearing and zoomed edge panning; native timing and record ownership preserved. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. #467: retain positive bounded Trace descriptors and explicit selected field windows at their original native cuts; upstream presentation reference unchanged. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Trace history review: expose native gap continuations independently of visible rows and require a contiguous native prefix through the selected owner for cumulative usage.",
@@ -770,7 +718,6 @@
         "../../locale/react",
         "../../presentation/primitives/icons",
         "../workflows/run-canvas/context",
-        "./Trajectory.module.css",
         "./TrajectoryInspector",
         "./TrajectoryLedger",
         "./TrajectoryRow",
@@ -778,6 +725,7 @@
         "./layout",
         "./search",
         "./timeline",
+        "./trajectoryCss",
         "./useTraceContexts",
         "./useWorkflowNodes",
         "./workflow",
@@ -841,7 +789,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "a062a959ce6d64b46acece5ad52e9219f9757456fb4ad5cceeb45f63bb666cdc"
+      "local_sha256": "32c996cc6d027474e12d39ec232bc13e11c3a6374bbb81f2474961342327fc97"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -873,11 +821,11 @@
         "../agent/UserMessageVersions",
         "../agent/workflow-state",
         "../components/Artifact",
-        "./Trajectory.module.css",
         "./TrajectoryCell",
         "./TrajectoryRow",
         "./layout",
         "./timeline",
+        "./trajectoryCss",
         "./useTraceContent",
         "./useWorkflowNodeContent",
         "diff",
@@ -929,7 +877,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "9c800db6c3f9f36dffdb43abf3d7a11edc163460f8c7738ac857a3c653f00148"
+      "local_sha256": "60f684c298fa5a9c22b7a24f5410b31a8ce2b06296fa13b3090df1b0cc9a515e"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
@@ -2540,9 +2488,9 @@
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "../agent/workflow-state",
-        "./Trajectory.module.css",
         "./layout",
         "./tool-arguments",
+        "./trajectoryCss",
         "./workflow",
         "react"
       ],
@@ -2570,7 +2518,7 @@
           "treatment": "Summarize successful image results from recorded attachments."
         }
       ],
-      "local_sha256": "62150eb56519806c4703f327ce23b113e585909f735e25b2ef6213ae550f2065"
+      "local_sha256": "f57370a3bb77bf9c7543f0f30816ad37253d4570ab578a9be36b08a5398d15c4"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3130,9 +3078,9 @@
         "../../locale/react",
         "../../presentation/primitives/icons",
         "../agent/UserMessageVersions",
-        "./Trajectory.module.css",
         "./TrajectoryCell",
         "./layout",
+        "./trajectoryCss",
         "./workflow",
         "react"
       ],
@@ -3153,7 +3101,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "0def6eebb15866794a7913b8ee150d32582765855358de716090e94a5a070e22"
+      "local_sha256": "fbc4bce3a929e500cf7922946f6cb760079a59f9d8c7e721683c2878ca6aaff9"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -3166,9 +3114,9 @@
       "retained_dependencies": [
         "../../locale/react",
         "../../presentation/primitives/StateDot",
-        "./Trajectory.module.css",
         "./TrajectoryRow",
         "./layout",
+        "./trajectoryCss",
         "@tanstack/react-virtual",
         "react"
       ],
@@ -3183,7 +3131,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "70a6476da33049b680ba027eb30b13460ed7a56c491d962615d810db52482be0"
+      "local_sha256": "1f3a9b13cb710aba1d19c4c8ab4b54e998c92859580fb563e386feee62573681"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
@@ -6531,6 +6479,56 @@
       ],
       "excluded_dependencies": [],
       "local_sha256": "526df85e3a221b4261b2c954e4b330e0da68f416e6d79b529aad34010b29f17f"
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+      "destination": "web-console/src/app/trajectory/trajectoryCss.ts",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424 repair: explicit native focus targets, post-Turn Step chrome, and truthful structural-seat geometry. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Harness ledger boundaries: Request markers on the boundary above their Step's first output, label-only System rows, TTFT/decoding timeline colours and 系统提示词 wording. Harness ledger: Steps have no chrome, seats or navigation targets; the Turn label is the only selectable structure. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout. Tailwind migration: derived utility-string module preserves the Harness presentation grammar verbatim as utilities; semantics unchanged.",
+      "upstream_sha256": "b616ba24e9274a66c63d7027ac7700b9813f640ca41e6910106286d1bbeba925",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis",
+        "Harness Session Controller and event assembly",
+        "Host/Remote services",
+        "dynamic view registry",
+        "Harness client-side turn/step inference",
+        "provider configuration authority"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "e9740dcd1b98cfd92b68bfe3d2f1f968623542b7e0ce2c6697be0b3c79180fc5",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryGroupHeader.module.css",
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream_sha256": "b08362f0a3525131a9764d523c4b6bac5d9a9ee0a3b8aeec4c70253c5cb764e8",
+          "treatment": "Turn/group presentation and semantic detail organization adapted; native Trace replaces Harness event assembly, identity and prompt comparison. No runtime imported."
+        },
+        {
+          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+          "upstream_sha256": "dba4683d768a518704f13bbd8acc4d00e5ae23c1db147d5b66d610c39dfe6d88",
+          "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryToolbar.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "b512e1c52f397ef81775295ae779e95dbf7682d53ce7a9b48e2f1f01dd714c8c",
+          "treatment": "Toolbar strip, toggle/switch/action controls and trailing search field adapted."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+          "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+          "upstream_sha256": "dba4683d768a518704f13bbd8acc4d00e5ae23c1db147d5b66d610c39dfe6d88",
+          "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
+        }
+      ],
+      "local_sha256": "be421e34ad1cf04b2f402f18f1531d791801bf2ff9145d072be0ea21fdc388a4"
     }
   ],
   "inspected_only": [

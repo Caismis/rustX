@@ -3,7 +3,7 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { useTranslation } from '../../locale/react';
 import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
-import css from './Trajectory.module.css';
+import { trajectoryCss } from './trajectoryCss';;
 import type { SessionMessageVersion, SessionMessageVersionFamily, TraceRecord } from '../../../../protocol/app-server/v80';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
@@ -91,7 +91,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
     data-collapsed-summary={summary ? (row.callsOwner ? 'assistant' : 'turn') : undefined}
     data-timeline-focus={focusedIds && focusId ? focusedIds.has(focusId) ? 'inside' : 'outside' : undefined}
     role="row" aria-rowindex={index + 1} aria-selected={selected} aria-label={label}
-    tabIndex={(item && item.type !== 'RequestBoundary') || summary ? 0 : -1} className={css.record} style={style}
+    tabIndex={(item && item.type !== 'RequestBoundary') || summary ? 0 : -1} className={trajectoryCss.record} style={style}
     onClick={() => { if (summary) toggleSummary(); else if (item && item.type !== 'RequestBoundary') actions.select(item); }}
     onDoubleClick={onDoubleClick}
     onKeyDown={event => {
@@ -100,32 +100,32 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
       if (summary && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggleSummary(); return; }
       if (event.key === 'Escape' || item) onKeyDown(event, item?.display_key ?? '');
     }}>
-    <span role="cell" className={css.event}>
-      {request && <button type="button" onKeyDown={event => onKeyDown(event, request.display_key)} className={css.requestChrome} data-display-key={request.display_key}
+    <span role="cell" className={trajectoryCss.event}>
+      {request && <button type="button" onKeyDown={event => onKeyDown(event, request.display_key)} className={trajectoryCss.requestChrome} data-display-key={request.display_key}
         aria-label={requestLabel} aria-pressed={activeKey === request.display_key} data-label={requestLabel}
         data-state={request.record.state} data-request-owner={request.owner_record_id} data-request-id={request.record.request?.request_id}
         data-selected={activeKey === request.display_key || undefined} data-status={isErrorRecord(request.record) ? 'error' : undefined}
         style={row.requestRun ? { '--request-boundary-offset': `${row.requestRun * 8}px` } as CSSProperties : undefined}
         onClick={event => { event.stopPropagation(); actions.select(request); }}
         onDoubleClick={event => { event.stopPropagation(); }} />}
-      {turn && turn.ownerKey === activeTurn && !initialSystem && !row.betweenTurns && <span className={css.turnRail} aria-hidden="true" />}
-      {selected && <span className={css.selectionRail} aria-hidden="true" />}
-      {row.betweenTurns && <span className={css.turnLabel} aria-label={tx('trajectory:section.between-turns')}>{tx('trajectory:section.between-turns')}</span>}
-      {row.turnStart && !row.betweenTurns && turn && <span className={turn.ownerKey === activeTurn ? `${css.turnLabel} ${css.turnLabelActive}` : css.turnLabel} aria-label={turn.label}>
-        <span className={css.turnLabelFull} aria-hidden="true">{turn.label}</span>
-        <span className={css.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
+      {turn && turn.ownerKey === activeTurn && !initialSystem && !row.betweenTurns && <span className={trajectoryCss.turnRail} aria-hidden="true" />}
+      {selected && <span className={trajectoryCss.selectionRail} aria-hidden="true" />}
+      {row.betweenTurns && <span className={trajectoryCss.turnLabel} aria-label={tx('trajectory:section.between-turns')}>{tx('trajectory:section.between-turns')}</span>}
+      {row.turnStart && !row.betweenTurns && turn && <span className={turn.ownerKey === activeTurn ? `${trajectoryCss.turnLabel} ${trajectoryCss.turnLabelActive}` : trajectoryCss.turnLabel} aria-label={turn.label}>
+        <span className={trajectoryCss.turnLabelFull} aria-hidden="true">{turn.label}</span>
+        <span className={trajectoryCss.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
       </span>}
       {row.kind === 'semantic' && item && !node && <KindTag kind={cellKind(item)} />}
     </span>
-    <div role="cell" className={css.content}>
-      {workflow && <button type="button" className={css.workflowToggle} aria-expanded={workflowOpen} aria-label={tx(workflowOpen ? 'trajectory:workflow.collapse' : 'trajectory:workflow.expand')}
+    <div role="cell" className={trajectoryCss.content}>
+      {workflow && <button type="button" className={trajectoryCss.workflowToggle} aria-expanded={workflowOpen} aria-label={tx(workflowOpen ? 'trajectory:workflow.collapse' : 'trajectory:workflow.expand')}
         onClick={event => { event.stopPropagation(); actions.toggleWorkflow?.(workflow.id); }} onDoubleClick={event => event.stopPropagation()}>
         <IconChevronRightOutline14/>
       </button>}
       {summary
-        ? <span className={css.collapsedTurnContent} title={row.summary}>
-          <span className={css.collapsedTurnEllipsis}>…</span>
-          <span className={css.collapsedTurnText}>{row.summary}</span>
+        ? <span className={trajectoryCss.collapsedTurnContent} title={row.summary}>
+          <span className={trajectoryCss.collapsedTurnEllipsis}>…</span>
+          <span className={trajectoryCss.collapsedTurnText}>{row.summary}</span>
         </span>
         : item && row.kind === 'semantic' ? <CellContent item={item} /> : null}
       {messageFamily && messageHistory && <MessageVersionPager compact family={messageFamily}
@@ -133,7 +133,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
       {node && item?.type === 'WorkflowNode' && actions.openWorkflowNodeCanvas && (
         <button
           type="button"
-          className={css.workflowCanvasButton}
+          className={trajectoryCss.workflowCanvasButton}
           aria-label={tx('workflows:run-canvas.inspect-node', { p0: node.instance.node })}
           title={tx('workflows:run-canvas.inspect-node', { p0: node.instance.node })}
           onClick={event => {
@@ -148,7 +148,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
       {workflow && !node && actions.openWorkflowRootCanvas && (
         <button
           type="button"
-          className={css.workflowCanvasButton}
+          className={trajectoryCss.workflowCanvasButton}
           aria-label={tx('workflows:run-canvas.open')}
           title={tx('workflows:run-canvas.open')}
           onClick={event => {

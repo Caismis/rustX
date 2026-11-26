@@ -5,7 +5,7 @@ import { useTranslation } from '../../locale/react';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { TrajectoryRow, type TrajectoryRowActions } from './TrajectoryRow';
 import { ledgerFocusTargets, rowOwnsKey, type TrajectoryLedgerRow } from './layout';
-import css from './Trajectory.module.css';
+import { trajectoryCss } from './trajectoryCss';;
 
 export interface LedgerHandle {
   loadEarlier: () => void;
@@ -118,14 +118,14 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
     if (node) { node.focus({ preventScroll: virtualized }); onFocused(); }
   });
   const rendered = virtualized ? virtualizer.getVirtualItems().map(item => ({ row: rows[item.index]!, index: item.index, start: item.start })) : rows.map((row, index) => ({ row, index, start: 0 }));
-  return <div ref={viewport} className={css.ledger} data-trajectory-scroll="" role="table" aria-label={tx('trajectory:trajectory.trace-ledger')} aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
+  return <div ref={viewport} className={trajectoryCss.ledger} data-trajectory-scroll="" role="table" aria-label={tx('trajectory:trajectory.trace-ledger')} aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }} onScroll={event => {
     const pane = event.currentTarget; followsTail.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
   }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div style={{ position: 'relative', ...(virtualized ? { height: virtualizer.getTotalSize() } : {}) }}>
       {rendered.map(({ row, index, start }) => {
         const style = { height: row.height, ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
-        if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} data-history-load="" className={css.loadRow} style={style}>
-          <button type="button" className={css.historyLoadButton} disabled={loading || !row.historyBefore && !canLoadEarlier} aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')} onClick={() => requestOlder(row.historyBefore)}>
+        if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} data-history-load="" className={trajectoryCss.loadRow} style={style}>
+          <button type="button" className={trajectoryCss.historyLoadButton} disabled={loading || !row.historyBefore && !canLoadEarlier} aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')} onClick={() => requestOlder(row.historyBefore)}>
             {loading && <StateDot state="ongoing" />}
             <span aria-hidden="true">{loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')}</span>
           </button>
@@ -143,6 +143,6 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
         }} />;
       })}
     </div>
-    {!rows.length && <p className={css.note}>{searching ? tx('trajectory:trajectory.no-loaded-item-matches-this-search') : tx('trajectory:trajectory.no-records-in-the-loaded-window')}</p>}
+    {!rows.length && <p className={trajectoryCss.note}>{searching ? tx('trajectory:trajectory.no-loaded-item-matches-this-search') : tx('trajectory:trajectory.no-records-in-the-loaded-window')}</p>}
   </div>;
 }

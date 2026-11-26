@@ -36,7 +36,7 @@ import { Artifact } from '../components/Artifact';
 import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
 import { isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
-import css from './Trajectory.module.css';
+import { trajectoryCss } from './trajectoryCss';;
 import { useWorkflowNodeContent } from './useWorkflowNodeContent';
 import { workflowStatus } from '../agent/workflow-state';
 import { MessageVersionPager } from '../agent/UserMessageVersions';
@@ -98,7 +98,7 @@ function stateOf(record: TraceRecord): RecordState {
 
 function StatusValue({ state, nativeState }: { state: RecordState; nativeState?: TraceRecord['state'] }) {
   const tx = useTranslation();
-  return <dd className={state === 'error' ? css.error : undefined}>
+  return <dd className={state === 'error' ? trajectoryCss.error : undefined}>
     {nativeState ? traceStateLabel(tx, nativeState) : tx(state === 'error' ? 'trajectory:status.failed' : state === 'running' ? 'trajectory:status.pending' : 'trajectory:status.completed')}
   </dd>;
 }
@@ -114,7 +114,7 @@ function StartedAtValue({ timestamp }: { timestamp: number | undefined }) {
   const [showUnix, setShowUnix] = useState(false);
   if (timestamp === undefined) return <dd>{tx('trajectory:timing.not-available')}</dd>;
   return <dd>
-    <button type="button" className={css.timestampToggle} title={showUnix ? tx('trajectory:timing.show-local-time') : tx('trajectory:timing.show-unix-timestamp')}
+    <button type="button" className={trajectoryCss.timestampToggle} title={showUnix ? tx('trajectory:timing.show-local-time') : tx('trajectory:timing.show-unix-timestamp')}
       onClick={event => { if (!clickSelectsText(event.currentTarget)) setShowUnix(current => !current); }}>
       {showUnix ? (timestamp / 1_000).toFixed(3) : formatStartedAt(timestamp)}
     </button>
@@ -122,39 +122,39 @@ function StartedAtValue({ timestamp }: { timestamp: number | undefined }) {
 }
 
 function NoPayload({ children }: { children: ReactNode }) {
-  return <p className={css.noPayload}>{children}</p>;
+  return <p className={trajectoryCss.noPayload}>{children}</p>;
 }
 
 /** Detail-backed content waits for its read, or names a failed one. */
 function DetailPending({ error, deferred }: { error: string | undefined; deferred?:boolean }) {
   const tx = useTranslation();
   return error
-    ? <p role="alert" className={`${css.noPayload} ${css.error}`}>{error}</p>
-    : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
+    ? <p role="alert" className={`${trajectoryCss.noPayload} ${trajectoryCss.error}`}>{error}</p>
+    : <p role="status" className={trajectoryCss.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
 }
 
 /** Keep the selected visit available while its reader is pending or failed. */
 export function WorkflowNodeReadInspector({ node, error, onRetry, onClose }: { node: WorkflowNodeInstance; error?: string; onRetry: () => void; onClose: () => void }) {
   const tx = useTranslation();
   return <>
-    <div className={css.detailsHeader}>
-      <div className={css.detailsTitle}>
-        <span className={css.kindTag} data-role-kind="workflow_node">{cellLabel(tx, 'workflow_node')}</span>
-        <span className={css.detailsLocation}>{node.node}</span>
+    <div className={trajectoryCss.detailsHeader}>
+      <div className={trajectoryCss.detailsTitle}>
+        <span className={trajectoryCss.kindTag} data-role-kind="workflow_node">{cellLabel(tx, 'workflow_node')}</span>
+        <span className={trajectoryCss.detailsLocation}>{node.node}</span>
       </div>
-      <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
+      <button type="button" className={trajectoryCss.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
     </div>
-    {error ? <div className={css.detailBody}>
+    {error ? <div className={trajectoryCss.detailBody}>
       <DetailPending error={error} />
       <Button onClick={onRetry}>{tx('interactions:interactions.retry-details')}</Button>
-    </div> : <div className={css.detailBody} role="status" aria-busy="true" aria-label={tx('trajectory:details.loading')} />}
+    </div> : <div className={trajectoryCss.detailBody} role="status" aria-busy="true" aria-label={tx('trajectory:details.loading')} />}
   </>;
 }
 
 function Json({ value, label, preview = false, error = false }: { value: unknown; label: string; preview?: boolean; error?: boolean }) {
   const tx = useTranslation();
-  const className = [preview ? css.jsonPreview : css.jsonPayload, error ? css.errorPayload : undefined].filter(Boolean).join(' ');
-  if (value === null || typeof value !== 'object' || isJsonNumber(value)) return <pre className={[css.payload, preview ? css.payloadPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>{JSON.stringify(value)}</pre>;
+  const className = [preview ? trajectoryCss.jsonPreview : trajectoryCss.jsonPayload, error ? trajectoryCss.errorPayload : undefined].filter(Boolean).join(' ');
+  if (value === null || typeof value !== 'object' || isJsonNumber(value)) return <pre className={[trajectoryCss.payload, preview ? trajectoryCss.payloadPreview : undefined, error ? trajectoryCss.errorPayload : undefined].filter(Boolean).join(' ')}>{JSON.stringify(value)}</pre>;
   return <JsonTree data={value} label={label} labels={jsonLabels(tx)} collapsedStringLines={preview ? 3 : 12} className={className} />;
 }
 
@@ -183,15 +183,15 @@ function OverviewSection({ label, onOpen, actions, children }: { label: string; 
     for (const child of element.children) observer.observe(child);
     return () => observer.disconnect();
   }, [children, measure]);
-  return <section className={css.overviewSection}>
-    <h3 className={css.overviewHeading}>
-      <button type="button" className={css.overviewTitle} onClick={onOpen}>
+  return <section className={trajectoryCss.overviewSection}>
+    <h3 className={trajectoryCss.overviewHeading}>
+      <button type="button" className={trajectoryCss.overviewTitle} onClick={onOpen}>
         <span>{label}</span>
-        <IconChevronRightOutline14 className={css.overviewTitleIcon} size={12} />
+        <IconChevronRightOutline14 className={trajectoryCss.overviewTitleIcon} size={12} />
       </button>
       {actions}
     </h3>
-    <div ref={preview} className={`${css.overviewPreview} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-scroll-more={hasMore || undefined}
+    <div ref={preview} className={`${trajectoryCss.overviewPreview} ${trajectoryCss.summaryScrollRegion}`} data-summary-scroll-region="" data-scroll-more={hasMore || undefined}
       onScroll={event => measure(event.currentTarget)}>
       {children}
     </div>
@@ -199,9 +199,9 @@ function OverviewSection({ label, onOpen, actions, children }: { label: string; 
 }
 
 function NavLink({ label, onClick }: { label: string; onClick: () => void }) {
-  return <button type="button" className={css.overviewHierarchyNavLink} onClick={onClick}>
+  return <button type="button" className={trajectoryCss.overviewHierarchyNavLink} onClick={onClick}>
     <span>{label}</span>
-    <IconChevronRightOutline14 className={css.overviewHierarchyJumpIconTight} size={11} />
+    <IconChevronRightOutline14 className={trajectoryCss.overviewHierarchyJumpIconTight} size={11} />
   </button>;
 }
 
@@ -228,13 +228,13 @@ function UsageRows({ usage }: { usage: Usage | undefined }) {
   if (usage === undefined || Object.values(usage).every(value => value === undefined)) return <NoPayload>{tx('trajectory:usage.not-reported')}</NoPayload>;
   const tokens = (value: bigint) => tx('trajectory:unit.tokens', { value: String(value) });
   const totalInput = usage.totalInput;
-  return <dl className={css.overview}>
+  return <dl className={trajectoryCss.overview}>
     {totalInput !== undefined && <div><dt>{tx('trajectory:usage.input')}</dt><dd>{tokens(totalInput)}</dd></div>}
-    {usage.cacheRead !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.cached')}</dt><dd>{tokens(usage.cacheRead)}</dd></div>}
-    {usage.input !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.other')}</dt><dd>{tokens(usage.input)}</dd></div>}
+    {usage.cacheRead !== undefined && <div className={trajectoryCss.requestTokenDetail}><dt>{tx('trajectory:usage.cached')}</dt><dd>{tokens(usage.cacheRead)}</dd></div>}
+    {usage.input !== undefined && <div className={trajectoryCss.requestTokenDetail}><dt>{tx('trajectory:usage.other')}</dt><dd>{tokens(usage.input)}</dd></div>}
     {usage.output !== undefined && <div><dt>{tx('trajectory:usage.output')}</dt><dd>{tokens(usage.output)}</dd></div>}
-    {usage.reasoning !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.reasoning')}</dt><dd>{tokens(usage.reasoning)}</dd></div>}
-    {usage.output !== undefined && usage.reasoning !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.content')}</dt><dd>{tokens(usage.output - usage.reasoning)}</dd></div>}
+    {usage.reasoning !== undefined && <div className={trajectoryCss.requestTokenDetail}><dt>{tx('trajectory:usage.reasoning')}</dt><dd>{tokens(usage.reasoning)}</dd></div>}
+    {usage.output !== undefined && usage.reasoning !== undefined && <div className={trajectoryCss.requestTokenDetail}><dt>{tx('trajectory:usage.content')}</dt><dd>{tokens(usage.output - usage.reasoning)}</dd></div>}
   </dl>;
 }
 
@@ -243,8 +243,8 @@ function TokenRows({ usage }: { usage: Usage | undefined }) {
   const tokens = (value: bigint) => tx('trajectory:unit.tokens', { value: String(value) });
   return <>
     <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>{usage?.output === undefined ? '—' : tokens(usage.output)}</dd></div>
-    {usage?.reasoning !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.reasoning')}</dt><dd>{tokens(usage.reasoning)}</dd></div>}
-    {usage?.output !== undefined && usage.reasoning !== undefined && <div className={css.requestTokenDetail}><dt>{tx('trajectory:usage.content')}</dt><dd>{tokens(usage.output > usage.reasoning ? usage.output - usage.reasoning : 0n)}</dd></div>}
+    {usage?.reasoning !== undefined && <div className={trajectoryCss.requestTokenDetail}><dt>{tx('trajectory:usage.reasoning')}</dt><dd>{tokens(usage.reasoning)}</dd></div>}
+    {usage?.output !== undefined && usage.reasoning !== undefined && <div className={trajectoryCss.requestTokenDetail}><dt>{tx('trajectory:usage.content')}</dt><dd>{tokens(usage.output > usage.reasoning ? usage.output - usage.reasoning : 0n)}</dd></div>}
   </>;
 }
 
@@ -257,7 +257,7 @@ function RequestTiming({ request }: { request: TraceRecord }) {
   const decoding = wireCount(generation?.generation_ms);
   const rate = generation?.output_tokens_per_second ?? undefined;
   const running = stateOf(request) === 'running';
-  return <dl className={css.overview}>
+  return <dl className={trajectoryCss.overview}>
     <div><dt>{tx('trajectory:timing.started')}</dt><StartedAtValue timestamp={instantMillis(request.timing.started_at)} /></div>
     <div><dt>{tx('trajectory:timing.total-duration')}</dt><dd>{total !== undefined ? formatDurationMs(tx, total) : running ? tx('trajectory:status.pending') : tx('trajectory:timing.not-recorded')}</dd></div>
     <div><dt>{tx('trajectory:timing.ttft')}</dt><dd>{ttft !== undefined ? formatDurationMs(tx, ttft) : tx('trajectory:timing.first-token-unavailable')}</dd></div>
@@ -270,7 +270,7 @@ function RequestTiming({ request }: { request: TraceRecord }) {
 function RecordTiming({ record, preview = false }: { record: TraceRecord; preview?: boolean }) {
   const tx = useTranslation();
   const duration = wireCount(record.timing.duration_ms);
-  return <dl className={css.overview}>
+  return <dl className={trajectoryCss.overview}>
     <div><dt>{tx('trajectory:timing.started')}</dt><StartedAtValue timestamp={instantMillis(record.timing.started_at)} /></div>
     <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, duration)}</dd></div>
     {!preview && <div><dt>{tx('trajectory:timing.source')}</dt><dd>{duration === undefined ? tx('trajectory:timing.not-available') : tx('trajectory:timing.session-timestamps')}</dd></div>}
@@ -299,7 +299,7 @@ function rawBlockContent(block: TraceContentBlock): string {
 }
 
 function MarkdownFragment({ text, preview, compact = false }: { text: string; preview: boolean; compact?: boolean }) {
-  return <div className={preview ? css.markdownPreview : css.markdownPayload}>
+  return <div className={preview ? trajectoryCss.markdownPreview : trajectoryCss.markdownPayload}>
     <MarkdownText text={text} variant={compact ? 'compact' : 'normal'} />
   </div>;
 }
@@ -307,8 +307,8 @@ function MarkdownFragment({ text, preview, compact = false }: { text: string; pr
 function Attachments({ artifacts, preview, imageName }: { artifacts: readonly TraceArtifact[]; preview: boolean; imageName?: string }) {
   const tx = useTranslation();
   if (!artifacts.length) return null;
-  return <ul className={preview ? `${css.attachments} ${css.attachmentsPreview}` : css.attachments} aria-label={tx('trajectory:attachment.list')}>
-    {artifacts.map(artifact => <li key={artifact.artifact_id} className={css.attachmentRow}>
+  return <ul className={preview ? `${trajectoryCss.attachments} ${trajectoryCss.attachmentsPreview}` : trajectoryCss.attachments} aria-label={tx('trajectory:attachment.list')}>
+    {artifacts.map(artifact => <li key={artifact.artifact_id} className={trajectoryCss.attachmentRow}>
       <Artifact id={artifact.artifact_id} name={artifact.name ?? (artifact.image ? imageName : undefined)} image={artifact.image}
         mimeType={artifact.mime_type ?? undefined} inlineImage={artifact.image && imageName ? preview ? 'compact' : 'full' : undefined} />
     </li>)}
@@ -319,15 +319,15 @@ function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceCont
   const tx = useTranslation();
   const calls = blocks.flatMap(block => block.type === 'tool_call' ? [block] : []);
   if (!calls.length) return null;
-  return <ul className={preview ? `${css.assistantToolCalls} ${css.assistantToolCallsPreview}` : css.assistantToolCalls}>
+  return <ul className={preview ? `${trajectoryCss.assistantToolCalls} ${trajectoryCss.assistantToolCallsPreview}` : trajectoryCss.assistantToolCalls}>
     {calls.map(call => <li key={call.call_id}>
-      <button type="button" className={css.assistantToolCallButton} title={tx('trajectory:block.open-summary-title')} disabled={!onOpenCall} onClick={() => onOpenCall?.(call)}>
-        <svg className={css.assistantToolCallIcon} width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <button type="button" className={trajectoryCss.assistantToolCallButton} title={tx('trajectory:block.open-summary-title')} disabled={!onOpenCall} onClick={() => onOpenCall?.(call)}>
+        <svg className={trajectoryCss.assistantToolCallIcon} width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className={css.assistantToolCallText}>
-          <span className={css.assistantToolCallName}>{call.name}</span>
-          <span className={css.assistantToolCallArgs}>{JSON.stringify(call.arguments.value)}</span>
+        <span className={trajectoryCss.assistantToolCallText}>
+          <span className={trajectoryCss.assistantToolCallName}>{call.name}</span>
+          <span className={trajectoryCss.assistantToolCallArgs}>{JSON.stringify(call.arguments.value)}</span>
         </span>
       </button>
     </li>)}
@@ -336,16 +336,16 @@ function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceCont
 
 function SourceBlocks({ blocks, onOpenCall }: { blocks: readonly TraceContentBlock[]; onOpenCall: ((call: Extract<TraceContentBlock, {type:'tool_call'}>) => void) | undefined }) {
   const tx = useTranslation();
-  return <div className={css.sourceBlocks}>
+  return <div className={trajectoryCss.sourceBlocks}>
     {blocks.map((block, index) => {
-      const label = <span className={css.sourceBlockLabel}>{tx('trajectory:block.label', { index: index + 1, type: block.type })}</span>;
-      return <section className={css.sourceBlock} key={index}>
+      const label = <span className={trajectoryCss.sourceBlockLabel}>{tx('trajectory:block.label', { index: index + 1, type: block.type })}</span>;
+      return <section className={trajectoryCss.sourceBlock} key={index}>
         {block.type === 'tool_call' && onOpenCall
-          ? <button type="button" className={css.sourceBlockJumpTarget} aria-label={tx('trajectory:block.open-summary', { index: index + 1 })} title={tx('trajectory:block.open-summary-title')} onClick={() => onOpenCall(block)}>
-            {label}<IconChevronRightOutline14 className={css.sourceBlockJumpIcon} size={12} />
+          ? <button type="button" className={trajectoryCss.sourceBlockJumpTarget} aria-label={tx('trajectory:block.open-summary', { index: index + 1 })} title={tx('trajectory:block.open-summary-title')} onClick={() => onOpenCall(block)}>
+            {label}<IconChevronRightOutline14 className={trajectoryCss.sourceBlockJumpIcon} size={12} />
           </button>
-          : <div className={css.sourceBlockHeader}>{label}</div>}
-        <pre className={css.sourceBlockContent}>{rawBlockContent(block)}</pre>
+          : <div className={trajectoryCss.sourceBlockHeader}>{label}</div>}
+        <pre className={trajectoryCss.sourceBlockContent}>{rawBlockContent(block)}</pre>
       </section>;
     })}
   </div>;
@@ -368,17 +368,17 @@ function MessageContent({ blocks, fallback, artifacts, rendered, preview = false
   const thinking = blocks ? blockText(blocks, 'reasoning') : '';
   const files = [...new Map([...artifacts, ...blockArtifacts(blocks ?? [])].map(artifact => [artifact.artifact_id, artifact])).values()];
   const calls = blocks?.some(block => block.type === 'tool_call') === true;
-  if (!rendered) return <pre className={`${css.payload} ${preview ? css.payloadPreview : ''}`}>{output}</pre>;
+  if (!rendered) return <pre className={`${trajectoryCss.payload} ${preview ? trajectoryCss.payloadPreview : ''}`}>{output}</pre>;
   if (!output && !thinking && !files.length && !calls) return <NoPayload>{tx('trajectory:record.no-content')}</NoPayload>;
-  return <div className={thinking ? `${css.assistantContent} ${css.assistantContentRendered}` : undefined}>
-    {thinking && <div className={preview && !output ? `${css.thinkingQuote} ${css.thinkingQuoteOnlyPreview}` : css.thinkingQuote}>
-      <button type="button" className={css.thinkingToggle} aria-expanded={thinkingExpanded} onClick={() => onThinkingExpanded(!thinkingExpanded)}>
+  return <div className={thinking ? `${trajectoryCss.assistantContent} ${trajectoryCss.assistantContentRendered}` : undefined}>
+    {thinking && <div className={preview && !output ? `${trajectoryCss.thinkingQuote} ${trajectoryCss.thinkingQuoteOnlyPreview}` : trajectoryCss.thinkingQuote}>
+      <button type="button" className={trajectoryCss.thinkingToggle} aria-expanded={thinkingExpanded} onClick={() => onThinkingExpanded(!thinkingExpanded)}>
         {tx('trajectory:record.thinking')}
-        <IconChevronRightOutline14 className={css.thinkingChevron} size={12} />
+        <IconChevronRightOutline14 className={trajectoryCss.thinkingChevron} size={12} />
       </button>
       {thinkingExpanded && <MarkdownFragment text={thinking} preview={preview} compact />}
     </div>}
-    {output && <div className={css.assistantOutput}><MarkdownFragment text={output} preview={preview} /></div>}
+    {output && <div className={trajectoryCss.assistantOutput}><MarkdownFragment text={output} preview={preview} /></div>}
     <ToolCalls blocks={blocks ?? []} preview={preview} onOpenCall={onOpenCall} />
     <Attachments artifacts={files} preview={preview} />
   </div>;
@@ -399,7 +399,7 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const block = result.blocks.length === 1 ? result.blocks[0] : undefined;
   const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
   const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
-  if (launch) return <div><p>{tx('common:activity.background-started')}</p><p>{tx('common:activity.job-title', { id: launch.jobId })}</p><pre className={css.payload}>{launch.outputPath}</pre><Attachments artifacts={artifacts} preview={preview}/></div>;
+  if (launch) return <div><p>{tx('common:activity.background-started')}</p><p>{tx('common:activity.job-title', { id: launch.jobId })}</p><pre className={trajectoryCss.payload}>{launch.outputPath}</pre><Attachments artifacts={artifacts} preview={preview}/></div>;
   // The overview shares Chat's recorded details. Result keeps the original
   // content blocks in its existing JSON/text view, without a second disclosure.
   if (preview && !error) {
@@ -412,13 +412,13 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const text = result.blocks.length === 1 && result.blocks[0]!.type === 'text' ? result.blocks[0]!.text.text : undefined;
   const json = text === undefined ? undefined : parseJsonContainer(text);
   if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} imageName={imageName} /></>;
-  return <div className={[css.resultBlocks, preview ? css.resultBlocksPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>
-    {error && result.detail?.text && <pre className={css.resultBlockText}>{result.detail.text}</pre>}
+  return <div className={[trajectoryCss.resultBlocks, preview ? trajectoryCss.resultBlocksPreview : undefined, error ? trajectoryCss.errorPayload : undefined].filter(Boolean).join(' ')}>
+    {error && result.detail?.text && <pre className={trajectoryCss.resultBlockText}>{result.detail.text}</pre>}
     {blocks.map((block, index) => block.type === 'json'
       ? <Json key={index} value={block.value.value} label={tx('trajectory:record.result-json')} preview={preview} error={error} />
       : block.type === 'image' || block.type === 'file' ? null
-        : rawBlockContent(block) !== '' ? <pre key={index} className={css.resultBlockText}>{rawBlockContent(block)}</pre> : null)}
-    {!result.blocks.length && !(error && result.detail?.text) && <pre className={`${css.resultBlockText} ${css.noOutputText}`}>{tx('trajectory:record.no-output')}</pre>}
+        : rawBlockContent(block) !== '' ? <pre key={index} className={trajectoryCss.resultBlockText}>{rawBlockContent(block)}</pre> : null)}
+    {!result.blocks.length && !(error && result.detail?.text) && <pre className={`${trajectoryCss.resultBlockText} ${trajectoryCss.noOutputText}`}>{tx('trajectory:record.no-output')}</pre>}
     <Attachments artifacts={artifacts} preview={preview} imageName={imageName} />
   </div>;
 }
@@ -433,16 +433,16 @@ function Schema({ definition, preview = false }: { definition: TraceToolDefiniti
   const tx = useTranslation();
   if (!definition) return <NoPayload>{tx('trajectory:record.schema-unavailable')}</NoPayload>;
   const parameters = definition.input_schema.value;
-  return <div className={preview ? `${css.schema} ${css.schemaPreview}` : css.schema}>
-    <header className={css.schemaIntro}>
-      <h3 className={css.schemaName}>{definition.name}</h3>
-      <p className={css.schemaDescription}>{definition.description.text}</p>
+  return <div className={preview ? `${trajectoryCss.schema} ${trajectoryCss.schemaPreview}` : trajectoryCss.schema}>
+    <header className={trajectoryCss.schemaIntro}>
+      <h3 className={trajectoryCss.schemaName}>{definition.name}</h3>
+      <p className={trajectoryCss.schemaDescription}>{definition.description.text}</p>
     </header>
-    <section className={css.schemaParameters}>
-      <h4 className={css.schemaParametersTitle}>{tx('trajectory:record.parameters')}</h4>
+    <section className={trajectoryCss.schemaParameters}>
+      <h4 className={trajectoryCss.schemaParametersTitle}>{tx('trajectory:record.parameters')}</h4>
       {parameters !== null && typeof parameters === 'object'
-        ? <JsonTree data={parameters} label={tx('trajectory:record.named-parameters-json', { name: definition.name })} labels={jsonLabels(tx)} collapsedStringLines={preview ? 3 : 12} className={css.schemaTree} />
-        : <pre className={`${css.payload} ${preview ? css.payloadPreview : ''}`}>{JSON.stringify(parameters)}</pre>}
+        ? <JsonTree data={parameters} label={tx('trajectory:record.named-parameters-json', { name: definition.name })} labels={jsonLabels(tx)} collapsedStringLines={preview ? 3 : 12} className={trajectoryCss.schemaTree} />
+        : <pre className={`${trajectoryCss.payload} ${preview ? trajectoryCss.payloadPreview : ''}`}>{JSON.stringify(parameters)}</pre>}
     </section>
   </div>;
 }
@@ -456,7 +456,7 @@ function CopyAction({ text, label }: { text: string; label: string }) {
     return () => clearTimeout(timer);
   }, [state]);
   const title = state === 'idle' ? label : tx(state === 'copied' ? 'trajectory:copied' : 'trajectory:copy.copy-failed');
-  return <button type="button" className={css.programAction} data-state={state} aria-label={title} title={title}
+  return <button type="button" className={trajectoryCss.programAction} data-state={state} aria-label={title} title={title}
     onClick={() => { void writeClipboard(text).then(ok => setState(ok ? 'copied' : 'failed')); }}>
     {state === 'copied' ? <IconCheckOutline16 size={12} /> : <IconCopyOutline16 size={12} />}
   </button>;
@@ -468,25 +468,25 @@ function ProgramInput({ source, language, args, onOpen }: { source: string; lang
   const contents = useId();
   const [wrapped, setWrapped] = useState(false);
   const [showJson, setShowJson] = useState(false);
-  const actions = <span className={css.programActions}>
-    {!showJson && language !== undefined && <span className={css.programLanguage}>{language}</span>}
-    {!showJson && <button type="button" className={css.programAction} aria-label={tx('trajectory:record.wrap-lines')} title={tx('trajectory:record.wrap-lines')} aria-pressed={wrapped} aria-controls={contents} onClick={() => setWrapped(!wrapped)}>
+  const actions = <span className={trajectoryCss.programActions}>
+    {!showJson && language !== undefined && <span className={trajectoryCss.programLanguage}>{language}</span>}
+    {!showJson && <button type="button" className={trajectoryCss.programAction} aria-label={tx('trajectory:record.wrap-lines')} title={tx('trajectory:record.wrap-lines')} aria-pressed={wrapped} aria-controls={contents} onClick={() => setWrapped(!wrapped)}>
       <IconWrapLinesOutline16 size={12} />
     </button>}
-    {onOpen === undefined && args && <button type="button" className={css.programAction} aria-label={tx('trajectory:code.original-json')} title={tx('trajectory:code.original-json')} aria-pressed={showJson} aria-controls={contents} onClick={() => setShowJson(value => !value)}>
+    {onOpen === undefined && args && <button type="button" className={trajectoryCss.programAction} aria-label={tx('trajectory:code.original-json')} title={tx('trajectory:code.original-json')} aria-pressed={showJson} aria-controls={contents} onClick={() => setShowJson(value => !value)}>
       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M6 2H5a2 2 0 0 0-2 2v2a2 2 0 0 1-2 2 2 2 0 0 1 2 2v2a2 2 0 0 0 2 2h1" /><path d="M10 2h1a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0-2 2v2a2 2 0 0 1-2 2h-1" />
       </svg>
     </button>}
     <CopyAction text={showJson && args ? JSON.stringify(args.value) : source} label={tx(showJson ? 'trajectory:copy.copy-json' : 'trajectory:code.copy-source')} />
   </span>;
-  const body = <div id={contents} className={css.programContent} data-wrap={wrapped}>
+  const body = <div id={contents} className={trajectoryCss.programContent} data-wrap={wrapped}>
     {showJson && args
       ? <Json value={args.value} label={tx('trajectory:record.parameters-json')} />
-      : <CodeBlock code={source} lang={language} lineNumbers className={css.programSource} copyLabel={tx('trajectory:code.copy-source')} copiedLabel={tx('trajectory:copied')} />}
+      : <CodeBlock code={source} lang={language} lineNumbers className={trajectoryCss.programSource} copyLabel={tx('trajectory:code.copy-source')} copiedLabel={tx('trajectory:copied')} />}
   </div>;
   return onOpen === undefined
-    ? <section className={css.programPanel}><header className={css.overviewHeading}><span>{tx('trajectory:code.source')}</span>{actions}</header>{body}</section>
+    ? <section className={trajectoryCss.programPanel}><header className={trajectoryCss.overviewHeading}><span>{tx('trajectory:code.source')}</span>{actions}</header>{body}</section>
     : <OverviewSection label={tx('trajectory:code.source')} onOpen={onOpen} actions={actions}>{body}</OverviewSection>;
 }
 
@@ -500,13 +500,13 @@ function promptDiffLines(before: string, after: string) {
   ]);
 }
 
-const DIFF_LINE = { meta: css.promptDiffLinemeta, context: css.promptDiffLinecontext, added: css.promptDiffLineadded, removed: css.promptDiffLineremoved };
+const DIFF_LINE = { meta: trajectoryCss.promptDiffLinemeta, context: trajectoryCss.promptDiffLinecontext, added: trajectoryCss.promptDiffLineadded, removed: trajectoryCss.promptDiffLineremoved };
 
 function PromptDiffSection({ title, before, after }: { title: string; before: string; after: string }) {
   const lines = promptDiffLines(before, after);
-  return lines.length > 0 && <section className={css.promptDiffSection}>
-    <h3 className={css.promptDiffTitle}>{title}</h3>
-    <pre className={css.promptDiff}>{lines.map((line, index) => <span className={DIFF_LINE[line.kind]} key={index}>{line.text || ' '}{'\n'}</span>)}</pre>
+  return lines.length > 0 && <section className={trajectoryCss.promptDiffSection}>
+    <h3 className={trajectoryCss.promptDiffTitle}>{title}</h3>
+    <pre className={trajectoryCss.promptDiff}>{lines.map((line, index) => <span className={DIFF_LINE[line.kind]} key={index}>{line.text || ' '}{'\n'}</span>)}</pre>
   </section>;
 }
 
@@ -517,7 +517,7 @@ function SystemPromptDiff({ detail, promptChanged, toolsChanged, tools, previous
 }) {
   const tx = useTranslation(), previous = detail.previous_system_prompt, current = detail.effective_system_prompt;
   if (detail.predecessor.availability === 'not_applicable') return <NoPayload>{tx('trajectory:trajectory-inspector.no-predecessor-initial-prompt')}</NoPayload>;
-  return <div className={css.promptDiffSections}>
+  return <div className={trajectoryCss.promptDiffSections}>
     {promptChanged && (!previous ? <NoPayload>{tx('trajectory:trajectory-inspector.previous-prompt-unavailable-a-complete-diff-cannot-be-produced')}</NoPayload>
       : previous.truncated || current.truncated ? <NoPayload>{tx('trajectory:trajectory-inspector.a-complete-diff-cannot-be-produced')} {[
         current.truncated ? tx('trajectory:trajectory-inspector.current-prompt-truncated') : undefined,
@@ -533,21 +533,21 @@ function SystemPromptDiff({ detail, promptChanged, toolsChanged, tools, previous
 function ToolCatalog({ tools }: { tools: readonly TraceToolDefinition[] }) {
   const tx = useTranslation();
   if (!tools.length) return <NoPayload>{tx('trajectory:record.tools-missing')}</NoPayload>;
-  return <div className={css.toolCatalog}>
-    {tools.map((tool, index) => <details className={css.toolCatalogItem} key={`${tool.tool_id}:${index}`}>
-      <summary className={css.toolCatalogSummary}>
-        <IconChevronRightOutline14 className={css.toolCatalogChevron} size={12} />
-        <svg className={css.toolCatalogIcon} width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  return <div className={trajectoryCss.toolCatalog}>
+    {tools.map((tool, index) => <details className={trajectoryCss.toolCatalogItem} key={`${tool.tool_id}:${index}`}>
+      <summary className={trajectoryCss.toolCatalogSummary}>
+        <IconChevronRightOutline14 className={trajectoryCss.toolCatalogChevron} size={12} />
+        <svg className={trajectoryCss.toolCatalogIcon} width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className={css.toolCatalogName}>{tool.name}</span>
-        <span className={css.toolCatalogDescription}>{tool.description.text}</span>
+        <span className={trajectoryCss.toolCatalogName}>{tool.name}</span>
+        <span className={trajectoryCss.toolCatalogDescription}>{tool.description.text}</span>
       </summary>
-      <div className={css.toolCatalogDefinition}>
-        {tool.description.text !== '' && <p className={css.toolCatalogFullDescription}>{tool.description.text}</p>}
+      <div className={trajectoryCss.toolCatalogDefinition}>
+        {tool.description.text !== '' && <p className={trajectoryCss.toolCatalogFullDescription}>{tool.description.text}</p>}
         {tool.input_schema.value !== null && typeof tool.input_schema.value === 'object'
-          ? <JsonTree data={tool.input_schema.value} label={tx('trajectory:record.named-parameters-json', { name: tool.name })} labels={jsonLabels(tx)} className={css.toolCatalogTree} />
-          : <pre className={css.payload}>{JSON.stringify(tool.input_schema.value)}</pre>}
+          ? <JsonTree data={tool.input_schema.value} label={tx('trajectory:record.named-parameters-json', { name: tool.name })} labels={jsonLabels(tx)} className={trajectoryCss.toolCatalogTree} />
+          : <pre className={trajectoryCss.payload}>{JSON.stringify(tool.input_schema.value)}</pre>}
       </div>
     </details>)}
   </div>;
@@ -640,7 +640,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
       const family = messageHistory.versions.get(key);
       if (!family || (family.current.message_id && family.current.message_id === record.message_id)) return [];
       const label = message.preview?.text || message.attachments.find(file => file.name)?.name || tx('trajectory:request.no-content');
-      return [<li key={key}><span className={css.contentText} title={label}>{label}</span><MessageVersionPager compact family={family}
+      return [<li key={key}><span className={trajectoryCss.contentText} title={label}>{label}</span><MessageVersionPager compact family={family}
         disabled={messageHistory.disabled} onSwitch={messageHistory.switchVersion}/></li>];
     }) : [];
   // An Assistant record's own request is the one that accepted its message.
@@ -712,30 +712,30 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     : [sectionLabel, record.kind === 'compaction' ? undefined : location?.group].filter(Boolean).join(' · ');
   const title = item.type === 'RequestBoundary'
     ? <>
-      <span className={css.requestDetailsDot} aria-hidden="true" />
-      <span className={css.requestDetailsName}>{tx('trajectory:request.label', { request: requestNumber ?? '—' })}</span>
-      {sectionLabel && <span className={css.detailsLocation}>{sectionLabel}</span>}
+      <span className={trajectoryCss.requestDetailsDot} aria-hidden="true" />
+      <span className={trajectoryCss.requestDetailsName}>{tx('trajectory:request.label', { request: requestNumber ?? '—' })}</span>
+      {sectionLabel && <span className={trajectoryCss.detailsLocation}>{sectionLabel}</span>}
     </>
     : <>
-      <span className={css.kindTag} data-role-kind={kind}>{cellLabel(tx, kind)}</span>
-      {workflowNode && <span className={css.detailsLocation}>{workflowNode.instance.node}</span>}
-      {record.kind === 'tool' && (toolDetail?.name ?? sourceRecord.tool?.name) != null && <span className={css.detailsLocation} title={toolDetail?.name ?? sourceRecord.tool?.name ?? undefined}>{toolDetail?.name ?? sourceRecord.tool?.name}</span>}
-      {detailLocation && <span className={css.detailsLocation}>{detailLocation}</span>}
+      <span className={trajectoryCss.kindTag} data-role-kind={kind}>{cellLabel(tx, kind)}</span>
+      {workflowNode && <span className={trajectoryCss.detailsLocation}>{workflowNode.instance.node}</span>}
+      {record.kind === 'tool' && (toolDetail?.name ?? sourceRecord.tool?.name) != null && <span className={trajectoryCss.detailsLocation} title={toolDetail?.name ?? sourceRecord.tool?.name ?? undefined}>{toolDetail?.name ?? sourceRecord.tool?.name}</span>}
+      {detailLocation && <span className={trajectoryCss.detailsLocation}>{detailLocation}</span>}
     </>;
-  const panelClass = active === 'overview' ? `${css.detailBody} ${css.detailBodySummary}` : program && active === 'input' ? `${css.detailBody} ${css.detailBodyProgram}` : css.detailBody;
+  const panelClass = active === 'overview' ? `${trajectoryCss.detailBody} ${trajectoryCss.detailBodySummary}` : program && active === 'input' ? `${trajectoryCss.detailBody} ${trajectoryCss.detailBodyProgram}` : trajectoryCss.detailBody;
 
   const overview = () => {
     if (item.type === 'RequestBoundary') {
       const failure = requestDetail?.failure?.message.text ?? record.request?.failure_kind ?? undefined;
       return <>
-        <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
+        <dl className={`${trajectoryCss.overview} ${trajectoryCss.summaryScrollRegion}`} data-summary-scroll-region="">
           <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
           {record.request && <div><dt>{tx('trajectory:details.model')}</dt><dd>{record.request.model??tx('common:activity.loading')}</dd></div>}
           <div><dt>{tx('trajectory:details.tool-calls')}</dt><dd>{records.filter(candidate => candidate.kind === 'tool' && sameTraceStep(candidate.location,record.location)).length}</dd></div>
-          {failure && <div><dt>{tx('trajectory:details.error')}</dt><dd className={css.error}>{failure}</dd></div>}
-          {requestAssistant && <div><dt>{tx('trajectory:details.result')}</dt><dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(requestAssistant.id)} /></dd></div>}
+          {failure && <div><dt>{tx('trajectory:details.error')}</dt><dd className={trajectoryCss.error}>{failure}</dd></div>}
+          {requestAssistant && <div><dt>{tx('trajectory:details.result')}</dt><dd className={trajectoryCss.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(requestAssistant.id)} /></dd></div>}
         </dl>
-        <div className={css.overviewSections}>
+        <div className={trajectoryCss.overviewSections}>
           <OverviewSection label={tx('trajectory:tab.options')} onOpen={() => onFacet('options')}>
             {options ? <Json value={options} label={tx('trajectory:options.json')} preview /> : pending ? <DetailPending error={detailError} /> : <NoPayload>{tx('trajectory:options.not-recorded')}</NoPayload>}
           </OverviewSection>
@@ -746,34 +746,34 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     }
     if (record.kind === 'compaction') {
       return <>
-        <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
+        <dl className={`${trajectoryCss.overview} ${trajectoryCss.summaryScrollRegion}`} data-summary-scroll-region="">
           <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.state} /></div>
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>
-        {(pending || blocks?.length || fallback) && <div className={`${css.compactedSummary} ${css.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
+        {(pending || blocks?.length || fallback) && <div className={`${trajectoryCss.compactedSummary} ${trajectoryCss.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
       </>;
     }
     const markdown = record.kind !== 'tool';
     return <>
-      <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
+      <dl className={`${trajectoryCss.overview} ${trajectoryCss.summaryScrollRegion}`} data-summary-scroll-region="">
         {isInput && source !== undefined && <div>
           <dt>{tx('trajectory:details.source')}</dt>
-          <dd className={css.overviewParentLinks}><NavLink label={sourceLabel(tx, source)} onClick={() => onFacet('source')} /></dd>
+          <dd className={trajectoryCss.overviewParentLinks}><NavLink label={sourceLabel(tx, source)} onClick={() => onFacet('source')} /></dd>
         </div>}
         {ownRequest && <div>
           <dt>{tx('trajectory:details.source')}</dt>
-          <dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:request.label', { request: requestNumbers.get(ownRequest.id) ?? '—' })} onClick={() => onOpen(ownRequest.id)} /></dd>
+          <dd className={trajectoryCss.overviewParentLinks}><NavLink label={tx('trajectory:request.label', { request: requestNumbers.get(ownRequest.id) ?? '—' })} onClick={() => onOpen(ownRequest.id)} /></dd>
         </div>}
         {parentAssistant && <div>
           <dt>{tx('trajectory:details.hierarchy')}</dt>
-          <dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(parentAssistant)} /></dd>
+          <dd className={trajectoryCss.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(parentAssistant)} /></dd>
         </div>}
         <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state}/></div>
         {record.kind === 'assistant' && <TokenRows usage={usage} />}
         {isInput && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
       </dl>
-      <div className={css.overviewSections}>
+      <div className={trajectoryCss.overviewSections}>
         {markdown
           ? <OverviewSection label={tx('trajectory:tab.preview')} onOpen={() => onFacet('rendered')}>{content(true, true)}</OverviewSection>
           : record.kind === 'tool'
@@ -796,11 +796,11 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
       if (active === 'input') return nodeBody('input');
       if (active === 'output') return nodeBody('output');
       if (active === 'timing') return <RecordTiming record={{ ...record, timing: workflowNode.timing }}/>;
-      return <><dl className={css.overview}>
+      return <><dl className={trajectoryCss.overview}>
         {workflowNode.kind && <div><dt>{tx('trajectory:workflow.node-kind')}</dt><dd>{tx(`common:workflow.kind.${workflowNode.kind}`)}</dd></div>}
         <div><dt>{tx('trajectory:workflow.node-state')}</dt><dd>{workflowStatus(workflowNode.state, tx)}</dd></div>
         <div><dt>{tx('trajectory:workflow.node-path')}</dt><dd>{[...workflowNode.instance.block.definition.blocks, ...workflowNode.instance.block.invocations.map(String), workflowNode.instance.node].join(' / ')}</dd></div>
-      </dl><div className={css.overviewSections}>
+      </dl><div className={trajectoryCss.overviewSections}>
         <OverviewSection label={tx('trajectory:tab.payload')} onOpen={() => onFacet('input')}>{nodeBody('input', true)}</OverviewSection>
         <OverviewSection label={tx('trajectory:tab.result')} onOpen={() => onFacet('output')}>{nodeBody('output', true)}</OverviewSection>
       </div></>;
@@ -811,14 +811,14 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
         const prompt = resolved?.request?.effective_system_prompt ?? requestDetail?.effective_system_prompt;
         if (!prompt) return <DetailPending error={detailError} />;
         return prompt.text === '' ? <NoPayload>{tx('trajectory:record.system-prompt-missing')}</NoPayload>
-          : <div className={`${css.markdownPayload} ${css.systemPrompt}`}><MarkdownText text={prompt.text} /></div>;
+          : <div className={`${trajectoryCss.markdownPayload} ${trajectoryCss.systemPrompt}`}><MarkdownText text={prompt.text} /></div>;
       }
       case 'tools': {
         const tools = resolved?.request?.tools ?? requestDetail?.tools;
         return tools ? <ToolCatalog tools={tools} /> : <DetailPending error={detailError} />;
       }
       case 'diff': {
-        if (!detailReader && !requestDetail && predecessor?.availability === 'available' && !previousDomain) return <p role="status" className={css.noPayload}>{tx('trajectory:field.previous-not-loaded')}{onLoadEarlier && <Button onClick={onLoadEarlier}>{tx('trajectory:history.load-earlier')}</Button>}</p>;
+        if (!detailReader && !requestDetail && predecessor?.availability === 'available' && !previousDomain) return <p role="status" className={trajectoryCss.noPayload}>{tx('trajectory:field.previous-not-loaded')}{onLoadEarlier && <Button onClick={onLoadEarlier}>{tx('trajectory:history.load-earlier')}</Button>}</p>;
         const current = resolved?.request?.effective_system_prompt ?? requestDetail?.effective_system_prompt;
         return current ? <SystemPromptDiff promptChanged={record.request?.system_prompt.state === 'changed'} toolsChanged={record.request?.tool_catalog === 'changed'} tools={resolved?.request?.tools ?? requestDetail?.tools} previousTools={resolved?.request?.previous_tools} detail={{ predecessor: requestDetail?.predecessor ?? record.request?.predecessor ?? { availability: 'not_applicable' }, effective_system_prompt: current, previous_system_prompt: resolved?.request?.previous_system_prompt ?? requestDetail?.previous_system_prompt }} />
           : <DetailPending error={detailError} />;
@@ -832,29 +832,29 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
       case 'output': return toolResult();
       case 'schema': return schema();
       case 'options': return options ? <Json value={options} label={tx('trajectory:options.json')} /> : pending ? <DetailPending error={detailError} /> : <NoPayload>{tx('trajectory:options.not-recorded')}</NoPayload>;
-      case 'usage': return <div className={css.usagePanel}>
-        <section className={css.usageGroup}><h4 className={css.usageHeading}>{tx('trajectory:usage.this-request')}</h4><UsageRows usage={usage} /></section>
-        <section className={css.usageGroup}><h4 className={css.usageHeading}>{tx('trajectory:usage.session-cumulative')}</h4><UsageRows usage={cumulative} /></section>
+      case 'usage': return <div className={trajectoryCss.usagePanel}>
+        <section className={trajectoryCss.usageGroup}><h4 className={trajectoryCss.usageHeading}>{tx('trajectory:usage.this-request')}</h4><UsageRows usage={usage} /></section>
+        <section className={trajectoryCss.usageGroup}><h4 className={trajectoryCss.usageHeading}>{tx('trajectory:usage.session-cumulative')}</h4><UsageRows usage={cumulative} /></section>
       </div>;
       case 'timing': return item.type === 'RequestBoundary' ? <RequestTiming request={record} /> : <RecordTiming record={record} />;
     }
   };
 
   return <>
-    <div className={css.detailsHeader}>
-      <div className={css.detailsTitle}>{title}</div>
+    <div className={trajectoryCss.detailsHeader}>
+      <div className={trajectoryCss.detailsTitle}>{title}</div>
       {onOpenWorkflowCanvas && <Button size="sm" onClick={event => onOpenWorkflowCanvas(event.currentTarget)}>{tx('workflows:run-canvas.open')}</Button>}
-      <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
+      <button type="button" className={trajectoryCss.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
     </div>
-    <div className={css.detailTabs} role="tablist" aria-label={tx('trajectory:details.event')}>
+    <div className={trajectoryCss.detailTabs} role="tablist" aria-label={tx('trajectory:details.event')}>
       {tabs.map(tab => <button key={tab} id={`trajectory-detail-${tab}`} type="button" role="tab" aria-controls="trajectory-detail-panel" aria-selected={active === tab}
-        className={active === tab ? `${css.detailTab} ${css.detailTabActive}` : css.detailTab} onClick={() => onFacet(tab)}>
+        className={active === tab ? `${trajectoryCss.detailTab} ${trajectoryCss.detailTabActive}` : trajectoryCss.detailTab} onClick={() => onFacet(tab)}>
         {tabLabel(tab)}
       </button>)}
     </div>
     <div id="trajectory-detail-panel" className={panelClass} role="tabpanel" aria-labelledby={`trajectory-detail-${active}`}>
       {detailError && !pending && <DetailPending error={detailError}/>}
-      {adoptedVersions.length > 0 && <ul className={css.adoptedVersions}>{adoptedVersions}</ul>}
+      {adoptedVersions.length > 0 && <ul className={trajectoryCss.adoptedVersions}>{adoptedVersions}</ul>}
       {body()}
     </div>
   </>;
