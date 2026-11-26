@@ -21,7 +21,7 @@ import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChecklistOutline14, IconCloseOutline16, IconLoadingOutline16, IconRefreshOutline16 } from '../../../../presentation/primitives/icons';
-import css from './GeometryPreview.module.css';
+import { geometryPreviewCss } from './geometryPreviewCss';
 
 export interface GeometryPreviewProps extends PreviewViewStateProps { visible?: boolean; bytes?: Uint8Array<ArrayBuffer>; source?: GeometrySource; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
 export default function GeometryPreview({ bytes, source, name, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire, visible = true }: GeometryPreviewProps) {
@@ -162,35 +162,35 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
     owner.setNavigationMode(mode);
     setState(value => value.navigationMode === owner.navigationMode ? value : { ...value, navigationMode: owner.navigationMode });
   }
-  return <section className={css.root} style={state.sourceFailed ? { display: 'none' } : undefined} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
+  return <section className={geometryPreviewCss.root} style={state.sourceFailed ? { display: 'none' } : undefined} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
     if (!partsOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation(); closeParts();
   }}>
-    <div className={css.viewport} ref={container}>
-      {state.error ? <div className={css.message} role="alert"><GeometryCubeGlyph/><p>{t[state.error]}</p></div>
-        : !state.parts && (state.preview ? <p className={css.previewStatus} role="status" aria-live="polite">{t.refining}</p> : <div className={css.loading} role="status" aria-live="polite"><span aria-hidden="true"><IconLoadingOutline16 size={20} className={css.loader} /></span><GeometryLoading stage={state.stage ?? 'loading'}/></div>)}
+    <div className={geometryPreviewCss.viewport} ref={container}>
+      {state.error ? <div className={geometryPreviewCss.message} role="alert"><GeometryCubeGlyph/><p>{t[state.error]}</p></div>
+        : !state.parts && (state.preview ? <p className={geometryPreviewCss.previewStatus} role="status" aria-live="polite">{t.refining}</p> : <div className={geometryPreviewCss.loading} role="status" aria-live="polite"><span aria-hidden="true"><IconLoadingOutline16 size={20} className={geometryPreviewCss.loader} /></span><GeometryLoading stage={state.stage ?? 'loading'}/></div>)}
       {!state.error && <>
-        <div className={css.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
-          <Tooltip label={t.pan} side="right" delayMs={500}><button type="button" className={`${css.control} ${state.navigationMode === 'pan' ? css.controlActive : ''}`} disabled={!state.navigationMode} aria-label={t.pan} aria-pressed={state.navigationMode === 'pan'} onClick={() => changeNavigationMode(state.navigationMode === 'pan' ? 'orbit' : 'pan')}><PanGlyph/></button></Tooltip>
-          <span className={css.divider} aria-hidden="true"/>
-          <Tooltip label={t.fit} side="right" delayMs={500}><button type="button" className={css.control} disabled={!state.parts} aria-label={t.fit} onClick={() => active.current?.fit()}><FitGlyph/></button></Tooltip>
+        <div className={geometryPreviewCss.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
+          <Tooltip label={t.pan} side="right" delayMs={500}><button type="button" className={`${geometryPreviewCss.control} ${state.navigationMode === 'pan' ? geometryPreviewCss.controlActive : ''}`} disabled={!state.navigationMode} aria-label={t.pan} aria-pressed={state.navigationMode === 'pan'} onClick={() => changeNavigationMode(state.navigationMode === 'pan' ? 'orbit' : 'pan')}><PanGlyph/></button></Tooltip>
+          <span className={geometryPreviewCss.divider} aria-hidden="true"/>
+          <Tooltip label={t.fit} side="right" delayMs={500}><button type="button" className={geometryPreviewCss.control} disabled={!state.parts} aria-label={t.fit} onClick={() => active.current?.fit()}><FitGlyph/></button></Tooltip>
           <Menu open={menu} onClose={() => setMenu(false)} side="right" align="start" dense autoFocus selectedId={state.projection ?? 'orthographic'}
             items={[{ id: 'reset', label: t.reset, icon: <IconRefreshOutline16/> }, { id: 'isometric', label: t.isometric, icon: <GeometryCubeGlyph/> }, { id: 'directions', type: 'separator' }, ...views.filter(view => view !== 'isometric').map(view => ({ id: view, label: t[view], icon: <GeometryViewGlyph view={view}/> })), { id: 'projection-divider', type: 'separator' }, { id: 'projection-label', type: 'label', text: t.projection }, { id: 'perspective', label: t.perspective }, { id: 'orthographic', label: t.orthographic }]} onSelect={view => { if (view === 'reset') active.current?.reset(); else if (view === 'perspective' || view === 'orthographic') active.current?.setProjection(view); else active.current?.fit(view as StandardView); setMenu(false); }}
-            anchor={<Tooltip label={t.view} side="right" delayMs={500}><button type="button" className={`${css.control} ${menu ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.view} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><GeometryCubeGlyph/></button></Tooltip>}/>
-          <span className={css.divider} aria-hidden="true"/>
-          <Tooltip label={t.outlines} side="right" delayMs={500}><button type="button" className={`${css.control} ${state.outlineStatus === 'on' ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.outlines} aria-pressed={state.outlineStatus === 'on'} aria-busy={state.outlineStatus === 'loading'} onClick={() => requestOutlines(state.outlineStatus !== 'on' && state.outlineStatus !== 'loading')}><OutlineGlyph/></button></Tooltip>
-          <Tooltip label={t.parts} side="right" delayMs={500}><button type="button" className={`${css.control} ${partsOpen ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.parts} aria-expanded={partsOpen} aria-controls={partsId} data-geometry-parts-toggle onClick={() => setPartsOpen(value => !value)}><IconChecklistOutline14 size={16}/></button></Tooltip>
+            anchor={<Tooltip label={t.view} side="right" delayMs={500}><button type="button" className={`${geometryPreviewCss.control} ${menu ? geometryPreviewCss.controlActive : ''}`} disabled={!state.parts} aria-label={t.view} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><GeometryCubeGlyph/></button></Tooltip>}/>
+          <span className={geometryPreviewCss.divider} aria-hidden="true"/>
+          <Tooltip label={t.outlines} side="right" delayMs={500}><button type="button" className={`${geometryPreviewCss.control} ${state.outlineStatus === 'on' ? geometryPreviewCss.controlActive : ''}`} disabled={!state.parts} aria-label={t.outlines} aria-pressed={state.outlineStatus === 'on'} aria-busy={state.outlineStatus === 'loading'} onClick={() => requestOutlines(state.outlineStatus !== 'on' && state.outlineStatus !== 'loading')}><OutlineGlyph/></button></Tooltip>
+          <Tooltip label={t.parts} side="right" delayMs={500}><button type="button" className={`${geometryPreviewCss.control} ${partsOpen ? geometryPreviewCss.controlActive : ''}`} disabled={!state.parts} aria-label={t.parts} aria-expanded={partsOpen} aria-controls={partsId} data-geometry-parts-toggle onClick={() => setPartsOpen(value => !value)}><IconChecklistOutline14 size={16}/></button></Tooltip>
         </div>
-        {state.outlineStatus === 'limit' || state.outlineStatus === 'failed' ? <p className={css.outlineStatus} role="status">{state.outlineStatus === 'limit' ? t.outlineLimit : t.outlineFailed}</p> : null}
-        {state.parts && partsOpen && <div className={css.partsPanel} id={partsId}>
-          <header className={css.partsHeader}><span>{t.parts}<span className={css.count}>{number.format(partCount!)}</span></span><Button size="sm" className={css.panelClose} aria-label={t.closeParts} onClick={closeParts}><IconCloseOutline16/></Button></header>
-          <div className={css.structureActions}>
-            <Button size="sm" className={state.isolation ? css.controlActive : undefined} disabled={!state.selected && !state.isolation} aria-pressed={!!state.isolation} onClick={() => state.isolation && (!state.selected || state.selected === state.isolation) ? active.current?.restore() : active.current?.isolate()}>{t.isolate}</Button>
+        {state.outlineStatus === 'limit' || state.outlineStatus === 'failed' ? <p className={geometryPreviewCss.outlineStatus} role="status">{state.outlineStatus === 'limit' ? t.outlineLimit : t.outlineFailed}</p> : null}
+        {state.parts && partsOpen && <div className={geometryPreviewCss.partsPanel} id={partsId}>
+          <header className={geometryPreviewCss.partsHeader}><span>{t.parts}<span className={geometryPreviewCss.count}>{number.format(partCount!)}</span></span><Button size="sm" className={geometryPreviewCss.panelClose} aria-label={t.closeParts} onClick={closeParts}><IconCloseOutline16/></Button></header>
+          <div className={geometryPreviewCss.structureActions}>
+            <Button size="sm" className={state.isolation ? geometryPreviewCss.controlActive : undefined} disabled={!state.selected && !state.isolation} aria-pressed={!!state.isolation} onClick={() => state.isolation && (!state.selected || state.selected === state.isolation) ? active.current?.restore() : active.current?.isolate()}>{t.isolate}</Button>
             <Button size="sm" onClick={() => active.current?.showAll()}>{t.showAll}</Button>
             <Button size="sm" disabled={!state.selected || !state.inspection?.visibleTriangles} onClick={() => active.current?.focus()}>{t.focus}</Button>
           </div>
           <PartsTree key={copyId} parts={state.parts} selected={state.selected} hidden={state.hidden} expanded={expanded} onExpandedChange={setExpanded} onSelect={id => active.current?.select(id)} onVisibility={(id, visible) => active.current?.visibility(id, visible)} labels={t}/>
-          {state.inspection && <section className={css.properties} aria-label={t.properties}>
+          {state.inspection && <section className={geometryPreviewCss.properties} aria-label={t.properties}>
             <strong title={state.inspection.name}>{state.selected ? state.inspection.name || `${t.part} ${(state.parts.findIndex(part => part.id === state.selected) + 1)}` : t.model}</strong>
             <span>{t.mesh} · {units}</span>
             <dl><dt>{t.triangles}</dt><dd>{number.format(state.inspection.triangles)}</dd><dt>{t.renderedTriangles}</dt><dd>{number.format(state.inspection.visibleTriangles)}</dd></dl>
@@ -203,9 +203,9 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
         </div>}
       </>}
     </div>
-    <footer className={css.footer}>
-      {dimensions && <p className={css.metadata} title={`${t.bounds}: ${dimensions} · ${units}`}>{dimensions}<span className={css.units}>{units}</span></p>}
-      <span className={css.format}>{format.toUpperCase()}</span>
+    <footer className={geometryPreviewCss.footer}>
+      {dimensions && <p className={geometryPreviewCss.metadata} title={`${t.bounds}: ${dimensions} · ${units}`}>{dimensions}<span className={geometryPreviewCss.units}>{units}</span></p>}
+      <span className={geometryPreviewCss.format}>{format.toUpperCase()}</span>
     </footer>
   </section>;
 }

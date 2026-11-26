@@ -9,7 +9,7 @@ import type { PreviewViewStateProps } from '../../../presentation/right-panel/pr
 import { useViewScroll } from '../../../presentation/right-panel/use-view-scroll';
 import { ZoomViewport, zoomSurfaceClass } from '../workbench-documents/zoom/ZoomViewport';
 import { FIT_WIDTH, type ZoomPreference } from '../workbench-documents/zoom/types';
-import css from './PdfPreview.module.css';
+import { pdfPreviewCss } from './pdfPreviewCss';
 
 type Loaded = { bytes: Uint8Array<ArrayBuffer>; owner: PdfDocumentOwner; pages: number };
 export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8Array<ArrayBuffer>; signal: AbortSignal; retry: () => void; maxBytes?: number }) {
@@ -56,12 +56,12 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
     } catch (cause) { fail(documentFailure(cause)); }
     return () => { signal.removeEventListener('abort', retire); retire(); };
   }, [props.bytes, props.signal, props.maxBytes]);
-  if (error) return <div role="alert" className={css.status}><span>{tx(`artifacts:document.${documentFailure(new Error(error))}`)}</span><button onClick={props.retry}>{tx('artifacts:artifact-preview.retry-preview')}</button></div>;
+  if (error) return <div role="alert" className={pdfPreviewCss.status}><span>{tx(`artifacts:document.${documentFailure(new Error(error))}`)}</span><button onClick={props.retry}>{tx('artifacts:artifact-preview.retry-preview')}</button></div>;
   if (!loaded || loaded.bytes !== props.bytes) return <LoadingIndicator label={tx('artifacts:document.loading')}/>;
   return <ZoomViewport preference={preference} intrinsicWidth={pageWidth} horizontalInset={24}
     labels={{ controls: tx('artifacts:document.zoom'), menu: tx('artifacts:document.zoom'), out: tx('artifacts:workbench.zoom-out'), into: tx('artifacts:workbench.zoom-in'), fitWidth: tx('artifacts:workbench.fit-width'), value: percent => `${percent}%` }}
     signal={props.signal} scrollportRef={attachScroll} onPreference={setPreference} onRenderZoom={setRenderZoom}>
-    <section className={css.body} data-pdf-preview>{Array.from({ length: loaded.pages }, (_, index) => <PdfPage key={index} owner={loaded.owner} page={index + 1} zoom={renderZoom} root={reading.ref} signal={props.signal}
+    <section className={pdfPreviewCss.body} data-pdf-preview>{Array.from({ length: loaded.pages }, (_, index) => <PdfPage key={index} owner={loaded.owner} page={index + 1} zoom={renderZoom} root={reading.ref} signal={props.signal}
       onGeometry={reading.restore}/>)}</section>
   </ZoomViewport>;
 }
@@ -101,13 +101,13 @@ const PdfPage = memo(function PdfPage({ owner, page, zoom, root, signal, onGeome
     return () => { signal.removeEventListener('abort', retire); abort.abort(); };
   }, [owner, page, visible, zoom, signal, attempt]);
   useEffect(() => () => { owner.release(canvas.current!); }, [owner]);
-  return <div ref={host} className={css.page} data-pdf-page={page}>
-    {!size && !error && <div className={css.unmeasured} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
-    <div className={`${css.surface} ${zoomSurfaceClass}`} data-document-zoom-surface hidden={!size} style={size ? { '--document-zoom-width': `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` } as CSSProperties : undefined}>
-      {!ready && !error && <div className={css.placeholder} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
-      <canvas ref={canvas} className={css.canvas} role="img" aria-label={`${tx('artifacts:document.page')} ${page}`}/>
-      <div ref={text} className={css.text} data-pdf-text/>
+  return <div ref={host} className={pdfPreviewCss.page} data-pdf-page={page}>
+    {!size && !error && <div className={pdfPreviewCss.unmeasured} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
+    <div className={`${pdfPreviewCss.surface} ${zoomSurfaceClass}`} data-document-zoom-surface hidden={!size} style={size ? { '--document-zoom-width': `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` } as CSSProperties : undefined}>
+      {!ready && !error && <div className={pdfPreviewCss.placeholder} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
+      <canvas ref={canvas} className={pdfPreviewCss.canvas} role="img" aria-label={`${tx('artifacts:document.page')} ${page}`}/>
+      <div ref={text} className={pdfPreviewCss.text} data-pdf-text/>
     </div>
-    {error && <div role="alert" className={css.status}><span>{tx(`artifacts:document.${documentFailure(new Error(error))}`)}</span><button onClick={() => retry(n => n + 1)}>{tx('artifacts:artifact-preview.retry-preview')}</button></div>}
+    {error && <div role="alert" className={pdfPreviewCss.status}><span>{tx(`artifacts:document.${documentFailure(new Error(error))}`)}</span><button onClick={() => retry(n => n + 1)}>{tx('artifacts:artifact-preview.retry-preview')}</button></div>}
   </div>;
 });

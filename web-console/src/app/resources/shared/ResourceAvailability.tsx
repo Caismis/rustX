@@ -6,7 +6,7 @@ import { UnitOutcomeNotice, useUnitEditing, type UnitEditing } from '../../setti
 import { Choice } from '../../settings/primitives/aria';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
 import { toolSourceId } from '../../settings/capability';
-import css from './ResourceCatalog.module.css';
+import { resourceCatalogCss } from './resourceCatalogCss';
 
 type Selection = 'all' | string[];
 
@@ -26,7 +26,7 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
   const blocked = unit.draft || unit.reviewNeeded || !unit.writable || !unit.admitted || unit.busy;
   const canFreeze = selection !== 'all' || skillNames !== undefined;
   const catalogIncomplete = selection === 'all' && skillNames === undefined;
-  return <section className={css.skillPolicy} aria-label={tx('resources:skills.selection')} aria-busy={unit.busy || unit.awaitingObservation || catalogIncomplete}>
+  return <section className={resourceCatalogCss.skillPolicy} aria-label={tx('resources:skills.selection')} aria-busy={unit.busy || unit.awaitingObservation || catalogIncomplete}>
     <Choice label={tx('resources:skills.selection')} value={mode} disabled={blocked}
       disabledKeys={canFreeze ? undefined : ['selected']}
       options={[
@@ -53,7 +53,7 @@ function FailedIntentRecovery({ unit }: { unit: UnitEditing<Selection> }) {
   // pinned base a refused removal left behind (a refused "inherit" gesture
   // has no draft, but its intent still needs the retry/discard affordance).
   if (!unit.intent || !(unit.reviewNeeded || failed)) return null;
-  return <div className={css.availability}>
+  return <div className={resourceCatalogCss.availability}>
     <Button size="sm" onClick={() => { unit.review(); unit.submit(!unit.draft); }}>{tx('settings:aria.retry')}</Button>
     <Button size="sm" variant="ghost" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>
   </div>;
@@ -85,7 +85,7 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
   const selected = selection === 'all' ? skillEnabledByDefault ?? true : family === 'mcp' ? names.length > 0 : names.includes(name);
   const review = !!unit.draft || unit.reviewNeeded;
   const catalogIncomplete = family === 'skill' && selection === 'all' && skillNames === undefined;
-  return <div className={css.availability} aria-busy={unit.busy || unit.awaitingObservation || catalogIncomplete}>
+  return <div className={resourceCatalogCss.availability} aria-busy={unit.busy || unit.awaitingObservation || catalogIncomplete}>
     <Switch label={tx('settings:catalog.enable', { name })} checked={selected}
       disabled={review || !unit.writable || !unit.admitted || unit.busy || valid === false && !selected
         || family === 'skill' && selection === 'all' && skillNames === undefined}

@@ -9,7 +9,7 @@ import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefresh
 import type { ResponseAction } from '../commands/native';
 import { turnAnchor } from '../../client/transcript';
 import { TurnUsage } from './UsageStats';
-import css from './TurnTail.module.css';
+import { turnTailCss } from './turnTailCss';
 import { messageContentBinding, observationSourceIdentity, useContentSource } from './ObservationSource';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { readContentText } from './SourceContent';
@@ -17,7 +17,7 @@ import { StateDot } from '../../presentation/primitives/StateDot';
 
 export function MessageTime({ time }: { time?: string | null }) {
   const tx = useTranslation();
-  return time ? <time className={css.time} dateTime={time} title={new Date(time).toLocaleString(tx.language)}>{new Date(time).toLocaleTimeString(tx.language, { hour: '2-digit', minute: '2-digit' })}</time> : null;
+  return time ? <time className={turnTailCss.time} dateTime={time} title={new Date(time).toLocaleString(tx.language)}>{new Date(time).toLocaleTimeString(tx.language, { hour: '2-digit', minute: '2-digit' })}</time> : null;
 }
 export function CopyMessage({ text, messageId, publication }: { text: string; messageId?: string | null; publication?: PublicationAudit }) {
   const tx = useTranslation();
@@ -30,7 +30,7 @@ export function CopyMessage({ text, messageId, publication }: { text: string; me
     const timer = setTimeout(() => setStatus('idle'), 3000);
     return () => clearTimeout(timer);
   }, [status]);
-  return <Tooltip label={label} side="bottom"><button type="button" className={css.action} aria-label={label} onClick={() => {
+  return <Tooltip label={label} side="bottom"><button type="button" className={turnTailCss.action} aria-label={label} onClick={() => {
     const identity = JSON.stringify(observationSourceIdentity(source));
     const current = () => mounted.current && (!source || latest.current?.client === source.client && JSON.stringify(observationSourceIdentity(latest.current)) === identity && source.owned());
     void (async () => {
@@ -64,16 +64,16 @@ export function CopyMessage({ text, messageId, publication }: { text: string; me
 }
 export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false, forking = false, children }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean; forking?: boolean; children?: ReactNode }) {
   const tx = useTranslation();
-  const actions = <div className={css.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest || forking ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
+  const actions = <div className={turnTailCss.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest || forking ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
     <CopyMessage text={text} messageId={response.closing_message_id}/>
     {onHistorical && <>
       {/* rustX's Retry replays the original input on a sibling branch; it sits
           where Harness seats extra actions, between copy and branch. */}
-      {response.retry_locator && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
-      <Tooltip label={tx(forking ? 'common:session-product.forking' : 'agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} aria-busy={forking || undefined} disabled={disabled || forking} onClick={() => onHistorical('fork', response)}>{forking ? <StateDot state="ongoing"/> : <IconBranchOutline16/>}</button></Tooltip>
+      {response.retry_locator && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={turnTailCss.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
+      <Tooltip label={tx(forking ? 'common:session-product.forking' : 'agent:turn-tail.branch')} side="bottom"><button className={turnTailCss.action} type="button" aria-label={tx('agent:turn-tail.branch')} aria-busy={forking || undefined} disabled={disabled || forking} onClick={() => onHistorical('fork', response)}>{forking ? <StateDot state="ongoing"/> : <IconBranchOutline16/>}</button></Tooltip>
     </>}
     {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
     <MessageTime time={response.completed_at}/>
   </div>;
-  return children ? <div className={css.root}>{children}{actions}</div> : actions;
+  return children ? <div className={turnTailCss.root}>{children}{actions}</div> : actions;
 }

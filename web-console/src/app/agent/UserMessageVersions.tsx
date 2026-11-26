@@ -6,7 +6,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16 } from '../../presentation/primitives/icons';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
-import actionCss from './TurnTail.module.css';
+import { turnTailCss } from './turnTailCss';
 import { Textarea } from '@/components/ui/textarea';
 
 export interface UserMessageVersionLabels {
@@ -49,7 +49,7 @@ function VersionAction({ label, tooltip = label, disabled, busy, onClick, childr
 }) {
   return (
     <Tooltip label={tooltip} side="bottom" delayMs={300}>
-      <button type="button" className={actionCss.action} aria-label={label}
+      <button type="button" className={turnTailCss.action} aria-label={label}
         aria-busy={busy || undefined} disabled={disabled} onClick={onClick}>
         {children}
       </button>

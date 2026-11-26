@@ -1,6 +1,6 @@
 import { Quaternion, Vector3, type Camera } from 'three';
 import type { StandardView } from './viewport';
-import css from './GeometryPreview.module.css';
+import { geometryPreviewCss } from './geometryPreviewCss';
 
 export type GeometryAxis = 'X' | 'Y' | 'Z';
 type AxisView = Exclude<StandardView, 'isometric'>;
@@ -15,13 +15,13 @@ const hitRadius = 12, headLength = 14, headHalfWidth = 7;
 /** The three projected arrows are both the orientation indicator and its controls. */
 export function createAxisNavigation(container: HTMLElement, labels: AxisLabels, navigate: (view: StandardView) => void) {
   const ns = 'http://www.w3.org/2000/svg', element = document.createElementNS(ns, 'svg');
-  element.classList.add(css.axes); element.setAttribute('role', 'group'); element.dataset.geometryAxisIndicator = '';
+  element.classList.add(geometryPreviewCss.axes); element.setAttribute('role', 'group'); element.dataset.geometryAxisIndicator = '';
   let disposed = false;
   const axes = directions.map(endpoint => {
     const group = document.createElementNS(ns, 'g'), shaft = document.createElementNS(ns, 'path'), head = document.createElementNS(ns, 'path');
     const pole = document.createElementNS(ns, 'circle'), hit = document.createElementNS(ns, 'circle'), title = document.createElementNS(ns, 'title');
-    group.classList.add(css.axisControl); group.setAttribute('role', 'button'); group.setAttribute('tabindex', '0'); group.dataset.axis = endpoint.axis;
-    shaft.classList.add(css.axisShaft); head.classList.add(css.axisHead); pole.classList.add(css.axisPole); hit.classList.add(css.axisHit);
+    group.classList.add(geometryPreviewCss.axisControl); group.setAttribute('role', 'button'); group.setAttribute('tabindex', '0'); group.dataset.axis = endpoint.axis;
+    shaft.classList.add(geometryPreviewCss.axisShaft); head.classList.add(geometryPreviewCss.axisHead); pole.classList.add(geometryPreviewCss.axisPole); hit.classList.add(geometryPreviewCss.axisHit);
     pole.setAttribute('r', String(headHalfWidth)); hit.setAttribute('r', String(hitRadius));
     const control = { ...endpoint, group, shaft, head, pole, hit, title, next: endpoint.positive };
     const activate = () => {

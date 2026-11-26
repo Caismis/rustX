@@ -41,7 +41,7 @@ import { canonicalLocatorKey, messageSource } from '../../../../protocol/app-ser
 import { transcriptPresentation, entryIdentity, turnAnchor, type TranscriptCache } from '../../client/transcript';
 import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
-import tailCss from './TurnTail.module.css';
+import { turnTailCss } from './turnTailCss';
 import css from '../../presentation/agent/Chat.module.css';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
@@ -124,7 +124,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     const control = message.source === 'human' && message.kind === 'message'
       ? controls({ type: 'by_message_id', message_id: message.id }) : {};
     return { editor: control.editor, actions: control.editor != null ? undefined :
-      <div className={tailCss.actions} data-clock="start" aria-label={tx('agent:agent-transcript.message-actions')}>
+      <div className={turnTailCss.actions} data-clock="start" aria-label={tx('agent:agent-transcript.message-actions')}>
         <MessageTime time={message.timestamp}/>
         <CopyMessage messageId={message.id} text={message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/>
         {control.actions}
@@ -319,7 +319,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       const text = partial.content.flatMap(block => block.kind === 'text' || block.kind === 'refusal' ? [block.text] : []).join('');
       return messageSegments({ role: 'assistant', id: partial.message_id, content: [] },
         partial.content.flatMap(block => block.kind === 'proposed_tool_call' ? [] : [{ type: block.kind, block_index: block.block_index, text: block.text }]), [], { stopped: true, publicationStream: partial.stream_id,
-          actions: partial.content.some(block => block.kind === 'text' || block.kind === 'refusal') && <div className={tailCss.actions} data-clock="end"><CopyMessage text={text} publication={partial}/><MessageTime time={partial.settled_at}/></div> });
+          actions: partial.content.some(block => block.kind === 'text' || block.kind === 'refusal') && <div className={turnTailCss.actions} data-clock="end"><CopyMessage text={text} publication={partial}/><MessageTime time={partial.settled_at}/></div> });
     }
     if (entry.item.type === 'configuration_applied') return <ConfigurationChangeRow change={entry.item.change}/>;
     if (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') {
@@ -414,8 +414,8 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   };
   const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => {
     const cursor = descriptorTranscriptPosition(descriptor, entries, page);
-    return descriptor.completed_response && <div className={tailCss.root}>
-      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor, descriptor.completed_response.origin)}<div className={tailCss.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
+    return descriptor.completed_response && <div className={turnTailCss.root}>
+      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor, descriptor.completed_response.origin)}<div className={turnTailCss.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
         {descriptor.completed_response.usage && <TurnUsage usage={descriptor.completed_response.usage} models={descriptor.completed_response.models??[]}/>}
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div></div>;
@@ -479,7 +479,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     });
     const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
     return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-chat-flow-kind="user" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
-      other={<UserMessage actions={<div className={tailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className="whitespace-pre-wrap wrap-anywhere">{text}</div> : undefined}</UserMessage>}/></div>;
+      other={<UserMessage actions={<div className={turnTailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className="whitespace-pre-wrap wrap-anywhere">{text}</div> : undefined}</UserMessage>}/></div>;
   };
   return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
@@ -494,7 +494,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         return <section className={`${css.flowItem} ${css.flow}`} data-chat-group-part={descriptor.completed_response || isFinalTurnDescriptor(descriptor) ? 'response' : undefined} key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
           {descriptorOwner(descriptor)}
           {requestFeedback.messages.get(descriptor.identity ?? (descriptor.locator.type === 'by_message_id' ? descriptor.locator.message_id : ''))}
-          {!collapsed && <DescriptorContent descriptor={descriptor} editor={user.editor} actions={user.actions && <div className={tailCss.actions} data-clock="start">{user.actions}</div>}/>}
+          {!collapsed && <DescriptorContent descriptor={descriptor} editor={user.editor} actions={user.actions && <div className={turnTailCss.actions} data-clock="start">{user.actions}</div>}/>}
           {descriptorResponse(descriptor)}
           {!collapsed && descriptor.tool_calls.map(tool=><Tool key={`${canonicalLocatorKey(tool.occurrence.locator)}:${tool.block_index}`} tool={tool}/>)}
           {invocationPanels(descriptor.turn_process, descriptor.tool_calls)}

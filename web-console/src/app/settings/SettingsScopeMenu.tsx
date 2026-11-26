@@ -5,7 +5,7 @@ import { useTranslation } from '../../locale/react';
 import { Menu } from '../../presentation/primitives/Menu';
 import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/primitives/icons';
 import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './projection';
-import css from '../resources/shared/ResourceCatalog.module.css';
+import { resourceCatalogCss } from '../resources/shared/resourceCatalogCss';
 
 function UserScopeIcon() {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-4 0h8"/></svg>;
@@ -30,7 +30,7 @@ export function SettingsScopeMenu({ target, host, onSelect, userLabel, disabled 
   const label = target.kind === 'user' ? userLabel ?? tx('settings:catalog.user') : target.displayName;
   return <div>
     <Menu open={open} onClose={() => setOpen(false)} autoFocus selectedId={settingsTargetKey(target)}
-      anchor={<button type="button" className={css.scope} disabled={disabled} aria-label={tx('settings:catalog.scope')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}>{target.kind === 'user' ? <UserScopeIcon/> : <IconFolderClose16/>}<span>{label}</span><IconChevronDownOutline14/></button>}
+      anchor={<button type="button" className={resourceCatalogCss.scope} disabled={disabled} aria-label={tx('settings:catalog.scope')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}>{target.kind === 'user' ? <UserScopeIcon/> : <IconFolderClose16/>}<span>{label}</span><IconChevronDownOutline14/></button>}
       items={[
         {id:'user', label:userLabel ?? tx('settings:catalog.user'), icon:<UserScopeIcon/>},
         {id:'workspace-divider',type:'separator'},

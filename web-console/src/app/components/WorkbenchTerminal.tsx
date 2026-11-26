@@ -6,7 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import type { WorkbenchRequest, WorkbenchResult } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
 import { TerminalTheme } from './WorkbenchTerminalTheme';
-import css from '../../presentation/right-panel/Workbench.module.css';
+import { workbenchCss } from '../../presentation/right-panel/workbenchCss';
 export default function WorkbenchTerminal({ id, call }: { id: string; call: (request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult> }) {
   const tx = useTranslation(), root = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(''), [exited, setExited] = useState(false);
@@ -27,5 +27,5 @@ export default function WorkbenchTerminal({ id, call }: { id: string; call: (req
     void (async () => { let cursor = 0; try { while (!abort.signal.aborted) { const result = await call({ kind: 'poll', id, cursor }, abort.signal); if (abort.signal.aborted) break; if (result.reset) terminal.reset(); await new Promise<void>(resolve => terminal.write(result.output ?? '', resolve)); cursor = result.cursor!; if (result.exited) { terminal.options.disableStdin = true; setExited(true); break; } } } catch (cause) { report(cause); } })();
     return () => { abort.abort(); themeObserver.disconnect(); palette.dispose(); observer.disconnect(); data.dispose(); resize.dispose(); terminal.dispose(); };
   }, [id, call]);
-  return <section className={css.terminal} aria-label={tx('artifacts:workbench.terminal')}>{error && <p role="alert">{error}</p>}{exited && <p role="status">{tx('artifacts:workbench.exited')}</p>}<div ref={root} className={css.terminalBody}/></section>;
+  return <section className={workbenchCss.terminal} aria-label={tx('artifacts:workbench.terminal')}>{error && <p role="alert">{error}</p>}{exited && <p role="status">{tx('artifacts:workbench.exited')}</p>}<div ref={root} className={workbenchCss.terminalBody}/></section>;
 }

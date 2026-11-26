@@ -1,0 +1,18 @@
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
+export const resourceCatalogCss = {
+  scope: 'inline-flex items-center gap-[6px] max-w-[230px] min-h-[30px] px-[10px] py-[3px] [border:0.5px_solid_var(--dsw-alias-border-l3)] rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-secondary)] [font:inherit] text-[12px] cursor-pointer [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:whitespace-nowrap [&_svg]:flex-none',
+  group: 'rc-group [&+.rc-group]:mt-[24px] [&_.rc-list]:block [&_.rc-list]:border-y-[0.5px] [&_.rc-list]:[border-color:var(--dsw-alias-border-l2)] [&_.rc-list>.rc-card]:grid [&_.rc-list>.rc-card]:grid-cols-[minmax(240px,3fr)_minmax(0,2fr)] [&_.rc-list>.rc-card]:gap-x-[16px] [&_.rc-list>.rc-card]:items-center [&_.rc-list>.rc-card]:h-auto [&_.rc-list>.rc-card]:min-h-0 [&_.rc-list>.rc-card]:px-[10px] [&_.rc-list>.rc-card]:py-[8px] [&_.rc-list>.rc-card]:border-0 [&_.rc-list>.rc-card]:rounded-none [&_.rc-list>.rc-card]:bg-transparent [&_.rc-list>.rc-card+.rc-card]:[border-top:0.5px_solid_var(--dsw-alias-border-l2)] [&_.rc-list>.rc-card:has(.rc-card-actions)]:grid-cols-[minmax(240px,3fr)_minmax(0,2fr)_auto] max-[760px]:[&_.rc-list>.rc-card]:grid-cols-[minmax(0,1fr)] max-[760px]:[&_.rc-list>.rc-card]:gap-[6px] max-[760px]:[&_.rc-list>.rc-card:has(.rc-card-actions)]:grid-cols-[minmax(0,1fr)]',
+  groupTitle: 'mt-0 mb-[10px] text-[13px] font-medium',
+  cardHeading: '[&>button]:flex-1 [&>:last-child]:min-w-0',
+  headControls: 'flex items-center gap-[6px] ms-auto relative z-1',
+  resourceCard: 'rc-card [&_.rc-description]:min-h-0 [&_.rc-description]:p-0',
+  description: 'rc-description min-h-0 p-0',
+  cardActions: 'rc-card-actions flex flex-wrap items-center justify-end gap-[6px] relative z-1 mt-auto [.rc-list_&]:m-0',
+  availability: 'flex flex-wrap items-center justify-end gap-[6px]',
+  skillPolicy: 'flex flex-wrap items-end gap-[12px] mb-[20px]',
+  list: 'rc-list',
+  catalog: 'max-[600px]:[&_.rc-title]:text-[24px] max-[600px]:[&_.rc-search]:w-full max-[600px]:[&_.rc-search]:ml-0 max-[600px]:[&_.rc-card]:p-[12px] max-[600px]:[&_.rc-card]:gap-[8px]',
+  title: 'rc-title',
+  search: 'rc-search',
+  card: 'rc-card',
+};
