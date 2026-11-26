@@ -38,6 +38,13 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
     getItemKey: index => rows[index]!.display_key, overscan: 12, initialRect: { width: 800, height: 500 },
     initialOffset: () => viewport.current?.scrollTop ?? 0,
     anchorTo: 'end', followOnAppend: 'auto', scrollEndThreshold: 2,
+    // Ledger rows are integer-height; fractional scroll targets (viewport
+    // clientHeight feeds center/auto alignment) place rows at fractional
+    // offsets whose antialiasing flips between captures. Snap targets to
+    // integer pixels so identical content rasterizes identically.
+    scrollToFn: (offset, { adjustments = 0, behavior }, instance) => {
+      instance.scrollElement?.scrollTo?.({ top: Math.round(offset + adjustments), behavior });
+    },
   });
   const reveal = (key: string) => {
     const index = rows.findIndex(row => rowOwnsKey(row, key));
@@ -85,7 +92,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
       if (index >= 0) {
         const node = Array.from(pane.querySelectorAll<HTMLElement>('[data-display-key]')).find(node => node.dataset.displayKey === anchor.key);
         const start = node ? node.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop : rows.slice(0, index).reduce((sum, row) => sum + row.height, 0);
-        if (virtualized) virtualizer.scrollToOffset(start - anchor.offset); else pane.scrollTop = start - anchor.offset;
+        if (virtualized) virtualizer.scrollToOffset(Math.round(start - anchor.offset)); else pane.scrollTop = Math.round(start - anchor.offset);
       }
       prepend.current = null; followsTail.current = false;
     } else if (followsTail.current && rows.length) {
