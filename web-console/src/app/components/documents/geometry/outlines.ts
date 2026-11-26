@@ -107,23 +107,28 @@ export function createOutlines(root: Object3D, color: () => string, options?: { 
       const materialFor = (doubleSided: boolean) => {
         let material = palette.get(doubleSided);
         if (!material) {
-          material = new ShaderMaterial({ depthWrite: false, uniforms: { lineColor: { value: new Color(color()) }, doubleSided: { value: doubleSided ? 1 : 0 }, ...(packed ? { occurrenceVisible: { value: visibility } } : {}) },
+          material = new ShaderMaterial({ depthWrite: false, clipping: true, uniforms: { lineColor: { value: new Color(color()) }, doubleSided: { value: doubleSided ? 1 : 0 }, ...(packed ? { occurrenceVisible: { value: visibility } } : {}) },
             vertexShader: `attribute vec3 faceA; attribute vec3 faceB; attribute float edgeKind; uniform float doubleSided; varying float visibleEdge;
+              #include <clipping_planes_pars_vertex>
               ${packed ? `uniform vec4 occurrenceVisible[${Math.ceil(L.parts / 4)}];` : ''}
               void main() { ${packed ? `int occurrence = int(floor(edgeKind / 3.0));
                 if (occurrenceVisible[occurrence / 4][occurrence - (occurrence / 4) * 4] < 0.5) { visibleEdge = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
                 float kind = mod(edgeKind, 3.0);` : ''}
-                vec4 view = modelViewMatrix * vec4(position, 1.0);
-                vec3 eyeDirection = projectionMatrix[3][3] == 0.0 ? -view.xyz : vec3(0.0, 0.0, 1.0);
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                #include <clipping_planes_vertex>
+                vec3 eyeDirection = projectionMatrix[3][3] == 0.0 ? -mvPosition.xyz : vec3(0.0, 0.0, 1.0);
                 float a = dot(normalMatrix * faceA, eyeDirection); float b = dot(normalMatrix * faceB, eyeDirection);
                 float front = max(step(0.0, a), step(0.0, b));
                 visibleEdge = ${packed ? 'kind' : 'edgeKind'} > 0.5 ? max(front, doubleSided) : step(a * b, 0.0);
-                gl_Position = projectionMatrix * view;
+                gl_Position = projectionMatrix * mvPosition;
                 // Move depth toward the eye by one part per million of eye
                 // distance, using each projection's corresponding clip depth.
-                gl_Position.z -= projectionMatrix[3][3] == 0.0 ? abs(projectionMatrix[3][2]) * (0.000001 / 0.999999) : abs(projectionMatrix[2][2] * view.z) * 0.000001; }`,
+                gl_Position.z -= projectionMatrix[3][3] == 0.0 ? abs(projectionMatrix[3][2]) * (0.000001 / 0.999999) : abs(projectionMatrix[2][2] * mvPosition.z) * 0.000001; }`,
             fragmentShader: `uniform vec3 lineColor; varying float visibleEdge;
-              void main() { if (visibleEdge < 0.5) discard; gl_FragColor = vec4(lineColor, 1.0);
+              #include <clipping_planes_pars_fragment>
+              void main() {
+                #include <clipping_planes_fragment>
+                if (visibleEdge < 0.5) discard; gl_FragColor = vec4(lineColor, 1.0);
                 #include <colorspace_fragment>
               }`,
           }); palette.set(doubleSided, material); materials.add(material);

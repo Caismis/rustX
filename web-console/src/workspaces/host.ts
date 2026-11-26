@@ -71,6 +71,7 @@ export interface WorkspaceFolderListing { displayPath: string; folders: string[]
 export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   workspaces: ProductHostWorkspace[];
   preferredWorkspace?: string;
+  nativeStepPreview?: true;
   picker: { kind: 'native' } | { kind: 'configured' | 'browser'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
 export interface WorkspaceSelectionIntent { client: string; sequence: number }

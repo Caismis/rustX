@@ -191,10 +191,11 @@ loss retire the gesture before it can pick or navigate again.
 Zoom toward the pointer adapts Blender's optional zoom-to-mouse preference
 through OrbitControls. In perspective the eye moves along the pointer ray,
 keeping points on the ray projected at the pointer. Orthographic zoom
-compensates for scale about that same screen position. On empty background the
-anchor is the intersection with the current target plane. This projection
-calculation works during motion rendering without a depth query. Selection
-raycasts use the admitted original geometry.
+compensates for scale about that same screen position. Perspective dolly stops
+before crossing the closest retained hit on admitted original geometry. With
+no hit it uses the camera-parallel plane through the current orbit target.
+Provisional whole-model surfaces use the target plane. Selection and
+perspective depth use the same visibility and section predicate.
 
 Shortcuts require focus on the canvas or its axis gizmo. Physical keypad
 codes work with Num Lock on or off. Normal digits and slash remain available
@@ -208,6 +209,7 @@ See [#535](https://github.com/Caismis/rustX/issues/535),
 [#516](https://github.com/Caismis/rustX/issues/516),
 [#517](https://github.com/Caismis/rustX/pull/517) and
 [#534](https://github.com/Caismis/rustX/issues/534).
+
 Camera fitting centers a presentation-only parent. The admitted mesh surface,
 position-derived bounds and physical scale remain intact; preparation can remove
 redundant tessellation. Bounds are recomputed from admitted coordinates,
@@ -220,9 +222,9 @@ Camera, target, up vector, selected part
 and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Isolation, its one previous visibility snapshot and the outline preference use
 the same copy fence. Isolation shows the selected subtree and its ancestors,
-including a previously hidden selection. Choosing a different isolated part
-retains the original snapshot. Isolation is one pressed-state toggle with a
-persistent inset shadow; pressing it again restores that snapshot exactly.
+including a previously hidden selection. The pressed toggle restores the exact
+visibility snapshot when invoked again for that target. Invoking it for a
+different selection moves isolation to that occurrence and retains the snapshot.
 Show all clears both visibility overrides and isolation. Manual visibility edits
 while isolated do not overwrite the snapshot. Each action publishes and draws
 once, without cloning scene resources or rereading/tessellating the source.
@@ -235,8 +237,8 @@ New previews default to orthographic projection. The View menu switches
 perspective and orthographic projection on the same
 renderer/context. Switching preserves the target, up axis, direction and apparent
 vertical size at the target plane. Orthographic zoom saves its effective vertical
-span with the copy-bound pose; compatible remounts restore it. Fit, Focus and
-Reset retain the chosen projection. Resize preserves effective vertical span,
+span with the copy-bound pose, and compatible remounts restore it. Fit and Focus
+retain the projection. Reset restores orthographic. Resize preserves effective vertical span,
 and picking uses the active camera's projection.
 Hiding a selected part also hides its selection outline.
 Changing or restoring the up axis recreates OrbitControls through its public
@@ -391,6 +393,55 @@ geometry. `data-geometry-quality` distinguishes provisional geometry from
 `data-geometry-completeness` separately identifies `preview` versus `complete`
 admission before pixel refinement. These are
 diagnostic states, not GPU-completion or presentation timestamps.
+
+### Section preview (#551)
+
+The Section toggle opens controls for one uncapped cut for visual inspection.
+It starts off on a new copy. The first enable and Reset section use the center
+of the complete model on Z and retain the positive side. Changing the axis
+centers the plane on that axis and keeps the chosen side. A native range
+control uses up to 1,000 representable steps over the complete axis extent,
+with exact endpoints. A zero-extent axis fixes the plane at its only
+coordinate. Toggling off and back on restores the settings for that copy.
+Camera and visibility changes leave the physical position alone.
+
+The axis is the common model/world axis after occurrence transforms and before
+presentation centering. If `p` is a point in that frame and `a` the chosen
+axis, the retained half-space is
+`direction × (p[a] − offset) >= −tolerance`, where `direction` is +1 or −1
+and `tolerance` is eight float32 epsilons times the complete extent on that
+axis. The same biased plane applies to CPU ray hits and renderer clipping in
+centered coordinates. Rendering preserves authored face culling, opacity,
+material groups and PBR behavior. Hit testing uses the same sidedness and
+geometric surfaces, including for transparent materials. Selecting a clipped
+occurrence preserves its identity. Section mode tints its retained original
+surfaces, and the outline shader clips existing edges. The open cut consists
+only of retained surface and outline fragments.
+
+Fit and Focus intersect their existing visible bounds with the half-space.
+These boxes are conservative and may include empty space. A standard view
+uses full-model bounds if its cut is empty. Reset view uses the uncut
+full-model bounds and initial pose. Reset section adjusts only the plane.
+The plane is copy-bound inert state. It is retained for the same copy through
+parking and layout changes, and a refreshed copy starts with the toggle off.
+Section interaction and navigation use original surfaces throughout a cut.
+Whole-model approximations provide no section-boundary guarantee, so section
+controls become available after original geometry arrives and a sectioned
+retained copy waits for that geometry when remounted. Plane changes reuse the
+admitted scene, viewport and existing outline resources, scheduling draws
+through the viewport's frame and fence.
+
+See [#551](https://github.com/Caismis/rustX/issues/551).
+
+### Linux Workbench native STEP preview (#602)
+
+The optional Linux Product Host converter derives a full-detail GLB from a
+Workbench STEP/STP preview. The browser independently admits that GLB through
+the ordinary geometry viewer. The preview keeps the original file label and
+uses meters for glTF coordinates. Other preview sources use the existing
+importers. The [native STEP build and benchmark contract](issue-534/native-step-preview.md)
+describes opt-in configuration, artifact provenance, resource limits and
+comparison with the default bulk-lexer WASM path.
 
 ### Adaptive LOD assessment
 

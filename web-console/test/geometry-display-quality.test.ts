@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { BoxGeometry, PlaneGeometry, Raycaster, Vector3, Group, LineSegments, BufferGeometry, Mesh, MeshStandardMaterial, ShaderMaterial, Scene, OrthographicCamera, PerspectiveCamera } from 'three';
 import { createDisplayQuality } from '../src/app/components/documents/geometry/display-quality';
+import { pickGeometry } from '../src/app/components/documents/geometry/section';
 import { modelScene, disposeScene } from '../src/app/components/documents/geometry/scene-resources';
 
 const camera = () => { const value = new PerspectiveCamera(45, 1, .001, 100); value.position.z = 3; value.lookAt(0,0,0); value.updateMatrixWorld(true); return value; };
@@ -81,7 +82,7 @@ it.each([false, true])('picks the opaque dense foreground while surface preparat
     for (let triangle=0;triangle<50;triangle++) {
       const at=triangle*9, x=(positions[at]+positions[at+3]+positions[at+6])/3,y=(positions[at+1]+positions[at+4]+positions[at+7])/3;
       raycaster.set(new Vector3(x,y,1),new Vector3(0,0,-1));
-      expect(quality.pick(raycaster,[front,back])?.object).toBe(front);
+      expect(pickGeometry(scene,raycaster,() => true)?.object).toBe(front);
     }
     expect(front.geometry).toBe(original);
   } finally { quality.dispose(); disposeScene([scene]); plane.dispose(); }

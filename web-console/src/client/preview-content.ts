@@ -3,9 +3,9 @@
 import { WorkspaceHostError, fileSourceFailure } from '../workspaces/host';
 import type { GeometrySource, GeometrySourceConsumer } from '../../shared/geometry-source';
 import type { PreviewObservation } from '../../shared/file-observation.ts';
-import { FILE_PREVIEW_LIMITS, isFileData } from '../../shared/file-preview';
+import { FILE_PREVIEW_LIMITS, isFileData, type NativeStepPreviewTiming } from '../../shared/file-preview';
 export interface PreviewTextPage { text: string; version: string; offset: number; lines: number; eof: boolean }
-export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string }
+export interface PreviewBytes { data: Uint8Array<ArrayBuffer>; version: string; nativeStep?: NativeStepPreviewTiming }
 export type PreviewLoadMode = 'pages' | 'bytes' | 'geometry' | 'docx' | 'pptx';
 export interface PreviewReader {
   current(): boolean;
@@ -20,6 +20,7 @@ export interface PreviewReader {
 export interface PreviewContentSnapshot {
   revision: number; mode?: PreviewLoadMode; loading: boolean;
   text?: string; data?: Uint8Array<ArrayBuffer>; source?: GeometrySource; version?: string;
+  nativeStep?: NativeStepPreviewTiming;
   page?: PreviewTextPage; error?: unknown; failedOffset?: number; loadedLines: number;
 }
 type Intent = { kind: 'read'; offset: number } | { kind: 'validate' };
@@ -266,7 +267,7 @@ export class PreviewContentOwner {
         if (mode !== 'pages') {
           const result = await (mode === 'geometry' || mode === 'bytes' ? this.reader.bytes(controller.signal, mode) : this.reader.document(mode, controller.signal));
           if (this.current(epoch)) {
-            this.publish({ data: result.data, version: result.version, loading: mode==='geometry' && !!this.reader.observe && !this.observation });
+            this.publish({ data: result.data, version: result.version, nativeStep: result.nativeStep, loading: mode==='geometry' && !!this.reader.observe && !this.observation });
             if(mode==='geometry' && this.reader.observe && !this.observation){this.saved??=this.state;this.pending={kind:'validate'};}
           }
         } else {

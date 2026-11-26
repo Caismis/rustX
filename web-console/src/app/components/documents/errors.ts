@@ -1,6 +1,6 @@
 import { WorkspaceHostError, fileSourceFailure } from '../../../workspaces/host';
 import { settlementFailureKind } from '../../../workspaces/host';
-const codes = ['too_large', 'capacity', 'parser_limit', 'malformed', 'encrypted', 'worker_failure', 'parser_failure', 'parser_timeout', 'preview_unavailable', 'converter_unavailable', 'converter_timeout', 'converter_failure', 'archive_rejected', 'source_changed', 'source_missing', 'source_unavailable', 'authorization_revoked', 'obsolete', 'failure'] as const;
+const codes = ['too_large', 'capacity', 'parser_limit', 'malformed', 'encrypted', 'worker_failure', 'parser_failure', 'parser_timeout', 'preview_unavailable', 'converter_unavailable', 'converter_timeout', 'converter_failure', 'native_step_unavailable', 'native_step_external', 'archive_rejected', 'source_changed', 'source_missing', 'source_unavailable', 'authorization_revoked', 'obsolete', 'failure'] as const;
 export function documentFailure(cause: unknown): typeof codes[number] {
   const settlement = settlementFailureKind(cause);
   if (settlement) return settlement === 'converter_settlement_unknown' ? 'converter_unavailable' : 'preview_unavailable';

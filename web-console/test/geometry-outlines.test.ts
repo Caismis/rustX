@@ -80,7 +80,7 @@ for (const scale of [1e-6, 1, 1e6]) for (const generated of [false, true]) it.ea
   // Evaluate the actual shader's depth adjustment against Three's projection.
   // A fixed 1e-6 NDC pull crosses the occluder in this exact Fit Front case.
   const adjustment = shader.match(/gl_Position\.z -= ([^;]+);/)![1]
-    .replaceAll('projectionMatrix[3][3]', 'kind').replaceAll('projectionMatrix[3][2]', 'b').replaceAll('projectionMatrix[2][2]', 'a').replaceAll('view.z', 'z').replaceAll('abs(', 'Math.abs(');
+    .replaceAll('projectionMatrix[3][3]', 'kind').replaceAll('projectionMatrix[3][2]', 'b').replaceAll('projectionMatrix[2][2]', 'a').replaceAll('mvPosition.z', 'z').replaceAll('abs(', 'Math.abs(');
   const bias = new Function('kind', 'b', 'a', 'z', `return ${adjustment}`) as (kind: number, b: number, a: number, z: number) => number;
   const radius = Math.hypot(2, 2, .06) * scale / 2, distance = radius / Math.sin(Math.PI / 8) * 1.1;
   const camera = projection === 'perspective' ? new PerspectiveCamera(45, 4 / 3, radius / 10_000, radius * 1000) : new OrthographicCamera(-radius * 1.1 * 4 / 3, radius * 1.1 * 4 / 3, radius * 1.1, -radius * 1.1, radius / 10_000, radius * 1000);
@@ -99,7 +99,7 @@ it.each([false, true])('uses parallel orthographic eye rays for front and side f
   const root = new Group(), mesh = new Mesh(new BoxGeometry(), new MeshBasicMaterial()); root.add(mesh);
   const owner = createOutlines(root, () => '#ffffff', { generated }); expect(await owner.set(true)).toBe('on');
   const shader = ((generated ? owner.group.children[0] : mesh.children[0]) as LineSegments<BufferGeometry, ShaderMaterial>).material.vertexShader;
-  const expression = shader.match(/vec3 eyeDirection = ([^;]+);/)![1].replaceAll('projectionMatrix[3][3]', 'projection').replace('-view.xyz', 'perspective').replace('vec3(0.0, 0.0, 1.0)', 'parallel');
+  const expression = shader.match(/vec3 eyeDirection = ([^;]+);/)![1].replaceAll('projectionMatrix[3][3]', 'projection').replace('-mvPosition.xyz', 'perspective').replace('vec3(0.0, 0.0, 1.0)', 'parallel');
   const eye = new Function('projection', 'perspective', 'parallel', `return ${expression}`) as (projection: number, perspective: Vector3, parallel: Vector3) => Vector3;
   const front = new Vector3(0, 0, 1), side = new Vector3(1, 0, 0), parallel = new Vector3(0, 0, 1);
   for (const x of [-10, 10]) { const direction = eye(1, new Vector3(-x, 0, 4), parallel); expect(front.dot(direction)).toBe(1); expect(side.dot(direction)).toBe(0); }

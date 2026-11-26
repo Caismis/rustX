@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.16)
+project(rustx_step_native LANGUAGES CXX)
+
+find_path(OCCT_HEADERS Standard_Version.hxx PATH_SUFFIXES opencascade REQUIRED)
+add_executable(rustx-step-native main.cpp)
+target_compile_features(rustx-step-native PRIVATE cxx_std_17)
+target_include_directories(rustx-step-native SYSTEM PRIVATE ${OCCT_HEADERS})
+foreach(toolkit TKXDESTEP TKSTEP TKXSBase TKXCAF TKLCAF TKCDF TKMesh TKTopAlgo TKBRep TKMath TKernel TKRWMesh)
+    find_library(OCCT_${toolkit} NAMES ${toolkit} REQUIRED)
+    target_link_libraries(rustx-step-native PRIVATE ${OCCT_${toolkit}})
+endforeach()

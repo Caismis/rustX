@@ -114,7 +114,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   openDeliveryPreview = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal: AbortSignal) => this.openPreview(scope, { source: 'delivery', read }, signal);
   openWorkspacePreview = (scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal: AbortSignal) => this.openPreview(scope, { source: 'workspace', call }, signal);
   private async openPreview(scope: WorkspaceAuthorityScope, coordinates: object, signal: AbortSignal): Promise<import('../../shared/file-preview.ts').FilePreviewOperation> {
-    const bound = await this.settledFileCall<{ identity: string; version: string; bytes: number; file?: DeliveryBytes['file'] }>('file', scope, coordinates, signal, 'preview-open');
+    const bound = await this.settledFileCall<Pick<import('../../shared/file-preview.ts').FilePreviewOperation, 'version' | 'bytes' | 'file' | 'nativeStep'> & { identity: string }>('file', scope, coordinates, signal, 'preview-open');
     if (!/^[a-f0-9-]{36}$/.test(bound.identity) || !bound.version || !Number.isSafeInteger(bound.bytes) || bound.bytes < 0) throw new Error('Invalid preview operation');
     let closing: Promise<void> | undefined, cancellation: Promise<void> | undefined;
     const abort = () => {

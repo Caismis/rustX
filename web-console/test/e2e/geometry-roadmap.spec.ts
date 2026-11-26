@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { BoxGeometry, OrthographicCamera, PerspectiveCamera, Plane, Raycaster, SphereGeometry, Triangle, Vector2, Vector3 } from 'three';
 import { PNG } from 'pngjs';
-import { instrument, resources } from './geometry-observation';
+import { instrument, observeGeometryLatency, resources } from './geometry-observation';
 import { denseBoxStl } from '../geometry-fixtures';
 import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 
@@ -36,6 +36,109 @@ async function parts(page: Page) {
   await page.getByRole('button', { name: 'Expand: Assembly', exact: true }).click();
   return page.getByRole('list', { name: 'Parts', exact: true });
 }
+
+for (const entry of ['delivery', 'workspace']) test(`section clips transformed surfaces in ${entry} and preserves the original copy`, async ({ page }, info) => {
+  const shaderErrors: string[] = [];
+  page.on('console', message => { if (message.type() === 'error' && /WebGLProgram|Shader Error/.test(message.text())) shaderErrors.push(message.text()); });
+  const model = assemblyGlb([
+    { name: 'Assembly', translation: [100, 200, 300], scale: [2, 3, 4], children: [1, 2] },
+    { name: 'A', mesh: 0 }, { name: 'B', mesh: 0, translation: [30, 0, 0], scale: [-1, 1, 1] },
+  ]);
+  await load(page, entry, model); await refined(page);
+  const canvas = page.locator('[data-geometry-format]:visible canvas');
+  await expect(page.getByRole('button', { name: 'Model outlines', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const viewport = (await canvas.boundingBox())!;
+  const span = Math.hypot(60, 30, 40) * 1.1 / Math.min(1, viewport.width / viewport.height);
+  await canvas.press('Numpad1'); await refined(page);
+  const startingReads = await reads(page), startingResources = await resources(page);
+  const handles = await canvas.elementHandle();
+  const samples = async () => {
+    await painted(page);
+    const image = PNG.sync.read(await canvas.screenshot({ scale: 'css' }));
+    const center = image.width / 2, displacement = 20 * image.height / span;
+    const sample = (x: number, y: number) => {
+      const at = (Math.round(y) * image.width + Math.round(x)) * 4;
+      return image.data.subarray(at, at + 3);
+    };
+    const background = sample(image.width * .92, image.height / 2);
+    return [center - displacement, center + displacement].map(x => {
+      const color = sample(x, image.height / 2);
+      return Math.hypot(...Array.from(color, (value, index) => value - background[index])) > 35;
+    });
+  };
+  await expect.poll(samples).toEqual([true, true]);
+  const toggle = page.getByRole('button', { name: 'Section', exact: true });
+  await observeGeometryLatency(page, '[data-geometry-format] button[aria-label="Section"]', 'click', true);
+  await toggle.click();
+  const axis = page.getByRole('combobox', { name: 'Axis' }), slider = page.getByRole('slider', { name: 'Position' });
+  await expect(axis).toHaveValue('z');
+  await expect.poll(() => page.evaluate(() => (window as any).geometryLatency.first)).toBeGreaterThan(0);
+  await axis.selectOption('x');
+  await expect.poll(samples).toEqual([false, true]);
+  await page.getByRole('button', { name: 'Reverse side', exact: true }).click();
+  await expect.poll(samples).toEqual([true, false]);
+  await slider.press('Home');
+  await expect.poll(samples).toEqual([false, false]);
+  await slider.press('End');
+  await expect.poll(samples).toEqual([true, true]);
+  await expect.poll(() => page.evaluate(() => (window as any).geometryLatency.samples.length)).toBe(2);
+  await expect(slider).toBeFocused();
+  const track = (await slider.boundingBox())!;
+  const trackY = track.y + track.height / 2;
+  await page.mouse.move(track.x + track.width * .8, trackY);
+  await page.mouse.down();
+  await page.mouse.move(track.x + track.width * .08, trackY, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => (window as any).geometryLatency.samples.length)).toBeGreaterThan(4);
+  await expect.poll(samples).toEqual([false, false]);
+  await slider.press('End');
+  await toggle.click(); await toggle.click();
+  await expect(axis).toHaveValue('x'); await expect(slider).toHaveValue('1000');
+  await axis.selectOption('y');
+  await expect(axis).toHaveValue('y');
+  await page.getByRole('button', { name: 'Reset section', exact: true }).click();
+  await expect(axis).toHaveValue('z'); await expect(slider).toHaveValue('500');
+  await expect(page.getByRole('button', { name: 'Reverse side', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await toggle.click(); await refined(page);
+  await expect.poll(samples).toEqual([true, true]);
+  expect(await reads(page)).toBe(startingReads);
+  expect(await resources(page)).toEqual(startingResources);
+  expect(await canvas.evaluate((element, before) => element === before, handles)).toBe(true);
+  expect(shaderErrors).toEqual([]);
+  const timing = await page.evaluate(() => {
+    const { first, samples, gpuSamples, stages } = (window as any).geometryLatency;
+    return { activationMs: first, samples, gpuSamples, stages };
+  });
+  await info.attach('section-timings', { body: JSON.stringify(timing, null, 2), contentType: 'application/json' });
+});
+
+test('section settings follow the retained copy and reset after refresh', async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 900 });
+  await load(page);
+  const section = page.getByRole('button', { name: 'Section', exact: true });
+  await section.click();
+  await page.getByRole('combobox', { name: 'Axis' }).selectOption('y');
+  await page.getByRole('slider', { name: 'Position' }).press('End');
+  await page.getByRole('button', { name: 'Reverse side', exact: true }).click();
+  const original = (await pose(page)).section, originalReads = await reads(page);
+  expect(original).toMatchObject({ enabled: true, axis: 'y', offset: 230, reversed: true });
+  await page.getByRole('button', { name: 'Hide delivery', exact: true }).click();
+  await expect.poll(async () => (await resources(page)).contexts).toBe(0);
+  await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
+  await page.getByRole('button', { name: 'Chinese', exact: true }).click();
+  await page.getByRole('button', { name: 'Show delivery', exact: true }).click();
+  await ready(page);
+  await expect(page.getByRole('button', { name: '剖切', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: '坐标轴' })).toHaveValue('y');
+  await expect(page.getByRole('slider', { name: '位置' })).toHaveAttribute('aria-valuetext', '230 米');
+  await expect(page.getByRole('button', { name: '反转保留侧', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(await reads(page)).toBe(originalReads);
+  const refresh = page.getByRole('button', { name: '刷新', exact: true });
+  await refresh.click();
+  await ready(page);
+  await expect(page.getByRole('button', { name: '剖切', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  expect((await pose(page)).section).toMatchObject({ enabled: false, axis: 'z', reversed: false });
+});
 
 test('single Pan toggle preserves real drag semantics, pressed styles and geometry ownership', async ({ page }) => {
   await page.addInitScript(() => {
@@ -413,10 +516,11 @@ for (const projection of ['orthographic', 'perspective'] as const) test(`${proje
   }
 });
 
-test('pointer zoom preserves an original surface point during simplified motion rendering', async ({ page }) => {
+test('pointer zoom preserves an original surface point during simplified motion rendering', async ({ page }, info) => {
   await instrument(page);
   await page.goto(`${origin}/test/fixtures/geometry.html`);
-  const { triangles } = await page.evaluate(() => (window as any).geometryContract.denseBox(591));
+  // Keep the original above the streamed motion-preview threshold.
+  const { triangles } = await page.evaluate(() => (window as any).geometryContract.denseBox(240));
   await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
   await ready(page);
   await page.getByRole('button', { name: 'View angle', exact: true }).click();
@@ -434,13 +538,26 @@ test('pointer zoom preserves an original surface point during simplified motion 
   const anchorY = before.target[1] + dy * before.verticalSpan / box.height;
   expect(Math.abs(anchorX)).toBeLessThan(.5); expect(Math.abs(anchorY)).toBeLessThan(.5);
   const frameCount = await page.evaluate(() => (window as any).geometryModelFrames.length);
-  await page.mouse.move(x, y); await page.mouse.wheel(0, -140);
+  await page.mouse.move(x, y);
+  for (let tick = 0; tick < 7; tick++) {
+    await page.mouse.wheel(0, -20);
+    await painted(page);
+  }
   await expect.poll(async () => (await camera()).verticalSpan).toBeLessThan(before.verticalSpan);
   const after = await camera();
   expect((anchorX - after.target[0]) * box.height / after.verticalSpan).toBeCloseTo(dx, 5);
   expect((anchorY - after.target[1]) * box.height / after.verticalSpan).toBeCloseTo(dy, 5);
-  await expect.poll(() => page.evaluate(({ frameCount, triangles }) => (window as any).geometryModelFrames.slice(frameCount)
-    .some((frame: { quality: string; triangles: number }) => frame.quality === 'interactive' && frame.triangles < triangles), { frameCount, triangles })).toBe(true);
+  try {
+    await expect.poll(() => page.evaluate(({ frameCount, triangles }) => (window as any).geometryModelFrames.slice(frameCount)
+      .some((frame: { quality: string; triangles: number }) => frame.quality === 'interactive' && frame.triangles < triangles), { frameCount, triangles })).toBe(true);
+  } catch (error) {
+    const diagnostics = await page.evaluate(frameCount => {
+      const observed = window as any;
+      return { previews: observed.geometryPreviewTimings, frames: observed.geometryModelFrames.slice(frameCount) };
+    }, frameCount);
+    await info.attach('motion-display', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
+    throw error;
+  }
   await refined(page);
   await expect.poll(() => page.evaluate(() => (window as any).geometryDrawCalls.lastModelTriangles)).toBe(triangles);
 });

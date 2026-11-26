@@ -72,8 +72,8 @@ export async function instrument(page: Page, profile: true | 'native' = true) {
 export const resources = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResources }));
 
 /** One capture per page; first-frame proxy and trusted input diagnostics. */
-export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]', startEvent: 'pointerdown' | 'click' = 'pointerdown') {
-  await page.evaluate(({ startSelector, startEvent }) => {
+export async function observeGeometryLatency(page: Page, startSelector = 'button[aria-label^="Preview "]', startEvent: 'pointerdown' | 'click' = 'pointerdown', measureSection = false) {
+  await page.evaluate(({ startSelector, startEvent, measureSection }) => {
     const state = { start: 0, first: 0, firstSubmission: 0, firstModelSubmission: 0, firstGpuReady: 0, lodFirst:0, lodGpuReady:0, lodSamples:[] as number[], lodStages:{} as Record<string,{submission:number;gpu:number;opportunity:number}>, firstModel:0, firstModelGpuReady:0, pending: 0, cancelled: 0, samples: [] as number[], gpuSamples: [] as number[], stages: [] as { dispatch: number; submission: number; gpu: number; renderOpportunity: number }[] };
     const waiting: { start: number; received: number; lod: boolean }[] = [];
     let firstSubmitted = false, lodSubmitted = false, firstModelSubmitted = false; const observedLods=new Set<string>();
@@ -134,6 +134,12 @@ export async function observeGeometryLatency(page: Page, startSelector = 'button
       state.pending++;
       waiting.push({ start: event.timeStamp, received: performance.now(),lod:event.target.dataset.geometryCompleteness==='preview' });
     }, { capture: true });
+    if (measureSection) document.addEventListener('input', event => {
+      if (!event.isTrusted || !(event.target instanceof HTMLInputElement) || event.target.type !== 'range'
+        || !event.target.closest('[data-geometry-format]')) return;
+      state.pending++;
+      waiting.push({ start: event.timeStamp, received: performance.now(), lod: false });
+    }, { capture: true });
     Object.assign(window, { geometryLatency: state });
-  }, { startSelector, startEvent });
+  }, { startSelector, startEvent, measureSection });
 }

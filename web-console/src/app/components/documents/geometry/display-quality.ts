@@ -1,4 +1,4 @@
-import { Box3, BufferGeometry, LineSegments, Matrix4, Mesh, ShaderMaterial, type Camera, type Object3D, type Scene, type Raycaster } from 'three';
+import { Box3, BufferGeometry, LineSegments, Matrix4, Mesh, ShaderMaterial, type Camera, type Object3D, type Scene } from 'three';
 import { takeGeometryPreview } from './scene-resources';
 
 /** Upper bound on affine displacement amplification, including shear. Scaling
@@ -69,9 +69,6 @@ export function createDisplayQuality(root: Object3D) {
         }, camera, width, height);
       } finally { lines.forEach(line => { line.visible = true; }); }
     },
-    // A display approximation cannot prove foreground occlusion. Geometry refs
-    // are already restored after each submission; pick those admitted originals.
-    pick(raycaster: Raycaster, candidates: Mesh[]) { return raycaster.intersectObjects(candidates, false)[0]; },
     refresh() { for (const original of originals) { const incoming = takeGeometryPreview(original); if (incoming) lods.set(original, incoming); } },
     dispose() { for (const value of lods.values()) value.geometry.dispose(); lods.clear(); },
   };

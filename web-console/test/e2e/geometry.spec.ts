@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { writeFileSync } from 'node:fs';
+import { PNG } from 'pngjs';
 import { instrument, resources } from './geometry-observation';
 import { denseBoxStl, planeAndTinySolidStl } from '../geometry-fixtures';
 import { isCadRuntimeRequest, isGeometryRuntimeRequest } from './geometry-requests';
@@ -61,6 +62,28 @@ test('all geometry formats render through actual delivery and Workspace entry po
     await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(mountedBodies);
     await expect.poll(async () => (await resources(page)).workers).toBe(0);
     await expect.poll(async () => (await resources(page)).contexts).toBe(mountedBodies);
+    const view = page.locator('[data-geometry-format]:visible'), canvas = view.locator('canvas');
+    const size = (await canvas.boundingBox())!;
+    const span = Math.sqrt(300) * 1.1 / Math.min(1, size.width / size.height);
+    await canvas.press('Numpad1');
+    const sides = async () => {
+      const image = PNG.sync.read(await canvas.screenshot({ scale: 'css' }));
+      const center = image.width / 2, dx = 2.5 * image.height / span;
+      const pixel = (x: number) => {
+        const index = (Math.round(image.height / 2) * image.width + Math.round(x)) * 4;
+        return image.data.subarray(index, index + 3);
+      };
+      const background = pixel(image.width * .96);
+      return [center - dx, center + dx].map(x =>
+        Math.hypot(...Array.from(pixel(x), (value, index) => value - background[index])) > 35);
+    };
+    await expect.poll(sides, { message: `${entry} ${name} ordinary view` }).toEqual([true, true]);
+    const section = view.getByRole('button', { name: 'Section', exact: true });
+    await section.click();
+    await view.getByRole('combobox', { name: 'Axis' }).selectOption('x');
+    await expect.poll(sides, { message: `${entry} ${name} retained half` }).toEqual([false, true]);
+    await section.click();
+    await expect.poll(sides, { message: `${entry} ${name} restored view` }).toEqual([true, true]);
   }
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('cad-preview.png') });
   writeFileSync(info.outputPath('format-display-timings.json'), JSON.stringify(timings, null, 2));

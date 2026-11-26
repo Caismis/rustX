@@ -31,12 +31,14 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   controls(): OrbitControls;
   turntable(): void;
   select(event: PointerEvent): void;
+  guardZoom?(x: number, y: number): void;
   shortcut(action: Shortcut): void;
   cancelNavigation(): void;
 }) {
   const document = canvas.ownerDocument;
   const pointers = new Set<number>();
   let click: { id: number; x: number; y: number } | undefined;
+  let dolly: { id: number; x: number; y: number; previousY: number } | undefined;
   const exceedsThreshold = (event: PointerEvent) => !!click && (event.clientX - click.x) ** 2 + (event.clientY - click.y) ** 2 > 16;
   const down = (event: PointerEvent) => {
     if (!options.visible()) return;
@@ -51,6 +53,8 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
     }
     const sole = pointers.size === 0;
     pointers.add(event.pointerId);
+    if (sole && event.button === 1 && event.ctrlKey && event.pointerType !== 'touch')
+      dolly = { id: event.pointerId, x: event.clientX, y: event.clientY, previousY: event.clientY };
     click = sole && event.isPrimary && event.button === 0 ? { id: event.pointerId, x: event.clientX, y: event.clientY } : undefined;
     const action = event.button === 0 ? controls.mouseButtons.LEFT : event.button === 1 ? controls.mouseButtons.MIDDLE : controls.mouseButtons.RIGHT;
     const modified = event.ctrlKey || event.shiftKey || event.metaKey;
@@ -59,9 +63,14 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
     if (sole && rotates) options.turntable();
   };
   const move = (event: PointerEvent) => {
+    if (event.pointerId === dolly?.id && options.visible()) {
+      if (event.clientY < dolly.previousY) options.guardZoom?.(dolly.x, dolly.y);
+      dolly.previousY = event.clientY;
+    }
     if (click?.id === event.pointerId && exceedsThreshold(event)) click = undefined;
   };
   const up = (event: PointerEvent) => {
+    if (event.pointerId === dolly?.id) dolly = undefined;
     if (!pointers.delete(event.pointerId) || click?.id !== event.pointerId) return;
     const select = options.visible() && event.button === 0 && event.target === canvas && !exceedsThreshold(event);
     click = undefined;
@@ -70,7 +79,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
     if (event.clientX >= rect.left && event.clientX < rect.right && event.clientY >= rect.top && event.clientY < rect.bottom) options.select(event);
   };
   const cancel = () => {
-    click = undefined;
+    click = dolly = undefined;
     if (!pointers.size) return;
     const captured = [...pointers]; pointers.clear();
     options.cancelNavigation();
@@ -78,6 +87,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   };
   const canceled = (event: PointerEvent) => { if (pointers.has(event.pointerId)) cancel(); };
   const aux = (event: MouseEvent) => { if (event.button === 1) { event.preventDefault(); event.stopPropagation(); } };
+  const wheel = (event: WheelEvent) => { if (options.visible() && !pointers.size && event.deltaY < 0) options.guardZoom?.(event.clientX, event.clientY); };
   const keydown = (event: KeyboardEvent) => {
     const focused = document.activeElement;
     if (!options.visible() || event.defaultPrevented || event.target !== focused
@@ -93,6 +103,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   canvas.addEventListener('pointercancel', canceled, true);
   canvas.addEventListener('lostpointercapture', canceled);
   canvas.addEventListener('auxclick', aux);
+  canvas.addEventListener('wheel', wheel, { capture: true, passive: true });
   canvas.addEventListener('keydown', keydown, true);
   gizmo.addEventListener('keydown', keydown, true);
   return {
@@ -104,6 +115,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
       canvas.removeEventListener('pointercancel', canceled, true);
       canvas.removeEventListener('lostpointercapture', canceled);
       canvas.removeEventListener('auxclick', aux);
+      canvas.removeEventListener('wheel', wheel, true);
       canvas.removeEventListener('keydown', keydown, true);
       gizmo.removeEventListener('keydown', keydown, true);
       for (const id of pointers) if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);

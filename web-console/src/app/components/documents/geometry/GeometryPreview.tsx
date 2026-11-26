@@ -8,6 +8,7 @@ import { importGlb } from './glb';
 import type { GeometrySource } from '../../../../../shared/geometry-source';
 import { parseGeometry, parseGeometryStream } from './parse';
 import { disposeScene } from './scene-resources';
+import { sectionAxes, sectionCenter, type Section } from './section';
 import { GeometryError, type GeometryFailure } from './limits';
 import type { GeometryImportStage } from './stages';
 import { GeometryLoading } from '../GeometryLoading';
@@ -23,8 +24,8 @@ import { Tooltip } from '../../../../presentation/primitives/Tooltip';
 import { IconChecklistOutline14, IconCloseOutline16, IconLoadingOutline16, IconRefreshOutline16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
-export interface GeometryPreviewProps extends PreviewViewStateProps { visible?: boolean; bytes?: Uint8Array<ArrayBuffer>; source?: GeometrySource; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
-export default function GeometryPreview({ bytes, source, name, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire, visible = true }: GeometryPreviewProps) {
+export interface GeometryPreviewProps extends PreviewViewStateProps { visible?: boolean; bytes?: Uint8Array<ArrayBuffer>; source?: GeometrySource; name: string; previewFormat?: 'glb'; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
+export default function GeometryPreview({ bytes, source, name, previewFormat, copyId, signal, current, takeSource, releaseSource, viewState, onViewStateChange, onGeometryRetire, visible = true }: GeometryPreviewProps) {
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
   const latest = useRef({ viewState, onViewStateChange, t, visible }); latest.current = { viewState, onViewStateChange, t, visible };
@@ -34,16 +35,17 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
     if (!visible) setMenu(false);
     if (visible && deferredOutlines.current !== undefined && pendingOutlines.current === undefined) requestOutlines(deferredOutlines.current);
   }, [visible]);
-  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; sourceFailed?: boolean; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
+  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; section?: Section; sectionBounds?: Box3; error?: GeometryFailure; sourceFailed?: boolean; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const format = geometryFormat(name);
+  const sourceFormat = geometryFormat(name), format = previewFormat ?? sourceFormat;
   useEffect(() => {
     const controller = new AbortController(); let roots: Object3D[] = [], mounted: ReturnType<typeof mountGeometry> | undefined;
     let graphics: ReturnType<typeof prepareGeometryGraphics> | undefined, release: (() => void) | undefined;
     let progressive: ReturnType<typeof progressivePresentation> | undefined, provisional: ReturnType<typeof mountGeometry> | undefined;
     let selection: { selected?: string; hidden?: string[]; isolation?: string; projection: Projection; navigationMode: NavigationMode } = { projection: 'orthographic', navigationMode: 'orbit' };
+    let lastSection: Section | undefined;
     // Capture this copy's predicate, rather than adopting a later render's
     // permission while an earlier import is still completing.
     const ownsCopy = current;
@@ -69,17 +71,21 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
     };
     void (async () => {
       let object: Object3D, bounds: Box3, displayStart: number, prepared = Promise.resolve(), startPreview: (() => void) | undefined;
+      const retained = latest.current.viewState.geometry;
+      // A whole-model approximation has no section-boundary error bound.
+      // Wait for originals when reopening a retained, already sectioned copy.
+      const sectioned = retained?.copyId === copyId && retained.section?.enabled;
       const graphicsLost = () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); };
       if (format === 'glb') stage('importing');
       const streaming = source && format === 'stl';
       const pending = streaming ? parseGeometryStream(source, controller.signal, stage) : format === 'glb' ? importGlb(bytes!, controller.signal)
-        : parseGeometry(bytes!, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : lod => {
+        : parseGeometry(bytes!, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' || sectioned ? undefined : lod => {
           if (live() && progressive) progressive.add(lod); else lod.dispose();
         });
       void pending.catch(() => {});
       try { graphics = prepareGeometryGraphics(format !== 'glb', graphicsLost, { visible: latest.current.visible }); }
       catch (error) { void pending.then(value => value.dispose(), () => {}); throw error; }
-      if (format !== 'glb' && format !== 'stl') {
+      if (format !== 'glb' && format !== 'stl' && !sectioned) {
         const props = latest.current;
         progressive = progressivePresentation({ visible: latest.current.visible, container: container.current!, graphics, current: live, copyId, labels: () => latest.current.t,
           saved: props.viewState.geometry?.copyId === copyId ? props.viewState.geometry : undefined,
@@ -111,11 +117,14 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
       mounted = mountGeometry(container.current!, object, bounds, saved, props.t, patch => {
         if (!live()) return;
         latest.current.onViewStateChange({ geometry: { copyId, ...patch } });
+        const sectionChanged = lastSection !== patch.section;
+        lastSection = patch.section;
         const projection = patch.camera?.projection ?? selection.projection, navigationMode = patch.navigationMode === 'pan' ? 'pan' : 'orbit';
         if (selection.selected !== patch.selected || !sameHidden(selection.hidden, patch.hidden) || selection.isolation !== patch.isolation?.target || selection.projection !== projection || selection.navigationMode !== navigationMode) {
           selection = { selected: patch.selected, hidden: patch.hidden, isolation: patch.isolation?.target, projection, navigationMode };
-          setState(value => ({ ...value, ...selection, inspection: mounted?.inspect() }));
-        }
+          const inspection = mounted?.inspect();
+          setState(value => ({ ...value, ...selection, inspection, section: patch.section }));
+        } else if (sectionChanged) setState(value => ({ ...value, section: patch.section }));
       }, graphicsLost, { visible: latest.current.visible, generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady:()=>{if(live())startPreview?.();}, graphics });
       const ownerDocument = container.current!.ownerDocument;
       if (latest.current.visible && lodSeed?.focusedAxis && ownerDocument.activeElement === ownerDocument.body) mounted.focusAxis(lodSeed.focusedAxis);
@@ -125,7 +134,7 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
       const measure = `geometry:display-prepare:${format}`;
       performance.clearMeasures(measure); performance.measure(measure, { start: displayStart });
       active.current = mounted;
-      setState(value => ({ ...value, preview: false, parts: mounted!.parts, projection: mounted!.projection, navigationMode: mounted!.navigationMode, inspection: mounted!.inspect(), dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
+      setState(value => ({ ...value, preview: false, parts: mounted!.parts, projection: mounted!.projection, navigationMode: mounted!.navigationMode, inspection: mounted!.inspect(), section: mounted!.section, sectionBounds: bounds, dimensions: [bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z] }));
       if (saved?.outlines !== false) requestOutlines(true);
       void prepared.then(() => { if (!live() || !mounted) return; mounted.refreshPreview(); });
     })().catch(failed);
@@ -162,7 +171,7 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
     owner.setNavigationMode(mode);
     setState(value => value.navigationMode === owner.navigationMode ? value : { ...value, navigationMode: owner.navigationMode });
   }
-  return <section className={css.root} style={state.sourceFailed ? { display: 'none' } : undefined} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
+  return <section className={css.root} style={state.sourceFailed ? { display: 'none' } : undefined} data-geometry-format={sourceFormat} data-geometry-preview-format={format} aria-label={t.preview} onKeyDown={event => {
     if (!partsOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation(); closeParts();
   }}>
@@ -179,6 +188,13 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
             anchor={<Tooltip label={t.view} side="right" delayMs={500}><button type="button" className={`${css.control} ${menu ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.view} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><GeometryCubeGlyph/></button></Tooltip>}/>
           <span className={css.divider} aria-hidden="true"/>
           <Tooltip label={t.outlines} side="right" delayMs={500}><button type="button" className={`${css.control} ${state.outlineStatus === 'on' ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.outlines} aria-pressed={state.outlineStatus === 'on'} aria-busy={state.outlineStatus === 'loading'} onClick={() => requestOutlines(state.outlineStatus !== 'on' && state.outlineStatus !== 'loading')}><OutlineGlyph/></button></Tooltip>
+          <Tooltip label={t.section} side="right" delayMs={500}>
+            <button type="button" className={`${css.control} ${state.section?.enabled ? css.controlActive : ''}`} disabled={!state.sectionBounds}
+              aria-label={t.section} aria-pressed={state.section?.enabled ?? false} onClick={() => {
+                const owner = active.current;
+                if (owner) owner.updateSection({ ...owner.section, enabled: !owner.section.enabled });
+              }}><SectionGlyph/></button>
+          </Tooltip>
           <Tooltip label={t.parts} side="right" delayMs={500}><button type="button" className={`${css.control} ${partsOpen ? css.controlActive : ''}`} disabled={!state.parts} aria-label={t.parts} aria-expanded={partsOpen} aria-controls={partsId} data-geometry-parts-toggle onClick={() => setPartsOpen(value => !value)}><IconChecklistOutline14 size={16}/></button></Tooltip>
         </div>
         {state.outlineStatus === 'limit' || state.outlineStatus === 'failed' ? <p className={css.outlineStatus} role="status">{state.outlineStatus === 'limit' ? t.outlineLimit : t.outlineFailed}</p> : null}
@@ -193,7 +209,7 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
           {state.inspection && <section className={css.properties} aria-label={t.properties}>
             <strong title={state.inspection.name}>{state.selected ? state.inspection.name || `${t.part} ${(state.parts.findIndex(part => part.id === state.selected) + 1)}` : t.model}</strong>
             <span>{t.mesh} · {units}</span>
-            <dl><dt>{t.triangles}</dt><dd>{number.format(state.inspection.triangles)}</dd><dt>{t.renderedTriangles}</dt><dd>{number.format(state.inspection.visibleTriangles)}</dd></dl>
+            <dl><dt>{t.triangles}</dt><dd>{number.format(state.inspection.triangles)}</dd>{!state.section?.enabled && <><dt>{t.renderedTriangles}</dt><dd>{number.format(state.inspection.visibleTriangles)}</dd></>}</dl>
             {!!state.inspection.min.length && <><span>{t.worldBounds}</span><dl>
               <dt>{t.minimum}</dt><dd>{state.inspection.min.map(value => number.format(value)).join(', ')}</dd>
               <dt>{t.maximum}</dt><dd>{state.inspection.max.map(value => number.format(value)).join(', ')}</dd>
@@ -203,11 +219,41 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
         </div>}
       </>}
     </div>
+    {state.section?.enabled && state.sectionBounds && <SectionControls value={state.section} bounds={state.sectionBounds} update={value => active.current?.updateSection(value)} t={t} number={number} units={units}/>}
     <footer className={css.footer}>
       {dimensions && <p className={css.metadata} title={`${t.bounds}: ${dimensions} · ${units}`}>{dimensions}<span className={css.units}>{units}</span></p>}
-      <span className={css.format}>{format.toUpperCase()}</span>
+      <span className={css.format}>{sourceFormat.toUpperCase()}</span>
     </footer>
   </section>;
+}
+
+function SectionControls({ value, bounds, update, t, number, units }: { value: Section; bounds: Box3; update(value?: Section): void; t: typeof en | typeof zh; number: Intl.NumberFormat; units: string }) {
+  const { axis, offset, reversed } = value;
+  const min = bounds.min[axis], span = bounds.max[axis] - min;
+  const precision = Number.EPSILON * Math.max(Math.abs(min), Math.abs(bounds.max[axis]));
+  const steps = precision ? Math.max(1, Math.min(1000, Math.floor(span / precision))) : 1000;
+  const offsetLabel = `${number.format(offset)}${units === t.unknown ? '' : ` ${units}`}`;
+  return <div className={css.sectionControls} role="group" aria-label={t.section}>
+    <label>{t.sectionAxis}
+      <select value={axis} onChange={event => {
+        const next = event.currentTarget.value as Section['axis'];
+        update({ ...value, axis: next, offset: sectionCenter(bounds, next) });
+      }}>{sectionAxes.map(axis => <option key={axis} value={axis}>{axis.toUpperCase()}</option>)}</select>
+    </label>
+    <label className={css.sectionOffset}>{t.sectionOffset}
+      <input type="range" min={0} max={steps} disabled={!span} aria-valuetext={offsetLabel}
+        value={span ? Math.round(steps * (offset - min) / span) : 0}
+        onChange={event => update({ ...value, offset: min + span * (event.currentTarget.valueAsNumber / steps) })}/>
+      <output aria-hidden="true">{offsetLabel}</output>
+    </label>
+    <Button size="sm" className={reversed ? css.controlActive : undefined} aria-pressed={reversed} onClick={() => update({ ...value, reversed: !reversed })}>{t.sectionReverse}</Button>
+    <Button size="sm" onClick={() => update()}>{t.sectionReset}</Button>
+    <span className={css.sectionHelp}>{t.sectionHelp}</span>
+  </div>;
+}
+
+function SectionGlyph() {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 4h11v8h-11zM4 14l8-12M8 9l2 1.5M9.5 6.5l2 1.5"/></svg>;
 }
 
 function sameHidden(left: string[] | undefined, right: string[] | undefined) { return (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((id, index) => id === right?.[index]); }
