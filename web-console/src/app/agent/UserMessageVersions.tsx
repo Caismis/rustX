@@ -7,7 +7,6 @@ import { IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16 
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import actionCss from './TurnTail.module.css';
-import css from './UserMessageVersions.module.css';
 import { Textarea } from '@/components/ui/textarea';
 
 export interface UserMessageVersionLabels {
@@ -68,12 +67,12 @@ export function MessageVersionPager({ family, onSwitch, disabled, compact }: {
   const { previous, next, current_index, total } = family;
   if (total < 2) return null;
   return (
-    <span className={css.pager} data-compact={compact || undefined}
+    <span className="inline-flex items-center group/pager data-[compact]:flex-none data-[compact]:ms-auto data-[compact]:ps-[6px] data-[compact]:[&_button]:w-[24px] data-[compact]:[&_button]:h-[24px] data-[compact]:[&_button]:p-[4px] data-[compact]:[&_button]:outline-offset-0" data-compact={compact || undefined}
       onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
       <VersionAction label={tx('agent:message-version.previous')} disabled={disabled || !previous} onClick={() => { if (previous) onSwitch(previous); }}>
         <BundledIcon name="lucide:chevron-left" size={14} fallback={<IconChevronLeftOutline14 />} />
       </VersionAction>
-      <span className={css.position} role="status">{tx('agent:message-version.position', { current: current_index + 1, total })}</span>
+      <span className="min-w-[3ch] [color:var(--dsw-alias-label-secondary)] text-[var(--dsh-content-font-size-secondary,13px)] tabular-nums text-center whitespace-nowrap" role="status">{tx('agent:message-version.position', { current: current_index + 1, total })}</span>
       <VersionAction label={tx('agent:message-version.next')} disabled={disabled || !next} onClick={() => { if (next) onSwitch(next); }}>
         <BundledIcon name="lucide:chevron-right" size={14} fallback={<IconChevronRightOutline14 />} />
       </VersionAction>
@@ -86,14 +85,14 @@ export function UserMessageVersions({
 }: UserMessageVersionsProps) {
   const unavailable = disabled || busy;
   return (
-    <span className={css.actions}>
+    <span className="inline-flex items-center gap-[4px]">
       {family && <MessageVersionPager family={family} disabled={unavailable} onSwitch={onSwitch} />}
       <VersionAction label={labels.edit} tooltip={busy ? labels.loading : labels.edit}
         disabled={unavailable} busy={busy} onClick={onEdit}>
         {busy ? <StateDot state="ongoing" /> :
           <BundledIcon name="lucide:pencil" size={15} fallback={<IconEditOutline16 />} />}
       </VersionAction>
-      <span className={css.visuallyHidden} role="status">{busy ? labels.loading : ''}</span>
+      <span className="absolute w-[1px] h-[1px] overflow-hidden [clip-path:inset(50%)] whitespace-nowrap" role="status">{busy ? labels.loading : ''}</span>
     </span>
   );
 }
@@ -104,7 +103,7 @@ export function UserMessageEditor({
   const unavailable = disabled || busy;
   const canRetry = !unavailable && (editing.text.trim() !== '' || editing.hasAttachments);
   return (
-    <form className={css.editor} aria-busy={busy || undefined} onSubmit={event => {
+    <form className="flex flex-col gap-[8px] w-[30rem] max-w-full min-w-0" aria-busy={busy || undefined} onSubmit={event => {
       event.preventDefault();
       if (canRetry) onRetry();
     }} onKeyDown={event => {
@@ -119,10 +118,10 @@ export function UserMessageEditor({
         if (canRetry && !event.repeat) event.currentTarget.requestSubmit();
       }
     }}>
-      <Textarea unstyled className={css.input} aria-label={labels.input} value={editing.text}
+      <Textarea unstyled className="box-border w-full max-h-[45vh] min-h-[4em] px-[10px] py-[8px] resize-y [border:1px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-primary)] [font:inherit] text-[var(--dsh-content-font-size,14px)] leading-[1.5] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" aria-label={labels.input} value={editing.text}
         rows={Math.max(3, editing.text.split('\n', 10).length)}
         disabled={unavailable} autoFocus onChange={event => editing.onText(event.target.value)} />
-      <div className={css.editorActions}>
+      <div className="flex flex-wrap justify-end gap-[8px] [&_button]:focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] [&_button]:focus-visible:outline-offset-2">
         <Button variant="outline" size="sm" disabled={unavailable} onClick={onCancel} aria-keyshortcuts="Escape">
           {labels.cancel}
         </Button>

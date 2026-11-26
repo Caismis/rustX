@@ -9,7 +9,6 @@ import { useTranslation } from '../../locale/react';
 import { message } from '../../locale/translation';
 import { useToastNotice } from '../../locale/use-toast-notice';
 import { Toast } from '../../presentation/primitives/Toast';
-import css from './OpenWorkspace.module.css';
 import { Menu } from '../../presentation/primitives/Menu';
 import { IconChevronDownOutline14, IconFolderOpenOutline16, IconWarningOutline16 } from '../../presentation/primitives/icons';
 
@@ -59,11 +58,11 @@ function WorkspaceAction({ client, host, authority, target, disabled }: Paramete
   const busy = phase === 'loading' || phase === 'launching';
   const unavailable = catalog && !catalog.available ? catalog.reason : undefined;
   const label = phase === 'loading' ? tx('agent:desktop.loading') : phase === 'launching' ? tx('agent:desktop.launching') : tx('agent:desktop.open');
-  return <div className={css.action}>
-    <Menu className={css.menuAnchor} open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus
-      anchor={<div className={css.split} data-state={busy ? 'busy' : 'idle'}>
-        <button type="button" className={css.main} disabled={disabled} aria-disabled={disabled || busy} aria-label={label} title={tx('agent:desktop.host')} onClick={() => void perform(undefined, false, !!unavailable)}><IconFolderOpenOutline16 size={13}/></button>
-        <button type="button" className={css.chevron} disabled={disabled} aria-disabled={disabled || busy} aria-label={tx('agent:desktop.choose')} aria-haspopup="menu" aria-expanded={menu}
+  return <div className="flex items-center min-w-0">
+    <Menu className="inline-flex flex-none self-center" open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus
+      anchor={<div className="group/split inline-flex items-stretch box-border h-[24px] overflow-hidden [border:0.5px_solid_var(--dsw-alias-border-l4)] rounded-[var(--dsw-radius-sm)] [font-family:var(--dsw-font-family)]" data-state={busy ? 'busy' : 'idle'}>
+        <button type="button" className="inline-flex items-center justify-center border-0 bg-none [color:var(--dsw-alias-label-primary)] text-[11px] leading-[16px] whitespace-nowrap cursor-pointer focus-visible:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:cursor-default disabled:opacity-40 group-data-[state=busy]/split:cursor-default gap-[4px] px-[5px] py-[3px]" disabled={disabled} aria-disabled={disabled || busy} aria-label={label} title={tx('agent:desktop.host')} onClick={() => void perform(undefined, false, !!unavailable)}><IconFolderOpenOutline16 size={13}/></button>
+        <button type="button" className="inline-flex items-center justify-center border-0 bg-none text-[11px] leading-[16px] whitespace-nowrap cursor-pointer focus-visible:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:cursor-default disabled:opacity-40 group-data-[state=busy]/split:cursor-default pt-[3px] pr-[4px] pb-[3px] pl-[3px] [border-left:0.5px_solid_var(--dsw-alias-border-l4)] [color:var(--dsw-alias-label-secondary)]" disabled={disabled} aria-disabled={disabled || busy} aria-label={tx('agent:desktop.choose')} aria-haspopup="menu" aria-expanded={menu}
           onClick={() => menu ? setMenu(false) : void perform(undefined, true, !!unavailable)}><IconChevronDownOutline14 size={10}/></button>
       </div>}
       items={catalog?.available ? [...catalog.applications.map(app => ({ id: app.id, label: app.id === 'files' ? tx('agent:desktop.files') : app.label })), { id: 'refresh', label: tx('agent:desktop.retry') }] : []}

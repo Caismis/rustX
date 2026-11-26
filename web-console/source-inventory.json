@@ -2404,26 +2404,6 @@
       "classification": "A"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
-      "destination": "web-console/src/presentation/primitives/StateDot.module.css",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "21c9dca85dffbae6e31da3bfd4c4578739282f9ed3b9a3bbf68b6b12338879de",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "1e0c8640fa25b9e970a240a7dbd9b14c61d6a1475314877daa3751ca5ed235c2",
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/StateDot.tsx",
       "destination": "web-console/src/presentation/primitives/StateDot.tsx",
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
@@ -3497,36 +3477,6 @@
       ]
     },
     {
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
-      "destination": "web-console/src/presentation/agent/TurnProcess.module.css",
-      "upstream_sha256": "2fb00c2a24da7f9946dac118eaa076bd55133ca972d159c8b72d7ffee1ba2292",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Issue #406: Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior. Information-flow spacing, Turn heading and bubble geometry aligned to the referenced revision; native seat wrappers remain rustX-owned.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "0b93abf4158cc1be1a3b07796b385f1b93058c42d20178d393adec3167df6351",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
-          "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
-          "upstream_sha256": "7c86bb575337bb661714c72c1776bcfbf81519b0d8b37f5f432c786b774d5945",
-          "treatment": "Current process-row typography, disabled/hover treatment, chevron geometry and reduced-motion behavior."
-        },
-        {
-          "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "a20eaf9a5f4c6096b74d4a50ec48673f3044f4d5e07d8a57f1fda2225d9633ce",
-          "treatment": "2026-11-03 conversation-flow refresh: current Harness compact process spacing, stable running/tail geometry, settled-only duration headers and numeric typography. Native seat ownership remains unchanged. Disclosure content sizing, keyboard focus and touch-visible inspection are adapted to rustX controls; unchanged reasoning rows use React memoization."
-        }
-      ]
-    },
-    {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-primitives/src/TerminalBlock.tsx",
       "destination": "web-console/src/presentation/primitives/TerminalBlock.tsx",
@@ -4357,11 +4307,10 @@
         "../../workspaces/desktop",
         "../../workspaces/endpoint",
         "../../workspaces/host",
-        "./OpenWorkspace.module.css",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "856366daf47f2bc7e5c39889ee5dafdcf02263e49e9b0e419d394082a3f1c508",
+      "local_sha256": "a252fb48acf05fd8634115cc8778183b29517c612c151b3029f1a174587e3ee3",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-open-in-app/src/client/open-failure-toast.tsx",
@@ -4807,19 +4756,6 @@
         "./highlight"
       ],
       "local_sha256": "99ef74bf388e4b33708c6e12ca4e895ec47ae01fbd47525e0841d1f2de8812d2"
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/CodeCard.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "56cce1937d45385b9cb5574e8f7d89501154a1f8cd47a38da4d9051d7a740ada",
-      "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime.",
-      "destination": "web-console/src/presentation/markdown/CodeToolbar.module.css",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness runtime, slot/store authority and remote transport"
-      ],
-      "retained_dependencies": [],
-      "local_sha256": "14f037846a156e2d7d6e34612afb7a61ba71df78f32f8ecdeda5f25cea10be8b"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/index.ts",
@@ -6028,20 +5964,6 @@
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "local_sha256": "eaadf3b8bf07a5fe29f451136b50aadd58a3e123b0bb3e2c9094654ba9607723",
-      "classification": "A"
-    },
-    {
-      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
-      "destination": "web-console/src/app/agent/ModelRetry.module.css",
-      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
-      "upstream_sha256": "e52ee9df23a65396983f2f22b3186a1e6fd72e4ba4fd0f48d5bee746205870f1",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness retry event protocol and runtime authority"
-      ],
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "8766568f23c06fc93c2531355f35bae5e2850a243f86458d718dc08c66c08222",
       "classification": "A"
     },
     {

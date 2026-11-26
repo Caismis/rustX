@@ -9,7 +9,6 @@ import { EnumSelect } from '../../presentation/primitives/EnumSelect';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { SettingsGroup, SettingsRow } from '../../presentation/settings/SettingsPageShell';
 import { SettingsNotice } from './SettingsFeedback';
-import css from './ConnectionSettings.module.css';
 
 export function ConnectionSettings({ connection, client }: { connection: ConnectionController; client: AppServerClient }) {
   const tx = useTranslation();
@@ -33,7 +32,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     || !!transport.uncertain.filter(item => !item.interactionKey).length;
 
   return (
-    <section className={css.section} aria-label={tx('settings:connection-settings.connection-settings')}>
+    <section className="flex flex-col gap-[20px] min-w-0" aria-label={tx('settings:connection-settings.connection-settings')}>
       <SettingsGroup>
         <SettingsRow
           label={tx('settings:connection-settings.connection')}
@@ -41,7 +40,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
             ? `${tx('settings:connection-settings.active-mode')} ${selection.mode === 'local' ? tx('settings:connection-settings.local-managed-connection') : tx('settings:connection-settings.remote-app-server')}`
             : undefined}
           control={
-            <span className={css.statusPill} data-connection={transport.connection}>
+            <span className="inline-flex items-center gap-[7px] h-[26px] px-[11px] py-0 [border:1px_solid_var(--dsw-alias-border-l2)] rounded-full bg-[var(--dsw-alias-bg-base)] text-[12.5px] font-medium leading-[18px] [color:var(--dsw-alias-label-primary)] data-[connection=connected]:[border-color:color-mix(in_srgb,var(--dsw-alias-state-success-primary)_45%,var(--dsw-alias-border-l2))]" data-connection={transport.connection}>
               <StateDot state={dotState} size={8} />
               <span className="connection-status">{statusText}</span>
             </span>
@@ -49,11 +48,11 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
         />
         <SettingsRow
           vertical
-          label={<label htmlFor={modeId} className={css.fieldLabel}>{tx('settings:connection-settings.mode')}</label>}
+          label={<label htmlFor={modeId} className="inline! p-0! [font:inherit]! [color:inherit]!">{tx('settings:connection-settings.mode')}</label>}
         >
           <EnumSelect
             id={modeId}
-            className={css.select}
+            className="appearance-none pr-[36px]! cursor-pointer"
             label={tx('settings:connection-settings.connection-mode')}
             value={selection.selectedMode}
             onChange={value => { setToken(''); void connection.select(value); }}
@@ -67,11 +66,11 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
           <>
             <SettingsRow
               vertical
-              label={<label htmlFor={endpointId} className={css.fieldLabel}>{tx('settings:connection-settings.websocket-endpoint')}</label>}
+              label={<label htmlFor={endpointId} className="inline! p-0! [font:inherit]! [color:inherit]!">{tx('settings:connection-settings.websocket-endpoint')}</label>}
             >
               <Input
                 id={endpointId}
-                className={css.inputFull}
+                className="w-full"
                 aria-label={tx('settings:connection-settings.websocket-endpoint')}
                 value={endpoint}
                 onChange={event => setEndpoint(event.target.value)}
@@ -79,11 +78,11 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
             </SettingsRow>
             <SettingsRow
               vertical
-              label={<label htmlFor={tokenId} className={css.fieldLabel}>{tx('settings:connection-settings.transport-token')}</label>}
+              label={<label htmlFor={tokenId} className="inline! p-0! [font:inherit]! [color:inherit]!">{tx('settings:connection-settings.transport-token')}</label>}
             >
               <Input
                 id={tokenId}
-                className={css.inputFull}
+                className="w-full"
                 type="password"
                 autoComplete="off"
                 aria-label={tx('settings:connection-settings.transport-token')}
@@ -95,7 +94,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
         ) : (
           <SettingsRow description={tx('settings:connection-settings.the-launcher-supplies-this-connection-automatically')} />
         )}
-        <div className={css.actionRow}>
+        <div className="flex flex-wrap items-center gap-[8px] px-[16px] py-[14px]">
           {selection.selectedMode === 'remote' && (
             <Button variant="primary" size="sm" disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token)}>
               {tx('settings:connection-settings.connect')}
@@ -114,7 +113,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
 
       {hasDiagnostics && (
         <SettingsGroup>
-          <div className={css.diagnosticsCard}>
+          <div className="px-[16px] py-[6px]">
             {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
               <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
               {transport.detached.map((evidence, index) => <section key={index}><h3>{tx('settings:connection.previous-connection', { number: index + 1 })}</h3>
