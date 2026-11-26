@@ -17,7 +17,7 @@ import { message } from '../../locale/translation';
 import { Button } from '../../presentation/primitives/Button';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { IconCheckOutline14, IconChevronDownOutline14, IconChevronLeftOutline14, IconChevronRightOutline14, IconChevronUpOutline14, IconCloseOutline16, IconEditOutline16 } from '../../presentation/primitives/icons';
-import css from '../../presentation/agent/Question.module.css';
+import { questionCss } from '../../presentation/agent/questionCss';
 import { Textarea } from '@/components/ui/textarea';
 
 export function parseRecommendedLabel(label: string) {
@@ -41,9 +41,9 @@ function AnswerField({ variant, value, disabled, autoFocus, onChange, onKeyDown,
 }) {
   // The mirror is an invisible layout ruler, not copy: the trailing newline
   // sizes an empty final line, so it never passes through the locale.
-  return <div className={clsx(css.field, variant === 'inline' ? css.customInline : css.customBlock)}>
-    <div aria-hidden className={css.fieldMirror}>{`${value}\n`}</div>
-    <Textarea unstyled className={css.fieldInput} value={value} disabled={disabled} rows={1} autoFocus={autoFocus} aria-label={placeholder} placeholder={placeholder} onChange={onChange} onKeyDown={onKeyDown} />
+  return <div className={clsx(questionCss.field, variant === 'inline' ? questionCss.customInline : questionCss.customBlock)}>
+    <div aria-hidden className={questionCss.fieldMirror}>{`${value}\n`}</div>
+    <Textarea unstyled className={questionCss.fieldInput} value={value} disabled={disabled} rows={1} autoFocus={autoFocus} aria-label={placeholder} placeholder={placeholder} onChange={onChange} onKeyDown={onKeyDown} />
   </div>;
 }
 /** Composer takeover for one pending native questionnaire. `status` is shown
@@ -79,7 +79,7 @@ export function Questionnaire(props: QuestionnaireProps) {
   const copyToggle = (target: string, className: string) => {
     const expanded = expandedCopy.has(target);
     const label = tx(expanded ? 'interactions:questionnaire.collapse-text' : 'interactions:questionnaire.expand-text');
-    return <button type="button" className={clsx(css.iconButton, css.copyToggle, className)} aria-label={label} title={label}
+    return <button type="button" className={clsx(questionCss.iconButton, questionCss.copyToggle, className)} aria-label={label} title={label}
       aria-controls={target} aria-describedby={target} aria-expanded={expanded} onClick={() => setExpandedCopy(current => {
         const next = new Set(current); if (next.has(target)) next.delete(target); else next.add(target); return next;
       })}>{expanded ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}</button>;
@@ -129,22 +129,22 @@ export function Questionnaire(props: QuestionnaireProps) {
     const values = updateDraft(() => ({ ...emptyDraft(), skipped: true }), last ? index : index + 1);
     if (last) submitDrafts(values);
   };
-  return <div className={css.frame} ref={surface} data-question-record={record !== undefined || undefined}>
-    <section className={clsx(css.card, minimized && css.cardMinimized)} aria-label={tx('interactions:questionnaire.questionnaire')}>
-      <header className={css.header}>
-        <div className={css.headingBlock}>
-          <div className={css.eyebrow}>{form?.eyebrow ?? question.header}</div>
-          {minimized && <h2 className={css.title} id={titleId}>{form?.title ?? question.question}</h2>}
+  return <div className={questionCss.frame} ref={surface} data-question-record={record !== undefined || undefined}>
+    <section className={clsx(questionCss.card, minimized && questionCss.cardMinimized)} aria-label={tx('interactions:questionnaire.questionnaire')}>
+      <header className={questionCss.header}>
+        <div className={questionCss.headingBlock}>
+          <div className={questionCss.eyebrow}>{form?.eyebrow ?? question.header}</div>
+          {minimized && <h2 className={questionCss.title} id={titleId}>{form?.title ?? question.question}</h2>}
         </div>
-        <div className={css.headerActions}>
-          {(status || record !== undefined) && <span className={css.waitStatus}>{record !== undefined ? tx('interactions:questionnaire.recorded') : status}</span>}
-          <button type="button" className={css.iconButton} aria-expanded={!minimized}
+        <div className={questionCss.headerActions}>
+          {(status || record !== undefined) && <span className={questionCss.waitStatus}>{record !== undefined ? tx('interactions:questionnaire.recorded') : status}</span>}
+          <button type="button" className={questionCss.iconButton} aria-expanded={!minimized}
             aria-label={tx(minimized ? 'interactions:questionnaire.maximize' : 'interactions:questionnaire.minimize')}
             title={tx(minimized ? 'interactions:questionnaire.maximize' : 'interactions:questionnaire.minimize')}
             onClick={() => setMinimized(current => !current)}>
             {minimized ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}
           </button>
-          <button type="button" className={css.iconButton} disabled={record === undefined && disabled}
+          <button type="button" className={questionCss.iconButton} disabled={record === undefined && disabled}
             aria-label={tx(record === undefined ? 'interactions:questionnaire.dismiss' : 'interactions:questionnaire.close-record')} title={tx(record === undefined ? 'interactions:questionnaire.dismiss' : 'interactions:questionnaire.close-record')}
             onClick={() => props.record === undefined ? props.onDecline() : props.onClose()}>
             <IconCloseOutline16/>
@@ -152,49 +152,49 @@ export function Questionnaire(props: QuestionnaireProps) {
         </div>
       </header>
       {!minimized && <>
-        <div className={css.body} data-question-scroll>
-          <div className={css.questionTitle} data-expanded={expandedCopy.has(titleId) || undefined}><h2 className={clsx(css.title, css.titlePreview)} id={titleId}>{form?.title ?? question.question}</h2>{copyToggle(titleId, css.questionToggle)}</div>
-          {form && <div className={css.detail}><MarkdownText text={question.question}/></div>}
-          <div className={css.options} role={shape.type === 'single_choice' ? 'radiogroup' : 'group'} aria-labelledby={titleId}>
+        <div className={questionCss.body} data-question-scroll>
+          <div className={questionCss.questionTitle} data-expanded={expandedCopy.has(titleId) || undefined}><h2 className={clsx(questionCss.title, questionCss.titlePreview)} id={titleId}>{form?.title ?? question.question}</h2>{copyToggle(titleId, questionCss.questionToggle)}</div>
+          {form && <div className={questionCss.detail}><MarkdownText text={question.question}/></div>}
+          <div className={questionCss.options} role={shape.type === 'single_choice' ? 'radiogroup' : 'group'} aria-labelledby={titleId}>
             {hasOptions && shape.options.map((option, optionIndex) => {
               const selected = draft.selected.includes(optionIndex);
               const display = parseRecommendedLabel(option.label);
               const descriptionId = `${titleId}-option-${optionIndex}`;
               const hasDescription = !!option.description?.trim();
-              return <div key={optionIndex}><div className={clsx(css.optionRow, !disabled && css.optionRowInteractive, selected && !multi && css.optionSelected)} data-expanded={expandedCopy.has(descriptionId) || undefined}>
-                <button type="button" className={css.option} aria-describedby={hasDescription ? descriptionId : undefined}
+              return <div key={optionIndex}><div className={clsx(questionCss.optionRow, !disabled && questionCss.optionRowInteractive, selected && !multi && questionCss.optionSelected)} data-expanded={expandedCopy.has(descriptionId) || undefined}>
+                <button type="button" className={questionCss.option} aria-describedby={hasDescription ? descriptionId : undefined}
                   role={multi ? 'checkbox' : 'radio'} aria-checked={selected}
                   onKeyDown={event => { if (event.key === 'Enter' && !disabled) { event.preventDefault(); submitDrafts(drafts); } }}
                   aria-label={display.label} disabled={disabled} onClick={() => choose(optionIndex)}>
-                  {multi ? <span className={clsx(css.checkbox, selected && css.checkboxChecked)} aria-hidden>{selected && <IconCheckOutline14 size={12} />}</span>
-                    : <span className={css.number}>{optionIndex + 1}</span>}
-                  <span className={css.optionCopy}><span className={css.optionLine}>
-                    <span className={css.optionLabel}>{display.label}</span>{display.recommended && <span className={css.badge}>{tx('interactions:questionnaire.recommended')}</span>}
-                  </span>{hasDescription && <span className={css.description} id={descriptionId}>{option.description}</span>}</span>
+                  {multi ? <span className={clsx(questionCss.checkbox, selected && questionCss.checkboxChecked)} aria-hidden>{selected && <IconCheckOutline14 size={12} />}</span>
+                    : <span className={questionCss.number}>{optionIndex + 1}</span>}
+                  <span className={questionCss.optionCopy}><span className={questionCss.optionLine}>
+                    <span className={questionCss.optionLabel}>{display.label}</span>{display.recommended && <span className={questionCss.badge}>{tx('interactions:questionnaire.recommended')}</span>}
+                  </span>{hasDescription && <span className={questionCss.description} id={descriptionId}>{option.description}</span>}</span>
                 </button>
-                {hasDescription && copyToggle(descriptionId, css.descriptionToggle)}</div>
-                {option.preview && selected && <div className={css.detail}><MarkdownText text={option.preview}/></div>}
+                {hasDescription && copyToggle(descriptionId, questionCss.descriptionToggle)}</div>
+                {option.preview && selected && <div className={questionCss.detail}><MarkdownText text={option.preview}/></div>}
               </div>;
             })}
             {shape.type === 'boolean' ? <div className="row">
               <Button variant={draft.boolean === true ? 'primary' : 'outline'} disabled={disabled} onClick={() => updateDraft(() => ({ ...emptyDraft(), boolean: true }))}>{tx('interactions:questionnaire.true')}</Button>
               <Button variant={draft.boolean === false ? 'primary' : 'outline'} disabled={disabled} onClick={() => updateDraft(() => ({ ...emptyDraft(), boolean: false }))}>{tx('interactions:questionnaire.false')}</Button>
-            </div> : hasOptions ? shape.allow_custom && (record === undefined || draft.text !== '') && <div className={clsx(css.customRow, draft.text !== '' && css.customRowActive)}>
-              {multi ? <span className={clsx(css.checkbox, draft.text !== '' && css.checkboxChecked)} aria-hidden>{draft.text !== '' && <IconCheckOutline14 size={12} />}</span>
-                : <span className={css.number} aria-hidden><IconEditOutline16 size={12}/></span>}
+            </div> : hasOptions ? shape.allow_custom && (record === undefined || draft.text !== '') && <div className={clsx(questionCss.customRow, draft.text !== '' && questionCss.customRowActive)}>
+              {multi ? <span className={clsx(questionCss.checkbox, draft.text !== '' && questionCss.checkboxChecked)} aria-hidden>{draft.text !== '' && <IconCheckOutline14 size={12} />}</span>
+                : <span className={questionCss.number} aria-hidden><IconEditOutline16 size={12}/></span>}
               <AnswerField variant="inline" value={draft.text} disabled={disabled} placeholder={tx('interactions:questionnaire.placeholder')} onChange={draftText} onKeyDown={continueFromText}/>
             </div> : (record === undefined || draft.text !== '') && <AnswerField key={index} variant="block" autoFocus={!disabled} value={draft.text} disabled={disabled} placeholder={tx('interactions:questionnaire.placeholder')} onChange={draftText} onKeyDown={continueFromText}/>}
           </div>
-          {record !== undefined && draft.skipped && <p className={css.reviewNote}>{tx('tools:ask.skipped')}</p>}
+          {record !== undefined && draft.skipped && <p className={questionCss.reviewNote}>{tx('tools:ask.skipped')}</p>}
         </div>
-        <footer className={css.footer}>
-          <div className={css.pager}>
-            <button type="button" className={css.iconButton} aria-label={tx('interactions:questionnaire.previous-question')} disabled={index === 0} onClick={() => move(index - 1)}><IconChevronLeftOutline14 /></button>
-            <span className={css.progress}>{index + 1} / {questions.length}</span>
-            <button type="button" className={css.iconButton} aria-label={tx('interactions:questionnaire.next-question')} disabled={last} onClick={() => move(index + 1)}><IconChevronRightOutline14 /></button>
+        <footer className={questionCss.footer}>
+          <div className={questionCss.pager}>
+            <button type="button" className={questionCss.iconButton} aria-label={tx('interactions:questionnaire.previous-question')} disabled={index === 0} onClick={() => move(index - 1)}><IconChevronLeftOutline14 /></button>
+            <span className={questionCss.progress}>{index + 1} / {questions.length}</span>
+            <button type="button" className={questionCss.iconButton} aria-label={tx('interactions:questionnaire.next-question')} disabled={last} onClick={() => move(index + 1)}><IconChevronRightOutline14 /></button>
           </div>
-          <div className={css.feedback} role="status">{error}</div>
-          {record === undefined && <div className={css.footerActions}>
+          <div className={questionCss.feedback} role="status">{error}</div>
+          {record === undefined && <div className={questionCss.footerActions}>
             {!form && <Button variant="outline" disabled={disabled} onClick={skip}>{tx('interactions:questionnaire.skip')}</Button>}
             <Button variant="primary" disabled={disabled || !answered(draft)} onClick={continueFlow}>
               {submitting ? tx('interactions:questionnaire.submitting') : last ? tx('interactions:questionnaire.submit') : tx('interactions:questionnaire.next')}
