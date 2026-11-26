@@ -6,7 +6,7 @@ import { Switch } from '../../../presentation/primitives/Switch';
 import { CheckboxList, Selection, nativeTools } from '../../settings/forms/controls';
 import { McpIcon } from '../mcp/McpIcon';
 import { ResourceChoices, ScopedChoices, resourceScopes } from './ScopedChoices';
-import css from './Subagents.module.css';
+import { subagentsCss } from './subagentsCss';
 
 type Tools = NonNullable<NamedAgentProfileDocument['tools']>;
 type Grants = Pick<NamedAgentProfileDocument, 'tools'>;
@@ -25,17 +25,17 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
   const mcp = entries.filter(entry => entry.family === 'mcp');
   const inherited = scope === 'user' && source.target.kind === 'workspace';
 
-  return <section className={css.section} aria-labelledby={heading}>
-    <div className={css.sectionHead}>
+  return <section className={subagentsCss.section} aria-labelledby={heading}>
+    <div className={subagentsCss.sectionHead}>
       <h2 id={heading}>{tx('resources:subagents.tools')}</h2>
       {!!(tools.builtin?.length || sourceSelections.size) && <Button size="sm"
         onClick={() => change({ tools: { builtin: [], sources: {} } })}>{tx('resources:subagents.clear-tools')}</Button>}
     </div>
-    <div className={css.nativeTools}>
+    <div className={subagentsCss.nativeTools}>
       <CheckboxList label={tx('settings:extension-detail.native-tools')} values={nativeTools}
         selected={tools.builtin ?? []} change={builtin => change({ tools: { ...tools, builtin } })} />
     </div>
-    <fieldset className={css.choiceGroup}>
+    <fieldset className={subagentsCss.choiceGroup}>
       <legend>{tx('resources:subagents.mcp-tools')}</legend>
       {scopes.map(owner => {
         // An inherited profile still belongs to Global, even if the current
@@ -44,7 +44,7 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
           : mcp.filter(entry => entry.location.scope === owner).map(entry => entry.name);
         const revision = (owner === 'workspace' ? source.workspace_mcp : source.user_mcp)?.revision;
         return <ScopedChoices key={owner} owner={owner}>
-          {servers.length ? <div className={css.serverList}>
+          {servers.length ? <div className={subagentsCss.serverList}>
             {servers.map(name => <McpServerTools key={JSON.stringify([scope, name, revision])}
               scope={scope} owner={owner} name={name} selected={sourceSelections.get(name)} loadMcpTools={loadMcpTools}
               change={next => {
@@ -88,11 +88,11 @@ function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: 
   const options = new Map<string, { name: string; description?: string }>(discovered?.map(tool => [tool.name, tool]));
   for (const tool of exact) if (!options.has(tool)) options.set(tool, { name: tool });
 
-  return <div className={css.toolServer}>
-    <div className={css.toolServerHead}>
+  return <div className={subagentsCss.toolServer}>
+    <div className={subagentsCss.toolServerHead}>
       <McpIcon />
       <strong>{name}</strong>
-      <div className={css.toolSwitch}>
+      <div className={subagentsCss.toolSwitch}>
         <span>{tx('resources:subagents.all-mcp-tools')}</span>
         <Switch label={tx('resources:subagents.all-mcp-tools-for', { p0: name })} checked={all}
           onChange={checked => change(checked ? 'all' : undefined)} />
@@ -100,12 +100,12 @@ function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: 
     </div>
     {options.size > 0 && <ResourceChoices label={tx('resources:subagents.mcp-tool-list', { p0: name })}
       options={[...options.values()]} selected={exact} change={checked => change(checked.length ? checked : undefined)} />}
-    {failed ? <div className={css.toolStatus}>
+    {failed ? <div className={subagentsCss.toolStatus}>
       <p role="status">{tx('resources:subagents.mcp-tools-failed')}</p>
       <Button size="sm" disabled={!loadMcpTools} aria-label={tx('resources:subagents.retry-mcp-tools-for', { p0: name })}
         onClick={() => setAttempt(value => value + 1)}>{tx('resources:subagents.retry-mcp-tools')}</Button>
-    </div> : !current && loadMcpTools ? <div className={css.toolStatus}><p role="status">{tx('resources:subagents.loading-mcp-tools')}</p></div>
-      : discovered?.length === 0 && <div className={css.toolStatus}><p>{tx('resources:subagents.mcp-empty')}</p></div>}
+    </div> : !current && loadMcpTools ? <div className={subagentsCss.toolStatus}><p role="status">{tx('resources:subagents.loading-mcp-tools')}</p></div>
+      : discovered?.length === 0 && <div className={subagentsCss.toolStatus}><p>{tx('resources:subagents.mcp-empty')}</p></div>}
   </div>;
 }
 

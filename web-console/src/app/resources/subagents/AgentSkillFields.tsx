@@ -5,7 +5,7 @@ import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { useSkillCatalog } from '../skills/useSkillCatalog';
 import { ResourceChoices, ScopedChoices, resourceScopes } from './ScopedChoices';
-import css from './Subagents.module.css';
+import { subagentsCss } from './subagentsCss';
 
 export function AgentSkillFields({ client, source, scope, active, value, change }: {
   client?: AppServerClient; source: SourceSettings; scope: SourceScope; active: boolean;
@@ -19,10 +19,10 @@ export function AgentSkillFields({ client, source, scope, active, value, change 
   const selected = value === 'all' ? skills.filter(skill => skill.enabled_by_default).map(skill => skill.catalog.name) : value;
   const names = new Set(skills.map(skill => skill.catalog.name));
   const unavailable = catalog && !catalog.error ? selected.filter(name => !names.has(name)) : [];
-  return <div className={css.choiceGroup} role="group" aria-labelledby={heading}>
-    <div className={css.sectionHead}>
+  return <div className={subagentsCss.choiceGroup} role="group" aria-labelledby={heading}>
+    <div className={subagentsCss.sectionHead}>
       <h3 id={heading}>{tx('settings:extension-detail.skill-prompt-visibility')}</h3>
-      <div className={css.toolSwitch}>
+      <div className={subagentsCss.toolSwitch}>
         <span>{tx('resources:subagents.all-skills')}</span>
         <Switch label={tx('resources:subagents.all-skills')} checked={value === 'all'}
           onChange={checked => change(checked ? 'all' : [])} />
@@ -37,8 +37,8 @@ export function AgentSkillFields({ client, source, scope, active, value, change 
             options={options} selected={selected} change={change} /> : <p>{tx('resources:subagents.no-skills')}</p>}
         </ScopedChoices>;
       })}
-    {!!unavailable.length && <div className={css.scopedChoices}>
-      <span className={css.scopeHeading}>{tx('resources:subagents.unavailable-skills')}</span>
+    {!!unavailable.length && <div className={subagentsCss.scopedChoices}>
+      <span className={subagentsCss.scopeHeading}>{tx('resources:subagents.unavailable-skills')}</span>
       <ResourceChoices label={tx('resources:subagents.unavailable-skills')} options={unavailable.map(name => ({ name }))}
         selected={selected} change={change} />
     </div>}

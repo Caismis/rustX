@@ -17,7 +17,7 @@ import { SettingsScopeMenu } from '../../settings/SettingsScopeMenu';
 import type { SettingsTarget } from '../../settings/projection';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { extensionEntries } from '../shared/inventory';
-import css from './Subagents.module.css';
+import { subagentsCss } from './subagentsCss';
 import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
 import { AgentSkillFields } from './AgentSkillFields';
 import { Input as TextInput } from '@/presentation/primitives/Input';
@@ -139,7 +139,7 @@ export function AgentEditor({
   );
 
   const scopeControl = (
-    <div className={css.scope}>
+    <div className={subagentsCss.scope}>
       <span>{tx('settings:catalog.scope')}</span>
       {creating && onScopeChange ? (
         <SettingsScopeMenu
@@ -149,7 +149,7 @@ export function AgentEditor({
           onSelect={next => { unit.discard(); onScopeChange(next, value); }}
         />
       ) : (
-        <span className={css.scopeValue}>
+        <span className={subagentsCss.scopeValue}>
           {unit.definition === 'inherited' || target.kind === 'user' ? tx('resources:scope.global') : target.displayName}
         </span>
       )}
@@ -169,26 +169,26 @@ export function AgentEditor({
       toolbar={scopeControl}
       footer={<PageTransactionFooter cancelAlwaysEnabled={creating} leading={footerLeading} />}
     >
-      <div className={css.editor}>
+      <div className={subagentsCss.editor}>
         <UnitReset.Provider value={unit.resets}>
           <form
             ref={form}
             tabIndex={-1}
             aria-label={formName}
             aria-busy={busy}
-            className={clsx(settings.settings, css.form)}
+            className={clsx(settings.settings, subagentsCss.form)}
             data-definition={unit.definition}
             data-authored-value={unit.authoredPresent ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
             onSubmit={event => event.preventDefault()}
           >
             {(unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} />}
             <SettingsNotice text={current?.source.diagnostic ?? undefined} />
-            <fieldset className={css.fields} disabled={!unit.writable}>
-              <section className={css.section} aria-labelledby={`${sections}-profile`}>
-                <div className={css.sectionHead}>
+            <fieldset className={subagentsCss.fields} disabled={!unit.writable}>
+              <section className={subagentsCss.section} aria-labelledby={`${sections}-profile`}>
+                <div className={subagentsCss.sectionHead}>
                   <h2 id={`${sections}-profile`}>{tx('resources:subagents.profile')}</h2>
                 </div>
-                <div className={css.identity}>
+                <div className={subagentsCss.identity}>
                   <div>
                     <label>
                       {tx('resources:subagents.name')}
@@ -202,7 +202,7 @@ export function AgentEditor({
                         onChange={event => update({ name: event.target.value })}
                       />
                     </label>
-                    {nameError && <span id={validationId} className={css.validation}>{nameError}</span>}
+                    {nameError && <span id={validationId} className={subagentsCss.validation}>{nameError}</span>}
                   </div>
                   <Choice
                     label={tx('settings:models-page.model')}
@@ -229,11 +229,11 @@ export function AgentEditor({
                   {tx('settings:extension-detail.description')}
                   <TextInput value={value.description ?? ''} onChange={event => update({ description: event.target.value })} />
                 </label>
-                <div className={css.prompt}>
+                <div className={subagentsCss.prompt}>
                   <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
                   <Textarea id={promptId} rows={4} value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
                 </div>
-                <div className={css.settingRow}>
+                <div className={subagentsCss.settingRow}>
                   <span>{tx('resources:subagents.inject-guidance')}</span>
                   <Switch
                     label={tx('resources:subagents.inject-guidance')}
@@ -249,7 +249,7 @@ export function AgentEditor({
                 change={update}
                 loadMcpTools={discover && unit.writable ? loadMcpTools : undefined}
               />
-              <section className={css.section} aria-labelledby={`${sections}-advanced`}>
+              <section className={subagentsCss.section} aria-labelledby={`${sections}-advanced`}>
                 <h2 id={`${sections}-advanced`}>{tx('settings:agent-page.advanced-options')}</h2>
                 <AgentSkillFields
                   client={client}
@@ -261,16 +261,16 @@ export function AgentEditor({
                 />
                 {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
                 <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
-                <label className={css.timeout}>
+                <label className={subagentsCss.timeout}>
                   {tx('settings:extension-detail.child-timeout-ms')}
                   <TextInput type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
                 </label>
-                <fieldset className={css.featureGroup}>
+                <fieldset className={subagentsCss.featureGroup}>
                   <legend>{tx('settings:extension-detail.extensions-default-off')}</legend>
                   {(['todo', 'agent_status'] as const).map(id => {
                     const label = tx(`resources:subagents.feature-${id}`);
                     return (
-                      <div className={css.settingRow} key={id}>
+                      <div className={subagentsCss.settingRow} key={id}>
                         <span>{label}</span>
                         <Switch
                           label={label}
