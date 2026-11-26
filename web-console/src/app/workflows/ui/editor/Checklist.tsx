@@ -6,7 +6,7 @@ import { IconChecklistOutline14, IconCloseOutline16 } from '../../../../presenta
 import type { WorkflowDependencyFailure } from '../../../../../../protocol/app-server/v80';
 import type { ChecklistItem, ChecklistMessage } from '../../document/checklist';
 import { IconArrowLeft, IconWorkflow, KindIcon } from '../icons';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 
 /** Dify's checklist: the header button counts the nodes with problems, and
  * its popover lists each with what is wrong; choosing one goes to it. It
@@ -23,29 +23,29 @@ export function Checklist({ items, onGo }: { items: readonly ChecklistItem[]; on
   const title = (item: ChecklistItem) => item.node === undefined ? tx('workflows:checklist.workflow')
     : item.type === 'start' ? item.title || tx(item.block.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : item.title || item.node;
   return <Popover open={open} onOpenChange={next => { if (next) going.current = false; setOpen(next); }}>
-    <PopoverTrigger className={css.checklistButton} aria-label={items.length ? `${label} (${items.length})` : label} title={label}>
-      <IconChecklistOutline14 />{!!items.length && <span className={css.checklistCount} aria-hidden>{items.length}</span>}
+    <PopoverTrigger className={editorCss.checklistButton} aria-label={items.length ? `${label} (${items.length})` : label} title={label}>
+      <IconChecklistOutline14 />{!!items.length && <span className={editorCss.checklistCount} aria-hidden>{items.length}</span>}
     </PopoverTrigger>
-    <PopoverPopup side="bottom" align="end" sideOffset={10} className={css.checklist} finalFocus={() => !going.current}>
-      <div className={css.checklistHead}>
-        <PopoverTitle className={css.checklistTitle}>{label}{!!items.length && `(${items.length})`}</PopoverTitle>
-        <PopoverClose className={css.iconButton} aria-label={tx('workflows:dialog.close')}><IconCloseOutline16 /></PopoverClose>
+    <PopoverPopup side="bottom" align="end" sideOffset={10} className={editorCss.checklist} finalFocus={() => !going.current}>
+      <div className={editorCss.checklistHead}>
+        <PopoverTitle className={editorCss.checklistTitle}>{label}{!!items.length && `(${items.length})`}</PopoverTitle>
+        <PopoverClose className={editorCss.iconButton} aria-label={tx('workflows:dialog.close')}><IconCloseOutline16 /></PopoverClose>
       </div>
       {items.length ? <>
-        <PopoverDescription className={css.checklistDescription}>{tx('workflows:checklist.description')}</PopoverDescription>
-        <ul className={css.checklistItems}>{items.map(item => <li key={`${JSON.stringify(item.block)}:${item.node ?? ''}`} className={css.checklistNode}>
-          <div className={css.checklistNodeHead}>
-            <span className={clsx(css.checklistIcon, item.type && item.type !== 'start' ? css[`kind_${item.type}`] : css.startIcon)}>
+        <PopoverDescription className={editorCss.checklistDescription}>{tx('workflows:checklist.description')}</PopoverDescription>
+        <ul className={editorCss.checklistItems}>{items.map(item => <li key={`${JSON.stringify(item.block)}:${item.node ?? ''}`} className={editorCss.checklistNode}>
+          <div className={editorCss.checklistNodeHead}>
+            <span className={clsx(editorCss.checklistIcon, item.type && item.type !== 'start' ? editorCss[`kind_${item.type}`] : editorCss.startIcon)}>
               {item.type ? <KindIcon kind={item.type} size={13} /> : <IconWorkflow size={13} />}
             </span>
-            <span className={css.checklistNodeTitle}>{title(item)}</span>
+            <span className={editorCss.checklistNodeTitle}>{title(item)}</span>
           </div>
-          {item.messages.map((message, index) => <button key={index} type="button" className={css.checklistMessage} title={text(message)} onClick={() => { going.current = true; setOpen(false); onGo(item, message); }}>
-            <span className={css.checklistDot} aria-hidden /><span className={css.checklistText}>{text(message)}</span>
-            <span className={css.checklistGo}>{tx('workflows:checklist.go')}<IconArrowLeft size={13} className={css.checklistArrow} /></span>
+          {item.messages.map((message, index) => <button key={index} type="button" className={editorCss.checklistMessage} title={text(message)} onClick={() => { going.current = true; setOpen(false); onGo(item, message); }}>
+            <span className={editorCss.checklistDot} aria-hidden /><span className={editorCss.checklistText}>{text(message)}</span>
+            <span className={editorCss.checklistGo}>{tx('workflows:checklist.go')}<IconArrowLeft size={13} className={editorCss.checklistArrow} /></span>
           </button>)}
         </li>)}</ul>
-      </> : <p className={css.checklistResolved}><IconChecklistOutline14 />{tx('workflows:checklist.resolved')}</p>}
+      </> : <p className={editorCss.checklistResolved}><IconChecklistOutline14 />{tx('workflows:checklist.resolved')}</p>}
     </PopoverPopup>
   </Popover>;
 }

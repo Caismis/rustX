@@ -14,7 +14,7 @@ import { BlockForm } from './forms/BlockForm';
 import { NodePanel } from './panels/NodePanel';
 import { DraftTextField } from './forms/fields';
 import { readInspectorWidth, writeInspectorWidth } from './view-store';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -58,9 +58,9 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
   let head: ReactNode, body: ReactNode, description: ReactNode;
   if (selection.kind === 'node' && node && owner) {
     const id = selection.id, metadata = nodePresentation(document, path, id);
-    head = <div className={css.inspectTitle}>
-      <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={nodeIconKind(node)} size={17} /></span>
-      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
+    head = <div className={editorCss.inspectTitle}>
+      <span className={clsx(editorCss.nodeIcon, editorCss[`kind_${node.type}`])}><KindIcon kind={nodeIconKind(node)} size={17} /></span>
+      <span className={editorCss.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
     </div>;
     description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
     // As Dify: duplicate and delete live on the canvas menu, not the panel.
@@ -71,28 +71,28 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     const entryField = (field: 'title' | 'description'): FieldAddress => ({ block: path, node: startId, path: [field], role: 'value', domain: { kind: 'node_presentation' } });
     head = selection.kind === 'start'
       // As a node: the title is an inline heading that reverts to its default when cleared.
-      ? <div className={css.inspectTitle}><span className={clsx(css.nodeIcon, css.startIcon)}><IconEntry size={17} /></span><span className={css.nodeText}>
+      ? <div className={editorCss.inspectTitle}><span className={clsx(editorCss.nodeIcon, editorCss.startIcon)}><IconEntry size={17} /></span><span className={editorCss.nodeText}>
         <DraftTextField compact label={tx('workflows:panel.title')} placeholder={startTitle} value={entry?.title || startTitle} address={entryField('title')} /></span></div>
-      : <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
+      : <div className={editorCss.inspectTitle}><span className={editorCss.nodeIcon}><IconBlock size={17} /></span><span className={editorCss.nodeText}><span className={editorCss.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
     if (selection.kind === 'start') description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />;
     // As Dify's Loop and Iteration Start: a body has no input of its own; it
     // reads the variables around it.
-    body = owner && (path.length ? <p className={css.note}>{tx('workflows:inspector.body-start')}</p>
+    body = owner && (path.length ? <p className={editorCss.note}>{tx('workflows:inspector.body-start')}</p>
       : <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} tools={vocabulary?.builtin_tools ?? []} start={selection.kind === 'start'} />);
   }
-  return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
+  return <aside ref={root} className={editorCss.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
     onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [contenteditable="true"], [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
-    <div className={css.inspectorResize} role="separator" aria-label={tx('workflows:panel.resize')} aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0}
+    <div className={editorCss.inspectorResize} role="separator" aria-label={tx('workflows:panel.resize')} aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0}
       onPointerDown={event => { event.preventDefault(); resize.current = { x: event.clientX, width }; setResizing(true); }}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); changeWidth(width + (event.key === 'ArrowLeft' ? 20 : -20)); } }} />
     {/* As Dify's node panel: the description sits under the title, in the header. */}
-    <header className={css.inspectHead}>
-      <div className={css.inspectHeadRow}>{head}<button type="button" className={css.iconButton} aria-label={tx('workflows:inspector.close')} onClick={() => onSelect(undefined)}><IconCloseOutline16 /></button></div>
-      {description && <div className={css.inspectDescription} key={selection.kind === 'node' ? `node:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>{description}</div>}
+    <header className={editorCss.inspectHead}>
+      <div className={editorCss.inspectHeadRow}>{head}<button type="button" className={editorCss.iconButton} aria-label={tx('workflows:inspector.close')} onClick={() => onSelect(undefined)}><IconCloseOutline16 /></button></div>
+      {description && <div className={editorCss.inspectDescription} key={selection.kind === 'node' ? `node:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>{description}</div>}
     </header>
-    {(selection.kind === 'start' || selection.kind === 'node' && node?.type !== 'branch') && <div className={css.inspectTabs}><span>{tx('workflows:branch.settings')}</span></div>}
-    <div data-workflow-inspector-body className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
-      {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
+    {(selection.kind === 'start' || selection.kind === 'node' && node?.type !== 'branch') && <div className={editorCss.inspectTabs}><span>{tx('workflows:branch.settings')}</span></div>}
+    <div data-workflow-inspector-body className={clsx(editorCss.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
+      {rejection && <p role="alert" className={editorCss.hintError}>{rejection}</p>}{body}
     </div>
   </aside>;
 }

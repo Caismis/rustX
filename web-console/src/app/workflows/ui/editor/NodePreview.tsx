@@ -2,7 +2,7 @@ import type { Translate } from '../../../../locale/translation';
 import type { NodeDefinition, Value } from '../../document/model';
 import { predicateText, promptText, toolText, valueText } from './summary';
 import { VariableLabel, type VariableSources } from './VariableLabel';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 
 type PreviewNode = Exclude<NodeDefinition, { type: 'start' | 'branch' | 'review' }>;
 interface Row { label: string; value: string; reference?: readonly string[]; badge?: string }
@@ -53,9 +53,9 @@ function rows(tx: Translate, node: PreviewNode): Row[] {
 
 /** Dify-style compact configuration rows, derived directly from native nodes. */
 export function NodePreview({ tx, node, sources }: { tx: Translate; node: PreviewNode; sources: VariableSources }) {
-  return <div className={css.nodePreview} data-node-preview>{rows(tx, node).map((row, index) => <div className={css.nodePreviewRow} key={`${row.label}:${index}`} title={row.label ? `${row.label}: ${row.value}` : row.value}>
-    {row.label && <span className={css.nodePreviewLabel}>{row.label}</span>}
-    {row.reference ? <VariableLabel tx={tx} sources={sources} path={row.reference} className={css.nodePreviewReference} /> : <span className={css.nodePreviewValue}>{row.value}</span>}
-    {row.badge && <span className={css.nodePreviewBadge}>{row.badge}</span>}
+  return <div className={editorCss.nodePreview} data-node-preview>{rows(tx, node).map((row, index) => <div className={editorCss.nodePreviewRow} key={`${row.label}:${index}`} title={row.label ? `${row.label}: ${row.value}` : row.value}>
+    {row.label && <span className={editorCss.nodePreviewLabel}>{row.label}</span>}
+    {row.reference ? <VariableLabel tx={tx} sources={sources} path={row.reference} className={editorCss.nodePreviewReference} /> : <span className={editorCss.nodePreviewValue}>{row.value}</span>}
+    {row.badge && <span className={editorCss.nodePreviewBadge}>{row.badge}</span>}
   </div>)}</div>;
 }

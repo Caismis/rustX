@@ -7,17 +7,17 @@ import { useFieldDraft } from './drafts';
 import { readJson } from '../../../../../../shared/json-numbers';
 import { IconQuestionOutline14 } from '../../../../../presentation/primitives/icons';
 import { Tooltip } from '../../../../../presentation/primitives/Tooltip';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { EnumSelect } from '@/presentation/primitives/EnumSelect';
 import { Textarea } from '@/components/ui/textarea';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {
   const id = useId(), hintId = `${id}-hint`;
-  return <div className={css.field}>
-    <label htmlFor={id} className={css.fieldLabel}>{label}</label>
+  return <div className={editorCss.field}>
+    <label htmlFor={id} className={editorCss.fieldLabel}>{label}</label>
     {children(id, hint || error ? hintId : undefined)}
-    {(error || hint) && <small id={hintId} className={clsx(css.hint, error && css.hintError)} role={error ? 'alert' : undefined}>{error ?? hint}</small>}
+    {(error || hint) && <small id={hintId} className={clsx(editorCss.hint, error && editorCss.hintError)} role={error ? 'alert' : undefined}>{error ?? hint}</small>}
   </div>;
 }
 
@@ -31,9 +31,9 @@ export function TextField({ label, hint, value, field, onChange, multiline, mono
   const [session, setSession] = useState(0);
   const key = field;
   return <Field label={label} hint={hint}>{(id, describedBy) => multiline
-    ? <Textarea id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(css.input, css.textarea, mono && css.mono)} value={value} placeholder={placeholder}
+    ? <Textarea id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(editorCss.input, editorCss.textarea, mono && editorCss.mono)} value={value} placeholder={placeholder}
       onFocus={() => setSession(value => value + 1)} onChange={event => onChange(event.target.value, `${key}:${session}`)} />
-    : <TextInput id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(css.input, mono && css.mono)} value={value} placeholder={placeholder} list={list} spellCheck={false}
+    : <TextInput id={id} data-workflow-field={field} aria-describedby={describedBy} aria-invalid={invalid || undefined} className={clsx(editorCss.input, mono && editorCss.mono)} value={value} placeholder={placeholder} list={list} spellCheck={false}
       onFocus={() => setSession(value => value + 1)} onChange={event => onChange(event.target.value, `${key}:${session}`)} />}
   </Field>;
 }
@@ -61,9 +61,9 @@ export function useFieldError() {
 export function ConflictActions({ field }: { field: { conflict?: 'changed' | 'missing'; keep: () => void; reset: () => void } }) {
   const tx = useTranslation();
   if (!field.conflict) return null;
-  return <div className={css.inline}>
-    {field.conflict === 'changed' && <button type="button" className={css.smallButton} onClick={field.keep}>{tx('workflows:inspector.field-keep')}</button>}
-    <button type="button" className={css.smallButton} onClick={field.reset}>{tx(field.conflict === 'changed' ? 'workflows:inspector.field-current' : 'workflows:inspector.field-discard')}</button>
+  return <div className={editorCss.inline}>
+    {field.conflict === 'changed' && <button type="button" className={editorCss.smallButton} onClick={field.keep}>{tx('workflows:inspector.field-keep')}</button>}
+    <button type="button" className={editorCss.smallButton} onClick={field.reset}>{tx(field.conflict === 'changed' ? 'workflows:inspector.field-current' : 'workflows:inspector.field-discard')}</button>
   </div>;
 }
 
@@ -88,9 +88,9 @@ export function JsonField({ label, hint, value, rows = 6, line, address }: { lab
   const describe = useFieldError();
   const field = useFieldDraft({ address, canonical: JSON.stringify(value, null, 2) ?? 'null', command: jsonCommand(address) });
   return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <>
-    {line ? <TextInput id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.mono)} value={field.text} spellCheck={false}
+    {line ? <TextInput id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(editorCss.input, editorCss.mono)} value={field.text} spellCheck={false}
       onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
-    : <Textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
+    : <Textarea id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-invalid={!!field.error || undefined} className={clsx(editorCss.input, editorCss.textarea, editorCss.mono)} rows={rows} value={field.text} spellCheck={false}
       onChange={event => field.change(event.target.value)} onBlur={field.apply}
       onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); field.apply(); } }} />}
     <ConflictActions field={field} />
@@ -111,9 +111,9 @@ export function DraftTextField({ label, value, address, multiline, compact, bare
   let text = field.text;
   try { const parsed: unknown = JSON.parse(field.text); if (typeof parsed === 'string') text = parsed; } catch { /* Kept detached text remains inspectable. */ }
   const control = (id?: string, describedBy?: string) => multiline
-    ? <Textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} unstyled className={bare ? css.bareTextarea : clsx(css.input, css.textarea)} rows={bare ? 1 : undefined} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
-    : <TextInput unstyled id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? css.titleInput : css.input} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.currentTarget.blur(); field.apply(); } }} />;
-  return compact ? <>{control()}{field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></> : <Field label={label} error={describe(field.error)}>{(id, describedBy) => <>{control(id, describedBy)}<ConflictActions field={field} /></>}</Field>;
+    ? <Textarea id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} unstyled className={bare ? editorCss.bareTextarea : clsx(editorCss.input, editorCss.textarea)} rows={bare ? 1 : undefined} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} />
+    : <TextInput unstyled id={id} data-workflow-field={encodeField(address)} aria-label={compact ? label : undefined} aria-describedby={describedBy} className={compact ? editorCss.titleInput : editorCss.input} placeholder={placeholder} value={text} aria-invalid={!!field.error || undefined} onChange={event => field.change(JSON.stringify(event.target.value))} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.currentTarget.blur(); field.apply(); } }} />;
+  return compact ? <>{control()}{field.error && <small className={editorCss.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></> : <Field label={label} error={describe(field.error)}>{(id, describedBy) => <>{control(id, describedBy)}<ConflictActions field={field} /></>}</Field>;
 }
 
 /** Incomplete or out-of-range numbers remain drafts across panel changes. */
@@ -128,7 +128,7 @@ export function NumberField({ label, value, address, min = 0, max = Number.MAX_S
     if (number < min || number > max) return { status: 'rejected', error: { kind: 'range', min, max } };
     return { status: 'applied', document: setField(document, location, number) };
   } });
-  return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <><TextInput id={id} data-workflow-field={encodeField(location)} className={css.input} type="text" inputMode="numeric" value={field.text} aria-describedby={describedBy} aria-invalid={!!field.error || undefined}
+  return <Field label={label} hint={hint} error={describe(field.error)}>{(id, describedBy) => <><TextInput id={id} data-workflow-field={encodeField(location)} className={editorCss.input} type="text" inputMode="numeric" value={field.text} aria-describedby={describedBy} aria-invalid={!!field.error || undefined}
     onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} /><ConflictActions field={field} /></>}</Field>;
 }
 
@@ -152,29 +152,29 @@ export function KeyField({ label, hint, value, address, rename, onRenamed, error
     },
   });
   const shown = describe(field.error) ?? error;
-  const input = (id?: string, describedBy?: string) => <TextInput id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-label={compact} aria-invalid={!!field.error || !!error || undefined} className={clsx(css.input, css.mono, compact && css.branchKey)} value={field.text} spellCheck={false}
+  const input = (id?: string, describedBy?: string) => <TextInput id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-label={compact} aria-invalid={!!field.error || !!error || undefined} className={clsx(editorCss.input, editorCss.mono, compact && editorCss.branchKey)} value={field.text} spellCheck={false}
     onChange={event => field.change(event.target.value)} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />;
-  if (compact) return <span className={css.keyField}>{input()}{shown && <small className={clsx(css.hint, css.hintError)} role="alert">{shown}</small>}<ConflictActions field={field} /></span>;
-  return <Field label={label} hint={hint} error={shown}>{(id, describedBy) => <><div className={css.inline}>
+  if (compact) return <span className={editorCss.keyField}>{input()}{shown && <small className={clsx(editorCss.hint, editorCss.hintError)} role="alert">{shown}</small>}<ConflictActions field={field} /></span>;
+  return <Field label={label} hint={hint} error={shown}>{(id, describedBy) => <><div className={editorCss.inline}>
     {input(id, describedBy)}
-    <button type="button" className={css.smallButton} disabled={!field.pending} onClick={field.apply}>{tx('workflows:inspector.rename')}</button>
+    <button type="button" className={editorCss.smallButton} disabled={!field.pending} onClick={field.apply}>{tx('workflows:inspector.rename')}</button>
   </div><ConflictActions field={field} /></>}</Field>;
 }
 
 export function SelectField<T extends string>({ label, value, options, onChange, hint, disabled, field }: { field?: string; label: string; value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void; hint?: ReactNode; disabled?: boolean }) {
-  return <Field label={label} hint={hint}>{(id, describedBy) => <EnumSelect id={id} data-workflow-field={field} aria-describedby={describedBy} className={css.input} disabled={disabled} label={label} value={value} options={options} onChange={onChange} />}</Field>;
+  return <Field label={label} hint={hint}>{(id, describedBy) => <EnumSelect id={id} data-workflow-field={field} aria-describedby={describedBy} className={editorCss.input} disabled={disabled} label={label} value={value} options={options} onChange={onChange} />}</Field>;
 }
 
 /** A panel group. As Dify, `help` explains it in a "?" tooltip. */
 export function Section({ title, help, aside, children }: { title: string; help?: string; aside?: ReactNode; children: ReactNode }) {
-  return <section className={css.group}>
-    <h3 className={css.groupHeading}>{help ? <span className={css.headingText}>{title}<HelpTip text={help} /></span> : title}{aside !== undefined && <small>{aside}</small>}</h3>
+  return <section className={editorCss.group}>
+    <h3 className={editorCss.groupHeading}>{help ? <span className={editorCss.headingText}>{title}<HelpTip text={help} /></span> : title}{aside !== undefined && <small>{aside}</small>}</h3>
     {children}
   </section>;
 }
 
 /** Dify's "?" beside a heading. */
 export function HelpTip({ text }: { text: string }) {
-  return <Tooltip label={text} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={text}><IconQuestionOutline14 /></span></Tooltip>;
+  return <Tooltip label={text} side="bottom" maxWidth={240}><span className={editorCss.promptHint} tabIndex={0} aria-label={text}><IconQuestionOutline14 /></span></Tooltip>;
 }

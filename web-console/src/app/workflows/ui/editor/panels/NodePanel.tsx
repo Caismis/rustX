@@ -13,7 +13,7 @@ import { AggregatePanel } from './AggregatePanel';
 import { ListPanel } from './ListPanel';
 import { type PanelProps } from './shared';
 import { NextStep } from '../NextStep';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 
 const PANELS: Record<NodeKind, ComponentType<PanelProps>> = { code: CodePanel, agent: AgentPanel, model: ModelPanel, tool: ToolPanel, branch: BranchPanel, loop: LoopPanel,
   template:TemplatePanel,list:ListPanel,classifier:ClassifierPanel,aggregate:AggregatePanel,
@@ -23,5 +23,5 @@ export function NodePanel(props: PanelProps) {
   if (!node || node.type === 'start') return null;
   const Panel = PANELS[node.type];
   // As Dify's End, Return is the last node: nothing follows it.
-  return <div className={css.nodeSettings}><Panel {...props} />{node.type !== 'return' && <NextStep document={props.document} block={props.block} source={props.id} tools={props.vocabulary?.builtin_tools ?? []} edit={props.edit} onSelect={props.onSelect} />}</div>;
+  return <div className={editorCss.nodeSettings}><Panel {...props} />{node.type !== 'return' && <NextStep document={props.document} block={props.block} source={props.id} tools={props.vocabulary?.builtin_tools ?? []} edit={props.edit} onSelect={props.onSelect} />}</div>;
 }

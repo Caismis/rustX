@@ -12,7 +12,7 @@ import { FIELD_TYPES } from '../../../document/inputField';
 import type { WorkflowDocument } from '../../../document/model';
 import { JsonField } from './fields';
 import { FieldDialog, FieldTypeIcon } from './FieldDialog';
-import editorCss from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { inputFieldsCss } from './inputFieldsCss';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;

@@ -19,7 +19,7 @@ import { ModelSelection } from '../forms/ModelSelection';
 import { ConflictActions, DraftTextField, JsonField, useFieldError } from '../forms/fields';
 import { useNode, type PanelProps } from './shared';
 import { useFieldDraft } from '../forms/drafts';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 const StructuredOutputDialog = lazy(() => import('../forms/structured-output/StructuredOutputDialog').then(module => ({ default: module.StructuredOutputDialog })));
@@ -28,11 +28,11 @@ export function ModelPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'model');
   return <>
     {/* As Dify's LLM panel: the model and its prompt messages form one block. */}
-    <section className={css.group}>
+    <section className={editorCss.group}>
       <ModelSelection key={encodeField(at('model'))} policy={node.model ?? { mode: 'session' }} address={at('model')} port={props.port} onChange={(model, field) => update(current => ({ ...current, model }), at('model', ...field))} />
-      <div className={css.promptMessages}>
+      <div className={editorCss.promptMessages}>
         {node.messages.map((message, index) => <PromptMessage key={index} {...props} index={index} message={message} />)}
-        <button type="button" className={css.promptAddMessage} disabled={node.messages.length >= 32} onClick={() => update(current => {
+        <button type="button" className={editorCss.promptAddMessage} disabled={node.messages.length >= 32} onClick={() => update(current => {
           // As Dify: a new turn answers the last one.
           const last = current.messages.at(-1);
           return { ...current, messages: [...current.messages, { role: last?.role === 'user' ? 'assistant' : 'user', content: [] }] };
@@ -51,22 +51,22 @@ function ModelOutputs(props: PanelProps) {
   const [open, setOpen] = useState(true), [configuring, setConfiguring] = useState(false);
   const schema = node.output.type === 'json_schema' ? node.output.schema : undefined;
   const fixed = [['text', 'string', 'workflows:prompt.output-text'], ['reasoning_content', 'string', 'workflows:prompt.output-reasoning'], ['usage', 'object', 'workflows:prompt.output-usage']] as const;
-  return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
-    <h3 className={css.groupHeading}>
-      <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
-      <span className={css.structuredToggle}>
+  return <section className={editorCss.group} aria-label={tx('workflows:prompt.output-variables')}>
+    <h3 className={editorCss.groupHeading}>
+      <button type="button" className={editorCss.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
+      <span className={editorCss.structuredToggle}>
         {tx('workflows:prompt.structured')}
-        <Tooltip label={tx('workflows:prompt.structured-hint')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:prompt.structured-hint')}><IconQuestionOutline14 /></span></Tooltip>
+        <Tooltip label={tx('workflows:prompt.structured-hint')} side="bottom" maxWidth={240}><span className={editorCss.promptHint} tabIndex={0} aria-label={tx('workflows:prompt.structured-hint')}><IconQuestionOutline14 /></span></Tooltip>
         <Switch checked={!!schema} label={tx('workflows:prompt.structured')} onChange={on => update(current => ({ ...current, output: on ? { type: 'json_schema', schema: { type: 'object', properties: {}, required: [], additionalProperties: false } } : { type: 'text' } }), at('output'))} />
       </span>
     </h3>
     {open && <>
-      <dl className={css.outputVars}>
+      <dl className={editorCss.outputVars}>
         {fixed.map(([name, type, about]) => <div key={name}><dt><b>{name}</b><code>{type}</code></dt><dd>{tx(about)}</dd></div>)}
       </dl>
-      {schema !== undefined && <div className={css.structuredOutput}>
-        <div className={css.structuredHead}><b>{/* i18n-raw: native output field name */ 'structured_output'}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
-          <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
+      {schema !== undefined && <div className={editorCss.structuredOutput}>
+        <div className={editorCss.structuredHead}><b>{/* i18n-raw: native output field name */ 'structured_output'}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
+          <button type="button" className={editorCss.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
         </div>
         <StructuredFields schema={schema} document={props.document} address={at('output', 'schema')} />
       </div>}
@@ -103,7 +103,7 @@ function ModelFailure(props: PanelProps) {
   return <>
     <RetrySettings retry={retry} setRetry={setRetry} />
     <ErrorStrategy strategy={strategy.type} choose={choose}>
-      {strategy.type === 'default_value' && <div className={css.failureDefaults}>
+      {strategy.type === 'default_value' && <div className={editorCss.failureDefaults}>
         <DraftTextField label={/* i18n-raw: native output field name */ 'text'} value={strategy.text} address={at('on_error', 'text')} multiline />
         {node.output.type === 'json_schema' && <JsonField label={/* i18n-raw: native output field name */ 'structured_output'} value={strategy.structured_output ?? {}} rows={4} address={at('on_error', 'structured_output')} />}
       </div>}
@@ -114,10 +114,10 @@ function ModelFailure(props: PanelProps) {
 /** As Dify's retry on failure: a switch, then how often and how far apart. */
 export function RetrySettings({ retry, setRetry }: { retry?: Retry | null; setRetry: (retry?: Retry) => void }) {
   const tx = useTranslation();
-  return <section className={css.group} aria-label={tx('workflows:failure.retry')}>
-    <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:failure.retry')}</span>
+  return <section className={editorCss.group} aria-label={tx('workflows:failure.retry')}>
+    <h3 className={editorCss.groupHeading}><span className={editorCss.headingText}>{tx('workflows:failure.retry')}</span>
       <Switch checked={!!retry} label={tx('workflows:failure.retry')} onChange={on => setRetry(on ? { max_retries: 3, interval_ms: 1000 } : undefined)} /></h3>
-    {retry && <div className={css.retryFields}>
+    {retry && <div className={editorCss.retryFields}>
       <SliderField label={tx('workflows:failure.max-retries')} unit={tx('workflows:failure.times')} min={1} max={10} step={1} value={retry.max_retries} onChange={max_retries => setRetry({ ...retry, max_retries })} />
       <SliderField label={tx('workflows:failure.interval')} unit={tx('workflows:failure.ms')} min={100} max={5000} step={100} value={retry.interval_ms} onChange={interval_ms => setRetry({ ...retry, interval_ms })} />
     </div>}
@@ -128,22 +128,22 @@ export function RetrySettings({ retry, setRetry }: { retry?: Retry | null; setRe
  * the fail branch's card. */
 export function ErrorStrategy({ strategy, choose, note, children }: { strategy: Strategy['type']; choose: (type: Strategy['type']) => void; note?: string; children?: ReactNode }) {
   const tx = useTranslation();
-  return <section className={css.group} aria-label={tx('workflows:failure.title')}>
-    <h3 className={css.groupHeading}>
-      <span className={css.headingText}>{tx('workflows:failure.title')}
-        <Tooltip label={tx('workflows:failure.tip')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:failure.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
+  return <section className={editorCss.group} aria-label={tx('workflows:failure.title')}>
+    <h3 className={editorCss.groupHeading}>
+      <span className={editorCss.headingText}>{tx('workflows:failure.title')}
+        <Tooltip label={tx('workflows:failure.tip')} side="bottom" maxWidth={240}><span className={editorCss.promptHint} tabIndex={0} aria-label={tx('workflows:failure.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
       <Menu modal={false}>
-        <MenuTrigger className={css.strategyTrigger} aria-label={tx('workflows:failure.strategy')}>{tx(`workflows:failure.${STRATEGY_TEXT[strategy]}`)}<IconChevronDownOutline14 /></MenuTrigger>
-        <MenuPopup side="bottom" align="end" sideOffset={4} className={css.strategyPopup}>
-            {STRATEGIES.map(type => <MenuItem key={type} className={css.strategyItem} onClick={() => choose(type)}>
+        <MenuTrigger className={editorCss.strategyTrigger} aria-label={tx('workflows:failure.strategy')}>{tx(`workflows:failure.${STRATEGY_TEXT[strategy]}`)}<IconChevronDownOutline14 /></MenuTrigger>
+        <MenuPopup side="bottom" align="end" sideOffset={4} className={editorCss.strategyPopup}>
+            {STRATEGIES.map(type => <MenuItem key={type} className={editorCss.strategyItem} onClick={() => choose(type)}>
               <b>{tx(`workflows:failure.${STRATEGY_TEXT[type]}`)}</b><small>{tx(`workflows:failure.${STRATEGY_TEXT[type]}-desc`)}</small>
             </MenuItem>)}
           </MenuPopup>
       </Menu>
     </h3>
-    {note && <p className={css.note}>{note}</p>}
+    {note && <p className={editorCss.note}>{note}</p>}
     {children}
-    {strategy === 'fail_branch' && <div className={css.failBranchCard}><b>{tx('workflows:failure.branch-customize')}</b><p>{tx('workflows:failure.branch-tip')}</p></div>}
+    {strategy === 'fail_branch' && <div className={editorCss.failBranchCard}><b>{tx('workflows:failure.branch-customize')}</b><p>{tx('workflows:failure.branch-tip')}</p></div>}
   </section>;
 }
 
@@ -151,10 +151,10 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
 export function SliderField({ label, unit, min, max, step, value, onChange, numberFirst = false }: { label: string; unit?: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void; numberFirst?: boolean }) {
   const set = (text: string) => { const next = Number(text); if (Number.isInteger(next) && next >= min && next <= max) onChange(next); };
   const range = <input type="range" min={min} max={max} step={step} value={value} aria-label={label} onChange={event => set(event.target.value)} />;
-  const number = <span className={css.retryNumber}><TextInput type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
+  const number = <span className={editorCss.retryNumber}><TextInput type="number" min={min} max={max} step={step} value={value} aria-label={unit ? `${label} (${unit})` : label} onChange={event => set(event.target.value)} />{unit && <small>{unit}</small>}</span>;
   // As Dify's Loop count: the number, then the slider, under the heading.
-  return numberFirst ? <div className={css.sliderRow}>{number}{range}</div>
-    : <label className={css.retryField}><span>{label}</span>{range}{number}</label>;
+  return numberFirst ? <div className={editorCss.sliderRow}>{number}{range}</div>
+    : <label className={editorCss.retryField}><span>{label}</span>{range}{number}</label>;
 }
 
 /** The declared fields of a structured output, as Dify lists them. */
@@ -162,7 +162,7 @@ function SchemaTree({ schema, document, address }: { schema: unknown; document: 
   const tx = useTranslation(), object = schemaObject(schema), properties = schemaObject(object?.properties) ?? {};
   const required = Array.isArray(object?.required) ? object.required : [];
   const target = schemaTarget(address, document), keys = target ? orderedKeys(document, target, Object.keys(properties)) : Object.keys(properties);
-  return <ul className={css.schemaTree}>{keys.map(name => {
+  return <ul className={editorCss.schemaTree}>{keys.map(name => {
     const value = schemaObject(properties[name]), type = typeof value?.type === 'string' ? value.type : '?';
     return <li key={name}>
       <span><b>{name}</b><code>{type}</code>{required.includes(name) && <small>{tx('workflows:schema.required')}</small>}</span>
@@ -187,11 +187,11 @@ function PromptMessage(props: PanelProps & { index: number; message: Message }) 
     onChange={parts => update(current => ({ ...current, messages: current.messages.map((item, at) => at === index ? { ...item, content: parts } : item) }), address, undefined, `${field}:${session}`)}>
     {editable => <PromptCard label={role} hint={tx(`workflows:prompt.${message.role}-hint`)} text={promptText(content)} expanded={expanded} onExpand={() => setExpanded(value => !value)}
       role={index ? <Menu modal={false}>
-        <MenuTrigger className={css.promptRole} aria-label={tx('workflows:prompt.role')}>{role}<IconChevronDownOutline14 /></MenuTrigger>
-        <MenuPopup side="bottom" align="start" sideOffset={4} className={css.branchOperatorPopup}>
-            {(['user', 'assistant'] as const).map(value => <MenuItem key={value} className={css.branchOperatorItem} onClick={() => setRole(value)}>{/* i18n-raw: model message role, as Dify shows it */ value.toUpperCase()}</MenuItem>)}
+        <MenuTrigger className={editorCss.promptRole} aria-label={tx('workflows:prompt.role')}>{role}<IconChevronDownOutline14 /></MenuTrigger>
+        <MenuPopup side="bottom" align="start" sideOffset={4} className={editorCss.branchOperatorPopup}>
+            {(['user', 'assistant'] as const).map(value => <MenuItem key={value} className={editorCss.branchOperatorItem} onClick={() => setRole(value)}>{/* i18n-raw: model message role, as Dify shows it */ value.toUpperCase()}</MenuItem>)}
           </MenuPopup>
-      </Menu> : <b className={css.promptRoleFixed}>{role}</b>}
+      </Menu> : <b className={editorCss.promptRoleFixed}>{role}</b>}
       tools={<InsertVariable />}
       onRemove={index ? () => props.edit(document => {
         const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
@@ -205,8 +205,8 @@ function PromptMessage(props: PanelProps & { index: number; message: Message }) 
 
 export function InsertVariable() {
   const tx = useTranslation(), insert = useInsertVariable();
-  return <button type="button" className={css.promptTool} aria-label={tx('workflows:prompt.insert-variable')} title={tx('workflows:prompt.insert-variable')}
-    onMouseDown={event => event.preventDefault()} onClick={insert}><span aria-hidden className={css.promptVariableIcon}>{'{x}'}</span></button>;
+  return <button type="button" className={editorCss.promptTool} aria-label={tx('workflows:prompt.insert-variable')} title={tx('workflows:prompt.insert-variable')}
+    onMouseDown={event => event.preventDefault()} onClick={insert}><span aria-hidden className={editorCss.promptVariableIcon}>{'{x}'}</span></button>;
 }
 
 export function AgentPanel(props: PanelProps) {
@@ -214,14 +214,14 @@ export function AgentPanel(props: PanelProps) {
   return <>
     {/* As Dify's Agent panel: the Agent is picked from a list, its task is
         written in the LLM node's prompt editor, then its output variables. */}
-    <section className={css.group}>
-      <h3 className={css.groupHeading}>
-        <span className={css.headingText}>{tx('workflows:panel.agent-config')}
-          <Tooltip label={tx('workflows:inspector.agent-profile-hint')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:inspector.agent-profile-hint')}><IconQuestionOutline14 /></span></Tooltip></span>
+    <section className={editorCss.group}>
+      <h3 className={editorCss.groupHeading}>
+        <span className={editorCss.headingText}>{tx('workflows:panel.agent-config')}
+          <Tooltip label={tx('workflows:inspector.agent-profile-hint')} side="bottom" maxWidth={240}><span className={editorCss.promptHint} tabIndex={0} aria-label={tx('workflows:inspector.agent-profile-hint')}><IconQuestionOutline14 /></span></Tooltip></span>
       </h3>
       <ProfileSelection {...props} />
     </section>
-    <section className={css.group}><AgentTask {...props} /></section>
+    <section className={editorCss.group}><AgentTask {...props} /></section>
     <AgentOutputs {...props} />
     <AgentRoutes {...props} />
     <AgentFailure {...props} />
@@ -249,22 +249,22 @@ function AgentRoutes(props: PanelProps) {
     return next?.length ? { ...rest, routes: next } : rest;
   };
   const fresh = (taken: readonly { id: string }[]) => freshIdentifier({ input: {}, nodes: Object.fromEntries(taken.map(route => [route.id, { type: 'start' }])), edges: [] }, 'route');
-  return <section className={css.group} aria-label={tx('workflows:routes.title')}>
-    <h3 className={css.groupHeading}>
-      <span className={css.headingText}>{tx('workflows:routes.title')}
-        <Tooltip label={tx('workflows:routes.tip')} side="bottom" maxWidth={260}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:routes.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
+  return <section className={editorCss.group} aria-label={tx('workflows:routes.title')}>
+    <h3 className={editorCss.groupHeading}>
+      <span className={editorCss.headingText}>{tx('workflows:routes.title')}
+        <Tooltip label={tx('workflows:routes.tip')} side="bottom" maxWidth={260}><span className={editorCss.promptHint} tabIndex={0} aria-label={tx('workflows:routes.tip')}><IconQuestionOutline14 /></span></Tooltip></span>
       <Switch checked={!!routes.length} label={tx('workflows:routes.title')} onChange={on => exits(agent => withRoutes(agent, on ? [{ id: 'route_1', description: '' }, { id: 'route_2', description: '' }] : undefined))} />
     </h3>
-    {!!routes.length && <div className={css.routeList}>
-      {routes.map((route, index) => <div key={route.id} className={css.routeItem}>
-        <div className={css.routeItemHead}>
+    {!!routes.length && <div className={editorCss.routeList}>
+      {routes.map((route, index) => <div key={route.id} className={editorCss.routeItem}>
+        <div className={editorCss.routeItemHead}>
           <RouteId value={route.id} address={at('routes', index, 'id')} label={tx('workflows:routes.id')} rename={(document, from, to) => renameExit(document, props.block, props.id, from, to)} />
-          <button type="button" className={css.smallButton} disabled={routes.length < 2} aria-label={tx('workflows:routes.remove', { p0: route.id })} title={tx('workflows:routes.remove', { p0: route.id })}
+          <button type="button" className={editorCss.smallButton} disabled={routes.length < 2} aria-label={tx('workflows:routes.remove', { p0: route.id })} title={tx('workflows:routes.remove', { p0: route.id })}
             onClick={() => exits(agent => withRoutes(agent, (agent.routes ?? []).filter(item => item.id !== route.id)), { array: at('routes'), removed: index })}>×</button>
         </div>
         <DraftTextField label={tx('workflows:routes.description')} value={route.description} address={at('routes', index, 'description')} multiline />
       </div>)}
-      <button type="button" className={css.promptAddMessage} disabled={routes.length >= 32}
+      <button type="button" className={editorCss.promptAddMessage} disabled={routes.length >= 32}
         onClick={() => exits(agent => withRoutes(agent, [...(agent.routes ?? []), { id: fresh(agent.routes ?? []), description: '' }]), { array: at('routes'), inserted: routes.length })}><IconPlus size={13} />{tx('workflows:routes.add')}</button>
     </div>}
   </section>;
@@ -285,9 +285,9 @@ export function RouteId({ value, address, label, className, rename }: { value: s
   } });
   let shown = field.text;
   if (!key) try { const parsed: unknown = JSON.parse(shown); if (typeof parsed === 'string') shown = parsed; } catch { /* Detached text remains visible. */ }
-  return <><TextInput className={clsx(css.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
+  return <><TextInput className={clsx(editorCss.routeIdInput, className)} data-workflow-field={encodeField(address)} aria-label={label} aria-invalid={!!field.error || undefined} value={shown} onChange={event => field.change(key ? event.target.value : JSON.stringify(event.target.value))} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />
-    {field.error && <small className={css.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></>;
+    {field.error && <small className={editorCss.hintError} role="alert">{describe(field.error)}</small>}<ConflictActions field={field} /></>;
 }
 
 /** As Dify's Agent error handling. There is no retry: a workflow child
@@ -308,7 +308,7 @@ function AgentFailure(props: PanelProps) {
     });
   };
   return <ErrorStrategy strategy={strategy.type} choose={choose} note={tx('workflows:failure.agent-no-retry')}>
-    {strategy.type === 'default_value' && <div className={css.failureDefaults}>
+    {strategy.type === 'default_value' && <div className={editorCss.failureDefaults}>
       <JsonField label={tx('workflows:failure.default-value')} value={strategy.value} rows={4} address={at('on_error', 'value')} />
     </div>}
   </ErrorStrategy>;
@@ -322,23 +322,23 @@ function AgentOutputs(props: PanelProps) {
   const schema = node.output.type === 'json_schema' ? node.output.schema : undefined;
   // Routes add the chosen route's ID to either mode.
   const switchRow = node.routes?.length ? <div><dt><b>{/* i18n-raw: native output field name */ 'switch'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-switch')}</dd></div> : undefined;
-  return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
-    <h3 className={css.groupHeading}>
-      <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
-      <span className={css.structuredToggle}>
+  return <section className={editorCss.group} aria-label={tx('workflows:prompt.output-variables')}>
+    <h3 className={editorCss.groupHeading}>
+      <button type="button" className={editorCss.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
+      <span className={editorCss.structuredToggle}>
         {tx('workflows:prompt.structured')}
-        <Tooltip label={tx('workflows:prompt.agent-structured-hint')} side="bottom" maxWidth={240}><span className={css.promptHint} tabIndex={0} aria-label={tx('workflows:prompt.agent-structured-hint')}><IconQuestionOutline14 /></span></Tooltip>
+        <Tooltip label={tx('workflows:prompt.agent-structured-hint')} side="bottom" maxWidth={240}><span className={editorCss.promptHint} tabIndex={0} aria-label={tx('workflows:prompt.agent-structured-hint')}><IconQuestionOutline14 /></span></Tooltip>
         <Switch checked={!!schema} label={tx('workflows:prompt.structured')} onChange={on => update(current => ({ ...current, output: on ? { type: 'json_schema', schema: { type: 'object', properties: {}, required: [], additionalProperties: false } } : { type: 'text' } }), at('output'))} />
       </span>
     </h3>
     {open && (schema === undefined
-      ? <dl className={css.outputVars}><div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-text')}</dd></div>{switchRow}</dl>
-      : <div className={css.agentStructured}>
-        <div className={css.structuredHead}><b>{props.id}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
-          <button type="button" className={css.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
+      ? <dl className={editorCss.outputVars}><div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:prompt.agent-text')}</dd></div>{switchRow}</dl>
+      : <div className={editorCss.agentStructured}>
+        <div className={editorCss.structuredHead}><b>{props.id}</b><code>{/* i18n-raw: JSON Schema type name */ 'object'}</code>
+          <button type="button" className={editorCss.smallButton} onClick={() => setConfiguring(true)}><IconEditOutline16 />{tx('workflows:prompt.configure')}</button>
         </div>
         <StructuredFields schema={schema} document={props.document} address={at('output', 'schema')} />
-        {switchRow && <dl className={clsx(css.outputVars, css.agentSwitch)}>{switchRow}</dl>}
+        {switchRow && <dl className={clsx(editorCss.outputVars, editorCss.agentSwitch)}>{switchRow}</dl>}
       </div>)}
     {configuring && schema !== undefined && <Suspense fallback={null}><StructuredOutputDialog document={props.document} address={at('output', 'schema')} root={props.id} edit={props.edit} onClose={() => setConfiguring(false)} /></Suspense>}
   </section>;
@@ -347,22 +347,22 @@ function AgentOutputs(props: PanelProps) {
 /** A structured output's declared fields, or the note that it has none. */
 function StructuredFields({ schema, document, address }: { schema: unknown; document: WorkflowDocument; address: FieldAddress }) {
   const tx = useTranslation();
-  return Object.keys(schemaObject(schemaObject(schema)?.properties) ?? {}).length ? <SchemaTree schema={schema} document={document} address={address} /> : <p className={css.structuredEmpty}>{tx('workflows:prompt.structured-empty')}</p>;
+  return Object.keys(schemaObject(schemaObject(schema)?.properties) ?? {}).length ? <SchemaTree schema={schema} document={document} address={address} /> : <p className={editorCss.structuredEmpty}>{tx('workflows:prompt.structured-empty')}</p>;
 }
 
 /** The named profile, chosen from those discovered in this scope. */
 function ProfileSelection(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'agent'), profiles = props.vocabulary?.profiles ?? [];
   return <Menu modal={false}>
-    <MenuTrigger className={css.modelTrigger} aria-label={tx('workflows:inspector.agent-profile')} aria-invalid={!node.profile || undefined} title={tx('workflows:inspector.agent-profile-hint')}>
-      <span className={`${css.modelTriggerIcon} ${css.kind_agent}`}><KindIcon kind="agent" size={14} /></span>
-      <span className={css.modelTriggerName}>{node.profile || tx('workflows:inspector.agent-profile-choose')}</span>
-      <span className={css.modelTriggerSettings} aria-hidden><IconChevronDownOutline14 /></span>
+    <MenuTrigger className={editorCss.modelTrigger} aria-label={tx('workflows:inspector.agent-profile')} aria-invalid={!node.profile || undefined} title={tx('workflows:inspector.agent-profile-hint')}>
+      <span className={`${editorCss.modelTriggerIcon} ${editorCss.kind_agent}`}><KindIcon kind="agent" size={14} /></span>
+      <span className={editorCss.modelTriggerName}>{node.profile || tx('workflows:inspector.agent-profile-choose')}</span>
+      <span className={editorCss.modelTriggerSettings} aria-hidden><IconChevronDownOutline14 /></span>
     </MenuTrigger>
-    <MenuPopup side="bottom" align="start" sideOffset={4} className={css.profilePopup}>
-        {profiles.length ? profiles.map(name => <MenuItem key={name} className={css.strategyItem} aria-checked={name === node.profile} role="menuitemradio"
+    <MenuPopup side="bottom" align="start" sideOffset={4} className={editorCss.profilePopup}>
+        {profiles.length ? profiles.map(name => <MenuItem key={name} className={editorCss.strategyItem} aria-checked={name === node.profile} role="menuitemradio"
           onClick={() => { if (name !== node.profile) update(current => ({ ...current, profile: name }), at('profile')); }}><b>{name}</b></MenuItem>)
-          : <p className={css.profileEmpty}>{tx('workflows:inspector.agent-profile-none')}</p>}
+          : <p className={editorCss.profileEmpty}>{tx('workflows:inspector.agent-profile-none')}</p>}
       </MenuPopup>
   </Menu>;
 }
@@ -376,7 +376,7 @@ function AgentTask(props: PanelProps) {
     placeholder={tx('workflows:prompt.task-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')}
     onChange={task => update(current => ({ ...current, task }), address, undefined, `${field}:${session}`)}>
     {editable => <PromptCard label={label} hint={tx('workflows:prompt.task-hint')} text={promptText(node.task)} expanded={expanded} onExpand={() => setExpanded(value => !value)}
-      role={<b className={css.promptRoleFixed}>{label}</b>} tools={<InsertVariable />}>
+      role={<b className={editorCss.promptRoleFixed}>{label}</b>} tools={<InsertVariable />}>
       <div onFocus={() => setSession(value => value + 1)}>{editable}</div>
     </PromptCard>}
   </PromptEditor>;

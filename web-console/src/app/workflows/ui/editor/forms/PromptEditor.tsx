@@ -13,7 +13,7 @@ import { encodeField, type FieldAddress } from '../../../document/fields';
 import type { Value } from '../../../document/model';
 import type { Edit } from '../panels/shared';
 import { ReferencePicker } from './ReferencePicker';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 
 /** What a variable token needs to pick from its message's native scope. */
 const TokenScope = createContext<{ address: FieldAddress; edit: Edit; placeholder: string } | undefined>(undefined);
@@ -30,7 +30,7 @@ class VariableNode extends DecoratorNode<JSX.Element> {
   static importJSON(json: SerializedVariable) { return new VariableNode(json.path); }
   constructor(path: string[], key?: NodeKey) { super(key); this.__path = path; }
   exportJSON(): SerializedVariable { return { ...super.exportJSON(), path: this.__path }; }
-  createDOM() { const element = document.createElement('span'); element.className = css.promptVariable; element.contentEditable = 'false'; return element; }
+  createDOM() { const element = document.createElement('span'); element.className = editorCss.promptVariable; element.contentEditable = 'false'; return element; }
   updateDOM() { return false; }
   isInline() { return true; }
   getTextContent() { return `{{${this.__path.join('.')}}}`; }
@@ -126,10 +126,10 @@ export function PromptEditor({ parts, address, edit, label, placeholder, variabl
     editorState: () => $fill(initial.current),
   }}>
     <TokenScope.Provider value={{ address, edit, placeholder: variablePlaceholder }}>
-      {children(<div className={css.promptEditor}>
+      {children(<div className={editorCss.promptEditor}>
         <PlainTextPlugin ErrorBoundary={LexicalErrorBoundary}
-          contentEditable={<ContentEditable data-workflow-field={encodeField(address)} className={`${css.promptInput} ${expanded ? css.promptInputExpanded : compact ? css.promptInputCompact : ''}`} aria-label={label} aria-invalid={invalid || undefined} aria-placeholder={placeholder}
-            placeholder={<span className={css.promptPlaceholder}>{placeholder}</span>} />} />
+          contentEditable={<ContentEditable data-workflow-field={encodeField(address)} className={`${editorCss.promptInput} ${expanded ? editorCss.promptInputExpanded : compact ? editorCss.promptInputCompact : ''}`} aria-label={label} aria-invalid={invalid || undefined} aria-placeholder={placeholder}
+            placeholder={<span className={editorCss.promptPlaceholder}>{placeholder}</span>} />} />
       </div>)}
       <Sync parts={parts} onChange={onChange} />
     </TokenScope.Provider>

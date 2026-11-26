@@ -20,7 +20,7 @@ import { useReferenceSchema } from '../forms/useReferenceSchema';
 import { comparisonSymbols } from '../summary';
 import type { PanelProps } from './shared';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 
 const unfinished = (): Predicate => ({
   type: 'equal',
@@ -79,12 +79,12 @@ export function ConditionList({
     operator = condition?.type === 'or' ? 'or' : 'and';
   return (
     <>
-      <div className={clsx(css.branchConditionList, conditions.length > 1 && css.branchConditionGroup)}>
+      <div className={clsx(editorCss.branchConditionList, conditions.length > 1 && editorCss.branchConditionGroup)}>
         {conditions.length > 1 && (
-          <div className={css.branchLogicBracket}>
+          <div className={editorCss.branchLogicBracket}>
             <button
               type="button"
-              className={css.branchLogicToggle}
+              className={editorCss.branchLogicToggle}
               aria-label={tx('workflows:branch.match')}
               title={tx(operator === 'or' ? 'workflows:branch.or' : 'workflows:branch.and')}
               onClick={() => set({ type: operator === 'or' ? 'and' : 'or', predicates: [...conditions] })}
@@ -97,7 +97,7 @@ export function ConditionList({
           </div>
         )}
         {conditions.map((item, position) => (
-          <div className={css.branchConditionRow} key={position}>
+          <div className={editorCss.branchConditionRow} key={position}>
             <ConditionRow
               {...props}
               address={grouped ? within(base, ['predicates', position]) : base}
@@ -107,7 +107,7 @@ export function ConditionList({
             />
             <button
               type="button"
-              className={css.branchRemoveCondition}
+              className={editorCss.branchRemoveCondition}
               aria-label={tx('workflows:branch.remove-condition', { p0: String(position + 1) })}
               onClick={() => {
                 const remaining = conditions.filter((_, i) => i !== position);
@@ -124,7 +124,7 @@ export function ConditionList({
       </div>
       <button
         type="button"
-        className={css.branchAddCondition}
+        className={editorCss.branchAddCondition}
         onClick={() => {
           const position = conditions.length;
           set(
@@ -245,8 +245,8 @@ function SimpleCondition({
     onPicked();
   };
   return (
-    <div className={css.branchConditionControls}>
-      <div className={css.branchConditionTop}>
+    <div className={editorCss.branchConditionControls}>
+      <div className={editorCss.branchConditionTop}>
         <ReferencePicker
           address={location}
           path={left.path}
@@ -256,10 +256,10 @@ function SimpleCondition({
           onChoose={picked}
           placeholder={tx('workflows:branch.select-variable')}
         />
-        <span className={css.branchOperatorDivider} aria-hidden />
+        <span className={editorCss.branchOperatorDivider} aria-hidden />
         <Menu modal={false}>
           <MenuTrigger
-            className={css.branchOperator}
+            className={editorCss.branchOperator}
             aria-label={tx('workflows:branch.operator')}
             title={tx(`workflows:branch.${operator}`)}
             disabled={!left.path.length}
@@ -267,9 +267,9 @@ function SimpleCondition({
             {(kind === 'number' && comparisonSymbols[operator]) || tx(`workflows:branch.${operator}`)}
             <IconChevronDownOutline14 />
           </MenuTrigger>
-          <MenuPopup side="bottom" align="end" sideOffset={4} className={css.branchOperatorPopup}>
+          <MenuPopup side="bottom" align="end" sideOffset={4} className={editorCss.branchOperatorPopup}>
                 {options.map((type) => (
-                  <MenuItem key={type} className={css.branchOperatorItem} onClick={() => setOperator(type)}>
+                  <MenuItem key={type} className={editorCss.branchOperatorItem} onClick={() => setOperator(type)}>
                     {tx(`workflows:branch.${type}`)}
                   </MenuItem>
                 ))}
@@ -277,7 +277,7 @@ function SimpleCondition({
         </Menu>
       </div>
       {!valueFree && (
-        <div className={css.branchConditionValue}>
+        <div className={editorCss.branchConditionValue}>
           {itemKind === 'string' ? (
             <TemplateInput
               parts={templateParts(right)}
@@ -294,7 +294,7 @@ function SimpleCondition({
           ) : (
             <>
               {(itemKind === 'number' || itemKind === 'boolean') && (
-                <div className={css.operandMode} role="radiogroup" aria-label={tx('workflows:loop.input-mode')}>
+                <div className={editorCss.operandMode} role="radiogroup" aria-label={tx('workflows:loop.input-mode')}>
                   <button
                     type="button"
                     role="radio"
@@ -331,7 +331,7 @@ function SimpleCondition({
                 />
               ) : right.type === 'literal' && typeof right.value === 'boolean' ? (
                 <EnumSelect
-                  className={css.input}
+                  className={editorCss.input}
                   label={tx('workflows:branch.value')}
                   value={String(right.value)}
                   onChange={(next) =>

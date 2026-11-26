@@ -8,7 +8,7 @@ import { replaceNode } from '../../document/commands';
 import { blockAt, sameDocument, type BlockPath, type NodeKind, type WorkflowDocument } from '../../document/model';
 import { KindIcon, SourceIcon, ToolIcon } from '../icons';
 import { useToolCatalog } from './toolCatalog';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 /** A node kind, or a Tool node for one builtin Tool or one Tool of an MCP
@@ -71,14 +71,14 @@ export function NodeChooser({ tools, omit = [], existing, onChoose, input, previ
   const option = (item: Item, nested?: boolean) => { rows.push({ kind: 'option', index: items.length, item, nested }); items.push(item); };
   const toolItem = (tool: WorkflowToolChoice, source?: WorkflowToolSource): Item => ({
     key: `tool:${source?.source_id ?? ''}:${tool.name}`, label: tool.name, about: toolSummary(tool.description),
-    icon: source ? <SourceIcon kind={source.kind} size={15} /> : <ToolIcon name={tool.name} size={15} />, tone: css.kind_tool, choice: { kind: 'tool', tool, source: source?.source_id },
+    icon: source ? <SourceIcon kind={source.kind} size={15} /> : <ToolIcon name={tool.name} size={15} />, tone: editorCss.kind_tool, choice: { kind: 'tool', tool, source: source?.source_id },
   });
   if (tab === 'existing') for (const node of existing ?? []) {
-    if (matches(node.id, node.title)) option({ key: node.id, label: node.title, about: node.id, icon: <KindIcon kind={node.kind} size={15} />, tone: css[`kind_${node.kind}`], choice: { id: node.id } });
+    if (matches(node.id, node.title)) option({ key: node.id, label: node.title, about: node.id, icon: <KindIcon kind={node.kind} size={15} />, tone: editorCss[`kind_${node.kind}`], choice: { id: node.id } });
   } else if (tab === 'nodes') for (const { group, kinds } of GROUPS) {
     const shownKinds = kinds.filter(kind => !omit.includes(kind) && matches(kind, tx(`workflows:kind.${kind}`)));
     if (group && shownKinds.length) rows.push({ kind: 'heading', key: group, label: tx(`workflows:palette.group-${group}`) });
-    for (const kind of shownKinds) option({ key: kind, label: tx(`workflows:kind.${kind}`), about: tx(`workflows:kind-about.${kind}`), icon: <KindIcon kind={kind} size={15} />, tone: css[`kind_${kind}`], choice: { kind } });
+    for (const kind of shownKinds) option({ key: kind, label: tx(`workflows:kind.${kind}`), about: tx(`workflows:kind-about.${kind}`), icon: <KindIcon kind={kind} size={15} />, tone: editorCss[`kind_${kind}`], choice: { kind } });
   } else if (!omit.includes('tool')) {
     const builtin = tools.filter(tool => matches(tool.name, tool.description));
     if (builtin.length) rows.push({ kind: 'heading', key: 'builtin', label: tx('workflows:palette.group-builtin') });
@@ -109,12 +109,12 @@ export function NodeChooser({ tools, omit = [], existing, onChoose, input, previ
   };
   const move = (index: number) => { show(index); list.current?.querySelector(`[data-choice-index="${index}"]`)?.scrollIntoView({ block: 'nearest' }); };
   const current = shown && items[shown.index];
-  return <div className={css.chooser} onMouseLeave={() => setShown(undefined)}>
-    <div className={css.chooserTabs} role="tablist">
-      {tabs.map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} className={clsx(css.chooserTab, tab === value && css.chooserTabActive)}
+  return <div className={editorCss.chooser} onMouseLeave={() => setShown(undefined)}>
+    <div className={editorCss.chooserTabs} role="tablist">
+      {tabs.map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} className={clsx(editorCss.chooserTab, tab === value && editorCss.chooserTabActive)}
         onClick={() => choose(value)}>{tx(`workflows:palette.tab-${value}`)}</button>)}
     </div>
-    <label className={css.chooserSearch}><IconSearchOutline16 /><TextInput ref={field} value={queries[tab]} placeholder={tx(`workflows:palette.search-${tab}`)} aria-label={tx(`workflows:palette.search-${tab}`)}
+    <label className={editorCss.chooserSearch}><IconSearchOutline16 /><TextInput ref={field} value={queries[tab]} placeholder={tx(`workflows:palette.search-${tab}`)} aria-label={tx(`workflows:palette.search-${tab}`)}
       aria-controls="workflow-chooser" aria-activedescendant={items[active] ? `workflow-choice-${active}` : undefined}
       onChange={event => { const text = event.target.value; setQueries(value => ({ ...value, [tab]: text })); setActive(0); setShown(undefined); }}
       onKeyDown={event => {
@@ -123,25 +123,25 @@ export function NodeChooser({ tools, omit = [], existing, onChoose, input, previ
         else if (event.key === 'ArrowUp') { event.preventDefault(); move(Math.max(active - 1, 0)); }
         else if (event.key === 'Enter' && items[active]) { event.preventDefault(); onChoose(items[active].choice); }
       }} /></label>
-    <div ref={list} className={css.chooserList} id="workflow-chooser" role="listbox" aria-label={tx(`workflows:palette.tab-${tab}`)} onScroll={() => setShown(undefined)}>
-      {rows.map(row => row.kind === 'heading' ? <p key={`heading:${row.key}`} className={css.chooserGroup}>{row.label}</p>
-        : row.kind === 'note' ? <p key={`note:${row.key}`} className={css.chooserNote} role="status">{row.label}
-          {row.retry && <button type="button" className={css.chooserRetry} onClick={row.retry}>{tx('workflows:palette.retry')}</button>}</p>
-        : row.kind === 'provider' ? <button key={`provider:${row.key}`} type="button" className={css.chooserProvider} aria-expanded={row.open} disabled={row.source.state !== 'listed'} onClick={() => toggle(row.key)}>
-          <span className={clsx(css.chooserIcon, css.kind_tool)}><SourceIcon kind={row.source.kind} size={15} /></span>
-          <span className={css.chooserLabel}>{sourceName(row.source.source_id)}</span>
-          <span className={css.chooserBadge}>{tx(`workflows:palette.scope-${row.source.scope}`)}</span>
-          <small className={css.chooserCount}>{row.source.state === 'listed' ? row.count : tx(`workflows:palette.source-${row.source.state}`)}</small>
-          {row.source.state === 'listed' && <IconChevronRightOutline14 className={css.chooserChevron} />}
+    <div ref={list} className={editorCss.chooserList} id="workflow-chooser" role="listbox" aria-label={tx(`workflows:palette.tab-${tab}`)} onScroll={() => setShown(undefined)}>
+      {rows.map(row => row.kind === 'heading' ? <p key={`heading:${row.key}`} className={editorCss.chooserGroup}>{row.label}</p>
+        : row.kind === 'note' ? <p key={`note:${row.key}`} className={editorCss.chooserNote} role="status">{row.label}
+          {row.retry && <button type="button" className={editorCss.chooserRetry} onClick={row.retry}>{tx('workflows:palette.retry')}</button>}</p>
+        : row.kind === 'provider' ? <button key={`provider:${row.key}`} type="button" className={editorCss.chooserProvider} aria-expanded={row.open} disabled={row.source.state !== 'listed'} onClick={() => toggle(row.key)}>
+          <span className={clsx(editorCss.chooserIcon, editorCss.kind_tool)}><SourceIcon kind={row.source.kind} size={15} /></span>
+          <span className={editorCss.chooserLabel}>{sourceName(row.source.source_id)}</span>
+          <span className={editorCss.chooserBadge}>{tx(`workflows:palette.scope-${row.source.scope}`)}</span>
+          <small className={editorCss.chooserCount}>{row.source.state === 'listed' ? row.count : tx(`workflows:palette.source-${row.source.state}`)}</small>
+          {row.source.state === 'listed' && <IconChevronRightOutline14 className={editorCss.chooserChevron} />}
         </button>
         : <button key={row.item.key} id={`workflow-choice-${row.index}`} data-choice-index={row.index} data-node-id={'id' in row.item.choice ? row.item.choice.id : undefined} type="button" role="option" aria-selected={active === row.index} aria-description={row.item.about}
-          className={clsx(css.chooserOption, row.nested && css.chooserNested, active === row.index && css.chooserActive)} onMouseEnter={() => show(row.index)} onClick={() => onChoose(row.item.choice)}>
-          <span className={clsx(css.chooserIcon, row.item.tone)}>{row.item.icon}</span><span className={css.chooserLabel}>{row.item.label}</span>
+          className={clsx(editorCss.chooserOption, row.nested && editorCss.chooserNested, active === row.index && editorCss.chooserActive)} onMouseEnter={() => show(row.index)} onClick={() => onChoose(row.item.choice)}>
+          <span className={clsx(editorCss.chooserIcon, row.item.tone)}>{row.item.icon}</span><span className={editorCss.chooserLabel}>{row.item.label}</span>
         </button>)}
-      {!rows.length && <p className={css.chooserEmpty}>{tx('workflows:palette.none')}</p>}
+      {!rows.length && <p className={editorCss.chooserEmpty}>{tx('workflows:palette.none')}</p>}
     </div>
-    {current && <div className={clsx(css.chooserPreview, preview === 'left' && css.chooserPreviewLeft)} style={{ top: shown.top }} aria-hidden>
-      <span className={clsx(css.chooserIcon, css.chooserPreviewIcon, current.tone)}>{current.icon}</span>
+    {current && <div className={clsx(editorCss.chooserPreview, preview === 'left' && editorCss.chooserPreviewLeft)} style={{ top: shown.top }} aria-hidden>
+      <span className={clsx(editorCss.chooserIcon, editorCss.chooserPreviewIcon, current.tone)}>{current.icon}</span>
       <b>{current.label}</b>
       <p>{current.about}</p>
     </div>}

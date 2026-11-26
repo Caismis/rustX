@@ -13,7 +13,7 @@ import { buildField, FIELD_TYPES, fieldForm, FieldFormError, ITEM_TYPES, MAX_LEN
 import { renameSchemaField, schemaObject, schemaTarget, schemaTemplate, type Schema } from '../../../document/schema';
 import type { WorkflowDocument } from '../../../document/model';
 import { WorkflowIcon } from '../../WorkflowIcon';
-import editorCss from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { inputFieldsCss } from './inputFieldsCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Radio, RadioGroup } from '@/components/ui/radio-group';

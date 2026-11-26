@@ -4,7 +4,7 @@ import type { FieldAddress } from '../../../document/fields';
 import type { Value } from '../../../document/model';
 import type { Edit } from '../panels/shared';
 import { PromptEditor } from './PromptEditor';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 
 /** The parts a string value is typed as; another value shows none. */
 export function templateParts(value?: Value): readonly Value[] {
@@ -26,8 +26,8 @@ export function TemplateInput({ parts, address, edit, label, badge, invalid, onC
   const tx = useTranslation(), [session, setSession] = useState(0);
   return <PromptEditor parts={parts} address={address} edit={edit} label={label} compact={!multiline} invalid={invalid}
     placeholder={tx('workflows:value.template-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')} onChange={next => onChange(next, session)}>
-    {editable => <div className={`${css.templateInput} ${multiline ? css.scriptInput : ''}`} aria-invalid={invalid || undefined} onFocus={() => setSession(value => value + 1)}>
-      {editable}{badge && <span className={css.typeBadge}>{badge}</span>}
+    {editable => <div className={`${editorCss.templateInput} ${multiline ? editorCss.scriptInput : ''}`} aria-invalid={invalid || undefined} onFocus={() => setSession(value => value + 1)}>
+      {editable}{badge && <span className={editorCss.typeBadge}>{badge}</span>}
     </div>}
   </PromptEditor>;
 }

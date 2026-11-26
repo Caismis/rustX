@@ -10,7 +10,7 @@ import { ReferencePicker } from '../forms/ReferencePicker';
 import { NumberField } from '../forms/fields';
 import { BooleanInput, DataOutputs, DataSection, ScalarInput } from './DataFields';
 import { useNode, type PanelProps } from './shared';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { dataPanelsCss } from './dataPanelsCss';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
@@ -69,7 +69,7 @@ export function ListPanel(props: PanelProps) {
           {!!path.length && (
             <button
               type="button"
-              className={css.iconButton}
+              className={editorCss.iconButton}
               aria-label={tx('workflows:classifier.clear-input')}
               onClick={() => update((current) => ({ ...current, input: { type: 'reference', path: [] } }), at('input'))}
             >
@@ -107,7 +107,7 @@ export function ListPanel(props: PanelProps) {
           <>
             {hasFields && (
               <EnumSelect
-                className={css.input}
+                className={editorCss.input}
                 label={tx('workflows:list.field')}
                 value={JSON.stringify(filter.path)}
                 onChange={(next) => {
@@ -250,7 +250,7 @@ export function ListPanel(props: PanelProps) {
           <>
             {hasFields && (
               <EnumSelect
-                className={css.input}
+                className={editorCss.input}
                 label={tx('workflows:list.sort-field')}
                 value={JSON.stringify(sort.path)}
                 onChange={(next) => changeSort({ ...sort, path: JSON.parse(next) })}

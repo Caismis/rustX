@@ -13,7 +13,7 @@ import { DraftTextField, HelpTip, JsonField, Section } from '../forms/fields';
 import { ConditionList } from './Conditions';
 import { RouteId, SliderField } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { inputFieldsCss } from '../forms/inputFieldsCss';
 
 /** Dify's `LOOP_NODE_MAX_COUNT` and `MAX_PARALLEL_LIMIT`. */
@@ -33,8 +33,8 @@ function ConstantField({ label, type, value, address, edit }: { label: string; t
   const tx = useTranslation();
   if (value.type !== 'literal') return null;
   if (type === 'string' && typeof value.value === 'string') return <DraftTextField label={label} value={value.value} address={within(address, ['value'])} />;
-  if (type === 'boolean') return <label className={css.inlineField}><span>{label}</span>
-    <EnumSelect className={css.input} label={label} value={String(value.value === true)} onChange={next => edit(document => setField(document, address, { type: 'literal', value: next === 'true' }))} options={[{ value: 'true', label: tx('workflows:port.true') }, { value: 'false', label: tx('workflows:port.false') }]} /></label>;
+  if (type === 'boolean') return <label className={editorCss.inlineField}><span>{label}</span>
+    <EnumSelect className={editorCss.input} label={label} value={String(value.value === true)} onChange={next => edit(document => setField(document, address, { type: 'literal', value: next === 'true' }))} options={[{ value: 'true', label: tx('workflows:port.true') }, { value: 'false', label: tx('workflows:port.false') }]} /></label>;
   return <JsonField label={label} value={value.value} rows={3} line={type === 'number'} address={within(address, ['value'])} />;
 }
 
@@ -53,18 +53,18 @@ export function LoopPanel(props: PanelProps) {
     setVariables([...variables, { label: label(index), var_type: 'string', value: constant('string') }], { array: at('loop_variables'), inserted: variables.length });
   };
   return <>
-    <Section title={tx('workflows:loop.variables')} aside={<button type="button" className={css.iconButton} aria-label={tx('workflows:loop.add-variable')} onClick={add}><IconPlus size={14} /></button>}>
+    <Section title={tx('workflows:loop.variables')} aside={<button type="button" className={editorCss.iconButton} aria-label={tx('workflows:loop.add-variable')} onClick={add}><IconPlus size={14} /></button>}>
       {variables.length ? variables.map((variable, index) => {
         const base = at('loop_variables', index), variableMode = variable.value.type === 'reference';
         const set = (change: Partial<WorkflowLoopVariable>) => setVariables(variables.map((item, i) => i === index ? { ...item, ...change } : item));
-        return <div key={index} className={css.loopVariable}>
-          <div className={css.loopVariableHead}>
+        return <div key={index} className={editorCss.loopVariable}>
+          <div className={editorCss.loopVariableHead}>
             <div><RouteId label={tx('workflows:loop.variable-name')} value={variable.label} address={within(base, ['label'])} rename={(document, from, to) => renameLoopVariable(document, props.block, props.id, from, to)} /></div>
-            <EnumSelect className={css.input} label={tx('workflows:loop.variable-type')} value={variable.var_type} onChange={var_type => set({ var_type, value: variableMode ? unset() : constant(var_type) })}
+            <EnumSelect className={editorCss.input} label={tx('workflows:loop.variable-type')} value={variable.var_type} onChange={var_type => set({ var_type, value: variableMode ? unset() : constant(var_type) })}
               options={VAR_TYPES.map(type => ({ value: type, label: type }))} />
-            <button type="button" className={css.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index), { array: at('loop_variables'), removed: index })}><IconTrashOutline16 /></button>
+            <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:loop.remove-variable', { p0: variable.label })} onClick={() => setVariables(variables.filter((_, i) => i !== index), { array: at('loop_variables'), removed: index })}><IconTrashOutline16 /></button>
           </div>
-            <EnumSelect className={css.input} label={tx('workflows:loop.input-mode')} value={variableMode ? 'variable' : 'constant'} onChange={mode => set({ value: mode === 'variable' ? unset() : constant(variable.var_type) })}
+            <EnumSelect className={editorCss.input} label={tx('workflows:loop.input-mode')} value={variableMode ? 'variable' : 'constant'} onChange={mode => set({ value: mode === 'variable' ? unset() : constant(variable.var_type) })}
               options={[{ value: 'variable', label: tx('workflows:loop.mode-variable') }, { value: 'constant', label: tx('workflows:loop.mode-constant') }]} />
           {variableMode && variable.value.type === 'reference'
             ? <ReferencePicker address={within(base, ['value'])} path={variable.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
@@ -88,7 +88,7 @@ export function LoopPanel(props: PanelProps) {
 export function IterationPanel(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'iteration');
   const mode = node.error_handle_mode ?? 'terminated', flatten = node.flatten_output ?? true;
-  const badge = <span className={css.typeBadge}>{/* i18n-raw: Dify's type badge */ 'Array'}</span>;
+  const badge = <span className={editorCss.typeBadge}>{/* i18n-raw: Dify's type badge */ 'Array'}</span>;
   return <>
     <Section title={tx('workflows:iteration.input')} aside={badge}>
       <ReferencePicker address={at('iterator')} path={node.iterator.type === 'reference' ? node.iterator.path : []} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
@@ -96,26 +96,26 @@ export function IterationPanel(props: PanelProps) {
     <Section title={tx('workflows:iteration.output')} aside={badge}>
       <ReferencePicker address={at('output')} path={node.output.type === 'reference' ? node.output.path : []} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
     </Section>
-    <section className={css.group} aria-label={tx('workflows:iteration.parallel')}>
-      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.parallel')}<HelpTip text={tx('workflows:iteration.parallel-desc')} /></span>
+    <section className={editorCss.group} aria-label={tx('workflows:iteration.parallel')}>
+      <h3 className={editorCss.groupHeading}><span className={editorCss.headingText}>{tx('workflows:iteration.parallel')}<HelpTip text={tx('workflows:iteration.parallel-desc')} /></span>
         <Switch checked={!!node.is_parallel} label={tx('workflows:iteration.parallel')} onChange={on => update(({ is_parallel: _, ...current }) => on ? { ...current, is_parallel: true } : current, at('is_parallel'))} /></h3>
       {node.is_parallel && <SliderField label={tx('workflows:iteration.max-parallelism')} min={1} max={PARALLEL_LIMIT} step={1} value={node.parallel_nums ?? 10}
         onChange={parallel_nums => update(current => ({ ...current, parallel_nums }), at('parallel_nums'))} />}
     </section>
-    <section className={css.group} aria-label={tx('workflows:iteration.error-method')}>
-      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.error-method')}</span>
+    <section className={editorCss.group} aria-label={tx('workflows:iteration.error-method')}>
+      <h3 className={editorCss.groupHeading}><span className={editorCss.headingText}>{tx('workflows:iteration.error-method')}</span>
         <Menu modal={false}>
-          <MenuTrigger className={css.strategyTrigger} aria-label={tx('workflows:iteration.error-method')}>{tx(`workflows:iteration.error-${mode}`)}<IconChevronDownOutline14 /></MenuTrigger>
-          <MenuPopup side="bottom" align="end" sideOffset={4} className={css.strategyPopup}>
-              {ITERATION_ERRORS.map(type => <MenuItem key={type} className={css.strategyItem} onClick={() => update(({ error_handle_mode: _, ...current }) => type === 'terminated' ? current : { ...current, error_handle_mode: type }, at('error_handle_mode'))}>
+          <MenuTrigger className={editorCss.strategyTrigger} aria-label={tx('workflows:iteration.error-method')}>{tx(`workflows:iteration.error-${mode}`)}<IconChevronDownOutline14 /></MenuTrigger>
+          <MenuPopup side="bottom" align="end" sideOffset={4} className={editorCss.strategyPopup}>
+              {ITERATION_ERRORS.map(type => <MenuItem key={type} className={editorCss.strategyItem} onClick={() => update(({ error_handle_mode: _, ...current }) => type === 'terminated' ? current : { ...current, error_handle_mode: type }, at('error_handle_mode'))}>
                 <b>{tx(`workflows:iteration.error-${type}`)}</b>
               </MenuItem>)}
             </MenuPopup>
         </Menu>
       </h3>
     </section>
-    <section className={css.group} aria-label={tx('workflows:iteration.flatten')}>
-      <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:iteration.flatten')}<HelpTip text={tx('workflows:iteration.flatten-desc')} /></span>
+    <section className={editorCss.group} aria-label={tx('workflows:iteration.flatten')}>
+      <h3 className={editorCss.groupHeading}><span className={editorCss.headingText}>{tx('workflows:iteration.flatten')}<HelpTip text={tx('workflows:iteration.flatten-desc')} /></span>
         <Switch checked={flatten} label={tx('workflows:iteration.flatten')} onChange={on => update(({ flatten_output: _, ...current }) => on ? current : { ...current, flatten_output: false }, at('flatten_output'))} /></h3>
     </section>
   </>;
@@ -124,7 +124,7 @@ export function IterationPanel(props: PanelProps) {
 /** As Dify's Exit Loop: no configuration. */
 export function LoopEndPanel() {
   const tx = useTranslation();
-  return <Section title={tx('workflows:kind.loop_end')}><p className={css.note}>{tx('workflows:kind-about.loop_end')}</p></Section>;
+  return <Section title={tx('workflows:kind.loop_end')}><p className={editorCss.note}>{tx('workflows:kind-about.loop_end')}</p></Section>;
 }
 
 /** Dify's write modes a variable type offers, in its menu order. */
@@ -150,28 +150,28 @@ export function AssignerPanel(props: PanelProps) {
   const variables = owner?.type === 'loop' ? owner.loop_variables ?? [] : [];
   const setItems = (items: WorkflowAssignment[], array?: ArrayEdit) => update(current => ({ ...current, items }), at('items'), array);
   const typeOf = (item: WorkflowAssignment) => item.variable[0] === step?.node ? variables.find(variable => variable.label === item.variable[1])?.var_type : undefined;
-  if (owner?.type !== 'loop') return <Section title={tx('workflows:assigner.variables')}><p className={css.note}>{tx('workflows:assigner.outside-loop')}</p></Section>;
-  return <Section title={tx('workflows:assigner.variables')} aside={<button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.add')} disabled={!variables.length||node.items.length>=32}
+  if (owner?.type !== 'loop') return <Section title={tx('workflows:assigner.variables')}><p className={editorCss.note}>{tx('workflows:assigner.outside-loop')}</p></Section>;
+  return <Section title={tx('workflows:assigner.variables')} aside={<button type="button" className={editorCss.iconButton} aria-label={tx('workflows:assigner.add')} disabled={!variables.length||node.items.length>=32}
     onClick={() => { const first = variables[0]; setItems([...node.items, { variable: [step!.node, first.label], operation: 'overwrite', value: unset() }], { array: at('items'), inserted: node.items.length }); }}><IconPlus size={14} /></button>}>
-    {!variables.length && <p className={css.note}>{tx('workflows:assigner.no-loop-variables')}</p>}
+    {!variables.length && <p className={editorCss.note}>{tx('workflows:assigner.no-loop-variables')}</p>}
     {node.items.length ? node.items.map((item, index) => {
       const type = typeOf(item), base = at('items', index);
       const set = (variable: string[], operation: WorkflowWriteMode, value: Value | undefined) =>
         setItems(node.items.map((current, i) => i === index ? { variable, operation, ...(value ? { value } : {}) } : current));
-      return <div key={index} className={css.loopVariable}>
-        <div className={css.assignmentHead}>
-          <EnumSelect className={css.input} label={tx('workflows:assigner.variable')} value={item.variable[1] || null} placeholder={tx('workflows:assigner.select')} onChange={next => {
+      return <div key={index} className={editorCss.loopVariable}>
+        <div className={editorCss.assignmentHead}>
+          <EnumSelect className={editorCss.input} label={tx('workflows:assigner.variable')} value={item.variable[1] || null} placeholder={tx('workflows:assigner.select')} onChange={next => {
             const variable = variables.find(entry => entry.label === next)!;
             set([step!.node, variable.label], 'overwrite', unset());
           }} options={variables.map(variable => ({ value: variable.label, label: `${variable.label} · ${variable.var_type}` }))} />
-          <EnumSelect className={css.input} label={tx('workflows:assigner.operation')} value={item.operation} disabled={!type} onChange={mode => {
+          <EnumSelect className={editorCss.input} label={tx('workflows:assigner.operation')} value={item.operation} disabled={!type} onChange={mode => {
             set(item.variable, mode, type && operand(mode, type));
           }} options={(type ? operations(type) : [item.operation]).map(mode => ({ value: mode, label: tx(`workflows:assigner.op-${mode}`) }))} />
-          <button type="button" className={css.iconButton} aria-label={tx('workflows:assigner.remove', { p0: String(index + 1) })} onClick={() => setItems(node.items.filter((_, i) => i !== index), { array: at('items'), removed: index })}><IconTrashOutline16 /></button>
+          <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:assigner.remove', { p0: String(index + 1) })} onClick={() => setItems(node.items.filter((_, i) => i !== index), { array: at('items'), removed: index })}><IconTrashOutline16 /></button>
         </div>
         {item.value?.type === 'reference' ? <ReferencePicker address={within(base, ['value'])} path={item.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
           : item.value && type ? <ConstantField label={tx('workflows:loop.value')} type={item.operation === 'set' ? type : 'number'} value={item.value} address={within(base, ['value'])} edit={props.edit} /> : null}
       </div>;
-    }) : variables.length ? <p className={css.note}>{tx('workflows:assigner.empty')}</p> : null}
+    }) : variables.length ? <p className={editorCss.note}>{tx('workflows:assigner.empty')}</p> : null}
   </Section>;
 }

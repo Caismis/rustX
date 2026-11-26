@@ -15,7 +15,7 @@ import { useInspectorExpansion } from '../forms/useInspectorExpansion';
 import type { VariableInsertion } from '../forms/WorkflowCodeView';
 import { RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { workflowCodeCss } from '../forms/workflowCodeCss';
 
 const WorkflowCodeView=lazy(()=>import('../forms/WorkflowCodeView'));
@@ -24,20 +24,20 @@ const WorkflowCodeView=lazy(()=>import('../forms/WorkflowCodeView'));
 export function TemplatePanel(props:PanelProps) {
   const tx=useTranslation(),{node,at,update}=useNode(props,'template'),[outputs,setOutputs]=useState(false);
   return <div className={workflowCodeCss.panel}>
-    <section className={css.group} aria-label={tx('workflows:data.inputs')}>
-      <h3 className={css.groupHeading}>{tx('workflows:data.inputs')}<button type="button" className={css.iconButton} aria-label={tx('workflows:data.add-input')} disabled={Object.keys(node.variables).length>=32} onClick={()=>{
+    <section className={editorCss.group} aria-label={tx('workflows:data.inputs')}>
+      <h3 className={editorCss.groupHeading}>{tx('workflows:data.inputs')}<button type="button" className={editorCss.iconButton} aria-label={tx('workflows:data.add-input')} disabled={Object.keys(node.variables).length>=32} onClick={()=>{
         update(current=>({...current,variables:{...current.variables,[templateInputName(Object.keys(current.variables))]:{type:'reference',path:[]}}}),at('variables'));
       }}><IconPlus size={14}/></button></h3>
       <div className={workflowCodeCss.variables}>{Object.entries(node.variables).map(([name,value])=><div className={workflowCodeCss.row} key={name}>
         <div><RouteId label={tx('workflows:data.input-name')} value={name} address={{...at('variables',{key:name}),role:'key'}} rename={(document,from,to)=>renameTemplateInput(document,at('variables'),from,to)}/></div>
         <div className={workflowCodeCss.reference} data-empty={value.type!=='reference'||!value.path.length||undefined}><ReferencePicker token address={at('variables',{key:name})} path={value.type==='reference'?value.path:[]} edit={props.edit} placeholder={tx('workflows:classifier.select-input')}/></div>
-        <button type="button" className={css.iconButton} aria-label={tx('workflows:data.remove-input',{p0:name})} onClick={()=>update(current=>{const {[name]:_,...variables}=current.variables;return {...current,variables};},at('variables'))}><IconTrashOutline16/></button>
+        <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:data.remove-input',{p0:name})} onClick={()=>update(current=>{const {[name]:_,...variables}=current.variables;return {...current,variables};},at('variables'))}><IconTrashOutline16/></button>
       </div>)}</div>
     </section>
     <TemplateEditor key={encodeField(at('template'))} {...props}/>
-    <section className={css.group}>
-      <h3 className={css.groupHeading}><button type="button" className={css.outputToggle} aria-expanded={outputs} onClick={()=>setOutputs(value=>!value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14/></button></h3>
-      {outputs&&<dl className={css.outputVars}><div><dt><b>{/* i18n-raw: native output identifier */ 'output'}</b><code>{/* i18n-raw: native schema type */ 'string'}</code></dt><dd>{tx('workflows:template.output-description')}</dd></div></dl>}
+    <section className={editorCss.group}>
+      <h3 className={editorCss.groupHeading}><button type="button" className={editorCss.outputToggle} aria-expanded={outputs} onClick={()=>setOutputs(value=>!value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14/></button></h3>
+      {outputs&&<dl className={editorCss.outputVars}><div><dt><b>{/* i18n-raw: native output identifier */ 'output'}</b><code>{/* i18n-raw: native schema type */ 'string'}</code></dt><dd>{tx('workflows:template.output-description')}</dd></div></dl>}
     </section>
   </div>;
 }
@@ -52,8 +52,8 @@ function TemplateEditor(props:PanelProps) {
     }}>
       <header><span>{tx('workflows:template.code')}</span><div className="items-center">
         <a href="https://jinja.palletsprojects.com/en/3.1.x/templates/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-[2px] mr-[4px] pr-[8px] [border-right:0.5px_solid_var(--dsw-alias-border-l3)] [color:var(--dsw-alias-label-tertiary)] text-[12px] font-normal no-underline hover:[color:var(--dsw-alias-label-primary)] hover:underline">{tx('workflows:template.jinja-only')}<IconQuestionOutline14/></a>
-        <button type="button" className={css.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
-        <button type="button" className={css.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} onClick={expand.toggle}><IconFullscreenOutline16/></button>
+        <button type="button" className={editorCss.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
+        <button type="button" className={editorCss.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} onClick={expand.toggle}><IconFullscreenOutline16/></button>
       </div></header>
       <div className={workflowCodeCss.codeArea}><Suspense fallback={<p role="status">{tx('workflows:editor.loading')}</p>}><WorkflowCodeView language="jinja2" label={tx('workflows:data.template-code')} value={field.text} field={encodeField(address)} onChange={field.change} onBlur={field.apply} onVariableRequest={request=>{setLimit(false);setInsertion(request);}}/></Suspense></div>
       {insertion&&<ReferencePicker key={`${insertion.from}:${insertion.source}`} token initiallyOpen anchor={insertion.rect} address={at('variables',{key:templateInputName(Object.keys(node.variables))})} path={[]} edit={props.edit} onClose={restore=>{setInsertion(undefined);if(restore)insertion.focus();}} onChoose={choice=>{
@@ -75,8 +75,8 @@ function TemplateEditor(props:PanelProps) {
           return existing?next:setField(next,at('variables'),{...current.variables,[name]:{type:'reference',path:[...choice.path]}});
         });
       }}/>}
-      {field.error&&<small role="alert" className={css.hintError}>{describe(field.error)}</small>}<ConflictActions field={field}/>
-      {limit&&<small role="alert" className={css.hintError}>{tx('workflows:template.input-limit')}</small>}
+      {field.error&&<small role="alert" className={editorCss.hintError}>{describe(field.error)}</small>}<ConflictActions field={field}/>
+      {limit&&<small role="alert" className={editorCss.hintError}>{tx('workflows:template.input-limit')}</small>}
     </section>
     <p className={workflowCodeCss.help}>{tx('workflows:template.insert-help')}</p>
   </div>;

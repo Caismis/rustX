@@ -6,7 +6,7 @@ import { nodeField, setField } from '../../../document/fields';
 import { blockAt, nodeAt } from '../../../document/model';
 import { DraftOwner } from './drafts';
 import type { PanelProps } from '../panels/shared';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 
 /** One explicit signature edit over native type analysis of the current document. */
 export function CodeSignatureButton(props:PanelProps&{onError:(failed:boolean)=>void}) {
@@ -34,5 +34,5 @@ export function CodeSignatureButton(props:PanelProps&{onError:(failed:boolean)=>
     }catch{if(current()&&request===sequence.current)props.onError(true);}
     finally{if(request===sequence.current)setBusy(false);}
   };
-  return <button type="button" className={css.iconButton} disabled={busy} aria-label={tx('workflows:code.sync-signature')} title={tx('workflows:code.sync-signature')} aria-busy={busy} onClick={()=>void sync()}><IconRefreshOutline16/></button>;
+  return <button type="button" className={editorCss.iconButton} disabled={busy} aria-label={tx('workflows:code.sync-signature')} title={tx('workflows:code.sync-signature')} aria-busy={busy} onClick={()=>void sync()}><IconRefreshOutline16/></button>;
 }

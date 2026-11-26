@@ -13,7 +13,7 @@ import { NODE_WIDTH, projectScene } from './scene';
 import { viewId, type Selection } from './selection';
 import { chosenNode, NodeChooser, type Choice } from './NodeChooser';
 import type { Edit } from './panels/shared';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 import { Popover, PopoverPopup } from '@/components/ui/popover';
 
 type Port = ControlPort;
@@ -24,7 +24,7 @@ const SOURCE_MIDDLE = 17;
  * one, with a short tick where each line meets a port. */
 function NextLine({ anchors }: { anchors: readonly number[] }) {
   const y = SOURCE_MIDDLE;
-  return <svg className={css.nextLine} width={24} height={(anchors.at(-1) ?? y) + 4} aria-hidden="true">
+  return <svg className={editorCss.nextLine} width={24} height={(anchors.at(-1) ?? y) + 4} aria-hidden="true">
     <rect x={0} y={y - 2} width={1} height={4} />
     {anchors.map((anchor, index) => {
       const end = index ? anchor : y;
@@ -123,38 +123,38 @@ export function NextStep({ document, block, source, tools, edit, onSelect }: {
     if (added) onSelect({ kind: 'node', id: added, path: block });
   }
 
-  return <Popover open={!!openPort} onOpenChange={(next, details) => { if (!next) close(details.reason === 'escape-key'); }}><section className={css.nextSection} aria-label={tx('workflows:inspector.next-step')}>
-    <h3 className={css.nextHeading}>{tx('workflows:inspector.next-step')}</h3>
-    <p className={css.nextHint}>{tx('workflows:next-step.hint')}</p>
-    <div className={clsx(css.nextFlow, sourceNode?.type === 'branch' && css.branchNextFlow)}>
-      <span className={clsx(css.nextSource, sourceNode?.type === 'start' ? css.startIcon : css[`kind_${sourceNode!.type}`])}>
+  return <Popover open={!!openPort} onOpenChange={(next, details) => { if (!next) close(details.reason === 'escape-key'); }}><section className={editorCss.nextSection} aria-label={tx('workflows:inspector.next-step')}>
+    <h3 className={editorCss.nextHeading}>{tx('workflows:inspector.next-step')}</h3>
+    <p className={editorCss.nextHint}>{tx('workflows:next-step.hint')}</p>
+    <div className={clsx(editorCss.nextFlow, sourceNode?.type === 'branch' && editorCss.branchNextFlow)}>
+      <span className={clsx(editorCss.nextSource, sourceNode?.type === 'start' ? editorCss.startIcon : editorCss[`kind_${sourceNode!.type}`])}>
         {sourceNode?.type === 'start' ? <IconEntry size={18} /> : <KindIcon kind={nodeIconKind(sourceNode!)} size={18} />}
       </span>
       <NextLine anchors={anchors} />
-      <div ref={portList} className={css.nextPorts}>
+      <div ref={portList} className={editorCss.nextPorts}>
         {ports.map(port => {
           const targets = targetsFor(port);
-          return <div key={port} className={clsx(css.nextPort, port === 'fail' && css.nextPortFail)}>
-            {ports.length > 1 && <span className={css.nextPortLabel} data-port-label>{portLabel(port)}</span>}
-            {targets.map(target => { const targetNode = nodeAt(owner, target); return <div key={target} className={css.nextConnected}>
-              <button type="button" className={css.nextTarget} title={nodeTitle(target)} onClick={() => onSelect({ kind: 'node', id: target, path: block })}>
-                <span className={clsx(css.nextTargetIcon, targetNode && css[`kind_${targetNode.type}`])}>{targetNode ? <KindIcon kind={nodeIconKind(targetNode)} size={15} /> : <IconBlock size={15} />}</span>
+          return <div key={port} className={clsx(editorCss.nextPort, port === 'fail' && editorCss.nextPortFail)}>
+            {ports.length > 1 && <span className={editorCss.nextPortLabel} data-port-label>{portLabel(port)}</span>}
+            {targets.map(target => { const targetNode = nodeAt(owner, target); return <div key={target} className={editorCss.nextConnected}>
+              <button type="button" className={editorCss.nextTarget} title={nodeTitle(target)} onClick={() => onSelect({ kind: 'node', id: target, path: block })}>
+                <span className={clsx(editorCss.nextTargetIcon, targetNode && editorCss[`kind_${targetNode.type}`])}>{targetNode ? <KindIcon kind={nodeIconKind(targetNode)} size={15} /> : <IconBlock size={15} />}</span>
                 <span>{nodeTitle(target)}</span>
               </button>
-              <button type="button" className={css.nextRemove} aria-label={tx('workflows:next-step.disconnect', { p0: nodeTitle(target) })} title={tx('workflows:next-step.disconnect', { p0: nodeTitle(target) })} onClick={() => remove(port, target)}><IconCloseOutline16 /></button>
+              <button type="button" className={editorCss.nextRemove} aria-label={tx('workflows:next-step.disconnect', { p0: nodeTitle(target) })} title={tx('workflows:next-step.disconnect', { p0: nodeTitle(target) })} onClick={() => remove(port, target)}><IconCloseOutline16 /></button>
             </div>; })}
-            <button type="button" className={css.nextAdd} aria-label={tx(targets.length ? 'workflows:next-step.parallel' : 'workflows:next-step.choose', { p0: ports.length > 1 ? portLabel(port) : tx('workflows:inspector.next-step') })}
+            <button type="button" className={editorCss.nextAdd} aria-label={tx(targets.length ? 'workflows:next-step.parallel' : 'workflows:next-step.choose', { p0: ports.length > 1 ? portLabel(port) : tx('workflows:inspector.next-step') })}
               aria-haspopup="dialog" aria-expanded={openPort === port}
               onPointerDown={event => { if (event.button === 0) { event.preventDefault(); event.stopPropagation(); open(port, event.currentTarget); } }}
               onClick={event => { if (event.detail === 0) open(port, event.currentTarget); }}>
-              <span className={css.nextAddIcon}><IconPlus size={13} /></span>
+              <span className={editorCss.nextAddIcon}><IconPlus size={13} /></span>
               {tx(targets.length ? 'workflows:next-step.parallel-label' : 'workflows:next-step.choose-label')}
             </button>
           </div>;
         })}
       </div>
     </div>
-    {openPort && <PopoverPopup ref={panel} className={css.nextPicker} role="dialog" aria-label={tx('workflows:next-step.picker')}
+    {openPort && <PopoverPopup ref={panel} className={editorCss.nextPicker} role="dialog" aria-label={tx('workflows:next-step.picker')}
       anchor={trigger} positionMethod="fixed" side="left" align="start" sideOffset={8} collisionPadding={12}
       initialFocus={false} finalFocus={() => false}>
       <NodeChooser tools={tools} input={input} preview="left" omit={unavailableKinds(document, block)} onChoose={choose}

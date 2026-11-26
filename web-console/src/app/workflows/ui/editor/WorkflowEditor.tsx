@@ -30,7 +30,7 @@ import { Checklist } from './Checklist';
 import { Inspector } from './Inspector';
 import { DraftOwner, FieldCommits } from './forms/drafts';
 import { viewKey } from './view-store';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 import { Textarea } from '@/components/ui/textarea';
 
 /** Problems a native diagnostic marks in the block being edited: its own
@@ -177,28 +177,28 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
   }, [editor, save]);
 
   let content: ReactNode;
-  if (snapshot.matches('loading')) content = <p className={css.state} role="status">{tx('workflows:editor.loading')}</p>;
-  else if (snapshot.matches('failed')) content = <div className={css.state} role="alert">
+  if (snapshot.matches('loading')) content = <p className={editorCss.state} role="status">{tx('workflows:editor.loading')}</p>;
+  else if (snapshot.matches('failed')) content = <div className={editorCss.state} role="alert">
     <p>{tx('workflows:editor.read-failed', { p0: context.loadFailure?.kind === 'failed' ? context.loadFailure.message : context.loadFailure?.kind ?? '' })}</p>
     <Button variant="outline" size="sm" onClick={() => editor.send({ type: 'RELOAD' })}>{tx('workflows:library.retry')}</Button>
   </div>;
-  else if (!base?.source.present) content = <div className={css.state} role="alert"><p>{tx('workflows:editor.missing')}</p></div>;
+  else if (!base?.source.present) content = <div className={editorCss.state} role="alert"><p>{tx('workflows:editor.missing')}</p></div>;
   // As Dify's failed DSL import: a file this version cannot read (written by
   // another version, or edited by hand) says why and where, and nothing in
   // it changes. A file it reads opens, its problems in the checklist.
-  else if (!document || !owner) content = <div className={css.state} role="alert">
+  else if (!document || !owner) content = <div className={editorCss.state} role="alert">
     <p>{tx('workflows:editor.not-editable')}</p>
-    {base.source.diagnostic && <ul className={css.problems}><li className={css.problem}><code>{base.source.diagnostic.path}</code><span>{base.source.diagnostic.reason}</span>
+    {base.source.diagnostic && <ul className={editorCss.problems}><li className={editorCss.problem}><code>{base.source.diagnostic.path}</code><span>{base.source.diagnostic.reason}</span>
       {base.source.diagnostic.line != null && <small>{tx('workflows:editor.line', { p0: base.source.diagnostic.line, p1: base.source.diagnostic.column ?? 0 })}</small>}
       {base.source.diagnostic.correction && <small>{base.source.diagnostic.correction}</small>}</li></ul>}
-    <div className={css.stateActions}>
+    <div className={editorCss.stateActions}>
       <Button variant="outline" size="sm" onClick={() => surface.send({ type: 'BACK' })}>{tx('workflows:editor.back')}</Button>
       <Button variant="primary" size="sm" onClick={() => editor.send({ type: 'RELOAD' })}>{tx('workflows:editor.reload')}</Button>
     </div>
   </div>;
-  else content = <ToolCatalogProvider port={context.port}><div className={css.body}>
+  else content = <ToolCatalogProvider port={context.port}><div className={editorCss.body}>
     <ReactFlowProvider>
-      <div className={css.stage}>
+      <div className={editorCss.stage}>
         <Canvas document={document} path={block} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection} currentState={currentState} organizeEpoch={layoutEpoch}
           problems={problems} edit={edit} editable={editable && !saving} drafts={context.drafts} onDuplicate={duplicate} tools={base.source.vocabulary.builtin_tools} />
       </div>
@@ -209,23 +209,23 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
       vocabulary={base.source.vocabulary} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined} /></DraftOwner.Provider>}
   </div></ToolCatalogProvider>;
 
-  return <section className={css.editor} aria-labelledby="workflow-editor-title">
-    <header className={css.head}>
-      <div className={css.headMain}>
-        <div className={css.crumbLine}>
-          <button type="button" className={css.iconButton} aria-label={tx('workflows:editor.back')} title={tx('workflows:editor.back')} onClick={() => surface.send({ type: 'BACK' })}><IconArrowLeft /></button>
-          <span className={css.muted}>{tx('workflows:library.title')}</span><span aria-hidden className={css.sep}>/</span>
-          <span className={css.muted}>{target.scope.kind === 'user' ? tx('workflows:scope.global') : tx('workflows:scope.workspace-value', { p0: scopeLabel })}</span><span aria-hidden className={css.sep}>/</span>
+  return <section className={editorCss.editor} aria-labelledby="workflow-editor-title">
+    <header className={editorCss.head}>
+      <div className={editorCss.headMain}>
+        <div className={editorCss.crumbLine}>
+          <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:editor.back')} title={tx('workflows:editor.back')} onClick={() => surface.send({ type: 'BACK' })}><IconArrowLeft /></button>
+          <span className={editorCss.muted}>{tx('workflows:library.title')}</span><span aria-hidden className={editorCss.sep}>/</span>
+          <span className={editorCss.muted}>{target.scope.kind === 'user' ? tx('workflows:scope.global') : tx('workflows:scope.workspace-value', { p0: scopeLabel })}</span><span aria-hidden className={editorCss.sep}>/</span>
           {document?.editor?.display && <WorkflowIcon icon={document.editor.display.icon} size={16} />}
-          <h1 id="workflow-editor-title" className={css.title}>{document?.editor?.display?.title.trim() || target.id}</h1>
+          <h1 id="workflow-editor-title" className={editorCss.title}>{document?.editor?.display?.title.trim() || target.id}</h1>
         </div>
-        <p className={css.fileLine}><IconFile size={14} /><code title={base?.source.path}>{base?.source.relative_path ?? /* i18n-raw: native canonical file location */ `.agents/workflows/${target.id}.yaml`}</code><span aria-hidden className={css.sep}>│</span><span>{fileState}</span>
-          {base && <span className={css.revision} title={base.revision}>{shortRevision(base.revision)}</span>}</p>
+        <p className={editorCss.fileLine}><IconFile size={14} /><code title={base?.source.path}>{base?.source.relative_path ?? /* i18n-raw: native canonical file location */ `.agents/workflows/${target.id}.yaml`}</code><span aria-hidden className={editorCss.sep}>│</span><span>{fileState}</span>
+          {base && <span className={editorCss.revision} title={base.revision}>{shortRevision(base.revision)}</span>}</p>
       </div>
-      <div className={css.actions}>
-        <span className={css.saved} role="status"><b className={clsx(css.dot, dirty && css.dotDirty)} />{dirty ? tx('workflows:editor.dirty') : tx('workflows:editor.clean')}</span>
-        <button type="button" className={css.iconButton} aria-label={tx('workflows:editor.undo')} title={tx('workflows:editor.undo')} disabled={!context.past.length} onClick={() => editor.send({ type: 'UNDO' })}><IconUndo /></button>
-        <button type="button" className={css.iconButton} aria-label={tx('workflows:editor.redo')} title={tx('workflows:editor.redo')} disabled={!context.future.length} onClick={() => editor.send({ type: 'REDO' })}><IconRedo /></button>
+      <div className={editorCss.actions}>
+        <span className={editorCss.saved} role="status"><b className={clsx(editorCss.dot, dirty && editorCss.dotDirty)} />{dirty ? tx('workflows:editor.dirty') : tx('workflows:editor.clean')}</span>
+        <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:editor.undo')} title={tx('workflows:editor.undo')} disabled={!context.past.length} onClick={() => editor.send({ type: 'UNDO' })}><IconUndo /></button>
+        <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:editor.redo')} title={tx('workflows:editor.redo')} disabled={!context.future.length} onClick={() => editor.send({ type: 'REDO' })}><IconRedo /></button>
         {editable && <Checklist items={items} onGo={go} />}
         <Button variant="primary" size="sm" icon={<IconFile />} disabled={!editable || saving || !dirty || !!context.uncertain} onClick={save}>{saving ? tx('workflows:editor.saving') : tx('workflows:editor.save')}</Button>
         <Menu open={menu} onClose={() => setMenu(false)} align="end" autoFocus onSelect={id => {
@@ -238,7 +238,7 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
           { id: 'layout', label: tx('workflows:editor.reset-layout') },
           { type: 'separator', id: 'separator' },
           { id: 'reload', label: tx('workflows:editor.reload'), disabled: saving },
-        ]} anchor={<button type="button" className={css.moreButton} aria-label={tx('workflows:editor.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><IconEllipsisOutline16 /></button>} />
+        ]} anchor={<button type="button" className={editorCss.moreButton} aria-label={tx('workflows:editor.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><IconEllipsisOutline16 /></button>} />
       </div>
     </header>
     {context.receipt && !notice && context.receipt !== toasted && <Toast key={`${context.receipt.revision}:${context.receipt.generation}`} tone="success" text={tx('workflows:notice.saved')} onDone={() => setToasted(context.receipt)} />}
@@ -266,12 +266,12 @@ function EditorNotices({ notice, uncertain, reconcile, dismiss, discard, drafts,
   else if (notice?.kind === 'pending_fields') text = tx('workflows:notice.pending-fields', { p0: Object.keys(drafts).length });
   else if (uncertain) text = tx('workflows:notice.uncertain');
   const serious = notice?.kind === 'failure' || uncertain || notice?.kind === 'changed_externally' || notice?.kind === 'changed_after_save' || notice?.kind === 'pending_fields';
-  return <div className={clsx(css.notice, serious && css.noticeSerious)} role={serious ? 'alert' : 'status'}>
+  return <div className={clsx(editorCss.notice, serious && editorCss.noticeSerious)} role={serious ? 'alert' : 'status'}>
     <span>{text}</span>
     {uncertain && <Button size="sm" variant="outline" onClick={reconcile}>{tx('workflows:notice.reconcile')}</Button>}
     {notice?.kind === 'pending_fields' && <Button size="sm" variant="outline" onClick={discard}>{tx('workflows:notice.discard-fields')}</Button>}
     {notice && <Button size="sm" onClick={dismiss}>{tx('workflows:notice.dismiss')}</Button>}
-    {notice?.kind === 'pending_fields' && <ul className={css.pendingFields} aria-label={tx('workflows:notice.pending-list')}>
+    {notice?.kind === 'pending_fields' && <ul className={editorCss.pendingFields} aria-label={tx('workflows:notice.pending-list')}>
       {Object.entries(drafts).map(([field, draft]) => <li key={field}>
         <code>{describeField(draft.address)}</code>
         {draft.conflict === 'missing' ? <DetachedText draft={draft} discard={() => discardField(field)} /> : <>
@@ -296,8 +296,8 @@ function DetachedText({ draft, discard }: { draft: FieldDraft; discard: () => vo
     <small>{tx('workflows:notice.field-gone')}</small>
     <Button size="sm" variant="outline" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>{tx(open ? 'workflows:notice.hide-text' : 'workflows:notice.view-text')}</Button>
     <Button size="sm" variant="outline" onClick={discard}>{tx('workflows:notice.discard-field')}</Button>
-    {open && <div id={id} className={css.keptText}>
-      <Textarea className={clsx(css.input, css.textarea, css.mono)} readOnly value={draft.text} aria-label={tx('workflows:notice.kept-text', { p0: location })} spellCheck={false} rows={Math.min(8, draft.text.split('\n').length + 1)} />
+    {open && <div id={id} className={editorCss.keptText}>
+      <Textarea className={clsx(editorCss.input, editorCss.textarea, editorCss.mono)} readOnly value={draft.text} aria-label={tx('workflows:notice.kept-text', { p0: location })} spellCheck={false} rows={Math.min(8, draft.text.split('\n').length + 1)} />
       <Button size="sm" variant="outline" onClick={() => { setCopy(undefined); void writeClipboard(draft.text).then(ok => setCopy(ok ? 'copied' : 'failed')); }}>{tx('workflows:notice.copy-text')}</Button>
       <span role="status">{copy && tx(copy === 'copied' ? 'workflows:notice.text-copied' : 'workflows:notice.copy-failed')}</span>
     </div>}

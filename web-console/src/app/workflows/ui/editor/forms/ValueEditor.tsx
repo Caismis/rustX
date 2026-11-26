@@ -18,7 +18,7 @@ function updateKind<K extends Value['type'] | Predicate['type'], T extends { typ
     return update(current as Extract<T, { type: K }>);
   });
 }
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
 
@@ -47,31 +47,31 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
     if (current.items.length !== value.items.length) throw new CommandRejected('missing_field');
     return { ...current, items: update(current.items) };
   }, array);
-  return <fieldset className={css.value}>
-    <legend className={css.fieldLabel}>{label}</legend>
-    <div className={css.kindRow} role="radiogroup" aria-label={tx('workflows:value.kind')}>
-      {VALUE_KINDS.map(kind => <button key={kind} type="button" role="radio" aria-checked={value.type === kind} className={clsx(css.chip, value.type === kind && css.chipActive)}
+  return <fieldset className={editorCss.value}>
+    <legend className={editorCss.fieldLabel}>{label}</legend>
+    <div className={editorCss.kindRow} role="radiogroup" aria-label={tx('workflows:value.kind')}>
+      {VALUE_KINDS.map(kind => <button key={kind} type="button" role="radio" aria-checked={value.type === kind} className={clsx(editorCss.chip, value.type === kind && editorCss.chipActive)}
         onClick={() => { if (value.type !== kind) edit(document => setField(document, address, template(kind))); }}>{tx(`workflows:value.${kind}`)}</button>)}
     </div>
-    {value.type === 'reference' && <><ReferencePicker address={address} path={value.path} edit={edit} /><details className={css.advanced}><summary>{tx('workflows:value.manual')}</summary><PathEditor address={within(address, ['path'])} path={value.path} edit={edit} /></details></>}
+    {value.type === 'reference' && <><ReferencePicker address={address} path={value.path} edit={edit} /><details className={editorCss.advanced}><summary>{tx('workflows:value.manual')}</summary><PathEditor address={within(address, ['path'])} path={value.path} edit={edit} /></details></>}
     {value.type === 'template' && <TemplateInput parts={value.parts} address={address} edit={edit} label={label}
       onChange={(parts, session) => edit(document => updateKind<'template', Value>(document, address, ['template'], current => ({ ...current, parts })), `${encodeField(address)}:${session}`)} />}
     {value.type === 'literal' && <JsonField label={tx('workflows:value.literal-json')} value={value.value} rows={3} address={within(address, ['value'])} />}
-    {value.type === 'object' && <div className={css.nested}>
-      {Object.entries(value.fields).map(([key, entry]) => <div key={key} className={css.nestedRow}>
+    {value.type === 'object' && <div className={editorCss.nested}>
+      {Object.entries(value.fields).map(([key, entry]) => <div key={key} className={editorCss.nestedRow}>
         <ValueEditor label={key} address={within(address, ['fields', { key }])} value={entry} edit={edit} />
-        <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
+        <button type="button" className={editorCss.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
           onClick={() => change(['object'], current => ({ ...current, fields: Object.fromEntries(Object.entries(current.fields).filter(([name]) => name !== key)) }))}>×</button>
       </div>)}
       <AddKey existing={Object.keys(value.fields)} address={address} add={(document, key) => updateKind<'object', Value>(document, address, ['object'], current => Object.hasOwn(current.fields, key) ? current : { ...current, fields: { ...current.fields, [key]: template('reference') } })} />
     </div>}
-    {value.type === 'array' && <div className={css.nested}>
-      {value.items.map((item, index) => <div key={index} className={css.nestedRow}>
+    {value.type === 'array' && <div className={editorCss.nested}>
+      {value.items.map((item, index) => <div key={index} className={editorCss.nestedRow}>
         <ValueEditor label={`[${index}]`} address={within(address, ['items', index])} value={item} edit={edit} />
-        <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })}
+        <button type="button" className={editorCss.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })}
           onClick={() => resize(current => current.filter((_, at) => at !== index), { array: items, removed: index })}>×</button>
       </div>)}
-      <button type="button" className={css.smallButton} onClick={() => resize(current => [...current, template('reference')], { array: items, inserted: value.items.length })}>{tx('workflows:inspector.add-item')}</button>
+      <button type="button" className={editorCss.smallButton} onClick={() => resize(current => [...current, template('reference')], { array: items, inserted: value.items.length })}>{tx('workflows:inspector.add-item')}</button>
     </div>}
   </fieldset>;
 }
@@ -93,15 +93,15 @@ export function PathEditor({ address, path, edit }: { address: FieldAddress; pat
     if (!Array.isArray(current)) throw new CommandRejected('missing_field');
     return update(current);
   }), coalesce);
-  return <div className={css.path} aria-label={tx('workflows:value.path')} role="group">
-    {path.map((component, index) => <span key={index} className={css.pathComponent}>
-      <TextInput className={clsx(css.input, css.mono, css.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
+  return <div className={editorCss.path} aria-label={tx('workflows:value.path')} role="group">
+    {path.map((component, index) => <span key={index} className={editorCss.pathComponent}>
+      <TextInput className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
         size={Math.max(4, component.length)} onChange={event => { const text = event.target.value; set(current => current.map((value, at) => at === index ? text : value), encodeField(within(address, [index]))); }} />
-      <button type="button" className={css.pathRemove} aria-label={tx('workflows:inspector.remove', { p0: component })} onClick={() => set(current => current.filter((_, at) => at !== index))}>×</button>
+      <button type="button" className={editorCss.pathRemove} aria-label={tx('workflows:inspector.remove', { p0: component })} onClick={() => set(current => current.filter((_, at) => at !== index))}>×</button>
     </span>)}
-    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono, css.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
+    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
       onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } else if (event.key === 'Escape') adding.reset(); }} />
-    <small className={css.hint}>{tx('workflows:value.path-hint')}</small>
+    <small className={editorCss.hint}>{tx('workflows:value.path-hint')}</small>
   </div>;
 }
 
@@ -113,10 +113,10 @@ export function AddKey({ existing, address, add, label, action }: { existing: re
     return { status: 'applied', document: add(document, key) };
   } });
   const valid = field.text !== '' && !existing.includes(field.text);
-  return <div className={css.inline}>
-    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(css.input, css.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
+  return <div className={editorCss.inline}>
+    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
       onChange={event => field.change(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
-    <button type="button" className={css.smallButton} disabled={!valid} onClick={field.apply}>{action ?? tx('workflows:inspector.add-field')}</button>
+    <button type="button" className={editorCss.smallButton} disabled={!valid} onClick={field.apply}>{action ?? tx('workflows:inspector.add-field')}</button>
   </div>;
 }
 
@@ -155,9 +155,9 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
     if (current.predicates.length !== shown) throw new CommandRejected('missing_field');
     return { ...current, predicates: update(current.predicates) };
   }, array);
-  return <fieldset className={css.value}>
-    <legend className={css.fieldLabel}>{label}</legend>
-    <EnumSelect className={css.input} label={tx('workflows:predicate.kind')} value={predicate.type}
+  return <fieldset className={editorCss.value}>
+    <legend className={editorCss.fieldLabel}>{label}</legend>
+    <EnumSelect className={editorCss.input} label={tx('workflows:predicate.kind')} value={predicate.type}
       onChange={kind => { if (kind !== predicate.type) edit(document => updateField<Predicate>(document, address, current => current.type === kind ? current : predicateTemplate(kind, current))); }}
       options={PREDICATE_KINDS.map(kind => ({ value: kind, label: tx(`workflows:predicate.${kind}`) }))} />
     {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
@@ -166,14 +166,14 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
       <ValueEditor label={tx('workflows:predicate.right')} address={within(address, ['right'])} value={predicate.right} edit={edit} />
     </>}
     {(predicate.type === 'empty' || predicate.type === 'not_empty') && <ValueEditor label={tx('workflows:branch.value')} address={within(address, ['value'])} value={predicate.value} edit={edit} />}
-    {predicate.type === 'not' && <div className={css.nested}><PredicateEditor label={tx('workflows:predicate.not')} address={within(address, ['predicate'])} predicate={predicate.predicate} edit={edit} /></div>}
-    {(predicate.type === 'and' || predicate.type === 'or') && <div className={css.nested}>
-      {predicate.predicates.map((item, index) => <div key={index} className={css.nestedRow}>
+    {predicate.type === 'not' && <div className={editorCss.nested}><PredicateEditor label={tx('workflows:predicate.not')} address={within(address, ['predicate'])} predicate={predicate.predicate} edit={edit} /></div>}
+    {(predicate.type === 'and' || predicate.type === 'or') && <div className={editorCss.nested}>
+      {predicate.predicates.map((item, index) => <div key={index} className={editorCss.nestedRow}>
         <PredicateEditor label={`${index + 1}`} address={within(address, ['predicates', index])} predicate={item} edit={edit} />
-        <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: String(index + 1) })} disabled={predicate.predicates.length === 1}
+        <button type="button" className={editorCss.smallButton} aria-label={tx('workflows:inspector.remove', { p0: String(index + 1) })} disabled={predicate.predicates.length === 1}
           onClick={() => { if (shown > 1) resize(current => current.filter((_, at) => at !== index), { array: predicates, removed: index }); }}>×</button>
       </div>)}
-      <button type="button" className={css.smallButton} onClick={() => resize(current => [...current, { type: 'boolean', value: { type: 'reference', path: ['args'] } }], { array: predicates, inserted: shown })}>{tx('workflows:predicate.add')}</button>
+      <button type="button" className={editorCss.smallButton} onClick={() => resize(current => [...current, { type: 'boolean', value: { type: 'reference', path: ['args'] } }], { array: predicates, inserted: shown })}>{tx('workflows:predicate.add')}</button>
     </div>}
   </fieldset>;
 }

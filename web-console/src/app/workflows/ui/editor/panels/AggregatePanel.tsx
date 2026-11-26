@@ -12,7 +12,7 @@ import { ReferencePicker } from '../forms/ReferencePicker';
 import { RouteId } from './InferencePanels';
 import { DataOutputs, DataSection } from './DataFields';
 import { useNode, type PanelProps } from './shared';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { dataPanelsCss } from './dataPanelsCss';
 
 export function AggregatePanel(props: PanelProps) {
@@ -32,7 +32,7 @@ export function AggregatePanel(props: PanelProps) {
   };
   return (
     <div className={dataPanelsCss.panel}>
-      <section className={css.group}>
+      <section className={editorCss.group}>
         {(node.grouped ? node.groups : node.groups.slice(0, 1)).map((group, index) => (
           <div className={dataPanelsCss.group} key={`${index}:${group.name}`}>
             <h3>
@@ -81,7 +81,7 @@ export function AggregatePanel(props: PanelProps) {
               {node.grouped && node.groups.length > 1 && (
                 <button
                   type="button"
-                  className={css.iconButton}
+                  className={editorCss.iconButton}
                   aria-label={tx('workflows:data.remove-group', { p0: group.name })}
                   onClick={() => requestRemove(group.name)}
                 >
@@ -129,7 +129,7 @@ export function AggregatePanel(props: PanelProps) {
                     </div>
                     <button
                       type="button"
-                      className={css.iconButton}
+                      className={editorCss.iconButton}
                       aria-label={tx('workflows:data.remove-source', { p0: String(position + 1) })}
                       onClick={() =>
                         update(
@@ -161,7 +161,7 @@ export function AggregatePanel(props: PanelProps) {
         {node.grouped && (
           <button
             type="button"
-            className={css.promptAddMessage}
+            className={editorCss.promptAddMessage}
             disabled={node.groups.length >= 32}
             onClick={() => {
               let n = 2;

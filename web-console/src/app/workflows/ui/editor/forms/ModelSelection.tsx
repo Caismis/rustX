@@ -6,7 +6,7 @@ import type { WorkflowScopePort } from '../../../port';
 import { IconSettingsOutline14 } from '../../../../../presentation/primitives/icons';
 import { KindIcon } from '../../icons';
 import { JsonField, NumberField, SelectField } from './fields';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
 
 type Query = { type: 'models' } | { type: 'profiles'; model: string };
@@ -59,19 +59,19 @@ export function ModelSelection(props: {
   const tx = useTranslation(), { policy } = props, [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const selected = policy.mode === 'explicit' ? policy : undefined;
-  return <section className={css.group}>
-    <h3 className={css.groupHeading}>{tx('workflows:card.model')}<span className={css.required} aria-hidden>*</span></h3>
+  return <section className={editorCss.group}>
+    <h3 className={editorCss.groupHeading}>{tx('workflows:card.model')}<span className={editorCss.required} aria-hidden>*</span></h3>
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger ref={trigger} className={css.modelTrigger}
+      <PopoverTrigger ref={trigger} className={editorCss.modelTrigger}
         aria-invalid={selected && !selected.model || undefined} aria-label={tx('workflows:prompt.model-parameters')}>
-        <span className={`${css.modelTriggerIcon} ${css.kind_model}`}><KindIcon kind="model" size={14} /></span>
-        <span className={css.modelTriggerName}>{selected ? selected.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session')}</span>
-        {selected?.profile && <span className={css.modelTriggerBadge}>{selected.profile}</span>}
-        <span className={css.modelTriggerSettings} aria-hidden><IconSettingsOutline14 /></span>
+        <span className={`${editorCss.modelTriggerIcon} ${editorCss.kind_model}`}><KindIcon kind="model" size={14} /></span>
+        <span className={editorCss.modelTriggerName}>{selected ? selected.model || tx('workflows:inspector.model-choose') : tx('workflows:inspector.model-session')}</span>
+        {selected?.profile && <span className={editorCss.modelTriggerBadge}>{selected.profile}</span>}
+        <span className={editorCss.modelTriggerSettings} aria-hidden><IconSettingsOutline14 /></span>
       </PopoverTrigger>
-      <PopoverPopup className={css.modelPopup} positionMethod="fixed" side="left" align="start" sideOffset={12} collisionPadding={12}
+      <PopoverPopup className={editorCss.modelPopup} positionMethod="fixed" side="left" align="start" sideOffset={12} collisionPadding={12}
         role="dialog" aria-label={tx('workflows:prompt.model-parameters')} finalFocus={() => trigger.current ?? false}>
-        <h4 className={css.modelPopupTitle}>{tx('workflows:prompt.model-parameters')}</h4>
+        <h4 className={editorCss.modelPopupTitle}>{tx('workflows:prompt.model-parameters')}</h4>
         <ModelParameters {...props} />
       </PopoverPopup>
     </Popover>
@@ -105,7 +105,7 @@ function ModelParameters({ policy, address, port, onChange }: {
         options={[{ value: '', label: tx('workflows:inspector.model-default-profile') }, ...withSelected(profileValues, selected.profile).map(profile => ({ value: profile, label: profile }))]}
         onChange={profile => onChange({ ...selected, profile: profile || undefined }, ['profile'])} />
       {selected.model && <ChoicePages choices={profiles} kind="profiles" />}
-      <details className={css.advanced}><summary>{tx('workflows:panel.advanced')}</summary>
+      <details className={editorCss.advanced}><summary>{tx('workflows:panel.advanced')}</summary>
       <NumberField label={tx('workflows:inspector.model-output-limit')} hint={tx('workflows:inspector.model-output-limit-hint')} value={selected.max_output_tokens} min={1} max={4294967295} optional address={{ ...address, path: [...address.path, 'max_output_tokens'] }} />
       <JsonField label={tx('workflows:inspector.model-params')} hint={tx('workflows:inspector.model-params-hint')} value={selected.request_params ?? {}} rows={5} address={{ ...address, path: [...address.path, 'request_params'], role: 'optional' }} />
       </details>
@@ -115,13 +115,13 @@ function ModelParameters({ policy, address, port, onChange }: {
 
 function ChoicePages({ choices: { state, load }, kind }: { choices: ReturnType<typeof useModelChoices>; kind: 'models' | 'profiles' }) {
   const tx = useTranslation();
-  if (state?.loading) return <p className={css.note} role="status">{tx('workflows:inspector.model-choices-loading')}</p>;
-  if (state?.failed) return <div><p className={css.note} role="alert">{tx('workflows:inspector.model-choices-failed')}</p>
-    <button type="button" className={css.smallButton} onClick={() => load()}>{tx('workflows:inspector.model-choices-reload')}</button></div>;
+  if (state?.loading) return <p className={editorCss.note} role="status">{tx('workflows:inspector.model-choices-loading')}</p>;
+  if (state?.failed) return <div><p className={editorCss.note} role="alert">{tx('workflows:inspector.model-choices-failed')}</p>
+    <button type="button" className={editorCss.smallButton} onClick={() => load()}>{tx('workflows:inspector.model-choices-reload')}</button></div>;
   if (!state?.choices) return null;
   const { revision, next_offset } = state.choices;
-  return <div className={css.inline}>
-    {state.offset > 0 && <button type="button" className={css.smallButton} onClick={() => load(Math.max(0, state.offset - 32), revision)}>{tx(kind === 'models' ? 'workflows:inspector.model-choices-previous-models' : 'workflows:inspector.model-choices-previous-profiles')}</button>}
-    {next_offset != null && <button type="button" className={css.smallButton} onClick={() => load(next_offset, revision)}>{tx(kind === 'models' ? 'workflows:inspector.model-choices-more-models' : 'workflows:inspector.model-choices-more-profiles')}</button>}
+  return <div className={editorCss.inline}>
+    {state.offset > 0 && <button type="button" className={editorCss.smallButton} onClick={() => load(Math.max(0, state.offset - 32), revision)}>{tx(kind === 'models' ? 'workflows:inspector.model-choices-previous-models' : 'workflows:inspector.model-choices-previous-profiles')}</button>}
+    {next_offset != null && <button type="button" className={editorCss.smallButton} onClick={() => load(next_offset, revision)}>{tx(kind === 'models' ? 'workflows:inspector.model-choices-more-models' : 'workflows:inspector.model-choices-more-profiles')}</button>}
   </div>;
 }

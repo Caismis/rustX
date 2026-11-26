@@ -5,7 +5,7 @@ import { useTranslation } from '../../../../locale/react';
 import { IconPlus } from '../icons';
 import { CanvasActions } from './WorkflowNode';
 import type { SceneEdge } from './scene';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 
 /** As Dify's CustomEdge: a "+" at the midpoint, shown while the edge or the
  * button is hovered or focused, inserts a node into this connection. */
@@ -16,9 +16,9 @@ export const WorkflowEdge = memo(function WorkflowEdge({ id, sourceX, sourceY, t
   return <>
     <g onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}><BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} interactionWidth={interactionWidth} /></g>
     {actions.editable && <EdgeLabelRenderer>
-      <div className={clsx(css.edgeAdd, (hovered || near || selected) && css.edgeAddShown, 'nodrag nopan')} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }}
+      <div className={clsx(editorCss.edgeAdd, (hovered || near || selected) && editorCss.edgeAddShown, 'nodrag nopan')} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }}
         onMouseEnter={() => setNear(true)} onMouseLeave={() => setNear(false)} onFocus={() => setNear(true)} onBlur={() => setNear(false)}>
-        <button type="button" className={css.handleAdd} aria-label={tx('workflows:canvas.insert-edge')} onClick={event => { event.stopPropagation(); actions.insertEdge(id, event.currentTarget); }}><IconPlus size={10} /></button>
+        <button type="button" className={editorCss.handleAdd} aria-label={tx('workflows:canvas.insert-edge')} onClick={event => { event.stopPropagation(); actions.insertEdge(id, event.currentTarget); }}><IconPlus size={10} /></button>
       </div>
     </EdgeLabelRenderer>}
   </>;

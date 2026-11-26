@@ -11,18 +11,18 @@ import { ValueEditor } from '../forms/ValueEditor';
 import { IconPencil } from '../../icons';
 import type { Edit } from './shared';
 import { EnumSelect } from '../../../../../presentation/primitives/EnumSelect';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { dataPanelsCss } from './dataPanelsCss';
 
 export function DataOutputs({ items }: { items: { name: string; type: string; description: string }[] }) {
   const tx = useTranslation(),
     [open, setOpen] = useState(false);
   return (
-    <section className={css.group}>
-      <h3 className={css.groupHeading}>
+    <section className={editorCss.group}>
+      <h3 className={editorCss.groupHeading}>
         <button
           type="button"
-          className={css.outputToggle}
+          className={editorCss.outputToggle}
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
@@ -31,7 +31,7 @@ export function DataOutputs({ items }: { items: { name: string; type: string; de
         </button>
       </h3>
       {open && (
-        <dl className={css.outputVars}>
+        <dl className={editorCss.outputVars}>
           {items.map((item) => (
             <div key={item.name}>
               <dt>
@@ -58,12 +58,12 @@ export function DataSection({
   required?: boolean;
 }) {
   return (
-    <section className={css.group}>
-      <h3 className={css.groupHeading}>
+    <section className={editorCss.group}>
+      <h3 className={editorCss.groupHeading}>
         <span>
           {title}
           {required && (
-            <span aria-hidden className={css.required}>
+            <span aria-hidden className={editorCss.required}>
               *
             </span>
           )}
@@ -125,15 +125,15 @@ export function BooleanInput({ value, address, edit, label, onChange }: {
   if (!variable && !(value.type === 'literal' && typeof value.value === 'boolean')) {
     return <ValueEditor label={label} address={address} value={value} edit={edit} />;
   }
-  return <div className={css.toolArgumentRow} role="group" aria-label={label}>
-    <div className={css.typeSwitch} role="radiogroup" aria-label={tx('workflows:value.kind')}>
-      <button type="button" role="radio" aria-checked={variable} aria-label={tx('workflows:tool.variable')} title={tx('workflows:tool.variable')} className={clsx(variable && css.typeSwitchActive)}
+  return <div className={editorCss.toolArgumentRow} role="group" aria-label={label}>
+    <div className={editorCss.typeSwitch} role="radiogroup" aria-label={tx('workflows:value.kind')}>
+      <button type="button" role="radio" aria-checked={variable} aria-label={tx('workflows:tool.variable')} title={tx('workflows:tool.variable')} className={clsx(variable && editorCss.typeSwitchActive)}
         onClick={() => { if (!variable) onChange({ type: 'reference', path: [] }); }}>{/* i18n-raw: Dify's variable glyph */ '{x}'}</button>
-      <button type="button" role="radio" aria-checked={!variable} aria-label={tx('workflows:tool.constant')} title={tx('workflows:tool.constant')} className={clsx(!variable && css.typeSwitchActive)}
+      <button type="button" role="radio" aria-checked={!variable} aria-label={tx('workflows:tool.constant')} title={tx('workflows:tool.constant')} className={clsx(!variable && editorCss.typeSwitchActive)}
         onClick={() => { if (variable) onChange({ type: 'literal', value: false }); }}><IconPencil size={14} /></button>
     </div>
     {variable ? <ReferencePicker token address={address} path={value.path} edit={edit} />
-      : <EnumSelect className={css.input} label={label} value={String(value.value)}
+      : <EnumSelect className={editorCss.input} label={label} value={String(value.value)}
         onChange={next => onChange({ type: 'literal', value: next === 'true' })}
         options={[{ value: 'true', label:/* i18n-raw: boolean literal */ 'True' }, { value: 'false', label:/* i18n-raw: boolean literal */ 'False' }]} />}
   </div>;

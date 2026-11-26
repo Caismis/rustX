@@ -13,7 +13,7 @@ import { PromptEditor } from '../forms/PromptEditor';
 import { promptText } from '../summary';
 import { InsertVariable, RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 
 type Review = Extract<NodeDefinition, { type: 'review' }>;
@@ -25,17 +25,17 @@ export function ReviewPanel(props: PanelProps) {
   return <>
     <ReviewContent {...props} />
     <ReviewActions {...props} />
-    <div className={css.panelDivider} />
+    <div className={editorCss.panelDivider} />
     <ReviewTimeout {...props} />
-    <div className={css.panelDivider} />
+    <div className={editorCss.panelDivider} />
     <ReviewOutputs />
   </>;
 }
 
 function Heading({ title, tip, children }: { title: string; tip: string; children?: React.ReactNode }) {
-  return <h3 className={css.groupHeading}>
-    <span className={css.headingText}>{title}
-      <Tooltip label={tip} side="bottom" maxWidth={260}><span className={css.promptHint} tabIndex={0} aria-label={tip}><IconQuestionOutline14 /></span></Tooltip></span>
+  return <h3 className={editorCss.groupHeading}>
+    <span className={editorCss.headingText}>{title}
+      <Tooltip label={tip} side="bottom" maxWidth={260}><span className={editorCss.promptHint} tabIndex={0} aria-label={tip}><IconQuestionOutline14 /></span></Tooltip></span>
     {children}
   </h3>;
 }
@@ -44,12 +44,12 @@ function ReviewContent(props: PanelProps) {
   const tx = useTranslation(), { node, at, update } = useNode(props, 'review');
   const [expanded, setExpanded] = useState(false), [session, setSession] = useState(0);
   const address = at('content'), field = encodeField(address), label = tx('workflows:review.content');
-  return <section className={css.group}>
+  return <section className={editorCss.group}>
     <PromptEditor parts={node.content} address={address} edit={props.edit} label={label} expanded={expanded} invalid={!node.content.length}
       placeholder={tx('workflows:review.content-placeholder')} variablePlaceholder={tx('workflows:branch.select-variable')}
       onChange={content => update(current => ({ ...current, content }), address, undefined, `${field}:${session}`)}>
       {editable => <PromptCard label={label} hint={tx('workflows:review.content-tip')} text={promptText(node.content)} expanded={expanded} onExpand={() => setExpanded(value => !value)}
-        role={<b className={css.promptRoleFixed}>{label}</b>} tools={<InsertVariable />}>
+        role={<b className={editorCss.promptRoleFixed}>{label}</b>} tools={<InsertVariable />}>
         <div onFocus={() => setSession(value => value + 1)}>{editable}</div>
       </PromptCard>}
     </PromptEditor>
@@ -72,17 +72,17 @@ function ReviewActions(props: PanelProps) {
     const id = freshIdentifier({ input: {}, nodes: Object.fromEntries(review.actions.map(action => [action.id, { type: 'start' }])), edges: [] }, `action_${review.actions.length + 1}`);
     return { ...review, actions: [...review.actions, { id, title: tx('workflows:review.default-title', { p0: String(review.actions.length + 1) }) }] };
   }, { array: at('actions'), inserted: node.actions.length });
-  return <section className={css.group} aria-label={tx('workflows:review.actions')}>
+  return <section className={editorCss.group} aria-label={tx('workflows:review.actions')}>
     <Heading title={tx('workflows:review.actions')} tip={tx('workflows:review.actions-tip')}>
-      <button type="button" className={css.iconButton} disabled={node.actions.length >= 12} aria-label={tx('workflows:review.add-action')} title={tx('workflows:review.add-action')} onClick={add}><IconPlus size={14} /></button>
+      <button type="button" className={editorCss.iconButton} disabled={node.actions.length >= 12} aria-label={tx('workflows:review.add-action')} title={tx('workflows:review.add-action')} onClick={add}><IconPlus size={14} /></button>
     </Heading>
-    {!node.actions.length && <p className={css.reviewEmpty}>{tx('workflows:review.actions-empty')}</p>}
-    <div className={css.reviewActions}>
-      {node.actions.map((action, index) => <div key={action.id} className={css.reviewAction}>
-        <div className={css.reviewActionId}><RouteId value={action.id} address={at('actions', index, 'id')} label={tx('workflows:review.action-id')}
+    {!node.actions.length && <p className={editorCss.reviewEmpty}>{tx('workflows:review.actions-empty')}</p>}
+    <div className={editorCss.reviewActions}>
+      {node.actions.map((action, index) => <div key={action.id} className={editorCss.reviewAction}>
+        <div className={editorCss.reviewActionId}><RouteId value={action.id} address={at('actions', index, 'id')} label={tx('workflows:review.action-id')}
           rename={(document, from, to) => renameExit(document, props.block, props.id, from, to)} /></div>
-        <div className={css.reviewActionTitle}><DraftTextField value={action.title} label={tx('workflows:review.action-title')} placeholder={tx('workflows:review.action-title')} address={at('actions', index, 'title')} /></div>
-        <button type="button" className={css.iconButton} aria-label={tx('workflows:review.remove-action', { p0: action.id })} title={tx('workflows:review.remove-action', { p0: action.id })}
+        <div className={editorCss.reviewActionTitle}><DraftTextField value={action.title} label={tx('workflows:review.action-title')} placeholder={tx('workflows:review.action-title')} address={at('actions', index, 'title')} /></div>
+        <button type="button" className={editorCss.iconButton} aria-label={tx('workflows:review.remove-action', { p0: action.id })} title={tx('workflows:review.remove-action', { p0: action.id })}
           onClick={() => exits(review => ({ ...review, actions: review.actions.filter(item => item.id !== action.id) }), { array: at('actions'), removed: index })}><IconTrashOutline16 /></button>
       </div>)}
     </div>
@@ -100,12 +100,12 @@ function ReviewTimeout(props: PanelProps) {
     const next = Math.min(MAX_TIMEOUT, Math.max(per, Math.round(count) * per));
     if (Number.isFinite(next) && next !== milliseconds) update(current => ({ ...current, timeout_ms: String(next) }), at('timeout_ms'));
   };
-  return <section className={clsx(css.group, css.reviewTimeout)}>
-    <h3 className={css.groupHeading}><span className={css.headingText}>{tx('workflows:review.timeout')}</span></h3>
-    <TextInput className={css.input} type="number" min={1} max={MAX_TIMEOUT / unit} aria-label={tx('workflows:review.timeout')} value={value}
+  return <section className={clsx(editorCss.group, editorCss.reviewTimeout)}>
+    <h3 className={editorCss.groupHeading}><span className={editorCss.headingText}>{tx('workflows:review.timeout')}</span></h3>
+    <TextInput className={editorCss.input} type="number" min={1} max={MAX_TIMEOUT / unit} aria-label={tx('workflows:review.timeout')} value={value}
       onChange={event => { if (event.target.value !== '') commit(Number(event.target.value), unit); }} />
-    <div className={css.typeSwitch} role="radiogroup" aria-label={tx('workflows:review.timeout')}>
-      {([HOUR, MINUTE] as const).map(per => <button key={per} type="button" role="radio" aria-checked={unit === per} className={clsx(unit === per && css.typeSwitchActive)}
+    <div className={editorCss.typeSwitch} role="radiogroup" aria-label={tx('workflows:review.timeout')}>
+      {([HOUR, MINUTE] as const).map(per => <button key={per} type="button" role="radio" aria-checked={unit === per} className={clsx(unit === per && editorCss.typeSwitchActive)}
         onClick={() => { setUnit(per); commit(value, per); }}>{tx(per === HOUR ? 'workflows:review.hours' : 'workflows:review.minutes')}</button>)}
     </div>
   </section>;
@@ -114,11 +114,11 @@ function ReviewTimeout(props: PanelProps) {
 /** As Dify's output variables: the action chosen, then what was shown. */
 function ReviewOutputs() {
   const tx = useTranslation(), [open, setOpen] = useState(true);
-  return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
-    <h3 className={css.groupHeading}>
-      <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
+  return <section className={editorCss.group} aria-label={tx('workflows:prompt.output-variables')}>
+    <h3 className={editorCss.groupHeading}>
+      <button type="button" className={editorCss.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
     </h3>
-    {open && <dl className={css.outputVars}>
+    {open && <dl className={editorCss.outputVars}>
       <div><dt><b>{/* i18n-raw: native output field name */ 'action'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:review.output-action')}</dd></div>
       <div><dt><b>{/* i18n-raw: native output field name */ 'content'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:review.output-content')}</dd></div>
     </dl>}

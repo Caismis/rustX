@@ -10,7 +10,7 @@ import { Section, TextField } from './fields';
 import { InputFields } from './InputFields';
 import { NextStep } from '../NextStep';
 import type { Selection } from '../selection';
-import css from '../Editor.module.css';
+import { editorCss } from '../editorCss';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
@@ -39,8 +39,8 @@ export function BlockForm({ document, block, edit, onSelect, tools, start = fals
         onChange={(title, session) => editDisplay({ title }, session)} />
       <TextField label={tx('workflows:inspector.display-description')} value={display.description ?? ''} multiline field={workflowField('editor.display.description')}
         onChange={(description, session) => editDisplay({ description }, session)} />
-      <div className={css.field}>
-        <span className={css.fieldLabel}>{tx('workflows:inspector.display-icon')}</span>
+      <div className={editorCss.field}>
+        <span className={editorCss.fieldLabel}>{tx('workflows:inspector.display-icon')}</span>
         <IconPicker value={display.icon ?? DEFAULT_WORKFLOW_ICON} onChange={icon => editDisplay({ icon })} />
       </div>
     </Section>}

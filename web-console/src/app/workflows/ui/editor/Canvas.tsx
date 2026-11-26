@@ -27,7 +27,7 @@ import { viewId, type Duplicate, type Selection } from './selection';
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from './shortcuts';
 import type { NodeRunOverlay } from '../../run-canvas/aggregation';
 import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu';
-import css from './Editor.module.css';
+import { editorCss } from './editorCss';
 
 export type { Selection } from './selection';
 export interface Problems { readonly nodes: ReadonlyMap<string, 'error' | 'warning' | 'nested'>; readonly edges: ReadonlySet<string> }
@@ -104,8 +104,8 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       ...(node.parentId ? { extent: [[24, 64], [1_000_000, 1_000_000]] as [[number, number], [number, number]] } : {}),
       ariaLabel: `${baseLabel}${overlayLabel}`,
       className: clsx(
-        problems.nodes.has(node.id) && css[`node_${problems.nodes.get(node.id)}`],
-        overlay && css[`run_${overlay.status}`],
+        problems.nodes.has(node.id) && editorCss[`node_${problems.nodes.get(node.id)}`],
+        overlay && editorCss[`run_${overlay.status}`],
       ) || undefined,
     };
   }), [scene, runOverlay, selected, selectedId, effectiveEditable, problems, tx]);
@@ -124,7 +124,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   const edges = useMemo(() => scene.edges.map(edge => {
     const selected = selection?.kind === 'edge' && sameBlockPath(selection.path ?? scope, edge.data!.path) && selection.index === edge.data!.index;
     return { ...edge, reconnectable: editable && selected, selected,
-      className: clsx(css.edge, problems.edges.has(edge.id) && css.edgeError) };
+      className: clsx(editorCss.edge, problems.edges.has(edge.id) && editorCss.edgeError) };
   }), [scene, editable, selection, scope, problems]);
   const byId = useMemo(() => new Map(scene.nodes.map(node => [node.id, node])), [scene]);
   const choose = useCallback((node: SceneNode, multiple = false) => {
@@ -361,7 +361,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   }, [locateId, initialized, flow, viewEpoch, locateFrame, minimap, focusNonce]);
   useEffect(() => { if (viewEpoch) setSelected(new Set()); }, [viewEpoch]);
   const found = search === undefined ? [] : projectScene(document).nodes.filter(node => `${node.data.title} ${node.data.local} ${keyOfBlock(node.data.path)}`.toLowerCase().includes(search.toLowerCase())).slice(0, 64);
-  return <div ref={container} className={css.canvas} aria-label={tx('workflows:canvas.label')} role="region" aria-busy={moving} tabIndex={0}
+  return <div ref={container} className={editorCss.canvas} aria-label={tx('workflows:canvas.label')} role="region" aria-busy={moving} tabIndex={0}
     onFocusCapture={event => { const target = event.target as HTMLElement; if (target.matches('.react-flow__node')) setFocusedId(target.dataset.id); }}
     onBlurCapture={event => { if ((event.target as Element).matches('.react-flow__node')) setFocusedId(undefined); }}
     onCopy={event => { if (keyboardOwned(event.target) || window.getSelection()?.toString()) return; try { event.clipboardData.setData('text/plain', fragmentFor()); event.preventDefault(); } catch (error) { report(error); } }}
@@ -399,51 +399,51 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         autoPanOnNodeFocus={false} panOnDrag={mode === 'pan' ? true : [1, 2]} selectionOnDrag={mode === 'select'} panOnScroll
         proOptions={readOnly ? undefined : { hideAttribution: true }} attributionPosition={readOnly ? 'top-right' : undefined}
         ariaLabelConfig={{ 'node.a11yDescription.default': tx('workflows:canvas.label') }}>
-        <Background variant={BackgroundVariant.Dots} gap={18} size={1} className={css.dots} />
-        {minimap && <MiniMap className={css.minimap} pannable zoomable ariaLabel={tx('workflows:canvas.minimap')} nodeClassName={css.miniNode} maskColor="transparent" />}
+        <Background variant={BackgroundVariant.Dots} gap={18} size={1} className={editorCss.dots} />
+        {minimap && <MiniMap className={editorCss.minimap} pannable zoomable ariaLabel={tx('workflows:canvas.minimap')} nodeClassName={editorCss.miniNode} maskColor="transparent" />}
       </ReactFlow>
       {/* As Dify's operator bar: add, then the pointer modes, then layout. */}
-      <div className={css.rail} role="toolbar" aria-label={tx('workflows:canvas.tools')} aria-orientation="vertical">
+      <div className={editorCss.rail} role="toolbar" aria-label={tx('workflows:canvas.tools')} aria-orientation="vertical">
         {!readOnly && <>
           <Tool label={tx('workflows:canvas.add')} disabled={!effectiveEditable} onClick={addBelow}><IconAddCircle /></Tool>
           <Tool label={tx('workflows:canvas.add-note')} disabled={!effectiveEditable} onClick={addNote}><IconNoteAdd /></Tool>
-          <span className={css.railSeparator} aria-hidden />
+          <span className={editorCss.railSeparator} aria-hidden />
         </>}
         <Tool label={tx('workflows:canvas.select')} active={mode === 'select'} onClick={() => setMode('select')}><IconCursor /></Tool>
         <Tool label={tx('workflows:canvas.pan')} active={mode === 'pan'} onClick={() => setMode('pan')}><IconHand /></Tool>
         {!readOnly && <>
-          <span className={css.railSeparator} aria-hidden />
+          <span className={editorCss.railSeparator} aria-hidden />
           <Tool label={tx('workflows:canvas.organize')} disabled={!effectiveEditable || organizing} onClick={() => void organize()}><IconOrganize /></Tool>
         </>}
       </div>
       <Zoom minimap={minimap} toggleMinimap={() => setMinimap(value => !value)} />
-      <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: deepNodeCount(document.block) }))}</p>
+      <p className={editorCss.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: deepNodeCount(document.block) }))}</p>
       {palette && <Palette at={palette.at} tools={tools} omit={unavailableKinds(document, palette.path)} insertion={!!palette.insertion} onChoose={add} onClose={() => { setPalette(undefined); container.current?.focus(); }} />}
       {/* As Dify's node menu: change, then copy and duplicate, then delete. */}
       {menu && (() => {
         const view = byId.get(menu.id)?.data.view;
         const close = () => { setMenu(undefined); container.current?.focus(); };
-        return <div className={css.contextMenu} role="menu" aria-label={tx('workflows:canvas.node-actions', { p0: byId.get(menu.id)?.data.title ?? '' })} style={{ left: menu.at.x, top: menu.at.y }}
+        return <div className={editorCss.contextMenu} role="menu" aria-label={tx('workflows:canvas.node-actions', { p0: byId.get(menu.id)?.data.title ?? '' })} style={{ left: menu.at.x, top: menu.at.y }}
           onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close(); } }}>
           {view === 'node' && editable && <>
-            <button type="button" role="menuitem" autoFocus aria-haspopup="dialog" aria-expanded={!!menu.changing} className={clsx(menu.changing && css.contextActive)} onClick={() => setMenu({ ...menu, changing: !menu.changing })}>{tx('workflows:canvas.change')}</button>
-            <span className={css.contextSeparator} role="separator" />
+            <button type="button" role="menuitem" autoFocus aria-haspopup="dialog" aria-expanded={!!menu.changing} className={clsx(menu.changing && editorCss.contextActive)} onClick={() => setMenu({ ...menu, changing: !menu.changing })}>{tx('workflows:canvas.change')}</button>
+            <span className={editorCss.contextSeparator} role="separator" />
           </>}
           <button type="button" role="menuitem" autoFocus={view !== 'node' || !editable} onClick={() => { copy(menu.id); close(); }}>{tx('workflows:canvas.copy')}<ShortcutKeys keys={COPY_KEYS} /></button>
           <button type="button" role="menuitem" disabled={!editable} onClick={() => { duplicate(menu.id); setMenu(undefined); }}>{tx('workflows:canvas.duplicate')}<ShortcutKeys keys={DUPLICATE_KEYS} /></button>
-          <span className={css.contextSeparator} role="separator" />
-          <button type="button" role="menuitem" className={css.contextDanger} disabled={!editable} onClick={() => { remove(menu.id); setMenu(undefined); }}>{tx(view === 'note' ? 'workflows:note.delete' : 'workflows:canvas.delete')}<ShortcutKeys keys={DELETE_KEYS} /></button>
+          <span className={editorCss.contextSeparator} role="separator" />
+          <button type="button" role="menuitem" className={editorCss.contextDanger} disabled={!editable} onClick={() => { remove(menu.id); setMenu(undefined); }}>{tx(view === 'note' ? 'workflows:note.delete' : 'workflows:canvas.delete')}<ShortcutKeys keys={DELETE_KEYS} /></button>
           {/* Beside the menu, on the side with room, and within the canvas. */}
-          {menu.changing && <div className={clsx(css.changeNode, menu.at.x + 546 > (container.current?.clientWidth ?? 0) && css.changeNodeLeft)} role="dialog" aria-label={tx('workflows:canvas.change')}
+          {menu.changing && <div className={clsx(editorCss.changeNode, menu.at.x + 546 > (container.current?.clientWidth ?? 0) && editorCss.changeNodeLeft)} role="dialog" aria-label={tx('workflows:canvas.change')}
             style={{ top: Math.min(0, (container.current?.clientHeight ?? 0) - menu.at.y - 400) }}>
             <NodeChooser tools={tools} omit={unavailableKinds(document, byId.get(menu.id)!.data.path)} onChoose={choice => { if (!('id' in choice)) change(menu.id, choice); }} />
           </div>}
         </div>;
       })()}
-      {search !== undefined && <div className={css.nodeSearch} role="dialog" aria-label={tx('workflows:canvas.find')} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setSearch(undefined); container.current?.focus(); } }}>
-        <TextInput autoFocus className={css.input} aria-label={tx('workflows:canvas.find')} placeholder={tx('workflows:canvas.find')} value={search} onChange={event => setSearch(event.target.value)} />
+      {search !== undefined && <div className={editorCss.nodeSearch} role="dialog" aria-label={tx('workflows:canvas.find')} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setSearch(undefined); container.current?.focus(); } }}>
+        <TextInput autoFocus className={editorCss.input} aria-label={tx('workflows:canvas.find')} placeholder={tx('workflows:canvas.find')} value={search} onChange={event => setSearch(event.target.value)} />
         {found.map(node => <button type="button" key={node.id} onClick={() => { choose(node); setSearch(undefined); }}>{node.data.view === 'start' ? node.data.title || tx(node.data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : node.data.title}<small>{keyOfBlock(node.data.path)}</small></button>)}
-        {!found.length && <p className={css.note}>{tx('workflows:palette.none')}</p>}
+        {!found.length && <p className={editorCss.note}>{tx('workflows:palette.none')}</p>}
       </div>}
     </NoteActions.Provider></CanvasActions.Provider>
   </div>;
@@ -452,21 +452,21 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
 import type { ReactNode } from 'react';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 function Tool({ label, active, disabled, onClick, children }: { label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" className={clsx(css.tool, active && css.toolActive)} aria-pressed={active} aria-label={label} title={label} disabled={disabled} onClick={onClick}>{children}</button>;
+  return <button type="button" className={clsx(editorCss.tool, active && editorCss.toolActive)} aria-pressed={active} aria-label={label} title={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 /** As Dify's zoom control: out, the zoom level and its menu, in. */
 function Zoom({ minimap, toggleMinimap }: { minimap: boolean; toggleMinimap: () => void }) {
   const tx = useTranslation(), flow = useReactFlow(), { zoom } = useViewport();
-  return <div className={css.zoom} role="group" aria-label={tx('workflows:canvas.zoom')}>
+  return <div className={editorCss.zoom} role="group" aria-label={tx('workflows:canvas.zoom')}>
     <button type="button" aria-label={tx('workflows:canvas.zoom-out')} title={tx('workflows:canvas.zoom-out')} onClick={() => void flow.zoomOut({ duration: 120 })}><IconMinus size={13} /></button>
     <Menu modal={false}>
-      <MenuTrigger className={css.zoomLevel} aria-label={tx('workflows:canvas.zoom')}>{Math.round(zoom * 100)}%</MenuTrigger>
-      <MenuPopup side="top" align="end" sideOffset={6} className={css.zoomMenu}>
-        {[2, 1, 0.75, 0.5, 0.25].map(level => <MenuItem key={level} className={css.zoomItem} onClick={() => void flow.zoomTo(level, { duration: 120 })}>{`${level * 100}%`}</MenuItem>)}
-        <MenuSeparator className={css.zoomSeparator} />
-        <MenuItem className={css.zoomItem} onClick={() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration: 150 })}>{tx('workflows:canvas.fit')}</MenuItem>
-        <MenuSeparator className={css.zoomSeparator} />
-        <MenuCheckboxItem className={css.zoomItem} checked={minimap} onCheckedChange={toggleMinimap}>{tx('workflows:canvas.minimap')}</MenuCheckboxItem>
+      <MenuTrigger className={editorCss.zoomLevel} aria-label={tx('workflows:canvas.zoom')}>{Math.round(zoom * 100)}%</MenuTrigger>
+      <MenuPopup side="top" align="end" sideOffset={6} className={editorCss.zoomMenu}>
+        {[2, 1, 0.75, 0.5, 0.25].map(level => <MenuItem key={level} className={editorCss.zoomItem} onClick={() => void flow.zoomTo(level, { duration: 120 })}>{`${level * 100}%`}</MenuItem>)}
+        <MenuSeparator className={editorCss.zoomSeparator} />
+        <MenuItem className={editorCss.zoomItem} onClick={() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration: 150 })}>{tx('workflows:canvas.fit')}</MenuItem>
+        <MenuSeparator className={editorCss.zoomSeparator} />
+        <MenuCheckboxItem className={editorCss.zoomItem} checked={minimap} onCheckedChange={toggleMinimap}>{tx('workflows:canvas.minimap')}</MenuCheckboxItem>
       </MenuPopup>
     </Menu>
     <button type="button" aria-label={tx('workflows:canvas.zoom-in')} title={tx('workflows:canvas.zoom-in')} onClick={() => void flow.zoomIn({ duration: 120 })}><IconPlus size={13} /></button>
