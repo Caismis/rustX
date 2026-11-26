@@ -23,6 +23,7 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 serde_yaml_ng = "0.10.0"
 sha2 = "0.10"
+blake3 = "1.8.7"
 rmp-serde = "1"
 base64 = "0.22"
 uuid = { version = "1.24", features = ["v7"] }
