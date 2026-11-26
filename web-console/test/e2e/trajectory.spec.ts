@@ -625,7 +625,7 @@ for (const width of [1440, 390]) test(`overview tooltip names the block and zoom
   await page.mouse.move(box.x + box.width * .9, box.y + 25); await page.mouse.down({ button: 'right' });
   await page.mouse.move(box.x + box.width * .1, box.y + 25, { steps: 6 }); await page.mouse.up({ button: 'right' });
   const covered = await page.evaluate(() => {
-    const labels = [...document.querySelectorAll<HTMLElement>('[class*="labels"] span')];
+    const labels = [...document.querySelectorAll<HTMLElement>('[data-timeline-labels] span')];
     return labels.map(label => { const r = label.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === label; });
   });
   expect(covered).toEqual([true, true, true]);

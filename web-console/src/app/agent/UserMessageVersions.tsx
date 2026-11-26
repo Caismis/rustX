@@ -72,7 +72,7 @@ export function MessageVersionPager({ family, onSwitch, disabled, compact }: {
       <VersionAction label={tx('agent:message-version.previous')} disabled={disabled || !previous} onClick={() => { if (previous) onSwitch(previous); }}>
         <BundledIcon name="lucide:chevron-left" size={14} fallback={<IconChevronLeftOutline14 />} />
       </VersionAction>
-      <span className="min-w-[3ch] [color:var(--dsw-alias-label-secondary)] text-[var(--dsh-content-font-size-secondary,13px)] tabular-nums text-center whitespace-nowrap" role="status">{tx('agent:message-version.position', { current: current_index + 1, total })}</span>
+      <span className="min-w-[3ch] [color:var(--dsw-alias-label-secondary)] [font-size:var(--dsh-content-font-size-secondary,13px)] tabular-nums text-center whitespace-nowrap" role="status">{tx('agent:message-version.position', { current: current_index + 1, total })}</span>
       <VersionAction label={tx('agent:message-version.next')} disabled={disabled || !next} onClick={() => { if (next) onSwitch(next); }}>
         <BundledIcon name="lucide:chevron-right" size={14} fallback={<IconChevronRightOutline14 />} />
       </VersionAction>
@@ -118,7 +118,7 @@ export function UserMessageEditor({
         if (canRetry && !event.repeat) event.currentTarget.requestSubmit();
       }
     }}>
-      <Textarea unstyled className="box-border w-full max-h-[45vh] min-h-[4em] px-[10px] py-[8px] resize-y [border:1px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-primary)] [font:inherit] text-[var(--dsh-content-font-size,14px)] leading-[1.5] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" aria-label={labels.input} value={editing.text}
+      <Textarea unstyled className="box-border w-full max-h-[45vh] min-h-[4em] px-[10px] py-[8px] resize-y [border:1px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-primary)] [font:inherit] [font-size:var(--dsh-content-font-size,14px)] leading-[1.5] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" aria-label={labels.input} value={editing.text}
         rows={Math.max(3, editing.text.split('\n', 10).length)}
         disabled={unavailable} autoFocus onChange={event => editing.onText(event.target.value)} />
       <div className="flex flex-wrap justify-end gap-[8px] [&_button]:focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] [&_button]:focus-visible:outline-offset-2">

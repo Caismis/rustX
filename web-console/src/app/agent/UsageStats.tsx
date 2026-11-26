@@ -132,7 +132,7 @@ function ContextMeter({ occupancy }: { occupancy: RuntimeClientContextOccupancy 
       <span className="font-medium [color:var(--dsw-alias-label-primary)]">{reading}</span>
       <span className="[color:var(--dsw-alias-label-tertiary)] empty:hidden">{after}</span>
       {/* Native provenance marks a rebuilt-context estimate; provider readings remain exact. */}
-      <span className="ml-auto font-medium tabular-nums [color:var(--dsw-alias-label-primary)]">{`${occupancy.estimated ? '~' : ''}${formatTokens(occupancy.input_tokens, tx)} / ${formatTokens(occupancy.context_window_tokens, tx)}`}</span>
+      <span className="ml-auto font-medium tabular-nums [color:var(--dsw-alias-label-primary)]" data-occupancy-figures="">{`${occupancy.estimated ? '~' : ''}${formatTokens(occupancy.input_tokens, tx)} / ${formatTokens(occupancy.context_window_tokens, tx)}`}</span>
     </div>
     <div className="flex gap-[1px] mt-[10px] mb-[12px] h-[4px] rounded-full [corner-shape:round] bg-[var(--dsw-alias-interactive-bg-hover)] overflow-hidden">{segments.map(segment => <div key={segment.key} className={segment.color ? `flex-none min-w-[2px] h-full rounded-[var(--dsw-radius-xs)] bg-(--meter-tint,var(--dsw-alias-label-tertiary)) ${segment.color}` : "flex-none min-w-[2px] h-full rounded-[var(--dsw-radius-xs)] bg-(--meter-tint,var(--dsw-alias-label-tertiary))"} style={{ width: `${segment.width}%` }}/>)}</div>
     <dl className="mt-[6px] mb-0">

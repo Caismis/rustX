@@ -53,10 +53,10 @@ for (const theme of ['light', 'dark'] as const) test(`Harness tool details: inde
   await toggle.click();
   const generic = page.locator('[data-tool-call-id="generic"]');
   await generic.getByRole('button', { name: /^exa_search/ }).click();
-  const sections = generic.locator('[class*="ioSection"]');
+  const sections = generic.locator('[data-io-section]');
   expect(await sections.count()).toBe(2);
   for (const section of await sections.all()) expect(await section.evaluate(node => node.clientHeight <= 150 && node.scrollHeight > node.clientHeight)).toBe(true);
-  await expect(generic.locator('[class*="ioDivider"]')).toHaveCount(1);
+  await expect(generic.locator('[data-io-divider]')).toHaveCount(1);
   for (const id of ['read', 'edit', 'search']) {
     const row = page.locator(`[data-tool-call-id="${id}"]`);
     await row.getByRole('button', { expanded: false }).click();

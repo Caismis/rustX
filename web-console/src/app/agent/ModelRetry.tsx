@@ -110,13 +110,13 @@ function RetryNotice({ notice, open, onToggle, attached, running, client, sessio
   const active = attached && running && ['running', 'incomplete'].includes(notice.request.state) && notice.retry > 0;
   const label = active ? tx('agent:retry.active') : notice.request.state === 'cancelled' ? tx('agent:retry.cancelled')
     : notice.request.request?.failure_kind === 'timeout' ? tx('agent:retry.timeout') : tx('agent:retry.started');
-  return <details className="group/retry [color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))]" open={open} data-model-retry data-active={active || undefined} onToggle={event => {
+  return <details className="group/retry [color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))]" open={open} data-model-retry data-active={active || undefined} onToggle={event => {
     onToggle(event.currentTarget.open);
   }}>
     <summary className="inline-flex items-center w-fit max-w-full px-0 py-[2px] gap-[7px] rounded-[var(--dsw-radius-sm)] [color:inherit] cursor-pointer list-none select-none [&::-webkit-details-marker]:hidden hover:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:1.5px_solid_var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-2 after:flex-none after:w-[6px] after:h-[6px] after:mr-[2px] after:[border-right:1.5px_solid_currentcolor] after:[border-bottom:1.5px_solid_currentcolor] after:content-[''] after:-rotate-45 after:transition-transform after:duration-120 motion-reduce:after:transition-none group-open/retry:after:rotate-45"><span className="min-w-0 wrap-anywhere" role="status">
       <TextShimmer active={active}>{label + (notice.retry > 0 ? tx('agent:retry.ordinal', { n: notice.retry }) : '')}</TextShimmer>
     </span></summary>
-    <div className="grid gap-[2px] mt-[3px] pl-[14px] wrap-anywhere text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(18px+var(--dsh-content-font-delta-secondary,0px))]"><div><span className="[color:var(--dsw-alias-label-secondary)]">{tx('agent:retry.failure')}</span>{loaded?.message ?? tx('agent:retry.timeout')}</div>
+    <div className="grid gap-[2px] mt-[3px] pl-[14px] wrap-anywhere [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(18px+var(--dsh-content-font-delta-secondary,0px))]"><div><span className="[color:var(--dsw-alias-label-secondary)]">{tx('agent:retry.failure')}</span>{loaded?.message ?? tx('agent:retry.timeout')}</div>
       {large&&source.field&&open&&<TraceFields fields={[source.field]} cut={source.cut} reader={source.reader} owned={owned}/>}
       {loaded?.loading && <div>{tx('agent:retry.loading')}</div>}
       {loaded?.error && <button type="button" disabled={!attached} onClick={()=>void read()}>{tx('agent:retry.read-again')}</button>}

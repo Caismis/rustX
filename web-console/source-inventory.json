@@ -902,7 +902,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "cbbc9bf013db4297d3147af97e66ab2ac627ae9f2b515b37b56c1967b3fd11ff",
+      "local_sha256": "469ad891059ab1aa03a65360b13c937c824fc7754c2a52c81576fae876095dc4",
       "additional_sources": [
         {
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -1197,7 +1197,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "685f89cd51a5ff69eba00040b6a6b552a5a0d82638b7c720d5daaed57e8a8f66",
+      "local_sha256": "791223ac02644a4d9d0435c6c0cce489799961ed08c952a513c48c7d48f0df36",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
@@ -1240,7 +1240,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "78c7447feb07d7bc10b6dced536e11b3a525986c1c2a61a7afff4f3f38d352a5",
+      "local_sha256": "c27c37e5b6421c71b59991b83f6053262683dd6387dd9a670c67f41f39240c29",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -1643,7 +1643,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b9a7b52a0b8ed55aedae4d1466b90d0cfcb24c9914e3bcb63a0ab512cdaea03a",
+      "local_sha256": "0c65f4482d0646507148bc363949f64e57e3d5731f90f9242df28eba53e76e10",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
@@ -2018,7 +2018,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "db837b991680a4c26f9e67e25cdc24fe10e1591047a0620baab1f9eec88d8e6b",
+      "local_sha256": "a0082cdbbfa6361750a88ced205221052013b2d4c9d261b2385fbe9ba798cbbd",
       "classification": "B"
     },
     {
@@ -2422,7 +2422,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "2e2d0592e8bfff08951c539fe511ed03f4006b52d30a1d3346d38cb1cce041d1"
+      "local_sha256": "cf7a963365445689762fe5f126ab010f5b792bbac48491a64582a4a3bcae0521"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -2631,7 +2631,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "16c12b2cdce624f95caa1d35d0ba71f5beb08ed4372c09f520fef4e436b30c06",
+      "local_sha256": "ca170d93fd5b9c4cda7c67cb57b8c17899a998f0cf3a8c64c8e12d3b1b3fbbb1",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
@@ -2817,7 +2817,7 @@
         "react"
       ],
       "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
-      "local_sha256": "7f1ca5197eae67a888e39ea401d7f54377135950787929c91b4096b8f6148dbc"
+      "local_sha256": "bc3d9d22295a63ad3bdd7ae40b11b6eb8f8bce9c626b49cab7dbb40cb8c06ae0"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3222,7 +3222,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "8e54e961b8857f4d0243f28a44dc5ce15c0953357bf0db8f700441e21ccf5f4b",
+      "local_sha256": "9307510e3291500ed07ab0d158fd9cd81d7c36bc626e9af4d9cdb98c2420f821",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/QuestionToolRow.tsx",
@@ -3253,7 +3253,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "ff3962b1533a27b6e0055d3878e31c76c50b4f11979cfb7d4fbc090535bbd5dd"
+      "local_sha256": "c7fa4f39abbfa325ef91c4d7c18afe37e27533906be7099796562618035237e5"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.ts",
@@ -3301,7 +3301,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "5e9763e7fe435f21f24192ee532164dc24582c3e34ce6eb15f93fc84bc3cb783"
+      "local_sha256": "f8bf71a0a9ffd76d7d4c9029f2358d54f9de03dff35c03ec36a026f576ea6496"
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",
@@ -4242,7 +4242,7 @@
         "@fortune-sheet/react/dist/index.css?inline",
         "react"
       ],
-      "local_sha256": "dae7a34e5831bc0674f79f6bf9dff0e9167accfcbb253efddacad14fed2f0833"
+      "local_sha256": "6e7e987e730eadf137c8216a157fc9e27cc49c0e941292c542fb4daa06a8b228"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/format.ts",
@@ -4812,7 +4812,7 @@
         "Harness runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "b79895c844b515e5643fe6e5ec89a5ca68455e6fef79d0c19dbe33ba1f3bd064",
+      "local_sha256": "3bbf39dce2841663645c8c3b48fe96b0e35682cd75bff5dc93e6a2e989b1831a",
       "classification": "A"
     },
     {
@@ -4840,7 +4840,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "eaadf3b8bf07a5fe29f451136b50aadd58a3e123b0bb3e2c9094654ba9607723",
+      "local_sha256": "21fea229b8d00a88155958a28fa80dd2cb16dda2129c295b1bcdedbf33039206",
       "classification": "A"
     },
     {
@@ -5258,7 +5258,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "f2657a3de405b9d3ec1ba0d52f3ce284ff6298b93655f11dca0a6270f89dafe5",
+      "local_sha256": "778aeb23bb59a9734ba0ec42181b2749569812c89257b9fdcee58559c936ebe1",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",
@@ -5703,7 +5703,7 @@
         "Harness context injection history, request diffing and runtime authority"
       ],
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "local_sha256": "1b33bb41e7f6c071e9e9cd813e42afe7ac0460df4ca4813d76338fe4bb50cd38"
+      "local_sha256": "b423212645793c7ea8e0d2560f403e85508f6bbb9dedf5e80e8e1823a4d95aaf"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
@@ -6149,7 +6149,7 @@
       "excluded_dependencies": [
         "Cordis, Remote, plugin slots/store and resource-address authority"
       ],
-      "local_sha256": "13ca72fa28576cbe02bec81930eced21acf8b75b9fc348c2920a0446fd0c3785"
+      "local_sha256": "340192cdb453539ad8bab301a39654cb76fff1c246a1c90fddde6f3634fc954e"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -6528,7 +6528,7 @@
           "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
         }
       ],
-      "local_sha256": "be421e34ad1cf04b2f402f18f1531d791801bf2ff9145d072be0ea21fdc388a4"
+      "local_sha256": "7ab71f59426f140b2ca7f62cdda853bd5f3e007d5538b20527cb8f8840401484"
     }
   ],
   "inspected_only": [

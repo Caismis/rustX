@@ -25,7 +25,7 @@ export function RecordedQuestionReply({ questions, answers, time }: { questions:
     return { question: question.question, header: question.header !== question.question && question.header, text };
   });
   return <UserMessage label={tx('interactions:questionnaire.answers')} actions={<div className="flex items-center gap-[8px] pr-[4px]"><MessageTime time={time}/><CopyMessage text={rows.map(row => `${row.header ? `${row.header} — ` : ''}${row.question}\n${row.text}`).join('\n\n')}/></div>}>
-    <dl className="m-0 [&>div+div]:mt-[12px] [&_dt]:grid [&_dt]:gap-[3px] [&_dt]:[color:var(--dsw-alias-label-secondary)] [&_small]:text-[var(--dsh-content-font-size-secondary,13px)] [&_dd]:mt-[4px] [&_dd]:mx-0 [&_dd]:mb-0">{rows.map((row, index) => <div key={index}><dt>{row.header && <small>{row.header}</small>}{row.question}</dt><dd>{row.text}</dd></div>)}</dl>
+    <dl className="m-0 [&>div+div]:mt-[12px] [&_dt]:grid [&_dt]:gap-[3px] [&_dt]:[color:var(--dsw-alias-label-secondary)] [&_small]:[font-size:var(--dsh-content-font-size-secondary,13px)] [&_dd]:mt-[4px] [&_dd]:mx-0 [&_dd]:mb-0">{rows.map((row, index) => <div key={index}><dt>{row.header && <small>{row.header}</small>}{row.question}</dt><dd>{row.text}</dd></div>)}</dl>
   </UserMessage>;
 }
 /** Durable request/settlement receipts share only their exact native identity. */
@@ -58,8 +58,8 @@ export function InteractionAudit({ item, settlement }: { item: Requested | Settl
     <DisclosureRow icon={<IconQuestionOutline14/>} title={title} rowClassName={toolCss.row} open={open} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setOpen(value => !value)}
       collapsedContent={<><span className={toolCss.sep} aria-hidden/><span className={toolCss.summary}>{summary}</span></>}>
       <div className={toolCss.ioCard}>
-        <div className={toolCss.ioSection}><span className={toolCss.ioLabel}>{tx('interactions:approval-takeover.reason')}</span><span className={toolCss.ioText}>{subject.reason}</span></div>
-        {outcome?.type === 'denied' && <div className={toolCss.ioSection}><span className={toolCss.ioLabel}>{tx('interactions:audit.denied')}</span><span className={toolCss.ioText}>{outcome.reason}</span></div>}
+        <div className={toolCss.ioSection} data-io-section=""><span className={toolCss.ioLabel}>{tx('interactions:approval-takeover.reason')}</span><span className={toolCss.ioText}>{subject.reason}</span></div>
+        {outcome?.type === 'denied' && <div className={toolCss.ioSection} data-io-section=""><span className={toolCss.ioLabel}>{tx('interactions:audit.denied')}</span><span className={toolCss.ioText}>{outcome.reason}</span></div>}
       </div>
     </DisclosureRow>
   </div>;

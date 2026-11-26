@@ -109,7 +109,7 @@ function ttftFraction(span: TrajectorySpan, mode: TrajectoryTimelineMode): numbe
 function LaneLabels() {
   const tx = useTranslation();
   return (
-    <div className={trajectoryTimelineCss.labels} aria-hidden="true">
+    <div className={trajectoryTimelineCss.labels} aria-hidden="true" data-timeline-labels="">
       <span>{tx('trajectory:lane.Input')}</span>
       <span>{tx('trajectory:lane.Model')}</span>
       <span>{tx('trajectory:lane.Tools')}</span>

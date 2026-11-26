@@ -38,7 +38,7 @@ export function ConfigurationChangeRow({ change }: { change: ConfigurationChange
   return <div data-configuration-change data-binding-revision={change.binding_revision}>
     <DisclosureRow icon={<IconBrowseOutline16 size={14}/>} title={title} open={open && expandable} expandable={expandable} expandOnRowClick keepContentWhenOpen
       onToggle={() => setOpen(value => !value)}
-      collapsedContent={summary && <><span className="flex-none w-[2px] h-[2px] mx-[8px] my-0 rounded-[var(--dsw-radius-xs)] bg-[var(--dsw-alias-label-caption)]" aria-hidden/><span className="flex-auto min-w-0 overflow-hidden [color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] text-ellipsis whitespace-nowrap">{summary}</span></>}>
+      collapsedContent={summary && <><span className="flex-none w-[2px] h-[2px] mx-[8px] my-0 rounded-[var(--dsw-radius-xs)] bg-[var(--dsw-alias-label-caption)]" aria-hidden/><span className="flex-auto min-w-0 overflow-hidden [color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] text-ellipsis whitespace-nowrap">{summary}</span></>}>
       <div className="box-border w-[calc(100%-22px-var(--dsh-content-font-delta,0px))] max-h-[141px] mt-[4px] mr-0 mb-0 ml-[calc(22px+var(--dsh-content-font-delta,0px))] overflow-auto pt-[10px] pr-[16px] pb-[12px] pl-[12px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-alias-markdown-code-block)] [color:var(--dsw-alias-label-tertiary)] [font:400_11px/16px_var(--ds-font-family-code)]">
         <div className="wrap-anywhere">
           {added.total > 0 && <div>{tx('agent:tools.added', { names: names(added) })}</div>}

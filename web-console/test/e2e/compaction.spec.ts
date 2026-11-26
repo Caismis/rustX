@@ -112,7 +112,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       const compactedOccupancy = dock.getByRole('button', { name: /(% of context used$|^上下文已用 )/ });
       expect(Number.parseInt(await compactedOccupancy.innerText(), 10)).toBeLessThan(pressureBefore);
       await compactedOccupancy.click();
-      await expect(page.getByRole('dialog').locator('[class*="figures"]')).toHaveText(/^~/);
+      await expect(page.getByRole('dialog').locator('[data-occupancy-figures]')).toHaveText(/^~/);
       await page.keyboard.press('Escape');
       // Compaction estimates are separate from reported cumulative billing.
       const usageAfter = await dock.locator('button').allTextContents();

@@ -110,7 +110,7 @@ export function DisclosureRow({
           </span>
         )}
         <TextShimmer active={running} className={clsx('flex-auto min-w-0', contentClassName)} contentClassName={contentLayoutClassName}>
-        <TextShimmer className={clsx('flex-none text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] [color:inherit]', titleClassName)}>{title}</TextShimmer>
+        <TextShimmer className={clsx('flex-none [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] [color:inherit]', titleClassName)}>{title}</TextShimmer>
         {(keepContentWhenOpen || !open) && collapsedContent}
         </TextShimmer>
       </div>

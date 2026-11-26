@@ -1,7 +1,7 @@
 export const questionCss = {
   frame: 'flex justify-center pt-[6px] pb-[10px] px-[calc(var(--dsh-composer-side-clearance)+16px)]',
   card: 'flex flex-col w-full max-w-(--dsh-chat-content-width) max-h-[min(60vh,520px)] pt-0 px-0 pb-[10px] border-0 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] rounded-[var(--dsw-radius-xl)] bg-[var(--dsw-specific-input-major)] shadow-[var(--dsw-elevation-panel)] [color:var(--dsw-alias-label-primary)] overflow-hidden [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] box-border [&_*]:box-border',
-  cardMinimized: 'max-h-none [&_.q-header]:pb-[14px] [&_.q-title]:[-webkit-box] [&_.q-title]:overflow-hidden [&_.q-title]:[-webkit-box-orient:vertical] [&_.q-title]:[-webkit-line-clamp:2]',
+  cardMinimized: 'max-h-none [&_.q-header]:pb-[14px] [&_.q-title]:[display:-webkit-box] [&_.q-title]:overflow-hidden [&_.q-title]:[-webkit-box-orient:vertical] [&_.q-title]:[-webkit-line-clamp:2]',
   headerActions: 'flex items-center gap-[4px] flex-shrink-0',
   header: 'q-header flex items-start justify-between gap-[16px] flex-shrink-0 pt-[20px] pr-[16px] pb-0 pl-[24px]',
   headingBlock: 'flex-1 min-w-0',

@@ -64,7 +64,7 @@ export function ExcelBody({ content, format, limits, t, loading, signal, activeS
   const hasFormulas = state.value.sheets.some(sheet => sheet.celldata?.some(cell => cell.v?.f !== undefined))
   return <section className="flex flex-col h-full min-h-0 overflow-hidden whitespace-normal [font-family:var(--dsw-font,sans-serif)]" data-excel-preview aria-label={t('title')}>
     <style>{scopedStyles}</style>
-    {state.value.unsupportedFeatures.length > 0 && <div className="flex flex-none items-start gap-[8px] px-[12px] py-[8px] [color:var(--dsw-alias-state-warn-label)] bg-[var(--dsw-alias-state-warn-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[1.5] wrap-anywhere [&>svg]:flex-none [&>svg]:mt-[2px]" role="note" data-excel-unsupported-notice>
+    {state.value.unsupportedFeatures.length > 0 && <div className="flex flex-none items-start gap-[8px] px-[12px] py-[8px] [color:var(--dsw-alias-state-warn-label)] bg-[var(--dsw-alias-state-warn-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[1.5] wrap-anywhere [&>svg]:flex-none [&>svg]:mt-[2px]" role="note" data-excel-unsupported-notice>
       <IconWarningTriangleOutlineRegular size={16} />
       <span>{t('unsupportedNotice', { features: state.value.unsupportedFeatures.map(feature => t(feature)).join(t('featureSeparator')) })}</span>
     </div>}

@@ -85,7 +85,7 @@ export const taskManagerCss = {
   deliveryHead: 'flex items-center gap-[10px]',
   deliveryTime: 'block [color:var(--dsw-alias-label-primary)] text-[14px] leading-[22px] font-medium',
   confirmTitle: 'm-0 whitespace-pre-wrap wrap-anywhere',
-  savedPrompt: '[-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] line-clamp-2 overflow-hidden mt-[6px] [color:var(--dsw-alias-label-tertiary)] text-[13px] leading-[22px] whitespace-pre-wrap wrap-anywhere data-[expanded]:block data-[expanded]:[-webkit-line-clamp:none] data-[expanded]:line-clamp-none',
+  savedPrompt: '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] line-clamp-2 overflow-hidden mt-[6px] [color:var(--dsw-alias-label-tertiary)] text-[13px] leading-[22px] whitespace-pre-wrap wrap-anywhere data-[expanded]:block data-[expanded]:[-webkit-line-clamp:none] data-[expanded]:line-clamp-none',
   savedPromptToggle: 'inline-flex items-center gap-[2px] mt-[2px] ml-[-6px] px-[6px] py-[1px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-secondary)] font-inherit text-[12px] leading-[20px] cursor-pointer [@media(hover:hover)]:hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-2',
   confirmActions: 'flex justify-end flex-wrap gap-[8px]',
   detailContext: 'flex flex-none items-center min-w-0 max-w-[200px] has-[>button:disabled]:cursor-not-allowed [&>button:disabled]:pointer-events-none',

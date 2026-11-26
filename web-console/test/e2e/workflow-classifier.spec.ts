@@ -117,7 +117,7 @@ for (const width of [1440,390]) test.describe(`classifier panel ${width}`,()=>{
       expect(classifier.instruction).toContainEqual({type:'reference',path:['args','query']});
       expect(saved.block.edges.filter((edge:any)=>edge.from==='classify')).toEqual(dataNodesDocument().block.edges!.filter(edge=>edge.from==='classify'));
       await panel.getByRole('button',{name:'高级设置',exact:true}).scrollIntoViewIfNeeded();
-      await panel.evaluate(element=>{const body=element.querySelector<HTMLElement>('[class*="inspectBody"]');if(body)body.scrollTop=0;});
+      await panel.evaluate(element=>{const body=element.querySelector<HTMLElement>('[data-workflow-inspector-body]');if(body)body.scrollTop=0;});
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);
       await expect(page.getByText(/已保存。运行时使用/)).toHaveCount(0);

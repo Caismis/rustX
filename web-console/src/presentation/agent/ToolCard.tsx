@@ -54,9 +54,9 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
    {(tool.path || tool.output) && <div className={toolCss.imageMeta}>{tool.path && <div>{tool.path}</div>}{tool.output && <div>{tool.output}</div>}</div>}
  </div>
  : <div className={toolCss.ioCard}>
-   {tool.input && <div className={toolCss.ioSection}><span className={toolCss.ioLabel}>{tx('tools:tool-card.in')}</span><span className={toolCss.ioText}>{tool.input}</span></div>}
-   {tool.input && tool.output && !tool.background && <span className={toolCss.ioDivider} aria-hidden/>}
-   {tool.output && !tool.background && <div className={toolCss.ioSection}><span className={toolCss.ioLabel}>{tx('tools:tool-card.out')}</span><span className={toolCss.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
+   {tool.input && <div className={toolCss.ioSection} data-io-section=""><span className={toolCss.ioLabel}>{tx('tools:tool-card.in')}</span><span className={toolCss.ioText}>{tool.input}</span></div>}
+   {tool.input && tool.output && !tool.background && <span className={toolCss.ioDivider} aria-hidden data-io-divider/>}
+   {tool.output && !tool.background && <div className={toolCss.ioSection} data-io-section=""><span className={toolCss.ioLabel}>{tx('tools:tool-card.out')}</span><span className={toolCss.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
  </div>)}
  {!tool.imageResult && tool.artifacts}
  {inspect && <ToolInspectionButton inspect={inspect}/>}

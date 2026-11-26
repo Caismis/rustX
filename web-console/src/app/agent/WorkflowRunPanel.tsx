@@ -74,7 +74,7 @@ function WorkflowMember({ instance, onInspectCanvas, children }: {
       aria-label={tx('workflows:run-canvas.inspect-node', { p0: instance.node! })}
       title={tx('workflows:run-canvas.inspect-node', { p0: instance.node! })}
       onClick={event => { event.stopPropagation(); onInspectCanvas(event.currentTarget); }}>↗</button>}
-    {error && <span role="alert" className="[color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:activity.unavailable')}</span>}
+    {error && <span role="alert" className="[color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:activity.unavailable')}</span>}
   </div>;
 }
 
@@ -112,7 +112,7 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
         {tx('workflows:run-canvas.open')}
       </button>}
       summary={<>
-      <span className="flex-none w-[2px] h-[2px] rounded-full bg-[var(--dsw-alias-label-tertiary)]" aria-hidden="true"/><span className={`overflow-hidden flex-1 min-w-0 text-[var(--dsh-content-font-size-secondary,13px)] text-ellipsis whitespace-nowrap `}>
+      <span className="flex-none w-[2px] h-[2px] rounded-full bg-[var(--dsw-alias-label-tertiary)]" aria-hidden="true"/><span className={`overflow-hidden flex-1 min-w-0 [font-size:var(--dsh-content-font-size-secondary,13px)] text-ellipsis whitespace-nowrap `}>
         <span className={children.length ? "max-[560px]:hidden" : undefined}>{tx('common:workflow.nodes', { count: nodes.length })}{children.length > 0 && ' · '}</span>
         {children.length > 0 && tx(run.omitted_instances > 0 ? 'common:subagents.count-at-least' : 'common:subagents.count', { count: children.length })}
       </span>
@@ -121,20 +121,20 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
       {nodes.map(instance => <WorkflowMember instance={instance} key={nodeKey(instance)}
         onInspectCanvas={runCanvas ? trigger => openRun(instance, trigger) : undefined}>
         <span className="inline-flex flex-none w-[20px] h-[20px] items-center justify-center rounded-[5px] [color:var(--dsw-alias-state-business-primary)] bg-[var(--dsw-alias-interactive-bg-hover)]"><KindIcon kind={instance.kind === 'block' ? 'start' : instance.kind} size={14}/></span>
-        <span className="member-copy flex flex-col flex-1 min-w-0 px-0 py-[3px]"><span className="member-label overflow-hidden text-[var(--dsh-content-font-size,14px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] text-ellipsis whitespace-nowrap" title={instance.node!}>{instance.node}{instance.visit != null && instance.visit > 1 ? ` · ${instance.visit}` : ''}</span>
-          {instance.kind === 'agent' ? <span className="[color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:workflow.agent-record')}</span> : <span className="[color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx(`common:workflow.kind.${instance.kind}`)}
+        <span className="member-copy flex flex-col flex-1 min-w-0 px-0 py-[3px]"><span className="member-label overflow-hidden [font-size:var(--dsh-content-font-size,14px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] text-ellipsis whitespace-nowrap" title={instance.node!}>{instance.node}{instance.visit != null && instance.visit > 1 ? ` · ${instance.visit}` : ''}</span>
+          {instance.kind === 'agent' ? <span className="[color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:workflow.agent-record')}</span> : <span className="[color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx(`common:workflow.kind.${instance.kind}`)}
             {instance.iteration != null && <> · {tx('common:workflow.iteration', { current: instance.iteration, max: instance.iterations_max ?? '—' })}</>}
             {instance.loop_exit && <> · {tx(`common:workflow.loop.${instance.loop_exit}`)}</>}
             {instance.checks_passed != null && <> · {tx(instance.checks_passed ? 'common:workflow.checks-passed' : 'common:workflow.checks-failed')}</>}
           </span>}
-          {instance.block.definition.blocks.length > 0 && <span className="[color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">
+          {instance.block.definition.blocks.length > 0 && <span className="[color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">
             {instance.block.definition.blocks.join(' / ')} · {instance.block.invocations.slice(1).join('.')}
           </span>}
         </span>
-        <span className="inline-flex flex-none items-center justify-end gap-[4px] max-w-[42%] overflow-hidden text-[var(--dsh-content-font-size-secondary,13px)] text-right text-ellipsis whitespace-nowrap"><StateDot state={reviewing(instance) ? 'warning' : dot(instance.state)}/>{reviewing(instance) ? waiting : label(instance.state)}</span>
+        <span className="inline-flex flex-none items-center justify-end gap-[4px] max-w-[42%] overflow-hidden [font-size:var(--dsh-content-font-size-secondary,13px)] text-right text-ellipsis whitespace-nowrap"><StateDot state={reviewing(instance) ? 'warning' : dot(instance.state)}/>{reviewing(instance) ? waiting : label(instance.state)}</span>
       </WorkflowMember>)}
-      {!nodes.length && <span className="[color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:workflow.empty')}</span>}
-      {run.omitted_instances > 0 && <span className="[color:var(--dsw-alias-label-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:activity.omitted', { n: run.omitted_instances })}</span>}
+      {!nodes.length && <span className="[color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:workflow.empty')}</span>}
+      {run.omitted_instances > 0 && <span className="[color:var(--dsw-alias-label-tertiary)] [font-size:var(--dsh-content-font-size-secondary,13px)] leading-[calc(20px+var(--dsh-content-font-delta-secondary,0px))] wrap-anywhere">{tx('common:activity.omitted', { n: run.omitted_instances })}</span>}
     </StatusDisclosure>
   </section>;
 }
