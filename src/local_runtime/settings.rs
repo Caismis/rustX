@@ -202,7 +202,7 @@ pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClien
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
             .open(path),
-        crate::bounded_file::MAX_RESOURCE_BYTES,
+        rustx_bounded_file::MAX_RESOURCE_BYTES,
     )
 }
 
@@ -466,7 +466,7 @@ impl SourceDirectory {
             path: self.path.join(name),
             identity: identity(&directory)?,
             directory,
-            byte_limit: crate::bounded_file::MAX_RESOURCE_BYTES,
+            byte_limit: rustx_bounded_file::MAX_RESOURCE_BYTES,
         })
     }
 
@@ -479,7 +479,7 @@ impl SourceDirectory {
             path: path.into(),
             directory,
             identity,
-            byte_limit: crate::bounded_file::MAX_RESOURCE_BYTES,
+            byte_limit: rustx_bounded_file::MAX_RESOURCE_BYTES,
         }))
     }
 
@@ -799,7 +799,10 @@ fn child(
         reason = "the path names the directory in test durability traces"
     )
 )]
-fn sync(directory: &std::os::fd::OwnedFd, path: &Path) -> std::io::Result<()> {
+pub(in crate::local_runtime) fn sync(
+    directory: &std::os::fd::OwnedFd,
+    path: &Path,
+) -> std::io::Result<()> {
     #[cfg(test)]
     durability::syncing(path);
     #[cfg(test)]

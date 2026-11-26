@@ -698,6 +698,15 @@ pub struct ConversationAccess {
     _lock: Flock<File>,
     controller: Option<Arc<ProductController>>,
 }
+impl rustx_durable::sqlite::OwnershipLock for ConversationAccess {
+    fn ownership_mutation(&self) -> std::io::Result<Box<dyn std::any::Any + Send>> {
+        let mutation = OwnershipMutation {
+            _lock: lock(directory(&self.root.root)?, FlockArg::LockSharedNonblock)?,
+        };
+        Ok(Box::new(mutation))
+    }
+}
+
 impl std::ops::Deref for ConversationAccess {
     type Target = ProductRoot;
     fn deref(&self) -> &ProductRoot {

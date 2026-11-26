@@ -276,11 +276,17 @@ fn semantic_prefix_hashing_never_rehashes_old_owners() {
         for turn in 0..history {
             append(&mut request, turn, false, false);
         }
-        let before = request.messages.len();
-        super::prefix_fingerprint(&request.messages, before);
+        // The semantic prefix digest lives in the shared preparation cell: a
+        // repeat fingerprint must not rehash covered owners.
+        let _ = request.messages.semantic_fingerprint();
+        crate::model::selected_input::take_hash_work();
+        let _ = request.messages.semantic_fingerprint();
+        let repeat = crate::model::selected_input::take_hash_work();
+        assert_eq!(repeat.1, 0, "history={history}, repeat={repeat:?}");
+        // An append hashes only the appended suffix.
         append(&mut request, history, false, false);
         crate::model::selected_input::take_hash_work();
-        let actual = super::prefix_fingerprint(&request.messages, request.messages.len());
+        let actual = request.messages.semantic_fingerprint();
         let work = crate::model::selected_input::take_hash_work();
         assert_eq!(
             actual,
@@ -288,6 +294,14 @@ fn semantic_prefix_hashing_never_rehashes_old_owners() {
         );
         assert!(work.1 < 512, "history={history}, {work:?}");
         println!("semantic history={history} hashed_bytes={}", work.1);
+        // An edit inside the covered prefix revokes the incremental digest:
+        // the next fingerprint rehashes from the changed owner forward.
+        request.messages.insert(1, request.messages[0].clone());
+        let changed = request.messages.semantic_fingerprint();
+        assert_eq!(
+            changed,
+            crate::model::types::semantic_messages_fingerprint(&request.messages)
+        );
     }
 }
 

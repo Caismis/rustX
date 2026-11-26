@@ -156,7 +156,6 @@ impl ScheduledExecutor {
         binding: &crate::scheduler::ScheduleBinding,
         id: &ScheduledWorkflowStartId,
         (after, limit): (u64, u32),
-        clock: &dyn RuntimeClock,
     ) -> Result<crate::scheduler::ScheduleOperationResult, crate::runtime::inbound::MailboxError>
     {
         let ownerless = move |recovered_writer: bool| {
@@ -178,7 +177,7 @@ impl ScheduledExecutor {
                     limit,
                     retirement,
                 },
-                clock,
+                self.clock.as_ref(),
             )
         };
         // The owner probe and the ownerless `WorkflowReconcileOwned`

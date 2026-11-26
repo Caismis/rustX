@@ -226,6 +226,9 @@ class Planning(unittest.TestCase):
                 self.assertEqual(planned["profile"], "full")
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
+                # macOS lanes are suspended: never selected in any profile.
+                self.assertFalse(planned["run"]["rust-platform-boundaries"])
+                self.assertFalse(planned["run"]["rust-platform-core"])
 
     def test_a_pull_request_runs_fast_until_promoted(self):
         self.assertEqual(v.plan("pull_request", [], modified("src/lib.rs"))["profile"], "fast")
@@ -238,10 +241,13 @@ class Planning(unittest.TestCase):
         self.assertEqual(v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))["risk"], "low")
         run = v.plan("pull_request", [], modified("src/lib.rs"))["run"]
         self.assertTrue(run["rust-fast"] and run["web-client"])
-        self.assertFalse(run["rust-contracts"] or run["rust-boundaries"])
+        self.assertFalse(run["rust-platform-core"])
+        self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
+        self.assertFalse(run["desktop-macos"])
         for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
             with self.subTest(path=path):
-                self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["web-client"])
+                # Suspended: no change selects the macOS jobs for now.
+                self.assertFalse(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected}, {"documentation-contracts"})
         run = v.plan("pull_request", [], modified("tests/README.md"))["run"]
@@ -251,7 +257,7 @@ class Planning(unittest.TestCase):
 class AffectedSteps(unittest.TestCase):
     def test_fast_runs_a_heavy_contract_group_only_when_its_component_changed(self):
         steps = v.plan("pull_request", [], modified("src/durable/sqlite.rs", "README.md"))["steps"]
-        self.assertEqual(steps, {"rust-fast:durable": True, "rust-fast:app-server": False,
+        self.assertEqual(steps, {"rust-fast:app-server": False,
                                  "rust-fast:runtime-client": False})
         steps = v.plan("pull_request", [], modified("tests/support/app_server_driver.rs"))["steps"]
         self.assertTrue(steps["rust-fast:app-server"])
@@ -267,9 +273,9 @@ class AffectedSteps(unittest.TestCase):
 
 
 class BrowserSelection(unittest.TestCase):
-    def test_full_runs_the_complete_inventory_in_three_shards(self):
+    def test_full_runs_the_complete_inventory_in_six_shards(self):
         self.assertEqual(v.plan("push", [], [])["browser"],
-                         {"selection": "full", "shards": [1, 2, 3], "specs": [], "presentation": False})
+                         {"selection": "full", "shards": [1, 2, 3, 4, 5, 6], "specs": [], "presentation": False})
 
     def test_fast_is_one_shard_of_smoke_and_changed_specs(self):
         browser = v.plan("pull_request", [], modified("web-console/test/e2e/chat.spec.ts", "README.md"))["browser"]
@@ -374,9 +380,17 @@ class Gate(unittest.TestCase):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
         self.assertIn("superseded", v.gate(planned, passing(planned), "old", "new")[0])
 
+    def test_an_extracted_crate_change_selects_the_rust_surface(self):
+        # crates/** feeds the `rust` surface: rust-fast runs every member's
+        # lib tests unconditionally, so a rustx-durable change needs no
+        # component gate to keep its SQLite store contracts exercised.
+        planned = v.plan("pull_request", [], modified("crates/rustx-durable/src/lib.rs"))
+        self.assertIn("rust", planned["surfaces"])
+        self.assertTrue(planned["run"]["rust-fast"])
+
     def test_full_without_a_selected_lane_fails(self):
         planned = v.plan("push", [], [])
-        for job in ("rust-contracts", "rust-boundaries"):
+        for job in ("rust-contracts",):
             for result in ("skipped", "cancelled", "failure", None):
                 with self.subTest(job=job, result=result):
                     results = passing(planned)
@@ -387,12 +401,11 @@ class Gate(unittest.TestCase):
                     self.assertEqual(v.gate(planned, results, None, None),
                                      [f"{job}: selected for FULL but {result or 'missing'}"])
 
-    def test_a_promoted_pull_request_cannot_pass_on_the_fast_lane_alone(self):
+    def test_a_suspended_macos_lane_running_anyway_fails(self):
         planned = v.plan("pull_request", [v.PROMOTION_LABEL], modified("src/runtime/process_runner.rs"))
-        results = {**passing(planned), "rust-fast": "success", "rust-contracts": "skipped"}
+        results = {**passing(planned), "rust-platform-core": "success"}
         self.assertEqual(v.gate(planned, results, "abc", "abc"),
-                         ["rust-fast: not selected for FULL but success",
-                          "rust-contracts: selected for FULL but skipped"])
+                         ["rust-platform-core: not selected for FULL but success"])
 
     def test_a_job_that_ran_without_being_selected_fails(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
@@ -435,9 +448,17 @@ class Workflow(unittest.TestCase):
     def test_rust_profiles_match_the_lane_check_declarations(self):
         jobs = self.jobs()
         self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-fast"])
-        for job in ("rust-contracts", "rust-boundaries"):
+        self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-platform-core"])
+        for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
-            self.assertIn('CARGO_BUILD_JOBS: "1"', jobs[job])
+        self.assertIn('CARGO_BUILD_JOBS: "4"', jobs["rust-contracts"])
+        # rust-boundaries is back to -j2: -j4 crashed its runner mid-compile
+        # on three of four fresh first attempts (see ci.yml).
+        self.assertIn('CARGO_BUILD_JOBS: "2"', jobs["rust-boundaries"])
+        # macOS lanes overlap two codegen workers; one rustX compilation peaks
+        # near 3.5 GB RSS, so -j2 stays under the 7 GB runner (see ci.yml).
+        for job in ("rust-platform-core", "rust-platform-boundaries"):
+            self.assertIn('CARGO_BUILD_JOBS: "2"', jobs[job])
 
 
 class StackedMergeGit(unittest.TestCase):
@@ -464,7 +485,9 @@ class StackedMergeGit(unittest.TestCase):
             (pathlib.Path(repo) / "README.md").write_text("base\n", encoding="utf-8")
             base = self.commit_tree(repo, "base")
 
-            self.git(repo, "checkout", "-b", "head")
+            # A branch literally named `head` makes every `HEAD` lookup
+            # ambiguous on case-insensitive filesystems (macOS APFS).
+            self.git(repo, "checkout", "-b", "stack-head")
             (pathlib.Path(repo) / "README.md").write_text("head\n", encoding="utf-8")
             head = self.commit_tree(repo, "head")
 

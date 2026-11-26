@@ -23,8 +23,8 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
             &session.active_conversation_id, &SubagentId::for_conversation(&session.active_conversation_id, 1),
             &AgentId::new("archive-child"), &child, &crate::runtime::subagent::AgentActivationOrigin::CreationTool { tool_call_id: ToolCallId::new("archive-child-call") },
             &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
-            &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
-            &serde_json::from_value(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!("sha256:definition")).unwrap(),
+            serde_json::from_value::<String>(serde_json::json!(format!("sha256:{}", "a".repeat(64)))).unwrap(),
             crate::events::types::SubagentOwnershipKind::Normal,
             &f.workspaces[0].clone(), chrono::Utc::now(),
         ));

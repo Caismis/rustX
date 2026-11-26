@@ -84,7 +84,7 @@ pub(super) fn capture(
         &mut hash,
         root,
         &root.join("AGENTS.md"),
-        crate::bounded_file::MAX_RESOURCE_BYTES,
+        rustx_bounded_file::MAX_RESOURCE_BYTES,
     )?;
     let workflows =
         super::super::workflow_resources::load(None, root).map_err(|error| error.to_string())?;
@@ -112,7 +112,7 @@ pub(super) fn capture(
         &mut hash,
         root,
         &root.join("mcp.toml"),
-        crate::bounded_file::MAX_RESOURCE_BYTES,
+        rustx_bounded_file::MAX_RESOURCE_BYTES,
     )?;
     crate::package_io::check_cancelled(signal).map_err(|error| error.to_string())?;
     Ok(format!("accepted-{:x}", hash.finalize()))

@@ -3,30 +3,9 @@
 //! latest input and share immutable owners with it. Edits and old cuts are misses.
 use std::sync::Arc;
 
-use sha2::{Digest, Sha256};
-
+use crate::model::SelectedModelInput;
 use crate::model::catalog::Modality;
-use crate::model::selected_input::InputNode;
-use crate::model::{ModelInputMessage, SelectedModelInput};
-use crate::runtime::identity::MessageId;
-
-#[derive(Clone, Default)]
-pub(crate) struct Prefix {
-    root: Option<Arc<InputNode>>,
-}
-impl Prefix {
-    pub(crate) fn capture(input: &SelectedModelInput) -> Self {
-        Self {
-            root: input.0.root.clone(),
-        }
-    }
-    pub(crate) fn len(&self) -> usize {
-        self.root.as_ref().map_or(0, |node| node.count)
-    }
-    pub(crate) fn matches(&self, input: &SelectedModelInput) -> bool {
-        input.shares_prefix(self.root.as_ref())
-    }
-}
+pub(crate) use rustx_types::model::adapter::correlation::Prefix;
 
 #[derive(Default)]
 struct Admission {
@@ -36,24 +15,9 @@ struct Admission {
 }
 
 #[derive(Default)]
-struct ContinuationIndex {
-    prefix: Prefix,
-    positions: imbl::HashMap<MessageId, imbl::Vector<usize>>,
-}
-
-#[derive(Clone, Default)]
-struct SemanticPrefix {
-    prefix: Prefix,
-    sha: Sha256,
-}
-
-#[derive(Default)]
 pub(crate) struct RequestCache {
     admission: Admission,
-    continuation: Option<ContinuationIndex>,
-    semantic: SemanticPrefix,
-    pub(super) correlation: Option<super::correlation::Plan>,
-    pub(super) correlation_epoch: u64,
+    pub(super) correlation: rustx_types::model::adapter::correlation::CorrelationSlot,
     pub(super) chat: Option<super::openai::chat_completions::ChatPrefix>,
     pub(super) responses: Option<super::openai::responses::ResponsesPrefix>,
     pub(super) anthropic: Option<super::anthropic::mapping::AnthropicPrefix>,
@@ -76,7 +40,7 @@ impl RequestCache {
         {
             #[cfg(feature = "issue-387-profile")]
             let _phase = super::profile::phase(super::profile::Phase::Modalities);
-            crate::model::invocation::append_content_modalities(
+            rustx_types::model::request_params::append_content_modalities(
                 input
                     .iter()
                     .enumerate()
@@ -101,52 +65,10 @@ impl RequestCache {
         cache.prefix = Prefix::capture(input);
         (cache.modalities.clone(), cache.images)
     }
-    fn candidates(&mut self, input: &SelectedModelInput, id: &MessageId) -> imbl::Vector<usize> {
-        let cache = self
-            .continuation
-            .get_or_insert_with(ContinuationIndex::default);
-        if !cache.prefix.matches(input) {
-            *cache = ContinuationIndex::default();
-        }
-        for (index, message) in input.iter().enumerate().skip(cache.prefix.len()) {
-            let mut ids = std::collections::HashSet::new();
-            if let Some(id) = message.canonical_id() {
-                ids.insert(id);
-            }
-            if let ModelInputMessage::Derived(message) = message {
-                ids.extend(message.sources.iter().map(|source| &source.message_id));
-            }
-            for id in ids {
-                cache
-                    .positions
-                    .entry(id.clone())
-                    .or_default()
-                    .push_back(index);
-            }
-        }
-        cache.prefix = Prefix::capture(input);
-        cache.positions.get(id).cloned().unwrap_or_default()
-    }
-    fn fingerprint(&mut self, input: &SelectedModelInput, count: usize) -> String {
-        let prefix = input.range(0..count);
-        let cache = &mut self.semantic;
-        if !cache.prefix.matches(&prefix) {
-            *cache = SemanticPrefix::default();
-        }
-        for message in prefix.iter().skip(cache.prefix.len()) {
-            crate::model::types::append_semantic_message(&mut cache.sha, message);
-        }
-        cache.prefix = Prefix::capture(&prefix);
-        format!("{:x}", cache.sha.clone().finalize())
-    }
 }
 
 pub(super) fn admission(input: &SelectedModelInput) -> (Vec<Modality>, usize) {
-    input
-        .preparation()
-        .lock()
-        .expect("input preparation cache")
-        .admission(input)
+    lock(input).admission(input)
 }
 
 /// Encode new fragments within the same admission budget as the final body.
@@ -157,7 +79,7 @@ pub(super) fn encode_raw<T: serde::Serialize>(
     limit: Option<usize>,
 ) -> Result<Arc<serde_json::value::RawValue>, crate::model::ModelError> {
     let raw = if let Some(limit) = limit {
-        let bytes = crate::bounded_json::encode_capped_bytes(value, limit)
+        let bytes = rustx_bounded_json::encode_capped_bytes(value, limit)
             .map_err(|error| super::validation::wire_encoding_error(&error))?;
         let json = String::from_utf8(bytes).expect("encoded JSON is UTF-8");
         serde_json::value::RawValue::from_string(json)
@@ -167,25 +89,6 @@ pub(super) fn encode_raw<T: serde::Serialize>(
             .map_err(|error| super::validation::wire_encoding_error(&error))?
     };
     Ok(raw.into())
-}
-
-pub(crate) fn continuation_candidates(
-    input: &SelectedModelInput,
-    id: &MessageId,
-) -> imbl::Vector<usize> {
-    input
-        .preparation()
-        .lock()
-        .expect("input preparation cache")
-        .candidates(input, id)
-}
-
-pub(crate) fn prefix_fingerprint(input: &SelectedModelInput, count: usize) -> String {
-    input
-        .preparation()
-        .lock()
-        .expect("input preparation cache")
-        .fingerprint(input, count)
 }
 
 #[cfg(test)]
@@ -209,8 +112,48 @@ pub(crate) fn work(update: impl FnOnce(&mut Work)) {
 }
 #[cfg(test)]
 pub(crate) fn take_work() -> Work {
-    WORK.with(|slot| slot.replace(Work::default()))
+    let mut work = WORK.with(|slot| slot.replace(Work::default()));
+    work.correlation_items +=
+        rustx_types::model::adapter::correlation::take_correlation_work().correlation_items;
+    work
 }
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Locks the selected input's preparation cell and exposes the engine-side
+/// [`RequestCache`] stored inside it.
+pub(crate) fn lock(messages: &crate::model::SelectedModelInput) -> Guard<'_> {
+    Guard {
+        guard: messages
+            .preparation()
+            .lock()
+            .expect("input preparation cache"),
+    }
+}
+
+/// Deref'd view of the [`RequestCache`] living in the preparation cell.
+pub(crate) struct Guard<'a> {
+    guard: std::sync::MutexGuard<'a, rustx_types::model::selected_input::InputPreparation>,
+}
+
+impl std::ops::Deref for Guard<'_> {
+    type Target = RequestCache;
+    fn deref(&self) -> &RequestCache {
+        self.guard
+            .engine
+            .as_ref()
+            .and_then(|cell| cell.downcast_ref::<RequestCache>())
+            .expect("preparation cell holds RequestCache")
+    }
+}
+
+impl std::ops::DerefMut for Guard<'_> {
+    fn deref_mut(&mut self) -> &mut RequestCache {
+        self.guard
+            .engine
+            .get_or_insert_with(|| Box::new(RequestCache::default()))
+            .downcast_mut::<RequestCache>()
+            .expect("preparation cell holds RequestCache")
+    }
+}

@@ -3,7 +3,7 @@
 use super::bash::BashReadonlyClass;
 use super::matrix::{BuiltinPermissionAction, BuiltinToolKind, builtin_action_for};
 use super::mode::ExecutionPermissionMode;
-use super::resource::ResourcePermissionValue;
+use rustx_types::runtime::permission::resource::ResourcePermissionValue;
 
 /// Bounded runtime-owned elevation reason extracted from tool metadata.
 ///

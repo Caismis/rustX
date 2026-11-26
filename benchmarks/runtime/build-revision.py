@@ -15,17 +15,41 @@ def digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def checked_artifacts(records, repo):
+def workspace_libraries(repo, env):
+    """Package name -> library target name for every workspace member with a lib target.
+
+    Package names (rustx-types) differ from the target names Cargo puts on
+    compiler artifacts (rustx_types): `cargo clean -p` needs the former and
+    artifact matching needs the latter.
+    """
+    metadata = subprocess.check_output(
+        ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
+        cwd=repo, env=env, text=True)
+    libraries = {}
+    for package in json.loads(metadata)['packages']:
+        for target in package['targets']:
+            if target['kind'] == ['lib']:
+                libraries[package['name']] = target['name']
+                break
+    return libraries
+
+
+def checked_artifacts(records, repo, libraries):
     artifacts = [row for row in records if row.get('reason') == 'compiler-artifact'
-                 and row.get('target', {}).get('name') in ('rustx', 'conformance')]
-    library = next(row for row in artifacts if row['target']['kind'] == ['lib'])
+                 and (row['target']['kind'] == ['lib']
+                      and row.get('target', {}).get('name') in libraries.values()
+                      or row['target']['name'] == 'conformance')]
+    library = next(row for row in artifacts if row['target']['name'] == 'rustx')
     benchmark = next(row for row in artifacts if row['target']['name'] == 'conformance')
-    for row, source in ((library, 'src/lib.rs'),
-                        (benchmark, 'tests/conformance/main.rs')):
+    for row in artifacts:
         if row['fresh'] is not False:
-            raise ValueError('root library and conformance must both be freshly compiled')
-        if Path(row['target']['src_path']).resolve() != repo / source:
+            raise ValueError('workspace libraries and conformance must all be freshly compiled')
+        if not str(Path(row['target']['src_path']).resolve()).startswith(str(repo) + '/'):
             raise ValueError('compiler artifact belongs to a different checkout')
+    missing = [package for package, target in libraries.items()
+               if not any(row['target']['name'] == target for row in artifacts)]
+    if missing:
+        raise ValueError('no fresh artifacts for workspace libraries: ' + ', '.join(missing))
     return artifacts, library, benchmark
 
 
@@ -44,7 +68,7 @@ def main():
     def git(*argv):
         return subprocess.check_output(['git', *argv], cwd=repo, text=True).strip()
     def clean_source():
-        if git('status', '--porcelain', '--', 'src', 'Cargo.toml', 'Cargo.lock'):
+        if git('status', '--porcelain', '--', 'src', 'crates', 'Cargo.toml', 'Cargo.lock'):
             raise ValueError('production source or Cargo inputs have uncommitted changes')
     clean_source()
     harness = [repo / 'tests/common/provider_emulator.rs',
@@ -61,8 +85,11 @@ def main():
                                       if key in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_JOBS')
                                       or key.startswith('CARGO_PROFILE_RELEASE_')}}
     try:
+        libraries = workspace_libraries(repo, env)
+        identity['workspace_libraries'] = libraries
         for name, command in (
-            ('clean', ['cargo', 'clean', '--release', '--package', 'rustx']),
+            ('clean', ['cargo', 'clean', '--release']
+                      + ['--package=' + name for name in libraries]),
             ('build', ['cargo', 'test', '--release', '--locked', '--test',
                        'conformance', '--no-run', '--message-format=json']),
         ):
@@ -75,7 +102,7 @@ def main():
             result.check_returncode()
         records = [json.loads(line) for line in (output / 'build.stdout').read_text().splitlines()
                    if line.startswith('{')]
-        artifacts, library, benchmark = checked_artifacts(records, repo)
+        artifacts, library, benchmark = checked_artifacts(records, repo, libraries)
         identity['root_artifacts'] = [
             {'name': row['target']['name'], 'kind': row['target']['kind'],
              'source_path': row['target']['src_path'], 'fresh': row['fresh']}

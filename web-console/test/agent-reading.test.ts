@@ -11,7 +11,7 @@ import { Server, snapshot } from './fixture';
 const child = 'conversation-worker';
 const cut = { conversation_id: child, journal: '300', transcript: '300', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
 const turn = (n: number): ObservedTurn => ({ id: { conversation_id: child, attempt_id: `child-${n}` }, ordinal: n, cursor: String(n), prompt: `Task ${n}`, response: `Report ${n}` });
-const entry = (n: number) => ({ cursor: String(n), item: { type: 'message' as const, message: { role: 'assistant' as const, id: `reply-${n}`, content: [{ type: 'text' as const, text: `Report ${n}` }] } }, turn_process: { ...turn(n).id, control_cursor: String(n), final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: `reply-${n}`, message_count: 1, tool_call_count: 0, outcome: 'completed' as const } });
+const entry = (n: number, text = `Report ${n}`) => ({ cursor: String(n), item: { type: 'message' as const, message: { role: 'assistant' as const, id: `reply-${n}`, content: [{ type: 'text' as const, text }] } }, turn_process: { ...turn(n).id, control_cursor: String(n), final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: `reply-${n}`, message_count: 1, tool_call_count: 0, outcome: 'completed' as const } });
 const live = (n: number): RuntimeClientSnapshot => ({ ...snapshot(), conversation_id: child, transcript: { entries: [entry(n)], next_cursor: String(n) } });
 const window = (n: number): MethodResult => ({ type: 'transcript_window', window: { cut, page: { entries: [entry(n)], next_cursor: String(n) }, target: turn(n).id, target_cursor: String(n), newer_cursor: String(n) } });
 let server: Server, reader: AgentReading;
@@ -90,7 +90,12 @@ it('reads native pages at the child cut and retains accumulated history', async 
   expect(reader.getSnapshot().history?.page.entries?.map(entry => entry.cursor)).toEqual(['0', '1', '2']);
   reader.returnToLatest();
   for (let n = 132; n < 800; n++) reader.observe({ ...live(n), transcript: { entries: [entry(n - 1), entry(n)], next_cursor: String(n - 1) } });
-  expect(reader.getSnapshot().history?.page.entries!.length).toBe(669);
+  // returnToLatest replaced the windowed rows with the live head; the sliding
+  // head then accumulated live rows at their durable positions 130..799.
+  const retained = reader.getSnapshot().history!.page.entries!;
+  expect(retained.slice(0, 3).map(entry => Number(entry.cursor))).toEqual([130, 131, 132]);
+  expect(retained.at(-1)!.cursor).toBe('799');
+  expect(retained.length).toBe(670);
   const loaded = reader.getSnapshot().history!.page.entries;
   reader.returnToLatest();
   expect(reader.getSnapshot().history!.page.entries).toBe(loaded);
@@ -106,6 +111,15 @@ it('parent detachment rejects pending child outline adoption', async () => {
 
 it('resident child conversations keep their historical location across hide and show', async () => {
   await setup(); installTurnNavigatorObserver(600);
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript') throw Error('method');
+    if (request.params.at.type === 'older') {
+      const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+      return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+    }
+    if (request.params.at.type !== 'turn_ordinal') throw Error('turn window');
+    return window(request.params.at.ordinal);
+  });
   const props = { client: server.client, sessionId: 'A', admission: server.client.getSnapshot().views.A.attachmentObservation,
     agent: { title: 'Worker', agent: 'Worker', agent_id: 'agent-worker', parent_agent_id: 'root', child_conversation_id: child,
       activation_id: 'activation', state: 'inactive' as const, activation_state: 'succeeded' as const, started_at: '2026-10-10T00:00:00Z', definition_digest: 'd', profile_digest: 'p',
@@ -120,7 +134,167 @@ it('resident child conversations keep their historical location across hide and 
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: false })); });
   await act(async () => { ui.rerender(createElement(SubagentChat, { ...props, visible: true })); });
   expect(ui.getByText('Report 1')).toBeTruthy();
+  // Three reads: the bounded hydration pages below the live head (exclusive
+  // before continuation 130 → 98 makes real progress through the unfetched gap),
+  // then the explicit turn window. The remount refetches nothing — hydration
+  // retained its pages and the windowed turn stays installed across hide/show.
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: unknown }).at))
+    .toEqual([{ type: 'older', before: '130', cut: null }, { type: 'older', before: '98', cut }, { type: 'turn_ordinal', ordinal: 1, cut }]);
+});
+
+it('recovers the canonical streamed reply after resync skips to a settled child checkpoint', async () => {
+  await setup();
+  installTurnNavigatorObserver(600);
+  const streamed = 'Live child first chunk. Second live chunk.';
+  const final = 'Canonical child final report.';
+  const props = { client: server.client, sessionId: 'A', admission: server.client.getSnapshot().views.A.attachmentObservation,
+    agent: { title: 'Worker', agent: 'Worker', agent_id: 'agent-worker', parent_agent_id: 'root', child_conversation_id: child,
+      activation_id: 'activation', state: 'active' as const, activation_state: 'running' as const, started_at: '2026-10-10T00:00:00Z',
+      definition_digest: 'd', profile_digest: 'p', workspace: '/workspace',
+      observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' as const }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } } },
+    visible: true };
+  const active: RuntimeClientSnapshot = { ...live(1), transcript: { entries: [entry(1)] }, attempt: {
+    attempt_id: 'child-2', phase: { type: 'running' }, turn: 1,
+    in_flight: { message_id: 'reply-2', blocks: [{ type: 'text', block_index: 0, text: streamed }] },
+  } };
+  let ui!: ReturnType<typeof render>;
+  await act(async () => { ui = render(createElement(SubagentChat, { ...props, snapshot: active })); });
+  expect(ui.getAllByText(streamed, { exact: true })).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(0);
+
+  // Resume from the settled eight-row head without following the intervening
+  // commit events. The transcript page can still read the streamed reply by cursor.
+  server.handlers.set('agent/transcript', request => {
+    expect(request).toMatchObject({ params: { at: { type: 'older', before: '3', cut: null } } });
+    return { type: 'transcript_window', window: { cut: { ...cut, transcript: '10', transcript_total: '10' },
+      page: { entries: [entry(1), entry(2, streamed)], next_cursor: null }, newer_cursor: '2' } };
+  });
+  const settled: RuntimeClientSnapshot = { ...live(10), transcript: {
+    entries: [...Array.from({ length: 7 }, (_, i) => entry(i + 3)), entry(10, final)], next_cursor: '3',
+  } };
+  await act(async () => ui.rerender(createElement(SubagentChat, {
+    ...props, agent: { ...props.agent, state: 'inactive', activation_state: 'succeeded' }, snapshot: settled,
+  })));
+  expect(ui.getByText(final, { exact: true })).toBeTruthy();
+  expect(ui.getAllByText(streamed, { exact: true })).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
+});
+
+it('a not-bottomed cache still walks below the held minimum after a head slide', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  const cursors = () => reader.getSnapshot().history?.page.entries?.map(row => Number(row.cursor));
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 72 }, (_, i) => entry(56 + i)), next_cursor: '56' } });
+  // The head slides past every held row: the deeper boundary must survive.
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(160 + i)), next_cursor: '160' } });
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('56');
+  await reader.loadInitial();
+  // Hydration fills the slide gap; the deeper boundary stays reachable.
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('24');
+  while (reader.getSnapshot().history?.page.next_cursor) await reader.loadEarlier();
+  expect(cursors()).toEqual(Array.from({ length: 167 }, (_, i) => i + 1));
+  expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
+});
+
+it('an already-bottomed cache refills the slide gap without re-reading below the bottom', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  const cursors = () => reader.getSnapshot().history?.page.entries?.map(row => Number(row.cursor));
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 64 }, (_, i) => entry(i + 1)), next_cursor: null } });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(193 + i)), next_cursor: '193' } });
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('193');
+  await reader.loadInitial();
+  expect(cursors()).toEqual(Array.from({ length: 200 }, (_, i) => i + 1));
+  const reads = server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: { before: string } }).at.before);
+  expect(reads).not.toContain('1');
+  expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
+});
+
+it('an initial read keeps walking after a page that adds only deferred positions', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    if (before === 160) return { type: 'transcript_window', window: { cut, page: { entries: [], deferred_entries: [{ offset: '159', identity: 'm159', content: [], deferred: true }], next_cursor: '128' } } };
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 72 }, (_, i) => entry(56 + i)), next_cursor: '56' } });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(160 + i)), next_cursor: '160' } });
+  await reader.loadInitial();
+  // The deferred-only page cached position 159; the walk must continue past
+  // it instead of stopping on 'no progress'.
+  const reads = server.requests.filter(row => row.request.method === 'agent/transcript').map(row => (row.request.params as { at: { before: string } }).at.before);
+  expect(reads).toContain('159');
+});
+
+it('a retired read cannot clear the live request\'s loading state or write its stale error', async () => {
+  await setup();
+  server.held.add('agent/transcript');
+  const first = reader.loadInitial();
+  const stale = await server.waitFor('agent/transcript', 1);
+  reader.invalidate();
+  const live2 = reader.loadEarlier();
+  const newer = await server.waitFor('agent/transcript', 2);
+  server.socket.deliver({ jsonrpc: '2.0', id: stale.id, error: { code: -32000, message: 'Obsolete history read' } });
+  await first;
+  expect(reader.getSnapshot().history?.loading).toBe(true);
+  expect(reader.getSnapshot().history?.error).toBeUndefined();
+  server.socket.success(newer, { type: 'transcript_window', window: { cut, page: { entries: [entry(1), entry(2), entry(3)], next_cursor: null } } });
+  await live2;
+  expect(reader.getSnapshot().history?.loading).toBe(false);
+});
+
+it('re-arms deferred hydration after an in-flight read fails across a head slide', async () => {
+  await setup();
+  server.held.add('agent/transcript');
+  const first = reader.loadInitial();
+  const stale = await server.waitFor('agent/transcript', 1);
+  // A slide bumps the generation; the hydration pass it triggers defers
+  // behind the in-flight read, whose settle must re-issue the read.
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(160 + i)), next_cursor: '160' } });
+  void reader.loadInitial();
+  server.socket.deliver({ jsonrpc: '2.0', id: stale.id, error: { code: -32000, message: 'Obsolete history read' } });
+  // The deferred hydration re-issues at the preserved deeper cursor.
+  const retry = await server.waitFor('agent/transcript', 2);
+  expect(retry.params).toMatchObject({ at: { type: 'older', before: '130' } });
+  expect(reader.getSnapshot().history?.error).toBeUndefined();
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  server.socket.success(retry, { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: 32 }, (_, i) => entry(98 + i)), next_cursor: '98' } } });
+  server.held.delete('agent/transcript');
+  await first;
+  expect(reader.getSnapshot().history?.error).toBeUndefined();
+});
+
+it('retires an in-flight history page when a disjoint child head replaces its cache', async () => {
+  await setup();
+  server.held.add('agent/transcript');
+  const loading = reader.loadInitial();
+  const older = await server.waitFor('agent/transcript', 1);
+  reader.observe(live(200));
+  const replaced = reader.getSnapshot().history;
+  server.socket.deliver({ jsonrpc: '2.0', id: older.id, error: { code: -32000, message: 'Obsolete history read' } });
+  await loading;
+  // The stale read's error is suppressed, but its loading flags still clear
+  // so the slid head is not wedged on the dead read.
+  expect(reader.getSnapshot().history).toEqual({ ...replaced, loading: false, initialLoading: false });
 });
 
 it('T14 a replaced child activation cannot adopt a late outline from the prior view', async () => {
@@ -155,4 +329,33 @@ it.each(['owned','disposed'] as const)('a selected inherited Child Turn freezes 
  server.socket.success(request,{type:'transcript_window',window:{cut,target:selected.turn.id,target_cursor:'1',page:{entries:[row]}}});
  if(disposition==='owned'){expect(await work).toEqual(selected.turn);expect(reader.getSnapshot().history!.window!.cut).toEqual(cut);}
  else{expect(await work).toBe(false);expect(reader.getSnapshot()).toBe(before);}
+});
+
+it('an older page resolving late retains live rows admitted while it was in flight', async () => {
+  server = new Server(); await server.attached('A');
+  reader = new AgentReading(server.client, server.client.target('A'), 'agent-worker', child,
+    () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation));
+  const cursors = () => reader.getSnapshot().history?.page.entries?.map(row => Number(row.cursor));
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(3 + i)), next_cursor: '3' } });
+  server.held.add('agent/transcript');
+  const work = reader.loadEarlier();
+  const held = await server.waitFor('agent/transcript', 1);
+  // Two live heads land mid-read: m12 ends up held only in the client cache.
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(12 + i)), next_cursor: '12' } });
+  reader.observe({ ...snapshot(), conversation_id: child, transcript: { entries: Array.from({ length: 8 }, (_, i) => entry(13 + i)), next_cursor: '13' } });
+  expect(cursors()).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  server.socket.success(held, { type: 'transcript_window', window: { cut: { ...cut, transcript: '10' }, page: { entries: [entry(1), entry(2)], next_cursor: null } } });
+  await work;
+  expect(cursors()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  expect(reader.getSnapshot().history?.page.next_cursor).toBe('12');
+  // Walk the gap to the bottom: refetched held rows dedupe.
+  server.held.delete('agent/transcript');
+  server.handlers.set('agent/transcript', request => {
+    if (request.method !== 'agent/transcript' || request.params.at.type !== 'older') throw Error('Expected bounded older read');
+    const before = Number(request.params.at.before), start = Math.max(1, before - Number(request.params.limit));
+    return { type: 'transcript_window', window: { cut, page: { entries: Array.from({ length: before - start }, (_, i) => entry(start + i)), next_cursor: start > 1 ? String(start) : null } } };
+  });
+  await reader.loadEarlier();
+  expect(cursors()).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+  expect(reader.getSnapshot().history?.page.next_cursor).toBeNull();
 });

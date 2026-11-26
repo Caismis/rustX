@@ -1,0 +1,16 @@
+[package]
+name = "rustx-conversation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+schemars = { version = "1", features = ["chrono04"] }
+chrono = { version = "0.4", features = ["serde"] }
+imbl = { version = "7.0.0", features = ["serde"] }
+rustx-types = { path = "../rustx-types" }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+
+[lints]
+workspace = true

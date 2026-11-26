@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
+pub use rustx_types::context::assembly::{
+    AcceptedSystemSection, ContextGeneration, ContributorGeneration, SystemSectionLane,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
@@ -22,99 +25,6 @@ use crate::runtime::identity::{
 
 /// The ABI version of the native context contribution contract.
 pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 7;
-
-/// The finite user-context semantic lanes owned by rustX.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UserContextLane {
-    /// Claimed inbound input. This is not extension-controlled.
-    ClaimedInbound,
-    /// The semantic lane of the **native runtime observation owner**
-    /// ([`NativeContextContributor::RuntimeToolObservation`]).
-    ///
-    /// This lane describes *who owns the fact*, not *when the fact became
-    /// eligible*. Deferred proposals produced by a certified extension keep
-    /// that extension's own semantics and land in
-    /// [`UserContextLane::ExtensionEnvironment`]; only the native runtime
-    /// observation owner's facts belong here. The lane is native-reserved:
-    /// no extension can claim it.
-    ///
-    /// The lane sits immediately after claimed inbound because a native
-    /// runtime observation describes what the environment just did for the
-    /// tool batch that precedes this step, while the request-time
-    /// environment and task-data lanes describe the
-    /// *current* step.
-    RuntimeToolObservation,
-    /// Generic certified-extension/environment context.
-    ExtensionEnvironment,
-    /// Compiled-in domain task data, never system instructions.
-    TaskData,
-}
-
-impl UserContextLane {
-    /// The contract's deterministic total order.
-    pub const ALL: [Self; 4] = [
-        Self::ClaimedInbound,
-        Self::RuntimeToolObservation,
-        Self::ExtensionEnvironment,
-        Self::TaskData,
-    ];
-
-    /// Stable manifest spelling of one user-context lane.
-    #[must_use]
-    pub const fn manifest_name(self) -> &'static str {
-        match self {
-            Self::TaskData => "task_data",
-            Self::ClaimedInbound => "claimed_inbound",
-            Self::RuntimeToolObservation => "runtime_tool_observation",
-            Self::ExtensionEnvironment => "extension_environment",
-        }
-    }
-}
-
-/// The finite request-time system-section lanes owned by rustX.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SystemSectionLane {
-    /// Core runtime/system identity. Single-owner and native-reserved.
-    CoreRuntimeIdentity,
-    /// Agent profile/persona. Single-owner and native-reserved.
-    AgentProfile,
-    /// Runtime-loaded workspace/project instructions. Single-owner and
-    /// native-reserved; never canonical conversation history.
-    WorkspaceInstructions,
-    /// Certified-extension sections, ordered by logical contributor identity.
-    CertifiedExtension,
-    /// Native capability guidance sections, including the request-time Skill
-    /// catalog, rather than conversational User context facts.
-    NativeCapabilityGuidance,
-    /// Permission-mode classification in immutable request snapshots.
-    PermissionReminder,
-}
-
-impl SystemSectionLane {
-    /// The contract's deterministic total order.
-    pub const ALL: [Self; 5] = [
-        Self::CoreRuntimeIdentity,
-        Self::AgentProfile,
-        Self::WorkspaceInstructions,
-        Self::CertifiedExtension,
-        Self::NativeCapabilityGuidance,
-    ];
-
-    /// Stable manifest spelling of one system-section lane.
-    #[must_use]
-    pub const fn manifest_name(self) -> &'static str {
-        match self {
-            Self::CoreRuntimeIdentity => "core_runtime_identity",
-            Self::AgentProfile => "agent_profile",
-            Self::WorkspaceInstructions => "workspace_instructions",
-            Self::CertifiedExtension => "certified_extension",
-            Self::NativeCapabilityGuidance => "native_capability_guidance",
-            Self::PermissionReminder => "permission_reminder",
-        }
-    }
-}
 
 /// The kind of transient proposal a contributor may return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,36 +273,6 @@ where
     }
 }
 
-/// The independent attestation/content generation recorded beside a logical
-/// contributor identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ContributorGeneration {
-    /// Stable logical identity used for deterministic ordering.
-    pub identity: ContextContributorIdentity,
-    /// Optional attestation/package/content generation. It does not affect
-    /// ordering.
-    pub attestation: Option<String>,
-}
-
-/// One frozen context assembly generation accepted for a primary step.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextGeneration {
-    /// Monotonic per-attempt generation assigned by the Agent Loop.
-    pub id: u64,
-    /// Owners of final accepted User contributions or System sections, sorted
-    /// and deduplicated by identity, with their authoritative attestations.
-    pub contributors: Vec<ContributorGeneration>,
-}
-
-impl ContextGeneration {
-    /// Sets the Agent Loop-owned generation number.
-    #[must_use]
-    pub const fn with_id(mut self, id: u64) -> Self {
-        self.id = id;
-        self
-    }
-}
-
 /// A canonical User message draft after assembly validation. It still has no
 /// `MessageId`; the conversation admission owner allocates one exactly once.
 #[derive(Debug, Clone, PartialEq)]
@@ -407,17 +287,6 @@ pub struct AcceptedUserContext {
     pub kind: ContextKind,
     /// Complete User content.
     pub content: Vec<UserContentBlock>,
-}
-
-/// One accepted system section after lane/identity assignment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AcceptedSystemSection {
-    /// The semantic system lane.
-    pub lane: SystemSectionLane,
-    /// The contributor that owns the section.
-    pub contributor: ContextContributorIdentity,
-    /// The exact section content.
-    pub content: String,
 }
 
 /// The validated result of one assembly invocation. This value is transient
@@ -1108,15 +977,17 @@ fn contribution_entry(
         opportunities: ContributionOpportunities::default(),
         post_tool_batch_anchor: None,
     };
-    check
-        .validate_message(&MessageBlock::User(crate::message::UserMessageBlock {
+    crate::durable::contribution::validate_contribution_message(
+        &check,
+        &MessageBlock::User(crate::message::UserMessageBlock {
             id: check_id,
             content: content.clone(),
             source: source.clone(),
             kind: crate::message::InboundKind::Context(kind.clone()),
             timestamp: None,
-        }))
-        .map_err(|error| ContextAssemblyError::InvalidProposal(error.to_string()))?;
+        }),
+    )
+    .map_err(|error| ContextAssemblyError::InvalidProposal(error.to_string()))?;
     Ok(ContributionEntry {
         lane,
         identity: identity.clone(),
@@ -1270,6 +1141,8 @@ pub fn render_effective_system_prompt(sections: &[AcceptedSystemSection]) -> Str
         .collect::<Vec<_>>()
         .join("\n\n")
 }
+
+pub use rustx_types::context::assembly::UserContextLane;
 
 #[cfg(test)]
 mod tests {

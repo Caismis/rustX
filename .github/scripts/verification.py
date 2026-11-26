@@ -69,7 +69,7 @@ TEST_PRESERVING = ("added", "modified")
 SURFACES = {
     "documentation": ("*.md", "docs/**", "web-console/*.md", "tui/*.md"),
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
-             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
+             "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**", "crates/**"),
     "protocol": ("protocol/**",),
     "web": ("web-console/**", "src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"),
     "tui": ("tui/**",),
@@ -133,7 +133,7 @@ def classify(changes):
 
 
 # Every gated job and when it runs. FULL runs everything once: the complete
-# Rust lanes replace the FAST Rust lane.
+# Rust lanes replace the FAST Rust lane and macOS full replaces macOS core.
 def selected_jobs(profile, surfaces):
     full = profile == "full"
     s = set(surfaces)
@@ -144,9 +144,21 @@ def selected_jobs(profile, surfaces):
         # FULL's rust-contracts lane already runs the `contracts` target.
         "documentation-contracts": not full and "documentation" in s,
         "rust-contracts": full,
+        "rust-contracts-shard": full,
+        "rust-contracts-report": full,
+        "rust-contracts-post": full,
         "rust-boundaries": full,
+        "rust-boundaries-shard": full,
+        "rust-boundaries-report": full,
+        # macOS lanes are suspended for now: the two free macos-15 slots make
+        # them the longest pole of every run (51m+ of irreducible native
+        # compile each), and the owner has deferred macOS verification. The
+        # job definitions stay in ci.yml; re-enable by restoring these keys.
+        "rust-platform-core": False,
+        "rust-platform-boundaries": False,
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,
+        "desktop-macos": False,
         "browser-prepare": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "web-client": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "browser-shard": full or bool(s & {"web", "dev", "rust", "protocol"}),
@@ -155,9 +167,11 @@ def selected_jobs(profile, surfaces):
 
 
 # Heavy Rust contract groups that FAST runs only for the change's affected
-# components (FULL always runs them), as `<job>:<component>` step keys.
+# components (FULL always runs them), as `<job>:<component>` step keys. The
+# extracted workspace crates' tests (crates/rustx-*, including rustx-durable's
+# SQLite store contracts) are not a component: rust-fast runs every member lib
+# unconditionally minus the `::scale::` capacity suite.
 COMPONENTS = {
-    "rust-fast:durable": ("src/durable/**",),
     "rust-fast:app-server": ("src/app_server/**", "src/local_runtime/**", "tests/scripted/app_server/**",
                              "tests/support/**"),
     "rust-fast:runtime-client": ("src/runtime_client/**",),
@@ -188,7 +202,7 @@ BROWSER_SPEC = "web-console/test/e2e/"
 
 def browser_selection(profile, changes):
     if profile == "full":
-        return {"selection": "full", "shards": [1, 2, 3], "specs": [], "presentation": False}
+        return {"selection": "full", "shards": [1, 2, 3, 4, 5, 6], "specs": [], "presentation": False}
     specs = set()
     # A spec's current name; a removed spec has none to run (and its removal
     # is high risk, so FAST cannot verify it).
@@ -219,7 +233,8 @@ def plan(event_name, labels, changes):
     else:
         classified = classify(changes)
         profile = "full" if PROMOTION_LABEL in labels else "fast"
-    return {**classified, "profile": profile, "run": selected_jobs(profile, classified["surfaces"]),
+    run = selected_jobs(profile, classified["surfaces"])
+    return {**classified, "profile": profile, "run": run,
             "steps": selected_steps(profile, paths_of(changes)), "browser": browser_selection(profile, changes)}
 
 

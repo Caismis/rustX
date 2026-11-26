@@ -4,6 +4,7 @@
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ProjectionStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 pub(super) use std::sync::Arc;
 
 pub(super) fn fixture_activation(
@@ -869,7 +870,7 @@ pub(super) fn assert_recovered_manual_publication(
 ) {
     use crate::runtime_client::{EventDelivery, RuntimeClientEvent};
     let after = host.checkpoint().unwrap();
-    let native = original.completed.observation.as_ref().unwrap();
+    let native = original.completed.observation.native_batch().unwrap();
     assert!(!native.source_unavailable);
     assert_eq!(after.read_cut.source_cut.as_ref(), Some(&native.read_cut));
     assert_eq!(after.read_cut.through, original.completed.sequence);

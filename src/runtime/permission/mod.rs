@@ -12,15 +12,14 @@ mod bash;
 mod classify;
 mod decision;
 mod matrix;
-mod mode;
-mod reminder;
-mod resource;
+pub use rustx_types::runtime::permission::mode;
+pub(crate) use rustx_types::runtime::permission::reminder;
 mod task;
 pub use task::PermissionTaskEvidence;
 pub(crate) mod review;
 
 pub use bash::{BashReadonlyAnalysis, BashReadonlyClass, analyze_bash_readonly};
-pub(crate) use classify::supports_elevation;
+pub use classify::supports_elevation;
 pub use classify::{ClassificationHints, classify_tool_kind, is_workspace_plan_file};
 pub use decision::{
     ElevationReason, PermissionDecision, PermissionDecisionKind, PermissionFacts,
@@ -29,8 +28,8 @@ pub use decision::{
 pub use matrix::{BuiltinPermissionAction, BuiltinToolKind, builtin_action_for};
 pub use mode::ExecutionPermissionMode;
 pub use reminder::{PermissionReminderState, permission_reminder_text};
-pub use resource::{
+pub use review::{PermissionReviewVerdict, accept_permission_review};
+pub use rustx_types::runtime::permission::resource::{
     ResourcePermissionSet, ResourcePermissionValue, effective_invocation_resource_permission,
     resolve_resource_permission, stricter_resource_permission,
 };
-pub use review::{PermissionReviewVerdict, accept_permission_review};

@@ -35,7 +35,7 @@ use crate::common::provider_emulator::ProviderEmulator;
 use rustx::app_server::connection::AppServerConnection;
 use rustx::app_server::host::AppServerHost;
 use rustx::app_server::protocol::{
-    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, InitializeParams,
+    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, ErrorData, InitializeParams,
     JsonRpcVersion, Method, MethodResult, NotificationMethod, PresentationCapabilities, Request,
     RequestId, Response, RpcError,
 };
@@ -2540,14 +2540,12 @@ async fn image_tool_round_trip_and_text_model_switch() {
     // adapter over the image-bearing canonical span, not a helper-only mock.
     // Attempt settlement is logical; the coordinator may still own its tail.
     // A Busy refusal admits nothing, so retry until the native owner returns.
+    // The wire message is the generic "Operation rejected"; the Busy/invalid
+    // admission state travels in `data` as `InvalidState`.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             match driver.compact_context().await {
-                Err(error)
-                    if error
-                        .message
-                        .contains("requires an idle conversation runtime") =>
-                {
+                Err(error) if error.data == Some(ErrorData::InvalidState) => {
                     tokio::task::yield_now().await;
                 }
                 result => break result.unwrap(),

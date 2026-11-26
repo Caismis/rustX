@@ -206,7 +206,7 @@ impl ConversationRuntime {
             .map_err(|error| error.to_string())?
             .map_err(|rejection| {
                 let refusal=serde_json::json!({"reason":rejection.reason,"current":crate::observation::goal::RuntimeClientGoalView::from_native(rejection.current.as_ref()).current});
-                crate::observation::bounded::bounded_bytes(&refusal,16_384).and_then(|bytes|String::from_utf8(bytes).ok()).unwrap_or_else(||"Goal control refused; read the current Goal state".into())
+                rustx_types::observation::bounded::bounded_bytes(&refusal,16_384).and_then(|bytes|String::from_utf8(bytes).ok()).unwrap_or_else(||"Goal control refused; read the current Goal state".into())
             })?;
         let phase = committed.phase;
         let view = crate::goal::GoalView {

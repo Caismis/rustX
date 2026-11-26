@@ -532,7 +532,7 @@ struct RegistryState {
     agent_observation_order: Vec<AgentId>,
     agent_observation_index: HashMap<AgentId, usize>,
     observation_generation: u64,
-    observation_layouts: HashMap<AgentId, crate::runtime::read_layout::ObservationLayoutCache>,
+    observation_layouts: HashMap<AgentId, rustx_durable::read_layout::ObservationLayoutCache>,
     /// Complete recovered physical obligation set, including allocations with
     /// no Reserved event, activation record or resume reservation. Reconciler
     /// completion never releases these runtime owners; only exact proof does.

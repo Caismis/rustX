@@ -5,6 +5,7 @@
 use super::terminal::{CanonicalCommitError, TerminalCommitState};
 use super::{AgentExecution, DurableFailureKind};
 use crate::durable::TranscriptCursor;
+use crate::durable::observation::NativeObservationBatch;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{AssistantMessageBlock, MessageBlock};
 use crate::model::event::ModelEvent;
@@ -490,7 +491,10 @@ impl AgentExecution<'_> {
                 &event,
                 envelope.sequence,
                 envelope.tool_occurrence.as_ref(),
-                envelope.observation.as_deref(),
+                envelope
+                    .observation
+                    .as_ref()
+                    .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>()),
             );
         }
     }

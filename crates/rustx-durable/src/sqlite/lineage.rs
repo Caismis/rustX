@@ -1,0 +1,312 @@
+//! One native lineage linearization point, never a destination execution replay.
+use super::{Connection, ConversationStoreError, decode, seq_to_i64, storage};
+use crate::reading::LineageReadCut;
+use crate::response::{AttemptEvidence, CompletedResponseProvenance, ResponseOrigin, add_usage};
+use rustx_conversation::{SurfaceOp, SurfaceRevision};
+use rustx_types::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use rustx_types::message::types::MessageBlock;
+use rustx_types::model::finish::ModelFinishReason;
+use rustx_types::runtime::identity::{AttemptId, ConversationId, MessageId};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub fn read(
+    connection: &Connection,
+    conversation: &ConversationId,
+    revision: SurfaceRevision,
+) -> Result<LineageReadCut, ConversationStoreError> {
+    read_at(connection, conversation, revision, None, None)
+}
+
+pub fn read_at(
+    connection: &Connection,
+    conversation: &ConversationId,
+    revision: SurfaceRevision,
+    activation: Option<rustx_types::context::checkpoint::ProjectionActivationId>,
+    boundary: Option<(&MessageId, bool)>,
+) -> Result<LineageReadCut, ConversationStoreError> {
+    // This first SELECT linearizes temporal cut C. Selected revision R below
+    // owns structure, not execution time; the same R at a newer C may observe
+    // newer outcomes. Later commits cannot alter this captured (R, C).
+    let read_cut = super::reading::cut(connection, conversation)?;
+    let (ids, surface_history) =
+        super::canonical::ledger::replay_surface_history(connection, revision)?;
+    let referenced: BTreeSet<_> = surface_history
+        .iter()
+        .flat_map(SurfaceOp::message_ids)
+        .cloned()
+        .collect();
+    let canonical: Vec<_> = super::canonical::transcript::load_canonical_rows(connection)?
+        .into_iter()
+        .filter(|message| referenced.contains(&rustx_conversation::message_id_of(message)))
+        .collect();
+    let messages = ids
+        .iter()
+        .map(|id| super::canonical::ledger::load_message(connection, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut turns = super::reading::lineage_turns(connection, conversation, read_cut.journal)?;
+    // Member presence selects message-backed history. A terminal-only predecessor
+    // controls structural prefix membership only AFTER the Journal cut filtered time.
+    turns.retain_mut(|turn| {
+        // A prompt outside the retained cut is not inherited; the turn keeps
+        // its identity and simply has no prompt preview.
+        if turn
+            .prompt_message_id
+            .as_ref()
+            .is_some_and(|id| !referenced.contains(id))
+        {
+            turn.prompt_message_id = None;
+        }
+        let had_members = !turn.process_message_ids.is_empty();
+        turn.process_message_ids
+            .retain(|id| referenced.contains(id));
+        if had_members {
+            return !turn.process_message_ids.is_empty();
+        }
+        turn.preceding_message_id
+            .as_ref()
+            .is_none_or(|id| referenced.contains(id))
+    });
+    let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
+    let raw_tool_arguments =
+        crate::sqlite::content::canonical_raw_arguments(connection, &canonical)?;
+    let projection_len = if let Some((id, include)) = boundary {
+        canonical.iter().position(|m| m.id() == id).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "missing selected canonical lineage boundary".into(),
+            )
+        })? + usize::from(include)
+    } else {
+        canonical.len()
+    };
+    let ledger = rustx_types::context::resources::LedgerFrontier(projection_len as u64);
+    let projections = selected_projections(
+        connection,
+        conversation,
+        ledger,
+        read_cut.journal,
+        activation,
+    )?;
+    let auxiliary_audits = crate::sqlite::projection::read_auxiliary_lineage_dependencies(
+        connection,
+        conversation,
+        &projections,
+        read_cut.journal,
+    )?;
+    Ok(LineageReadCut {
+        auxiliary_audits,
+        projections,
+        raw_tool_arguments,
+        read_cut,
+        conversation_id: conversation.clone(),
+        surface_revision: revision,
+        messages,
+        canonical,
+        surface_history,
+        completed_responses,
+        turns,
+    })
+}
+
+fn selected_projections(
+    connection: &Connection,
+    conversation: &ConversationId,
+    ledger: rustx_types::context::resources::LedgerFrontier,
+    journal: u64,
+    activation: Option<rustx_types::context::checkpoint::ProjectionActivationId>,
+) -> Result<Vec<crate::projection::ProjectionCheckpoint>, ConversationStoreError> {
+    let through = activation.unwrap_or(rustx_types::context::checkpoint::ProjectionActivationId(
+        i64::MAX as u64,
+    ));
+    if let Some(selected) = activation.filter(|a| a.0 > 0) {
+        crate::sqlite::projection::validate_activation_boundary(
+            connection,
+            selected,
+            ledger,
+            rustx_types::context::resources::JournalFrontier(journal),
+        )?;
+    }
+    let mut projections = Vec::new();
+    let mut previous_checkpoint = None;
+    let mut after = rustx_types::context::checkpoint::ProjectionActivationId(0);
+    let mut remaining_projection_bytes =
+        crate::context_resources::ResourceLimits::default().total_bytes;
+    loop {
+        let page = crate::sqlite::projection::timeline_page(
+            connection,
+            after,
+            64,
+            Some((
+                ledger,
+                rustx_types::context::resources::JournalFrontier(journal),
+                through,
+            )),
+            remaining_projection_bytes,
+        )?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().unwrap().activation.activation;
+        for checkpoint in &page {
+            // A retained activation owns its immutable predecessor closure.
+            if checkpoint.candidate.expected_head.as_ref() != previous_checkpoint.as_ref() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "missing historical projection predecessor".into(),
+                ));
+            }
+            crate::sqlite::projection::validate_current_dependencies(
+                connection,
+                conversation,
+                &checkpoint.candidate,
+            )?;
+            if checkpoint.candidate.base_frontier > checkpoint.activation.ledger {
+                return Err(ConversationStoreError::InvalidReference(
+                    "checkpoint base exceeds activation boundary".into(),
+                ));
+            }
+            previous_checkpoint = Some(checkpoint.candidate.checkpoint_id.clone());
+            remaining_projection_bytes -= crate::context_resources::bounded_encoded_len(
+                checkpoint,
+                remaining_projection_bytes,
+            )?;
+        }
+        projections.extend(page);
+        if projections.len() > 8192 {
+            return Err(ConversationStoreError::InvalidReference(
+                "lineage projection timeline exceeds bound".into(),
+            ));
+        }
+    }
+    if activation
+        .is_some_and(|a| a.0 > 0 && !projections.iter().any(|p| p.activation.activation == a))
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "missing selected historical checkpoint".into(),
+        ));
+    }
+    Ok(projections)
+}
+
+#[allow(clippy::too_many_lines)] // One native response evidence fold under the same SQLite snapshot.
+fn responses(
+    connection: &Connection,
+    conversation: &ConversationId,
+    through: u64,
+    canonical: &[MessageBlock],
+) -> Result<Vec<CompletedResponseProvenance>, ConversationStoreError> {
+    let wanted: BTreeSet<_> = canonical
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Assistant(assistant) => Some(assistant.id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut completed: BTreeMap<MessageId, CompletedResponseProvenance> =
+        super::provenance::responses(connection)?
+            .into_iter()
+            .filter(|response| wanted.contains(&response.closing_message_id))
+            .map(|response| (response.closing_message_id.clone(), response))
+            .collect();
+    let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
+    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND event_kind IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') AND (event_kind NOT IN ('model_request_started','model_request_completed','model_request_failed') OR event_owner_kind='agent') ORDER BY sequence")
+        .map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+    let rows = statement
+        .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))
+        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    for json in rows {
+        let event: RuntimeEventEnvelope = decode(
+            &json.map_err(|error| storage(error.to_string()))?,
+            "lineage response fact",
+        )?;
+        if event.event.auxiliary_call_id().is_some() {
+            continue;
+        }
+        let Some(id) = event.attempt_id else {
+            continue;
+        };
+        let evidence = attempts.entry(id.clone()).or_default();
+        match event.event {
+            RuntimeEvent::AttemptStarted { .. } => evidence.started_at = Some(event.timestamp),
+            RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                evidence.members.insert(message_id.clone());
+                evidence.closing = Some(message_id);
+            }
+            RuntimeEvent::ModelRequestStarted {
+                request_id, model, ..
+            } => {
+                evidence.request_started(request_id, model);
+            }
+            RuntimeEvent::ModelRequestCompleted {
+                request_id,
+                usage,
+                generation,
+                ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                request_id,
+                usage,
+                generation,
+                ..
+            } => {
+                evidence
+                    .timing
+                    .terminal(&request_id, generation, usage.as_ref());
+                if let Some(usage) = usage {
+                    evidence.reports += 1;
+                    add_usage(&mut evidence.usage, &usage);
+                }
+            }
+            RuntimeEvent::AttemptCompleted {
+                finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,
+                ..
+            } => {
+                if let Some(closing) = evidence
+                    .closing
+                    .take()
+                    .filter(|closing| wanted.contains(closing))
+                {
+                    let retry_message_id =
+                        super::reading::attempt_prompt(connection, &id, through)?;
+                    completed.insert(
+                        closing.clone(),
+                        CompletedResponseProvenance {
+                            process_message_ids: evidence
+                                .members
+                                .iter()
+                                .filter(|id| wanted.contains(*id))
+                                .cloned()
+                                .collect(),
+                            closing_message_id: closing.clone(),
+                            origin: ResponseOrigin {
+                                conversation_id: conversation.clone(),
+                                attempt_id: id.clone(),
+                                closing_message_id: closing,
+                            },
+                            completed_at: event.timestamp,
+                            retry_message_id,
+                            timing: evidence
+                                .timing
+                                .summary(evidence.started_at, event.timestamp),
+                            usage: (evidence.requests > 0 && evidence.requests == evidence.reports)
+                                .then(|| evidence.usage.take())
+                                .flatten(),
+                            models: std::mem::take(&mut evidence.models),
+                        },
+                    );
+                }
+                attempts.remove(&id);
+            }
+            RuntimeEvent::AttemptCompleted { .. }
+            | RuntimeEvent::AttemptCancelled { .. }
+            | RuntimeEvent::AttemptFailed { .. }
+            | RuntimeEvent::AttemptTimedOut { .. }
+            | RuntimeEvent::AttemptLimitExceeded { .. } => {
+                attempts.remove(&id);
+            }
+            _ => {}
+        }
+    }
+    Ok(canonical
+        .iter()
+        .filter_map(|message| completed.remove(&rustx_conversation::message_id_of(message)))
+        .collect())
+}

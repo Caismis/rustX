@@ -14,12 +14,13 @@ fn invalid() -> RuntimeClientError {
 fn prefix(header: &RuntimeClientInteractionHeader) -> Result<Vec<u8>, RuntimeClientError> {
     let mut value = b"{\"interaction\":".to_vec();
     value.extend(
-        crate::observation::bounded::bounded_bytes(&header.interaction, 4096)
+        rustx_types::observation::bounded::bounded_bytes(&header.interaction, 4096)
             .ok_or_else(invalid)?,
     );
     value.extend(b",\"source\":");
     value.extend(
-        crate::observation::bounded::bounded_bytes(&header.source, 4096).ok_or_else(invalid)?,
+        rustx_types::observation::bounded::bounded_bytes(&header.source, 4096)
+            .ok_or_else(invalid)?,
     );
     value.extend(b",\"request\":");
     Ok(value)

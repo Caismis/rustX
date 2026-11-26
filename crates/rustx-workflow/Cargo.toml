@@ -1,0 +1,22 @@
+[package]
+name = "rustx-workflow"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+
+[dependencies]
+rustx-types = { path = "../rustx-types" }
+rustx-identity = { path = "../rustx-identity" }
+rustx-bounded-file = { path = "../rustx-bounded-file" }
+rustx-bounded-json = { path = "../rustx-bounded-json" }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+serde_yaml_ng = "0.10.0"
+schemars = { version = "1", features = ["chrono04"] }
+sha2 = "0.10"
+imbl = { version = "7.0.0", features = ["serde"] }
+
+[lints]
+workspace = true

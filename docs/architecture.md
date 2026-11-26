@@ -10,6 +10,98 @@ modules. Session Controller operations and Workflow compilation/catalog modules
 retain their original native authorities and public paths. See the
 [engineering report](evidence/issue-560-final-report.md) and its disposition maps.
 
+## Workspace crate boundary (#560)
+
+`rustx` is a Cargo workspace whose `crates/rustx-*` members own shared
+contracts that lower layers need without pulling in the monolith. The
+dependency graph points strictly inward — leaves first:
+
+```text
+rustx-identity          canonical identity types                 (leaf)
+rustx-bounded-file      bounded file reader                      (leaf)
+rustx-bounded-json      bounded JSON reader                      (leaf)
+rustx-types             the shared contract plane                → identity
+rustx-workflow          the Workflow DSL contract                → types, identity, bounded-file, bounded-json
+rustx-conversation      mutable conversation hot state           → types
+rustx-publication       durable user-facing publication plane    → types
+rustx-durable           the native durable conversation authority → types, workflow, identity, conversation, publication, bounded-file, bounded-json
+rustx (monolith)        everything else                          → all members
+```
+
+`rustx-conversation` owns the
+mutable conversation hot state: `ConversationState` is the single mutable
+authority, holding the canonical `MessageLedger` (identity-deduped,
+allocation-owning history), the `ConversationSurface` (the mutable active
+working set), `CanonicalSelection` and `CanonicalBodies` (the bounded weak-lease
+registry of canonical `ModelInputMessage` allocations shared by the Ledger, the
+Surface and selected-input manifests). Its prepare→install primitives
+(`bind_bodies`, `append_after_validation`, `append_shared_after_validation`,
+`shared`, `CanonicalBodies::admit`, Surface append) are `pub(crate)`-narrowed:
+cross-crate callers go through `ConversationState` entry points
+(`commit`, `prepare_owned_commit`/`prepare_owned_batch`, `install_prepared`,
+`from_shared_durable_head`, `bind_bodies`) and read accessors; the only
+`pub` primitives that remain are `CanonicalBodies::share` (durable projection
+leases bodies into `SelectedInputManifest`s) and `CanonicalSelection::append`
+(the status surface rebuilds one exact selection). `rustx-publication` holds
+the durable user-facing publication plane: carryover accounting, the
+coalescer and frame records. `rustx-durable` is the native durable
+conversation authority (Issue #11): the backend-independent semantic store
+for the durable domains — the pending-inbound inbox and canonical-adoption
+transaction, observation capture and projection, read layouts, recovery and
+the SQLite backend — plus the frozen request-time model records
+`model::snapshot` and `model::occurrence`. `rustx-workflow` owns only the
+Workflow DSL contract: serialized definitions, the workflow-file document
+model, compile diagnostics, list/nav/review selections and tool-result
+typing shared by the runtime engine and the durable journal; execution and
+the compile driver stay in the monolith. The
+monolith re-exports each moved item at its original `crate::` path, so
+consumer paths do not change; extracted crates never depend back on `rustx`
+and keep dependencies pointing inward toward rustX-owned contracts. Lint
+configuration is workspace-wide (`[workspace.lints]`): `unsafe_code` is
+denied and clippy `all`/`pedantic` warnings apply to every member through
+`[lints] workspace = true`, so extracted crates keep the monolith's bar.
+
+Beyond `model`, `rustx-types` is the shared leaf for cross-layer plumbing:
+`skills` (file discovery, frontmatter, package/identity/source),
+`package_io` (confined descriptor-relative package I/O),
+`toml_authoring` (source TOML parsing, writing and structured diagnostics),
+`app_server::transport::auth` (instance JWT authentication at WebSocket
+admission), plus `context`, `runtime`, `runtime_client`, `tools`,
+`capabilities`, `events`, `message`, `observation`, `agent`, `scheduler`,
+`goal`/`goal_lifecycle`, `local_runtime`, `durable::canonical` and
+`workspace_changes`.
+
+Under `rustx-types`, `model` holds the model contract plane:
+`input` (`ModelInputMessage`, canonical/request-only context, carryover
+rendering), `projected` (model-visible views, canonical body identity),
+`images` (frozen image payloads and PNG measurement), `transformations`
+(provider payload rewrites), `uploads` (attachment upload accounting),
+`selected_input` (manifest assembly via `assemble_selected_model_input` and
+`SelectedModelInput`, plus the shared `InputPreparation` cell whose
+incremental continuation-candidate index and semantic-prefix digest are
+reused by request preparation in the runtime, durable reads and the provider
+adapter; engine-owned request state rides in its `engine` slot),
+`structured`, `auxiliary`, `snapshot` (request-identity vocabulary; the
+frozen records live in `rustx-durable`), `adapter` (provider transport,
+correlation, stream, retry, profile and the `anthropic`/`openai` wire
+configurations), `types` (the semantic-fingerprint cluster) and the rest of
+the request/response vocabulary. `model::media` stays in the monolith; the
+monolith re-exports `model::occurrence`/`model::snapshot` from
+`rustx-durable` and `model::selected_input`/`model::types`/`model::structured`
+from `rustx-types` at their original `crate::model` paths. Test-only
+instrumentation (`model::hash_work`, image decode
+counting, `agent::execution::attribution`) is compiled under
+`cfg(any(test, feature = "test-fixtures"))`, which the monolith enables only
+through its dev-dependency edge, so production builds never carry it.
+
+`rustx-types` also owns the continuation contract under `runtime`:
+`runtime::continuation` holds `ProviderContinuationState` (the provider
+boundary), `OpenAiResponsesContinuation`, `AnthropicContinuation` and
+`AcceptedOutputContinuationSource`. `from_accepted_output` takes the covered
+input's semantic fingerprint as a `String` rather than `&SelectedModelInput`,
+so the contract does not pull request selection back into the types crate;
+callers in the monolith pass `input.semantic_fingerprint()` explicitly.
+
 ## App Server environment services (#533)
 
 The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).

@@ -108,11 +108,15 @@ async fn assert_child_definition(
     .unwrap();
     assert_eq!(definition["tool_id"], "tool-inspect");
     assert_eq!(definition["name"], "inspect_tool");
-    let expected = crate::tools::compile_model_definition(&common::tool_policies(
+    let tool_definition = common::tool_policies(
         "inspect_tool",
         "tool-inspect",
         crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
-    ))
+    );
+    let expected = crate::tools::compile_model_definition(
+        &tool_definition,
+        rustx::runtime::permission::supports_elevation(&tool_definition),
+    )
     .unwrap();
     assert_eq!(definition["description"]["text"], expected.description);
     assert_eq!(definition["description"]["truncated"], false);

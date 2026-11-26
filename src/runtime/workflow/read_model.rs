@@ -15,6 +15,7 @@ use super::{
     WorkflowNodeInstance, WorkflowNodeProgram, WorkflowRunId,
 };
 use crate::runtime::identity::{SubagentId, ToolCallId};
+pub use rustx_types::runtime::workflow::read_model::{WorkflowNodeKind, WorkflowWait};
 
 pub const MAX_PROJECTED_RUNS: usize = 8;
 pub const MAX_PROJECTED_INSTANCES: usize = 512;
@@ -67,42 +68,6 @@ pub enum WorkflowState {
     Waiting { reason: WorkflowWait },
     Draining,
     Settled { outcome: WorkflowExecutionOutcome },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum WorkflowWait {
-    Tool,
-    Agent,
-    Model,
-    Capacity,
-    Questionnaire,
-    Approval,
-    Review,
-    Settlement,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum WorkflowNodeKind {
-    Template,
-    List,
-    Aggregate,
-    Classifier,
-    Block,
-    Agent,
-    Model,
-    Tool,
-    Branch,
-    Start,
-    Review,
-    Loop,
-    Iteration,
-    LoopEnd,
-    Assigner,
-    Return,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

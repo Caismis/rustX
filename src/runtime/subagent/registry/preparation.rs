@@ -18,7 +18,6 @@ use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::AgentId;
 use crate::runtime::identity::ConversationId;
 use crate::runtime::identity::SubagentId;
-use crate::runtime::identity::ToolCallId;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
@@ -58,35 +57,7 @@ pub struct ActivationAdmission {
     pub approval_mode: crate::runtime::types::ApprovalMode,
 }
 
-/// Truthful admission source. Client controls have no model `ToolCall` identity.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AgentActivationOrigin {
-    CreationTool {
-        tool_call_id: ToolCallId,
-    },
-    MessageTool {
-        tool_call_id: ToolCallId,
-    },
-    ClientControl,
-    Workflow {
-        node_id: Box<crate::runtime::workflow::WorkflowNodeInstance>,
-    },
-}
-
-impl AgentActivationOrigin {
-    #[must_use]
-    pub fn tool_call_id(&self) -> Option<&ToolCallId> {
-        match self {
-            Self::CreationTool { tool_call_id } | Self::MessageTool { tool_call_id } => {
-                Some(tool_call_id)
-            }
-            Self::ClientControl | Self::Workflow { .. } => None,
-        }
-    }
-}
+pub use rustx_types::runtime::subagent::AgentActivationOrigin;
 
 /// A privately prepared subagent start: everything fallible already
 /// succeeded, but nothing is published or owned yet.

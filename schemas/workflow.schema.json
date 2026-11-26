@@ -253,6 +253,7 @@
       "type": "object"
     },
     "WorkflowCodeLanguage": {
+      "description": "Typed Python/JavaScript main functions over the admitted workspace Bash tool.",
       "enum": [
         "python3",
         "javascript"

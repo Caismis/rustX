@@ -390,17 +390,21 @@ pub enum SettingsError {
     /// bounded diagnostic. Nothing was staged.
     InvalidWorkflow(Box<super::super::workflow_authoring::WorkflowDiagnostic>),
     TransferRejected(TransferRejection),
-    Io,
+    Io(std::io::Error),
     Committed,
 }
 fn read(path: &Path) -> Result<Option<Vec<u8>>, SettingsError> {
-    super::super::settings::read_document(path).map_err(|_| SettingsError::Io)
+    super::super::settings::read_document(path)
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))
 }
 
 /// A source pathname that cannot be admitted is `Invalid` when the target is
 /// redirected, exactly as at entry; otherwise `Io`.
 fn refused(target: &SourceTarget) -> SettingsError {
-    target.validate().err().unwrap_or(SettingsError::Io)
+    target
+        .validate()
+        .err()
+        .unwrap_or_else(|| SettingsError::Io(std::io::Error::other("source directory refused")))
 }
 
 /// Admit one `rustx.toml` of a capture round ([`AdmittedSource`]).
@@ -417,7 +421,9 @@ fn reread(
     document.reread().map_err(|failure| match failure {
         SourceReread::Redirected => SettingsError::Invalid,
         SourceReread::Unadmitted(_) => refused(target),
-        SourceReread::Unreadable(_) => SettingsError::Io,
+        SourceReread::Unreadable(error) => {
+            SettingsError::Io(std::io::Error::other(format!("{error:?}")))
+        }
     })
 }
 fn revision(bytes: Option<&[u8]>) -> String {
@@ -431,7 +437,10 @@ fn raw_workflow_selection(
     document: &super::super::settings::AdmittedSource,
     workspace: bool,
 ) -> Result<Vec<crate::runtime::workflow::WorkflowId>, SettingsError> {
-    let Some(bytes) = document.read().map_err(|_| SettingsError::Io)? else {
+    let Some(bytes) = document
+        .read()
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
+    else {
         return Ok(Vec::new());
     };
     let layer = super::capture::parse_layer(document.path(), &bytes, workspace)
@@ -532,7 +541,7 @@ fn mcp_view(
 fn agent_views(root: &Path, scope: SourceScope) -> Result<Vec<AgentSourceView>, SettingsError> {
     let mut result = Vec::new();
     for path in super::super::resource_directory::files(root, &root.join("agents"), "toml")
-        .map_err(|_| SettingsError::Io)?
+        .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
     {
         let Some(name) = path
             .file_stem()
@@ -1104,11 +1113,13 @@ impl UserConfigManager {
         expected: Option<&crate::local_runtime::model_probe::ModelProbeSource>,
     ) -> Result<(Option<RuntimeLayer>, String), SettingsError> {
         self.with_source_documents(target, |user, workspace| {
-            let user_bytes = user.read().map_err(|_| SettingsError::Io)?;
+            let user_bytes = user
+                .read()
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let workspace_bytes = workspace
                 .map(AdmittedSource::read)
                 .transpose()
-                .map_err(|_| SettingsError::Io)?
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?
                 .flatten();
             if let Some(expected) = expected
                 && (revision(user_bytes.as_deref()) != expected.user_revision
@@ -1177,7 +1188,7 @@ impl UserConfigManager {
             let mut locks = Vec::new();
             let mut unlocked = Vec::new();
             for document in documents {
-                match document.share_lock().map_err(|_| SettingsError::Io)? {
+                match document.share_lock().map_err(SettingsError::Io)? {
                     Some(lock) => locks.push(lock),
                     None => unlocked.push(document),
                 }
@@ -1204,7 +1215,9 @@ impl UserConfigManager {
             }
         }
         // Only an actor outside rustX unlinking writer locks gets here.
-        Err(SettingsError::Io)
+        Err(SettingsError::Io(std::io::Error::other(
+            "writer lock unlinked externally",
+        )))
     }
 
     /// One capture round, revision-fenced by rereading every input.
@@ -1217,7 +1230,11 @@ impl UserConfigManager {
     ) -> Result<(SourceSettings, String), SettingsError> {
         let user = user_document.path().to_path_buf();
         let workspace = workspace_document.map(|document| document.path().to_path_buf());
-        let read = |document: &AdmittedSource| document.read().map_err(|_| SettingsError::Io);
+        let read = |document: &AdmittedSource| {
+            document
+                .read()
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))
+        };
         let user_bytes = read(user_document)?;
         let workspace_bytes = workspace_document.map(read).transpose()?.flatten();
         let roots: Vec<_> =
@@ -1431,7 +1448,7 @@ impl UserConfigManager {
         // entry is invalid, as at entry.
         let source = SourceDirectory::create(&path).map_err(|error| {
             super::super::settings::report_io_failure("admit_writer_directory", &error);
-            target.validate().err().unwrap_or(SettingsError::Io)
+            target.validate().err().unwrap_or(SettingsError::Io(error))
         })?;
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
@@ -1462,9 +1479,11 @@ impl UserConfigManager {
         {
             let _lock = source.lock(name).map_err(|error| {
                 super::super::settings::report_io_failure("acquire_writer_lock", &error);
-                SettingsError::Io
+                SettingsError::Io(error)
             })?;
-            let original = source.read(name).map_err(|_| SettingsError::Io)?;
+            let original = source
+                .read(name)
+                .map_err(|error| SettingsError::Io(std::io::Error::other(format!("{error:?}"))))?;
             let actual = revision(original.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
@@ -1625,14 +1644,21 @@ impl UserConfigManager {
         let verify = || {
             // Durable reachability of the admitted directory, confirmed by
             // this transaction, and proof that the pathname still names it.
-            source.confirm().map_err(|_| {
+            source.confirm().map_err(|error| {
                 if source.holds() {
-                    SettingsError::Io
+                    SettingsError::Io(error)
                 } else {
                     SettingsError::Invalid
                 }
             })?;
-            let actual = revision(source.read(name).map_err(|_| SettingsError::Io)?.as_deref());
+            let actual = revision(
+                source
+                    .read(name)
+                    .map_err(|error| {
+                        SettingsError::Io(std::io::Error::other(format!("{error:?}")))
+                    })?
+                    .as_deref(),
+            );
             if actual == expected {
                 Ok(())
             } else {
@@ -1649,13 +1675,17 @@ impl UserConfigManager {
             }
             #[cfg(test)]
             if self.test_hooks.fault("stage_write") {
-                return Err(SettingsError::Io);
+                return Err(SettingsError::Io(std::io::Error::other(
+                    "injected fault: stage_write",
+                )));
             }
             #[cfg(test)]
             if self.test_hooks.fault("stage_sync") {
-                return Err(SettingsError::Io);
+                return Err(SettingsError::Io(std::io::Error::other(
+                    "injected fault: stage_sync",
+                )));
             }
-            let staged = source.stage(bytes).map_err(|_| SettingsError::Io)?;
+            let staged = source.stage(bytes).map_err(SettingsError::Io)?;
             #[cfg(test)]
             self.test_hooks.reach("before_publication");
             verify()?;
@@ -1667,9 +1697,7 @@ impl UserConfigManager {
             }
             #[cfg(test)]
             if self.test_hooks.fault("replace") {
-                source
-                    .replace(staged, name)
-                    .map_err(|_| SettingsError::Io)?;
+                source.replace(staged, name).map_err(SettingsError::Io)?;
                 return Err(Self::classify_failed_replacement(source, name, expected));
             }
             source
@@ -1679,7 +1707,7 @@ impl UserConfigManager {
             #[cfg(test)]
             self.test_hooks.reach("before_publication");
             verify()?;
-            source.remove(name).map_err(|_| SettingsError::Io)?;
+            source.remove(name).map_err(SettingsError::Io)?;
         }
         #[cfg(test)]
         self.test_hooks.reach("after_publication");
@@ -1704,7 +1732,9 @@ impl UserConfigManager {
         expected: &str,
     ) -> SettingsError {
         match source.read(name) {
-            Ok(bytes) if revision(bytes.as_deref()) == expected => SettingsError::Io,
+            Ok(bytes) if revision(bytes.as_deref()) == expected => SettingsError::Io(
+                std::io::Error::other("replacement left the original revision"),
+            ),
             _ => SettingsError::Committed,
         }
     }

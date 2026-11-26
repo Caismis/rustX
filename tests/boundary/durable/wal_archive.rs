@@ -256,7 +256,14 @@ fn wal_existing_management_does_not_convert_and_writer_transition_validates_iden
     let controller = std::sync::Arc::new(
         crate::runtime::local_storage::ProductController::acquire(root.path()).unwrap(),
     );
-    let writer = SqliteConversationStore::recover_existing(id.clone(), &path, &controller).unwrap();
+    let access = crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+        controller.clone(),
+        path.parent().unwrap(),
+    )
+    .unwrap();
+    let writer =
+        SqliteConversationStore::recover_existing(id.clone(), &path, std::sync::Arc::new(access))
+            .unwrap();
     assert_eq!(&std::fs::read(&path).unwrap()[18..20], &[2, 2]);
     writer
         .append_canonical(&message("recovered-writer"))

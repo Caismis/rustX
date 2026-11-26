@@ -36,6 +36,7 @@ async fn compose_admitted_with_controller(
     super::LocalConversationCore::compose_with_access(
         launch,
         &dependencies,
+        std::sync::Arc::new(crate::runtime::types::SystemClock),
         registry,
         launch.config().clone(),
         SessionPersistentState::from_input(&launch.input),

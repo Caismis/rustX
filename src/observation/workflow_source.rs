@@ -4,22 +4,22 @@ use serde::{Serialize, Serializer};
 use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone)]
-pub(crate) struct WorkflowReadSource {
+pub struct WorkflowReadSource {
     original: Arc<WorkflowSnapshot>,
     prepared: Arc<OnceLock<(WorkflowSnapshot, Vec<super::cut::CollectionFrontier>)>>,
 }
 impl WorkflowReadSource {
-    pub(crate) fn new(original: Arc<WorkflowSnapshot>) -> Self {
+    pub fn new(original: Arc<WorkflowSnapshot>) -> Self {
         Self {
             original,
             prepared: Arc::default(),
         }
     }
-    pub(crate) fn revision(&self) -> crate::runtime::workflow::read_model::WorkflowRevision {
+    pub fn revision(&self) -> crate::runtime::workflow::read_model::WorkflowRevision {
         self.original.revision
     }
     /// Query this immutable native cut, independently of its finite display header.
-    pub(crate) fn active_node_state(
+    pub fn active_node_state(
         &self,
         node: &crate::runtime::workflow::WorkflowNodeInstance,
     ) -> Option<&crate::runtime::workflow::read_model::WorkflowState> {
@@ -40,7 +40,7 @@ impl WorkflowReadSource {
             })
             .map(|current| &current.state)
     }
-    pub(crate) fn prepare(&self) {
+    pub fn prepare(&self) {
         self.prepared.get_or_init(|| {
             let mut runs = Vec::with_capacity(self.original.runs.len());
             let mut collections = Vec::with_capacity(self.original.runs.len() + 1);
@@ -96,14 +96,14 @@ impl WorkflowReadSource {
             )
         });
     }
-    pub(crate) fn header(&self) -> WorkflowSnapshot {
+    pub fn header(&self) -> WorkflowSnapshot {
         self.prepared
             .get()
             .expect("native Workflow header prepared outside Projection")
             .0
             .clone()
     }
-    pub(crate) fn frontiers(&self) -> Vec<super::cut::CollectionFrontier> {
+    pub fn frontiers(&self) -> Vec<super::cut::CollectionFrontier> {
         self.prepared
             .get()
             .expect("native Workflow header prepared")
@@ -220,7 +220,7 @@ mod tests {
                 next_offset: Some(32),
             }
         );
-        assert!(crate::observation::bounded::bounded_bytes(&header, 786_432).is_some());
+        assert!(rustx_types::observation::bounded::bounded_bytes(&header, 786_432).is_some());
         assert_eq!(
             serde_json::to_value(&source).unwrap(),
             serde_json::to_value(&*original).unwrap()

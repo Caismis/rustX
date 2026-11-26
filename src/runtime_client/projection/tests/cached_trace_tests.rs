@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::observation::EnvelopeNativeObservation;
 
 // The currently published Trace cache owns its original issued read evidence.
 use crate::durable::ConversationStore;
@@ -9,7 +10,7 @@ fn native_terminal_keeps_trace_invalidation_before_its_final_settlement() {
     let (mut projection, store) = initialized_source_projection();
     let started = append_source_attempt_start(&store, "terminal-trace-start");
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     let before = projection.checkpoint_candidate().unwrap();
     let terminal = store
@@ -24,7 +25,7 @@ fn native_terminal_keeps_trace_invalidation_before_its_final_settlement() {
         .unwrap();
     crate::runtime_client::trace::take_page_read_work();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(terminal.observation.as_deref().unwrap());
+        projection.apply_native_batch(terminal.observation.native_batch().unwrap());
     });
     let after = projection.checkpoint_candidate().unwrap();
     assert_eq!(after.cursor.get(), before.cursor.get() + 1);
@@ -62,7 +63,7 @@ fn native_receipt_invalidates_trace_inside_its_existing_publication() {
     let (mut projection, store) = initialized_source_projection();
     let initial = projection.checkpoint_candidate().unwrap();
     let started = append_source_attempt_start(&store, "recovery-native-start");
-    let receipt = started.observation.as_deref().unwrap();
+    let receipt = started.observation.native_batch().unwrap();
     crate::runtime_client::trace::take_page_read_work();
     publish_source_fact(&mut projection, |projection| {
         projection.apply_native_batch(receipt);
@@ -110,7 +111,7 @@ fn native_trace_only_duplicate_and_delayed_receipts_do_not_add_publications() {
         envelope.turn_id = Some(TurnId::new((index + 1).to_string()));
         let event = store.append_event(envelope).unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(event.observation.as_deref().unwrap());
+            projection.apply_native_batch(event.observation.native_batch().unwrap());
         });
         store
             .mark_observation_direct(event.sequence, event.sequence)
@@ -122,7 +123,7 @@ fn native_trace_only_duplicate_and_delayed_receipts_do_not_add_publications() {
     assert_eq!(current.read_cut.through, receipts[1].sequence);
     for event in &receipts {
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(event.observation.as_deref().unwrap());
+            projection.apply_native_batch(event.observation.native_batch().unwrap());
         });
         let witness = store
             .observation_event_witness(event.sequence, receipts[1].sequence)

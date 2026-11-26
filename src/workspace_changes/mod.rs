@@ -1,6 +1,6 @@
 //! Actual per-attempt workspace changes. Private snapshots and file captures live
 //! with the runtime, never enter model input, and never mutate the user's index.
-mod capture;
+pub(crate) use rustx_types::workspace_changes::capture;
 mod command;
 mod comparison;
 use comparison::FileContents;
@@ -194,7 +194,10 @@ impl ChangeRecording {
         })
     }
 
-    #[cfg(test)]
+    // Its only caller is the Linux-only cancellation module in
+    // `attempt::tests::workspace_changes`; compiled under cfg(test) on macOS
+    // it would warn as dead code.
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn hold_final_observation(
         &self,
     ) -> (
