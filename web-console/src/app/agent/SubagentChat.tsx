@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { AgentTranscript } from './AgentTranscript';
 import { JournalSourceProvider, useObservationSource } from './ObservationSource';
-import chatCss from '../../presentation/agent/Chat.module.css';
+import { chatCss } from '../../presentation/agent/chatCss';
 import { currentTurnLocation } from './turn-rail-items';
 import { TurnNavigation } from './TurnNavigator';
 

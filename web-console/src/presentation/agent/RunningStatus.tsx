@@ -3,7 +3,7 @@ import { memo, useEffect, useState } from 'react';
 import { useTranslation } from '../../locale/react';
 import { TextShimmer } from '../primitives/TextShimmer';
 import { RunningWhaleTail } from './RunningWhaleTail';
-import css from './Chat.module.css';
+import { chatCss } from './chatCss';
 
 /** Isolate clock ticks from the transcript; announce activity, not every second. */
 export const RunningStatus = memo(function RunningStatus({ startTime }: { startTime?: number }) {
@@ -20,9 +20,9 @@ export const RunningStatus = memo(function RunningStatus({ startTime }: { startT
     ? tx('agent:duration.seconds', { n: seconds })
     : tx('agent:duration.minutes-seconds', { m: Math.floor(seconds / 60), s: seconds % 60 });
   const label = duration === undefined ? tx('agent:turn-process.deep-diving') : tx('agent:copy.deep-diving-for-value', { p0: duration });
-  return <div className={css.running} data-chat-running>
-    <span className={css.runningAnnouncement} role="status" aria-live="polite" aria-atomic="true">{tx('agent:turn-process.deep-diving')}</span>
-    <span className={css.runningDivider} aria-hidden="true" />
-    <span className={css.runningContent}><RunningWhaleTail /><TextShimmer active className={css.runningText}>{label}</TextShimmer></span>
+  return <div className={chatCss.running} data-chat-running>
+    <span className={chatCss.runningAnnouncement} role="status" aria-live="polite" aria-atomic="true">{tx('agent:turn-process.deep-diving')}</span>
+    <span className={chatCss.runningDivider} aria-hidden="true" />
+    <span className={chatCss.runningContent}><RunningWhaleTail /><TextShimmer active className={chatCss.runningText}>{label}</TextShimmer></span>
   </div>;
 });

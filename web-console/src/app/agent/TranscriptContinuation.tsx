@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import css from '../../presentation/agent/Chat.module.css';
+import { chatCss } from '../../presentation/agent/chatCss';
 
 /** Continue the bounded native window at its trailing edge without pagination chrome. */
 export function TranscriptContinuation({ cursor, loading, load }: { cursor: string; loading: boolean; load: () => void | Promise<void> }) {
@@ -54,5 +54,5 @@ export function TranscriptContinuation({ cursor, loading, load }: { cursor: stri
       viewport.removeEventListener('pointermove', pointerMove);
     };
   }, []);
-  return <div ref={marker} className={css.continuation} data-chat-history-boundary={cursor} aria-hidden="true"/>;
+  return <div ref={marker} className={chatCss.continuation} data-chat-history-boundary={cursor} aria-hidden="true"/>;
 }

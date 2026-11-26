@@ -42,7 +42,7 @@ import { transcriptPresentation, entryIdentity, turnAnchor, type TranscriptCache
 import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
 import { turnTailCss } from './turnTailCss';
-import css from '../../presentation/agent/Chat.module.css';
+import { chatCss } from '../../presentation/agent/chatCss';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
@@ -64,8 +64,8 @@ function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bod
   id: string; hidden?: boolean; owner?: string; turnOwner?: string; reveal?: string; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
   message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; editor?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
 }) {
-  return <div className={css.flow} hidden={hidden} data-chat-anchor-key={id} data-chat-turn-owner={turnOwner} data-turn-process-owner={owner} data-response-reveal={reveal}>
-    {prefix}<div className={css.flow} hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} editor={editor} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
+  return <div className={chatCss.flow} hidden={hidden} data-chat-anchor-key={id} data-chat-turn-owner={turnOwner} data-turn-process-owner={owner} data-response-reveal={reveal}>
+    {prefix}<div className={chatCss.flow} hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} editor={editor} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
 export interface RequestFeedback {
@@ -338,10 +338,10 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     if (piece.kind === 'reply') {
       if (entry && entry.item.type !== 'message') return null;
       const message = entry?.item.type === 'message' ? entry.item.message : head!.message;
-      return <div className={css.flowItem} data-chat-group-part="response" key={messageStepKey(message.id, piece.blocks[0])}>{entry ? <Message message={message} include={piece.blocks} tools={toolsOf(entry)}/> : headBody(head!, piece.blocks)}</div>;
+      return <div className={chatCss.flowItem} data-chat-group-part="response" key={messageStepKey(message.id, piece.blocks[0])}>{entry ? <Message message={message} include={piece.blocks} tools={toolsOf(entry)}/> : headBody(head!, piece.blocks)}</div>;
     }
     const keys = piece.group.members.map(stepMemberKey);
-    return <div className={css.flowItem} hidden={!processOpen} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} open={keys.some(key => stepsOpen.has(key))}
+    return <div className={chatCss.flowItem} hidden={!processOpen} key={piece.group.key}><StepGroup id={piece.group.key} counts={piece.group.counts} open={keys.some(key => stepsOpen.has(key))}
       direct={verbose || !groupedLive && (!entry || entry.turn_process?.outcome === 'running')}
       {...(!entry && snapshot.attempt?.phase.type === 'running' || entry?.turn_process?.outcome === 'running' ? liveGroup(piece.group.members.flatMap(memberTools), piece.group.members.flatMap(member => 'head' in member ? (member.head.blocks ?? (member.head.message.role === 'assistant' ? member.head.message.content : [])).filter(block => block.type === 'reasoning').map(block => block.text ?? '') : member.entry.item.type === 'message' && member.entry.item.message.role === 'assistant' ? member.entry.item.message.content.filter(block => block.type === 'reasoning').map(block => block.text ?? '') : []).at(-1)) : {})}
       onToggle={() => toggleSteps(keys)}>
@@ -365,7 +365,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       // reasoning-only partial keeps it inside its process portion.
       const last = index === (responseTail < 0 ? segments.length - 1 : responseTail);
       const message=<Message message={value} publicationStream={publicationStream} blocks={blocks} include={segment.indices} streaming={streaming} stopped={stopped && last} actions={last ? actions : undefined} tools={tools}/>;
-      return <div className={css.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={key}>
+      return <div className={chatCss.flowItem} data-chat-group-part={segment.process ? undefined : 'response'} key={key}>
         {segment.process ? <StepGroup id={key} counts={[]} open={stepsOpen.has(key)} direct={!groupedLive}
           {...(streaming ? liveGroup(tools, blocks.filter((block,index)=>segment.indices.includes('block_index' in block ? block.block_index : index)&&block.type==='reasoning').map(block=>'text' in block ? block.text ?? '' : '').at(-1)) : {})}
           onToggle={()=>toggleSteps([key])}><div key={'message:' + value.id}>{message}</div></StepGroup> : message}
@@ -478,11 +478,11 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       return <MessageFile key={index} name={meta?.name ?? tx('agent:attachments.one', { n: 1 })} bytes={meta?.bytes}/>;
     });
     const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
-    return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-chat-flow-kind="user" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
+    return <div key={'message:' + value.messageId} className={chatCss.flowItem} data-pending-message="" data-chat-flow-kind="user" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
       other={<UserMessage actions={<div className={turnTailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className="whitespace-pre-wrap wrap-anywhere">{text}</div> : undefined}</UserMessage>}/></div>;
   };
-  return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
-    {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
+  return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={chatCss.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
+    {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={chatCss.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
     {history?.error && <p role="alert">{history.error}</p>}
     {withProcessSpacing(nodes.map(node => {
       if (node.kind === 'descriptor') {
@@ -491,7 +491,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         const user = descriptor.role === 'user' && descriptor.kind === 'message'
           ? controls(descriptor.locator, descriptor.identity
             ? { type: 'by_message_id', message_id: descriptor.identity } : undefined) : {};
-        return <section className={`${css.flowItem} ${css.flow}`} data-chat-group-part={descriptor.completed_response || isFinalTurnDescriptor(descriptor) ? 'response' : undefined} key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
+        return <section className={`${chatCss.flowItem} ${chatCss.flow}`} data-chat-group-part={descriptor.completed_response || isFinalTurnDescriptor(descriptor) ? 'response' : undefined} key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
           {descriptorOwner(descriptor)}
           {requestFeedback.messages.get(descriptor.identity ?? (descriptor.locator.type === 'by_message_id' ? descriptor.locator.message_id : ''))}
           {!collapsed && <DescriptorContent descriptor={descriptor} editor={user.editor} actions={user.actions && <div className={turnTailCss.actions} data-clock="start">{user.actions}</div>}/>}
@@ -501,7 +501,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         </section>;
       }
       if (node.kind === 'accepted') return submissionBubble(node.submission);
-      if (node.kind === 'compaction') return <div className={css.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
+      if (node.kind === 'compaction') return <div className={chatCss.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
       if (node.kind === 'continuation') return <TranscriptContinuation key="history-continuation" cursor={continuation!} loading={!!history?.loading} load={loadLater!}/>;
       if (node.kind === 'head') {
         // Native body heads and positively observed descriptor-only display
@@ -514,7 +514,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         if (!panels.length && grouped?.length === 0 && !requestFeedback?.messages.has(message.id) && !descriptor?.completed_response) return null;
         const childUser = !!receiver && isUser(message);
         const response = message.role === 'assistant' && (grouped ? grouped.some(piece => piece.kind === 'reply') : (head.blocks ?? message.content).some(block => block.type === 'text' || block.type === 'refusal'));
-        return <div className={`${css.flowItem} ${css.flow}`} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={isUser(message) ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
+        return <div className={`${chatCss.flowItem} ${chatCss.flow}`} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={isUser(message) ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
           prefix={<>{requestFeedback?.messages.get(message.id)}{descriptor && descriptorOwner(descriptor)}</>}
           bodyHidden={descriptor && descriptorCollapsed(descriptor)} message={message.role !== 'assistant' ? message : undefined} tools={tools} {...((childUser || userMessageHistory || editedMessage) && userControls(message))}
           other={message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(message,head.blocks ?? message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/>{panels}</div>;
@@ -525,13 +525,13 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         const panels = invocationPanels(activeOwner, tools, node.streaming.blocks);
         if (!panels.length && grouped?.length === 0 && !requestFeedback?.messages.has(node.streaming.message_id)) return null;
         const response = grouped ? grouped.some(piece => piece.kind === 'reply') : node.streaming.blocks?.some(block => block.type === 'text' || block.type === 'refusal');
-        return <div className={`${css.flowItem} ${css.flow}`} data-chat-group-part={response ? 'response' : undefined} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`}
+        return <div className={`${chatCss.flowItem} ${chatCss.flow}`} data-chat-group-part={response ? 'response' : undefined} key={`message:${node.streaming.message_id}`}><MessageSeat key="seat" id={`message:${node.streaming.message_id}`}
           turnOwner={snapshot.attempt ? turnAnchor({conversation_id:snapshot.conversation_id,attempt_id:snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source}) : undefined}
           prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={grouped ? pieces(undefined, grouped, true, headsById.get(node.streaming.message_id)) : messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, { streaming: true })}/>{panels}</div>;
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} forking={!!forking && attemptOwnerKey(forking.origin) === node.key} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}>{deliveryTail(node.key, entries.find(entry => entry.completed_response === node.response)?.cursor, node.response.origin)}</TurnTail>;
-      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" data-chat-trailing-process={!requestFeedback.attempts.has(attemptOwnerKey(node.process)) || undefined} key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
+      if (node.kind === 'process') return <div className={chatCss.flowItem} data-chat-flow-kind="turn-process" data-chat-trailing-process={!requestFeedback.attempts.has(attemptOwnerKey(node.process)) || undefined} key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
       const entry = node.entry;
       if (entry.item.type === 'attempt_terminal') {
         const turn = entry.item.turn;
@@ -578,7 +578,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       const headerOnly = entrySeat && !processOpen && !final && !feedback && !requestFeedback.attempts.has(key!) && !visibleStatus;
       const lastStatus = statusRows.filter(row => !row.hidden).at(-1);
       const trailingHeader = !runPanels.length && (lastStatus ? lastStatus.header && lastStatus.bodyHidden : headerOnly);
-      return <div className={`${css.flowItem} ${css.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-steering-batch={batch} data-chat-flow-kind={batch ? 'steering' : entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} data-chat-trailing-process={trailingHeader || undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
+      return <div className={`${chatCss.flowItem} ${chatCss.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-steering-batch={batch} data-chat-flow-kind={batch ? 'steering' : entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} data-chat-trailing-process={trailingHeader || undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
         prefix={<>
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && firstHeader(attemptOwnerKey(entry.completed_response.origin)) && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
@@ -591,7 +591,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         suffix={<>{statusRows.map(({ status, owner, header, bodyHidden, hidden }) => {
           // Keep the native anchor, while sharing its exact completed Attempt's
           // disclosure. Never borrow the adjacent row's ownership for a status.
-          return <div className={css.flow} hidden={hidden} key={statusIdentity(status)}>{header && disclosure(owner!)}<div hidden={bodyHidden}><AgentStatusAnnotation status={status}/></div></div>;
+          return <div className={chatCss.flow} hidden={hidden} key={statusIdentity(status)}>{header && disclosure(owner!)}<div hidden={bodyHidden}><AgentStatusAnnotation status={status}/></div></div>;
         })}</>}/>{runPanels}</div>;
     }))}
     {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}
