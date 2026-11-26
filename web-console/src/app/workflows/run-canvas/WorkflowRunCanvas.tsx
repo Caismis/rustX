@@ -57,7 +57,7 @@ import {
   type RunSnapshotPhase,
 } from './loader';
 import { viewId } from '../ui/editor/selection';
-import css from './RunCanvas.module.css';
+import { runCanvasCss } from './runCanvasCss';
 
 const EMPTY_PROBLEMS: Problems = { nodes: new Map(), edges: new Set() };
 const EMPTY_DRAFTS = {};
@@ -194,39 +194,39 @@ function VisitFieldPanel({
   }, [requestKey, field, reader, cut, omitted, owned]);
 
   if (omitted) {
-    return <p className={css.muted}>{tx('trajectory:workflow.body-omitted')}</p>;
+    return <p className={runCanvasCss.muted}>{tx('trajectory:workflow.body-omitted')}</p>;
   }
   if (!hasTraceNode) {
     if (traceStatus === 'loading') {
-      return <p role="status" className={css.muted}>{tx('trajectory:details.loading')}</p>;
+      return <p role="status" className={runCanvasCss.muted}>{tx('trajectory:details.loading')}</p>;
     }
     if (traceStatus === 'error') {
-      return <p role="alert" className={css.muted}>{traceError ?? tx('workflows:run-canvas.unavailable')}</p>;
+      return <p role="alert" className={runCanvasCss.muted}>{traceError ?? tx('workflows:run-canvas.unavailable')}</p>;
     }
-    return <p className={css.muted}>{tx('workflows:run-canvas.no-trace-field')}</p>;
+    return <p className={runCanvasCss.muted}>{tx('workflows:run-canvas.no-trace-field')}</p>;
   }
   if (!field) {
-    return <p className={css.muted}>{tx(fieldKind === 'input' ? 'trajectory:workflow.input-not-recorded' : 'trajectory:workflow.output-not-recorded')}</p>;
+    return <p className={runCanvasCss.muted}>{tx(fieldKind === 'input' ? 'trajectory:workflow.input-not-recorded' : 'trajectory:workflow.output-not-recorded')}</p>;
   }
   if (state.key === requestKey && state.error) {
-    return <p role="alert" className={css.muted}>{state.error}</p>;
+    return <p role="alert" className={runCanvasCss.muted}>{state.error}</p>;
   }
   if (state.key === requestKey && state.loading) {
-    return <p role="status" className={css.muted}>{tx('trajectory:details.loading')}</p>;
+    return <p role="status" className={runCanvasCss.muted}>{tx('trajectory:details.loading')}</p>;
   }
 
   let resolved: unknown;
   if (state.key === requestKey && !state.loading && state.value !== undefined) {
     resolved = state.value;
   } else if (!reader || !cut) {
-    return <p className={css.muted}>{tx('workflows:run-canvas.no-trace-field')}</p>;
+    return <p className={runCanvasCss.muted}>{tx('workflows:run-canvas.no-trace-field')}</p>;
   } else {
-    return <p role="status" className={css.muted}>{tx('trajectory:details.loading')}</p>;
+    return <p role="status" className={runCanvasCss.muted}>{tx('trajectory:details.loading')}</p>;
   }
 
   return typeof resolved === 'object' && resolved !== null
     ? <JsonTree data={resolved} label={fieldKind === 'input' ? tx('workflows:run-canvas.input') : tx('workflows:run-canvas.output')} labels={jsonLabels(tx)} />
-    : <pre className={css.muted}>{String(resolved)}</pre>;
+    : <pre className={runCanvasCss.muted}>{String(resolved)}</pre>;
 }
 
 export function WorkflowRunCanvas({
@@ -1043,40 +1043,40 @@ export function WorkflowRunCanvas({
     open
     onClose={onClose}
     title={tx('workflows:run-canvas.title', { p0: displayWorkflowId })}
-    overlayClassName={css.backdrop}
-    className={css.dialog}
+    overlayClassName={runCanvasCss.backdrop}
+    className={runCanvasCss.dialog}
     contentRef={dialogRef}
     finalFocus={() => false}
     initialFocus={() => dialogRef.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? false}
   >
     <div data-workflow-run-canvas="" data-workflow-run-id={runKey} style={{ display: 'contents' }}>
-      <header className={css.header}>
-        <div className={css.titleGroup}>
-          <h2 className={css.title}>{tx('workflows:run-canvas.title', { p0: displayWorkflowId })}</h2>
-          <span className={css.badge}>{tx('workflows:run-canvas.read-only')}</span>
-          <span className={css.badge}>{tx(activeRun && activeRun.state.type !== 'settled' ? 'workflows:run-canvas.source-live' : 'workflows:run-canvas.source-history')}</span>
-          {readyHeader && <span className={css.provenance}>
+      <header className={runCanvasCss.header}>
+        <div className={runCanvasCss.titleGroup}>
+          <h2 className={runCanvasCss.title}>{tx('workflows:run-canvas.title', { p0: displayWorkflowId })}</h2>
+          <span className={runCanvasCss.badge}>{tx('workflows:run-canvas.read-only')}</span>
+          <span className={runCanvasCss.badge}>{tx(activeRun && activeRun.state.type !== 'settled' ? 'workflows:run-canvas.source-live' : 'workflows:run-canvas.source-history')}</span>
+          {readyHeader && <span className={runCanvasCss.provenance}>
             <span>{tx('workflows:run-canvas.revision', { p0: readyHeader.source_revision.slice(0, 12) })}</span>
             <code>{tx('workflows:run-canvas.digest', { p0: readyHeader.program_digest.slice(0, 12) })}</code>
-            {!readyHeader.has_source_presentation && <span className={css.badge}>{tx('workflows:run-canvas.auto-layout')}</span>}
+            {!readyHeader.has_source_presentation && <span className={runCanvasCss.badge}>{tx('workflows:run-canvas.auto-layout')}</span>}
           </span>}
         </div>
-        <button type="button" data-modal-autofocus className={css.closeButton} aria-label={tx('workflows:run-canvas.close')} onClick={onClose}>
+        <button type="button" data-modal-autofocus className={runCanvasCss.closeButton} aria-label={tx('workflows:run-canvas.close')} onClick={onClose}>
           {tx('trajectory:details.close')}
         </button>
       </header>
 
-      <nav className={css.breadcrumbs} aria-label={tx('workflows:run-canvas.breadcrumbs')}>
-        <button type="button" className={css.crumbButton} onClick={() => focusNodeAtPath([])}>
+      <nav className={runCanvasCss.breadcrumbs} aria-label={tx('workflows:run-canvas.breadcrumbs')}>
+        <button type="button" className={runCanvasCss.crumbButton} onClick={() => focusNodeAtPath([])}>
           {tx('workflows:run-canvas.root')}
         </button>
         {selectedPath.map((step, index) => {
           const ancestorPath = selectedPath.slice(0, index);
           return <span key={`${index}:${step.node}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span className={css.crumbSep} aria-hidden="true">/</span>
+            <span className={runCanvasCss.crumbSep} aria-hidden="true">/</span>
             <button
               type="button"
-              className={css.crumbButton}
+              className={runCanvasCss.crumbButton}
               aria-label={tx('workflows:run-canvas.focus-parent', { p0: step.node })}
               onClick={() => focusNodeAtPath(ancestorPath, step.node)}
             >
@@ -1085,24 +1085,24 @@ export function WorkflowRunCanvas({
           </span>;
         })}
         {selection?.kind === 'node' && <>
-          <span className={css.crumbSep} aria-hidden="true">/</span>
-          <span className={`${css.crumbButton} ${css.crumbCurrent}`}>{selection.id}</span>
+          <span className={runCanvasCss.crumbSep} aria-hidden="true">/</span>
+          <span className={`${runCanvasCss.crumbButton} ${runCanvasCss.crumbCurrent}`}>{selection.id}</span>
         </>}
       </nav>
 
-      {bannerMessage && <p role={bannerMessage.error ? 'alert' : 'status'} className={`${css.banner} ${bannerMessage.error ? css.bannerError : ''}`}>
+      {bannerMessage && <p role={bannerMessage.error ? 'alert' : 'status'} className={`${runCanvasCss.banner} ${bannerMessage.error ? runCanvasCss.bannerError : ''}`}>
         <span>{bannerMessage.text}</span>
-        {bannerMessage.retryable && <button type="button" className={css.actionButton} onClick={() => setRetryCount(c => c + 1)}>
+        {bannerMessage.retryable && <button type="button" className={runCanvasCss.actionButton} onClick={() => setRetryCount(c => c + 1)}>
           {tx('workflows:run-canvas.retry')}
         </button>}
       </p>}
 
-      {traceErrorBanner && <p role="alert" className={`${css.banner} ${css.bannerError}`}>
+      {traceErrorBanner && <p role="alert" className={`${runCanvasCss.banner} ${runCanvasCss.bannerError}`}>
         <span>{traceErrorBanner.text}</span>
         {traceErrorBanner.onRetry && <button
           type="button"
           ref={retryTraceButton}
-          className={css.actionButton}
+          className={runCanvasCss.actionButton}
           onClick={() => {
             if (!currentOwned()) return;
             if (document.activeElement === retryTraceButton.current) {
@@ -1115,7 +1115,7 @@ export function WorkflowRunCanvas({
         </button>}
       </p>}
 
-      {(overlay.omittedInstances > 0 || overlay.traceIncomplete || liveDisconnectedNotice) && <p role="status" className={css.banner}>
+      {(overlay.omittedInstances > 0 || overlay.traceIncomplete || liveDisconnectedNotice) && <p role="status" className={runCanvasCss.banner}>
         <span>
           {liveDisconnectedNotice
             ? tx('workflows:run-canvas.live-disconnected')
@@ -1126,7 +1126,7 @@ export function WorkflowRunCanvas({
         {committedForExactCut && committedForExactCut.nextOffset !== null && (
           <button
             type="button"
-            className={css.actionButton}
+            className={runCanvasCss.actionButton}
             ref={pagingButton}
             disabled={committedForExactCut.loadingMore}
             onClick={loadMoreTraceVisits}
@@ -1136,8 +1136,8 @@ export function WorkflowRunCanvas({
         )}
       </p>}
 
-      <div className={css.body}>
-        <div className={css.stage}>
+      <div className={runCanvasCss.body}>
+        <div className={runCanvasCss.stage}>
           {readyDoc ? <ReactFlowProvider>
             <Canvas
               document={readyDoc}
@@ -1158,15 +1158,15 @@ export function WorkflowRunCanvas({
               onDuplicate={NOOP_DUPLICATE}
               tools={[]}
             />
-          </ReactFlowProvider> : <div className={css.emptyCanvas}>
+          </ReactFlowProvider> : <div className={runCanvasCss.emptyCanvas}>
             <span>{bannerMessage?.text ?? tx('workflows:run-canvas.unavailable')}</span>
           </div>}
         </div>
 
-        <aside className={css.inspector} aria-label={tx('workflows:run-canvas.node-details')}>
-          <div className={css.inspectorHead}>
-            <h3 className={css.inspectorTitle}>{selectedLabel}</h3>
-            <div className={css.inspectorMeta}>
+        <aside className={runCanvasCss.inspector} aria-label={tx('workflows:run-canvas.node-details')}>
+          <div className={runCanvasCss.inspectorHead}>
+            <h3 className={runCanvasCss.inspectorTitle}>{selectedLabel}</h3>
+            <div className={runCanvasCss.inspectorMeta}>
               {selectedDefinition && <span>{tx(`workflows:kind.${selectedDefinition.type}` as Parameters<typeof tx>[0])}</span>}
               {selectedOverlay && <>
                 <span>
@@ -1180,9 +1180,9 @@ export function WorkflowRunCanvas({
             </div>
           </div>
 
-          <div className={css.inspectorScroll}>
-            {selection?.kind === 'note' ? <p className={css.muted}>{tx('workflows:run-canvas.synthetic-note')}</p>
-              : !selectedOverlay?.visits.length && !currentVisit ? <p className={css.muted}>
+          <div className={runCanvasCss.inspectorScroll}>
+            {selection?.kind === 'note' ? <p className={runCanvasCss.muted}>{tx('workflows:run-canvas.synthetic-note')}</p>
+              : !selectedOverlay?.visits.length && !currentVisit ? <p className={runCanvasCss.muted}>
                 {selection?.kind === 'node'
                   ? (awaitingInitialTraceBatch
                     ? tx('workflows:run-canvas.trace-loading')
@@ -1192,8 +1192,8 @@ export function WorkflowRunCanvas({
                   : tx('workflows:run-canvas.select-node-hint')}
               </p> : <>
                 {selectedOverlay && selectedOverlay.visits.length > 0 && <div>
-                  <h4 className={css.sectionLabel}>{tx('workflows:run-canvas.visits-tab')} ({selectedOverlay.visits.length}{selectedOverlay.omittedVisits > 0 ? ` / ${selectedOverlay.visitCount}` : ''})</h4>
-                  <ul className={css.visitsList} role="listbox" aria-label={tx('workflows:run-canvas.visits-tab')}>
+                  <h4 className={runCanvasCss.sectionLabel}>{tx('workflows:run-canvas.visits-tab')} ({selectedOverlay.visits.length}{selectedOverlay.omittedVisits > 0 ? ` / ${selectedOverlay.visitCount}` : ''})</h4>
+                  <ul className={runCanvasCss.visitsList} role="listbox" aria-label={tx('workflows:run-canvas.visits-tab')}>
                     {selectedOverlay.visits.map(visit => {
                       const status = statusOfTraceState(visit.state, visit.reviewPending);
                       const iterations = visit.instance.block.invocations.slice(1);
@@ -1207,7 +1207,7 @@ export function WorkflowRunCanvas({
                           type="button"
                           role="option"
                           aria-selected={isSelected}
-                          className={css.visitButton}
+                          className={runCanvasCss.visitButton}
                           data-run-visit-key={visit.key}
                           onClick={() => setSelectedVisit(visit.instance)}
                         >
@@ -1225,13 +1225,13 @@ export function WorkflowRunCanvas({
                 </div>}
 
                 {currentVisit && <>
-                  <div className={css.tabs} role="tablist" aria-label={tx('workflows:run-canvas.selected-visit')}>
+                  <div className={runCanvasCss.tabs} role="tablist" aria-label={tx('workflows:run-canvas.selected-visit')}>
                     {(['overview', 'input', 'output'] as const).map(tab => <button
                       key={tab}
                       type="button"
                       role="tab"
                       aria-selected={visitTab === tab}
-                      className={css.tabButton}
+                      className={runCanvasCss.tabButton}
                       onClick={() => setVisitTab(tab)}
                     >
                       {tab === 'overview' ? tx('trajectory:tab.summary') : tab === 'input' ? tx('workflows:run-canvas.input') : tx('workflows:run-canvas.output')}
@@ -1240,9 +1240,9 @@ export function WorkflowRunCanvas({
 
                   <div role="tabpanel" aria-label={visitTab === 'overview' ? tx('trajectory:tab.summary') : visitTab === 'input' ? tx('workflows:run-canvas.input') : tx('workflows:run-canvas.output')}>
                     {visitTab === 'overview' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div className={css.inspectorMeta}>
+                      <div className={runCanvasCss.inspectorMeta}>
                         {!currentVisit.traceNode && !currentVisit.instanceView ? (
-                          <span role={fieldPanelTraceStatus === 'error' ? 'alert' : 'status'} className={css.muted}>
+                          <span role={fieldPanelTraceStatus === 'error' ? 'alert' : 'status'} className={runCanvasCss.muted}>
                             {fieldPanelTraceStatus === 'loading'
                               ? tx('workflows:run-canvas.trace-loading')
                               : fieldPanelTraceStatus === 'error'
@@ -1272,7 +1272,7 @@ export function WorkflowRunCanvas({
                       </div>
                       {canOpenChild && childRef && <button
                         type="button"
-                        className={css.actionButton}
+                        className={runCanvasCss.actionButton}
                         onClick={() => {
                           onClose();
                           void scope!.openWorkflow!(childRef.childAgentId, childRef.activationId, currentVisit.instance.node);

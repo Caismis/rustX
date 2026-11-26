@@ -7,7 +7,7 @@ import { useTranslation } from '../../../../locale/react';
 import { CardMenu } from '../../../../presentation/catalog/CardMenu';
 import { TransferDialog, transferActions, type TransferIntent } from '../../../resources/shared/ResourceTransfer';
 import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../../../presentation/catalog/CatalogControls';
-import css from '../../../../presentation/catalog/Catalog.module.css';
+import { catalogCss } from '../../../../presentation/catalog/catalogCss';
 import { Button } from '../../../../presentation/primitives/Button';
 import { CatalogListSkeleton } from '../../../../presentation/primitives/Skeleton';
 import { Switch } from '../../../../presentation/primitives/Switch';
@@ -98,34 +98,34 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     });
   };
   const onTransfer = transferAvailable ? startTransfer : undefined;
-  const context = listing && !(showingWorkspace && !workspace) && <p className={css.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>;
+  const context = listing && !(showingWorkspace && !workspace) && <p className={catalogCss.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>;
 
-  return <section className={css.library} aria-labelledby="workflows-title">
-    <header className={css.pageHead}>
-      <div><h1 id="workflows-title">{tx('workflows:library.title')}</h1><p className={css.muted}>{tx('workflows:library.subtitle')}</p></div>
+  return <section className={catalogCss.library} aria-labelledby="workflows-title">
+    <header className={catalogCss.pageHead}>
+      <div><h1 id="workflows-title">{tx('workflows:library.title')}</h1><p className={catalogCss.muted}>{tx('workflows:library.subtitle')}</p></div>
       <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!settled || !listing || (showingWorkspace && (!workspace || revoked))}
         onClick={() => library.send({ type: 'CONFIRM', kind: 'create' })}>{tx('workflows:library.new')}</Button>
     </header>
-    <div className={clsx(css.controls, !showingWorkspace && css.globalControls)}>
-      <div className={css.controlsLeft}>
-        <div className={css.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
-          {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.tab, tab === name && css.tabActive)} onClick={() => chooseTab(name)}>
+    <div className={clsx(catalogCss.controls, !showingWorkspace && catalogCss.globalControls)}>
+      <div className={catalogCss.controlsLeft}>
+        <div className={catalogCss.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
+          {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(catalogCss.tab, tab === name && catalogCss.tabActive)} onClick={() => chooseTab(name)}>
             {tx(name === 'workspace' ? 'workflows:scope.workspace' : 'workflows:scope.global')}
           </button>)}
         </div>
         {showingWorkspace && <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />}
       </div>
-      <div className={css.controlsRight}>
+      <div className={catalogCss.controlsRight}>
         <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
         <CatalogViewSwitch view={view} onChange={chooseView} />
       </div>
     </div>
     {context}
-    {showingWorkspace && catalog && !workspaces.length ? <p className={css.state}>{tx('workflows:library.no-workspaces')}</p>
+    {showingWorkspace && catalog && !workspaces.length ? <p className={catalogCss.state}>{tx('workflows:library.no-workspaces')}</p>
       : <WorkflowFiles library={library} state={state} scopeLabel={scopeLabel} query={query} view={view} revoked={revoked}
         onTransfer={onTransfer} transferDisabled={transferDisabled} />}
-    {showingWorkspace && <section className={css.scopeGroup} aria-label={tx('resources:scope.inherited')}>
-      <h2 className={css.context}>{tx('resources:scope.inherited')}{globalListing && <> · {globalListing.files.length}</>}</h2>
+    {showingWorkspace && <section className={catalogCss.scopeGroup} aria-label={tx('resources:scope.inherited')}>
+      <h2 className={catalogCss.context}>{tx('resources:scope.inherited')}{globalListing && <> · {globalListing.files.length}</>}</h2>
       <WorkflowFiles library={globalLibrary} state={globalState} scopeLabel={tx('workflows:scope.global-files')} query={query} view={view}
         onTransfer={onTransfer} transferDisabled={transferDisabled} />
     </section>}
@@ -170,7 +170,7 @@ function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTra
     const name = file.display?.title ?? file.id ?? file.file_name, off = failing(file);
     const unconfigurable = !listing?.configuration_revision;
     return <Switch label={tx('workflows:library.enable', { p0: name })} checked={file.enabled && !off}
-      disabled={!settled || !file.id || off || unconfigurable} className={css.enable}
+      disabled={!settled || !file.id || off || unconfigurable} className={catalogCss.enable}
       title={tx(off ? 'workflows:library.enable-failing' : unconfigurable ? 'workflows:library.enable-unconfigurable' : scope.kind === 'user' ? 'workflows:library.enable-global' : 'workflows:library.enable-workspace')}
       onChange={enabled => library.send({ type: 'ENABLE', file: file.file_name, enabled })} />;
   };
@@ -182,33 +182,33 @@ function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTra
   };
 
   let body;
-  if (revoked || listFailure?.kind === 'unavailable') body = <div className={css.state} role="alert"><p>{tx('workflows:library.unavailable')}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
-  else if (state.matches('failed') && listFailure) body = <div className={css.state} role="alert"><p>{tx('workflows:library.read-failed', { p0: listFailure.kind === 'failed' ? listFailure.message : listFailure.kind })}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
+  if (revoked || listFailure?.kind === 'unavailable') body = <div className={catalogCss.state} role="alert"><p>{tx('workflows:library.unavailable')}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
+  else if (state.matches('failed') && listFailure) body = <div className={catalogCss.state} role="alert"><p>{tx('workflows:library.read-failed', { p0: listFailure.kind === 'failed' ? listFailure.message : listFailure.kind })}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
   else if (!listing) body = <CatalogListSkeleton label={tx('workflows:library.loading')} />;
-  else if (listing.diagnostic) body = <p className={css.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
-  else if (!files.length) body = <p className={css.state}>{query.trim() ? tx('workflows:library.empty-search') : tx('workflows:library.empty')}</p>;
-  else body = <ul className={view === 'cards' ? css.cards : css.list} aria-label={tx('workflows:library.title')}>
-    {files.map(file => <li key={file.file_name} className={clsx(css.card, css.fixedCard, unreadable(file) && css.invalidCard)}>
-      <div className={css.cardHead}>
-        <button type="button" className={css.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.display?.title ?? file.id ?? file.file_name}>
-          <span className={css.fileTile}>{unreadable(file) ? <IconFile size={24} /> : <WorkflowIcon icon={file.display?.icon} size={24} />}</span>
-          <span className={css.cardName}>
-            <span className={css.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>
-            {file.display && <span className={css.cardId}>{file.id}</span>}
+  else if (listing.diagnostic) body = <p className={catalogCss.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
+  else if (!files.length) body = <p className={catalogCss.state}>{query.trim() ? tx('workflows:library.empty-search') : tx('workflows:library.empty')}</p>;
+  else body = <ul className={view === 'cards' ? catalogCss.cards : catalogCss.list} aria-label={tx('workflows:library.title')}>
+    {files.map(file => <li key={file.file_name} className={clsx(catalogCss.card, catalogCss.fixedCard, unreadable(file) && catalogCss.invalidCard)}>
+      <div className={catalogCss.cardHead}>
+        <button type="button" className={catalogCss.cardOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision} aria-label={file.display?.title ?? file.id ?? file.file_name}>
+          <span className={catalogCss.fileTile}>{unreadable(file) ? <IconFile size={24} /> : <WorkflowIcon icon={file.display?.icon} size={24} />}</span>
+          <span className={catalogCss.cardName}>
+            <span className={catalogCss.cardTitle}>{file.display?.title ?? file.id ?? file.file_name}</span>
+            {file.display && <span className={catalogCss.cardId}>{file.id}</span>}
           </span>
         </button>
         {toggle(file)}
         <CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} />
       </div>
-      <div className={css.cardBody}>
+      <div className={catalogCss.cardBody}>
         <FileFacts file={file} />
-        <div className={css.cardFoot}><span className={css.path}><IconFile size={14} /><span>{file.relative_path}</span></span><span className={css.time}>{modified(file.modified_ms)}</span></div>
+        <div className={catalogCss.cardFoot}><span className={catalogCss.path}><IconFile size={14} /><span>{file.relative_path}</span></span><span className={catalogCss.time}>{modified(file.modified_ms)}</span></div>
       </div>
     </li>)}
   </ul>;
 
   return <>
-    {operationFailure && <div className={css.banner} role="alert">
+    {operationFailure && <div className={catalogCss.banner} role="alert">
       {operationFailure.failure.kind === 'uncertain'
         ? tx('workflows:library.operation-uncertain', { p0: operationName(operationFailure.operation) })
         : <FailureText failure={operationFailure.failure} operation={operationName(operationFailure.operation)} />}
@@ -228,16 +228,16 @@ const failing = (file: WorkflowFileSummary) => !!file.diagnostic && !presentatio
 function FileFacts({ file }: { file: WorkflowFileSummary }) {
   const tx = useTranslation();
   const diagnostic = file.diagnostic;
-  if (diagnostic && unreadable(file)) return <p className={clsx(css.cardDescription, css.invalid)}>
+  if (diagnostic && unreadable(file)) return <p className={clsx(catalogCss.cardDescription, catalogCss.invalid)}>
     <IconWarningOutline16 /><span><strong>{tx('workflows:library.unreadable')}</strong> · {diagnostic.reason}{diagnostic.path !== '$' && <> <code>{diagnostic.path}</code></>}</span>
   </p>;
   const warning = presentationWarning(diagnostic);
-  return <p className={css.cardDescription}>
+  return <p className={catalogCss.cardDescription}>
     {file.display?.description ?? file.description}
-    {diagnostic && <span className={clsx(css.badge, css.badgeWarning)} title={`${diagnostic.reason}${diagnostic.path !== '$' ? ` · ${diagnostic.path}` : ''}`}>
+    {diagnostic && <span className={clsx(catalogCss.badge, catalogCss.badgeWarning)} title={`${diagnostic.reason}${diagnostic.path !== '$' ? ` · ${diagnostic.path}` : ''}`}>
       <IconWarningOutline16 />{tx(warning ? 'workflows:library.presentation-warning' : 'workflows:library.unchecked')}
     </span>}
-    {file.shadows_global && <span className={css.badge} title={tx('workflows:library.shadows-global-detail')}>{tx('workflows:library.shadows-global')}</span>}
+    {file.shadows_global && <span className={catalogCss.badge} title={tx('workflows:library.shadows-global-detail')}>{tx('workflows:library.shadows-global')}</span>}
   </p>;
 }
 
@@ -252,24 +252,24 @@ function WorkspaceChooser({ workspaces, selected, onSelect }: { workspaces: read
   const current = workspaces.find(row => row.id === selected);
   const close = (focus = true) => { setOpen(false); setQuery(''); setActive(0); if (focus) trigger.current?.focus(); };
   const choose = (id: string) => { onSelect(id); close(); };
-  return <div className={css.chooserWrap}>
-    <button ref={trigger} type="button" className={css.chooser} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(value => !value)}
+  return <div className={catalogCss.chooserWrap}>
+    <button ref={trigger} type="button" className={catalogCss.chooser} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(value => !value)}
       aria-label={tx('workflows:scope.chooser-label', { p0: current?.displayName ?? '' })}>
-      <span className={css.chooserValue}><IconFolder size={15} />{current?.displayName ?? tx('workflows:scope.choose-workspace')}</span><IconChevronDownOutline14 />
+      <span className={catalogCss.chooserValue}><IconFolder size={15} />{current?.displayName ?? tx('workflows:scope.choose-workspace')}</span><IconChevronDownOutline14 />
     </button>
-    {open && <div className={css.popover} onKeyDown={event => {
+    {open && <div className={catalogCss.popover} onKeyDown={event => {
       if (event.key === 'Escape') { event.stopPropagation(); close(); }
       else if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(index + 1, matches.length - 1)); }
       else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(index - 1, 0)); }
       else if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active].id); }
     }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) close(false); }}>
-      <label className={css.search}><IconSearchOutline16 /><TextInput unstyled autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder={tx('workflows:scope.search-workspaces')} aria-label={tx('workflows:scope.search-workspaces')} aria-controls="workflow-workspaces" aria-activedescendant={matches[active] ? `workflow-workspace-${matches[active].id}` : undefined} /></label>
-      <ul id="workflow-workspaces" role="listbox" className={css.options} aria-label={tx('workflows:scope.choose-workspace')}>
-        {matches.map((row, index) => <li key={row.id} id={`workflow-workspace-${row.id}`} role="option" aria-selected={row.id === selected} className={clsx(css.option, index === active && css.optionActive)}
+      <label className={catalogCss.search}><IconSearchOutline16 /><TextInput unstyled autoFocus value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} placeholder={tx('workflows:scope.search-workspaces')} aria-label={tx('workflows:scope.search-workspaces')} aria-controls="workflow-workspaces" aria-activedescendant={matches[active] ? `workflow-workspace-${matches[active].id}` : undefined} /></label>
+      <ul id="workflow-workspaces" role="listbox" className={catalogCss.options} aria-label={tx('workflows:scope.choose-workspace')}>
+        {matches.map((row, index) => <li key={row.id} id={`workflow-workspace-${row.id}`} role="option" aria-selected={row.id === selected} className={clsx(catalogCss.option, index === active && catalogCss.optionActive)}
           onMouseDown={event => event.preventDefault()} onClick={() => choose(row.id)}>
           <IconFolder size={14} /><span>{row.displayName}</span><small>{row.displayPath}</small>
         </li>)}
-        {!matches.length && <li className={css.muted}>{tx('workflows:scope.no-workspace-match')}</li>}
+        {!matches.length && <li className={catalogCss.muted}>{tx('workflows:scope.no-workspace-match')}</li>}
       </ul>
     </div>}
   </div>;

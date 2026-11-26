@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
-import catalog from '../../../presentation/catalog/Catalog.module.css';
+import { catalogCss } from '../../../presentation/catalog/catalogCss';
 import { CardMenu } from '../../../presentation/catalog/CardMenu';
 import { transferActions } from '../shared/ResourceTransfer';
 import { Button } from '../../../presentation/primitives/Button';
@@ -31,7 +31,7 @@ export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: 
     <Menu open={menu} onClose={() => setMenu(false)}
       items={[{id:'import', label:tx('settings:mcp.import'), icon:<IconDownloadOutline16 />}]}
       onSelect={() => { setMenu(false); onFocus({kind:'mcp',mode:'json'}); }}
-      anchor={<button className={catalog.dots} type="button" disabled={disabled} aria-label={tx('settings:mcp.more')}
+      anchor={<button className={catalogCss.dots} type="button" disabled={disabled} aria-label={tx('settings:mcp.more')}
         aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>} />
   </div>;
 }
@@ -102,7 +102,7 @@ export function McpPage({ source, scope, revision, onFocus, query, group, view, 
 
   if (group && needle && !matches.length) return null;
   return <div data-mcp-page="">
-    {document.state !== 'structured' && <p className={catalog.banner} role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
+    {document.state !== 'structured' && <p className={catalogCss.banner} role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
     <ResourceGroup label={group ?? tx('settings:mcp.installed')} count={matches.length} view={view}
       empty={<><p>{tx(needle ? 'settings:catalog.no-results' : 'settings:mcp.empty')}</p><p>{tx(needle ? 'settings:catalog.no-results-description' : 'settings:mcp.empty-help')}</p></>}>
       {matches.map(renderCard)}

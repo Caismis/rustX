@@ -1,7 +1,7 @@
 import { lazy, Suspense, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import { useTranslation } from '../../../locale/react';
-import catalogCss from '../../../presentation/catalog/Catalog.module.css';
+import { catalogCss } from '../../../presentation/catalog/catalogCss';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';
 import type { WorkspaceAuthority } from '../../../workspaces/authority';

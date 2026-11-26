@@ -10,7 +10,7 @@ import { sameEndpoint } from '../../workspaces/endpoint';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import { useTranslation } from '../../locale/react';
 import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../presentation/catalog/CatalogControls';
-import catalogCss from '../../presentation/catalog/Catalog.module.css';
+import { catalogCss } from '../../presentation/catalog/catalogCss';
 import { Button } from '../../presentation/primitives/Button';
 import { Menu } from '../../presentation/primitives/Menu';
 import { CatalogListSkeleton, DetailFormSkeleton } from '../../presentation/primitives/Skeleton';

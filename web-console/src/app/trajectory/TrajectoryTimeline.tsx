@@ -24,7 +24,7 @@ import {
   type TrajectoryTimelineMode,
 } from './timeline';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
-import css from './TrajectoryTimeline.module.css';
+import { trajectoryTimelineCss } from './trajectoryTimelineCss';
 
 const MINIMUM_DRAG_PX = 3;
 const MINIMUM_ZOOM_OPERATIONS = 4;
@@ -109,7 +109,7 @@ function ttftFraction(span: TrajectorySpan, mode: TrajectoryTimelineMode): numbe
 function LaneLabels() {
   const tx = useTranslation();
   return (
-    <div className={css.labels} aria-hidden="true">
+    <div className={trajectoryTimelineCss.labels} aria-hidden="true">
       <span>{tx('trajectory:lane.Input')}</span>
       <span>{tx('trajectory:lane.Model')}</span>
       <span>{tx('trajectory:lane.Tools')}</span>
@@ -140,7 +140,7 @@ function EarlierHistoryBoundary({ loading, enabled, onHover, onLoad }: {
     >
       <button
         type="button"
-        className={css.earlierHistory}
+        className={trajectoryTimelineCss.earlierHistory}
         data-earlier-history=""
         data-loading={loading || undefined}
         aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')}
@@ -270,11 +270,11 @@ function TimelineInteraction({
   // earlier history to offer here.
   if (model === null) {
     return (
-      <section ref={rootRef} className={css.root} aria-label={tx('trajectory:timeline.aria')}>
-        <div className={css.plot}>
+      <section ref={rootRef} className={trajectoryTimelineCss.root} aria-label={tx('trajectory:timeline.aria')}>
+        <div className={trajectoryTimelineCss.plot}>
           <LaneLabels />
-          <div className={css.track}>
-            <span className={css.empty}>{tx('trajectory:timeline.no-timing-data')}</span>
+          <div className={trajectoryTimelineCss.track}>
+            <span className={trajectoryTimelineCss.empty}>{tx('trajectory:timeline.no-timing-data')}</span>
           </div>
         </div>
       </section>
@@ -405,12 +405,12 @@ function TimelineInteraction({
   };
 
   return (
-    <section ref={rootRef} className={css.root} aria-label={tx('trajectory:timeline.aria')}>
-      <div className={css.plot}>
+    <section ref={rootRef} className={trajectoryTimelineCss.root} aria-label={tx('trajectory:timeline.aria')}>
+      <div className={trajectoryTimelineCss.plot}>
         <LaneLabels />
         <div
           ref={trackRef}
-          className={css.track}
+          className={trajectoryTimelineCss.track}
           data-panning={panning || undefined}
           data-domain-start={domainStart}
           data-domain-end={domainStart + domainDuration}
@@ -429,37 +429,37 @@ function TimelineInteraction({
             <EarlierHistoryBoundary loading={loadingEarlier} enabled={canLoadEarlier} onHover={() => { setHover(null); }} onLoad={onLoadEarlier} />
           )}
           {hover !== null && hover.recordId === null && draft === null && (
-            <div className={css.hoverLine} data-timeline-hover-line="" aria-hidden="true" style={{ '--trajectory-hover-left': `${hover.fraction * 100}%` } as CSSProperties} />
+            <div className={trajectoryTimelineCss.hoverLine} data-timeline-hover-line="" aria-hidden="true" style={{ '--trajectory-hover-left': `${hover.fraction * 100}%` } as CSSProperties} />
           )}
           {visibleRange !== null && (
             <>
               <div
-                className={css.selection}
+                className={trajectoryTimelineCss.selection}
                 data-focus-range=""
                 data-dragging={draft === null ? undefined : 'true'}
                 aria-hidden="true"
                 style={{ '--trajectory-selection-left': `${visibleRange.start * 100}%`, '--trajectory-selection-width': `${(visibleRange.end - visibleRange.start) * 100}%` } as CSSProperties}
               />
               <div
-                className={css.selectionEdges}
+                className={trajectoryTimelineCss.selectionEdges}
                 data-dragging={draft === null ? undefined : 'true'}
                 aria-hidden="true"
                 style={{ '--trajectory-selection-left': `${visibleRange.start * 100}%`, '--trajectory-selection-width': `${(visibleRange.end - visibleRange.start) * 100}%` } as CSSProperties}
               />
             </>
           )}
-          <div className={css.turnBoundaries} data-animate-viewport={animateViewport || undefined} aria-hidden="true" style={projectedDomainStyle}>
+          <div className={trajectoryTimelineCss.turnBoundaries} data-animate-viewport={animateViewport || undefined} aria-hidden="true" style={projectedDomainStyle}>
             {model.boundaries
               .filter(boundary => boundary.at > model.start && boundary.at >= domainStart && boundary.at <= domainStart + domainDuration)
               .map(boundary => (
                 <span
                   key={boundary.ownerKey}
-                  className={css.turnBoundary}
+                  className={trajectoryTimelineCss.turnBoundary}
                   style={{ '--trajectory-turn-left': `${(boundary.at - model.start) / fullDuration * 100}%` } as CSSProperties}
                 />
               ))}
           </div>
-          <div className={css.lanes} data-animate-viewport={animateViewport || undefined} data-timeline-domain="" style={projectedDomainStyle}>
+          <div className={trajectoryTimelineCss.lanes} data-animate-viewport={animateViewport || undefined} data-timeline-domain="" style={projectedDomainStyle}>
             {model.spans
               .filter(span => span.id === selectedId || (span.end >= domainStart && span.start <= domainStart + domainDuration))
               .map(span => {
@@ -469,7 +469,7 @@ function TimelineInteraction({
                   <Tooltip key={span.id} label={() => tooltipLabel(tx, span)} side="bottom" delayMs={TIMELINE_TOOLTIP_DELAY_MS}>
                     <span
                       aria-hidden="true"
-                      className={css.span}
+                      className={trajectoryTimelineCss.span}
                       data-timeline-span={span.kind}
                       data-record-id={span.id}
                       data-assistant-timing={ttft === null ? undefined : 'true'}

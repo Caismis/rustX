@@ -10,7 +10,7 @@ import { BackgroundJobItem } from './BackgroundJobItem';
 import { useJobsSessionStore, type JobGroup } from './jobs-store';
 import { jobActive } from './job-state';
 import { toggleElementId } from './session-panel-state';
-import css from './BackgroundJobs.module.css';
+import { backgroundJobsCss } from './backgroundJobsCss';
 
 const NO_JOBS: RuntimeClientJob[] = [];
 const FOLD_LIMIT = 5;
@@ -29,8 +29,8 @@ export function JobsRunningIndicator({ client, sessionId, panelShown }: {
   );
   if (panelShown || running === 0) return null;
   return (
-    <span className={css.runningIndicator} data-jobs-running="">
-      <span className={css.visuallyHidden}>
+    <span className={backgroundJobsCss.runningIndicator} data-jobs-running="">
+      <span className={backgroundJobsCss.visuallyHidden}>
         {tx('common:activity.jobs-running', { count: running })}
       </span>
     </span>
@@ -153,7 +153,7 @@ export function BackgroundJobsSection({ jobs, records, client, sessionId, storeK
       : tx(group === 'live' ? 'common:activity.jobs-live-more' : 'common:activity.jobs-ended-more', { count: hidden });
     const name = tx(group === 'live' ? 'common:activity.jobs-live-fold-name' : 'common:activity.jobs-ended-fold-name', { label });
     return (
-      <li key={`fold-${group}`} className={css.item}>
+      <li key={`fold-${group}`} className={backgroundJobsCss.item}>
         <div data-session-panel-row="fold">
           <button
             type="button"
@@ -175,26 +175,26 @@ export function BackgroundJobsSection({ jobs, records, client, sessionId, storeK
 
   return (
     <HoverCardGroup>
-      <ul className={css.list} data-jobs-section="" aria-label={tx('common:activity.background-jobs')}>
+      <ul className={backgroundJobsCss.list} data-jobs-section="" aria-label={tx('common:activity.background-jobs')}>
         {shownLive.map(item)}
         {liveFoldable && fold('live', live.length - FOLD_LIMIT)}
         {ended.length > 0 && (
-          <li className={css.sectionHeader}>
+          <li className={backgroundJobsCss.sectionHeader}>
             <button
               type="button"
-              className={css.sectionToggle}
+              className={backgroundJobsCss.sectionToggle}
               aria-expanded={endedExpanded}
               onClick={() => setEndedOpen(!endedExpanded)}
             >
               {tx('common:activity.jobs-ended', { count: ended.length })}
               <IconChevronDownOutline14
                 size={14}
-                className={endedExpanded ? `${css.sectionChevron} ${css.sectionChevronOpen}` : css.sectionChevron}
+                className={endedExpanded ? `${backgroundJobsCss.sectionChevron} ${backgroundJobsCss.sectionChevronOpen}` : backgroundJobsCss.sectionChevron}
               />
             </button>
             <button
               type="button"
-              className={css.sectionClear}
+              className={backgroundJobsCss.sectionClear}
               aria-label={tx('common:activity.clear-ended-jobs')}
               onClick={() => {
                 markCleared(ended.map(job => job.job_id));

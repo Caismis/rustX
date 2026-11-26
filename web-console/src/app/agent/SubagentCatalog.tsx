@@ -10,7 +10,7 @@ import { useSubagents } from './subagent-context';
 import { agentDot, agentRunning, agentStatus, agentDuration } from './subagent-state';
 import { formatDuration, formatTokens } from './token-format';
 import { workflowDot, workflowStatus } from './workflow-state';
-import css from './SubagentCatalog.module.css';
+import { subagentCatalogCss } from './subagentCatalogCss';
 import { Popover, PopoverPopup } from '@/components/ui/popover';
 
 function SwitcherIcon() {
@@ -68,31 +68,31 @@ export function SubagentMenu({ agents, workflowChildren = [], limited, selected,
     const metrics = scope.metrics[agent.agent_id], usage = metrics?.statistics.reported_usage;
     const duration = metrics && formatDuration(Math.floor(agentDuration(metrics, now) / 1000) * 1000, tx);
     const select = () => { openChild(agent.agent_id); close(); };
-    return <div key={agent.agent_id} className={css.node}>
-      <div role="treeitem" tabIndex={0} aria-level={level} aria-current={current || undefined} aria-expanded={branch ? isExpanded : undefined} aria-label={`${agent.title} ${agentStatus(agent, tx)}`} className={css.row} data-agent-id={agent.agent_id} data-agent-state={agent.state} onClick={select}
+    return <div key={agent.agent_id} className={subagentCatalogCss.node}>
+      <div role="treeitem" tabIndex={0} aria-level={level} aria-current={current || undefined} aria-expanded={branch ? isExpanded : undefined} aria-label={`${agent.title} ${agentStatus(agent, tx)}`} className={subagentCatalogCss.row} data-agent-id={agent.agent_id} data-agent-state={agent.state} onClick={select}
         onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); select(); } else if (branch && (event.key === 'ArrowRight' && !isExpanded || event.key === 'ArrowLeft' && isExpanded)) { event.preventDefault(); event.stopPropagation(); toggle(agent.agent_id); } }}>
-        {branch ? <button type="button" tabIndex={-1} className={`${css.disclosure} ${isExpanded ? css.disclosureOpen : ''}`} aria-label={tx(isExpanded ? 'common:subagents.collapse-branch' : 'common:subagents.expand-branch', { name: agent.title })} onClick={event => { event.stopPropagation(); toggle(agent.agent_id); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button> : entries.some(entry => inventory.some(child => child.parent_agent_id === entry.agent_id)) && <span className={css.disclosureSpace}/>}
-        <div className={css.clickarea}>
-          <span className={css.rowActivitySlot}><StateDot state={agentDot(agent)} size={7}/></span>
-          <span className={css.content}><span className={`${css.label} ${current ? css.currentLabel : ''}`}>{agent.title}</span><span className={css.summary}>{agent.agent} · {agentStatus(agent, tx)}</span></span>
-          {metrics && <span className={css.metrics}>{usage?.total_tokens != null && <span className={css.metricToken}>{tx('agent:usage.count', { count: formatTokens(usage.total_tokens, tx) })}</span>}<span className={css.metricDuration} title={duration}>{duration}</span></span>}
-          {!current && scope.openAside && <Tooltip label={tx('common:subagents.open-aside', { name: agent.title })} side="bottom" delayMs={500}><button type="button" className={css.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: agent.title })} onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openAside?.(agent.agent_id); close(); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button></Tooltip>}
+        {branch ? <button type="button" tabIndex={-1} className={`${subagentCatalogCss.disclosure} ${isExpanded ? subagentCatalogCss.disclosureOpen : ''}`} aria-label={tx(isExpanded ? 'common:subagents.collapse-branch' : 'common:subagents.expand-branch', { name: agent.title })} onClick={event => { event.stopPropagation(); toggle(agent.agent_id); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button> : entries.some(entry => inventory.some(child => child.parent_agent_id === entry.agent_id)) && <span className={subagentCatalogCss.disclosureSpace}/>}
+        <div className={subagentCatalogCss.clickarea}>
+          <span className={subagentCatalogCss.rowActivitySlot}><StateDot state={agentDot(agent)} size={7}/></span>
+          <span className={subagentCatalogCss.content}><span className={`${subagentCatalogCss.label} ${current ? subagentCatalogCss.currentLabel : ''}`}>{agent.title}</span><span className={subagentCatalogCss.summary}>{agent.agent} · {agentStatus(agent, tx)}</span></span>
+          {metrics && <span className={subagentCatalogCss.metrics}>{usage?.total_tokens != null && <span className={subagentCatalogCss.metricToken}>{tx('agent:usage.count', { count: formatTokens(usage.total_tokens, tx) })}</span>}<span className={subagentCatalogCss.metricDuration} title={duration}>{duration}</span></span>}
+          {!current && scope.openAside && <Tooltip label={tx('common:subagents.open-aside', { name: agent.title })} side="bottom" delayMs={500}><button type="button" className={subagentCatalogCss.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: agent.title })} onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openAside?.(agent.agent_id); close(); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button></Tooltip>}
         </div>
       </div>
-      {branch && isExpanded && <div role="group" className={css.children}>{rows(children, level + 1, new Set([...lineage, agent.agent_id]))}</div>}
+      {branch && isExpanded && <div role="group" className={subagentCatalogCss.children}>{rows(children, level + 1, new Set([...lineage, agent.agent_id]))}</div>}
     </div>;
   });
-  return <Popover open={open} onOpenChange={(next, details) => { if (!next) close(details.reason === 'escape-key'); }}><div className={`${css.root} ${selected ? css.switcherRoot : ''}`} onMouseEnter={scheduleOpen} onMouseLeave={scheduleClose}>
-    <button ref={element => { trigger.current = element; }} id={selected && !openTitle ? 'session-title' : undefined} type="button" className={selected ? `${css.switcherTrigger} ${openTitle ? css.ancestorSwitcherTrigger : ''}` : css.trigger} aria-label={openTitle ? label : tx('common:subagents.list')} aria-haspopup="tree" aria-expanded={open}
+  return <Popover open={open} onOpenChange={(next, details) => { if (!next) close(details.reason === 'escape-key'); }}><div className={`${subagentCatalogCss.root} ${selected ? subagentCatalogCss.switcherRoot : ''}`} onMouseEnter={scheduleOpen} onMouseLeave={scheduleClose}>
+    <button ref={element => { trigger.current = element; }} id={selected && !openTitle ? 'session-title' : undefined} type="button" className={selected ? `${subagentCatalogCss.switcherTrigger} ${openTitle ? subagentCatalogCss.ancestorSwitcherTrigger : ''}` : subagentCatalogCss.trigger} aria-label={openTitle ? label : tx('common:subagents.list')} aria-haspopup="tree" aria-expanded={open}
       onClick={() => { cancelOpen(); cancelClose(); if (openTitle) { close(); openTitle(); } else { pinned.current = true; setOpen(true); } }}
       onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); cancelOpen(); cancelClose(); pinned.current = true; setOpen(true); if (open) focusAt(0); } }}>
-      {!selected && (agents.some(agentRunning) || workflowChildren.some(child => child.instance.state.type !== 'settled')) && <span className={css.activitySlot}><StateDot state="ongoing"/></span>}<span className={selected ? css.switcherTitle : css.count}>{label}</span>{selected ? <SwitcherIcon/> : <span aria-hidden="true"><IconChevronDownOutline14 className={open ? css.triggerOpen : undefined}/></span>}
+      {!selected && (agents.some(agentRunning) || workflowChildren.some(child => child.instance.state.type !== 'settled')) && <span className={subagentCatalogCss.activitySlot}><StateDot state="ongoing"/></span>}<span className={selected ? subagentCatalogCss.switcherTitle : subagentCatalogCss.count}>{label}</span>{selected ? <SwitcherIcon/> : <span aria-hidden="true"><IconChevronDownOutline14 className={open ? subagentCatalogCss.triggerOpen : undefined}/></span>}
     </button>
-    {open && <PopoverPopup ref={menu} className={css.menu} anchor={trigger} positionMethod="fixed" side="bottom" align="start" sideOffset={5} collisionPadding={16}
-      initialFocus={false} finalFocus={() => false} onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onKeyDownCapture={navigate}><div className={css.menuBody} role="tree" aria-label={tx('common:subagents.list')}>{rows(agents)}
+    {open && <PopoverPopup ref={menu} className={subagentCatalogCss.menu} anchor={trigger} positionMethod="fixed" side="bottom" align="start" sideOffset={5} collisionPadding={16}
+      initialFocus={false} finalFocus={() => false} onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onKeyDownCapture={navigate}><div className={subagentCatalogCss.menuBody} role="tree" aria-label={tx('common:subagents.list')}>{rows(agents)}
       {workflowChildren.map(child => <WorkflowChildRow key={JSON.stringify([child.agentId, child.activationId])} child={child} selected={selected === child.agentId} close={close}/>)}
-    </div>{limited && <p role="status" className={css.notice}>{tx(scope.workflows?.loading ? 'common:activity.loading' : 'common:subagents.workflow-records-limited')}</p>}
-    {scope.workflows?.error && <p role="alert" className={css.notice}>{scope.workflows.error}</p>}</PopoverPopup>}
+    </div>{limited && <p role="status" className={subagentCatalogCss.notice}>{tx(scope.workflows?.loading ? 'common:activity.loading' : 'common:subagents.workflow-records-limited')}</p>}
+    {scope.workflows?.error && <p role="alert" className={subagentCatalogCss.notice}>{scope.workflows.error}</p>}</PopoverPopup>}
   </div></Popover>;
 }
 
@@ -107,30 +107,30 @@ function WorkflowChildRow({ child, selected, close }: { child: WorkflowChild; se
     void scope.openWorkflow(child.agentId, child.activationId, child.title).then(close)
       .catch(() => setError(true)).finally(() => setPending(false));
   };
-  return <div className={css.node}>
+  return <div className={subagentCatalogCss.node}>
     <div role="treeitem" tabIndex={0} aria-level={1} aria-current={selected || undefined} aria-label={`${child.title} ${status}`}
       aria-disabled={pending || !scope.openWorkflow || undefined} aria-busy={pending || undefined}
-      className={css.row} data-workflow-child-id={child.agentId} onClick={select}
+      className={subagentCatalogCss.row} data-workflow-child-id={child.agentId} onClick={select}
       onKeyDown={event => { if (!event.nativeEvent.isComposing && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); select(); } }}>
-      <div className={css.clickarea}>
-        <span className={css.rowActivitySlot}><StateDot state={workflowDot(state)} size={7}/></span>
-        <span className={css.content}>
-          <span className={`${css.label} ${selected ? css.currentLabel : ''}`}>{child.title}</span>
-          <span className={css.summary}>{tx('common:subagents.workflow-source', { name: child.workflowId })}</span>
-          <span className={css.summary}>{pending ? tx('common:activity.loading') : status}
+      <div className={subagentCatalogCss.clickarea}>
+        <span className={subagentCatalogCss.rowActivitySlot}><StateDot state={workflowDot(state)} size={7}/></span>
+        <span className={subagentCatalogCss.content}>
+          <span className={`${subagentCatalogCss.label} ${selected ? subagentCatalogCss.currentLabel : ''}`}>{child.title}</span>
+          <span className={subagentCatalogCss.summary}>{tx('common:subagents.workflow-source', { name: child.workflowId })}</span>
+          <span className={subagentCatalogCss.summary}>{pending ? tx('common:activity.loading') : status}
             {child.instance.block.definition.blocks.length > 0 && ` · ${child.instance.block.definition.blocks.join(' / ')}`}
             {child.instance.block.invocations.length > 1 && ` · ${child.instance.block.invocations.slice(1).join('.')}`}
             {child.instance.visit != null && child.instance.visit > 1 && ` · ${child.instance.visit}`}
           </span>
         </span>
         {!selected && scope.openWorkflowAside && <Tooltip label={tx('common:subagents.open-aside', { name: child.title })} side="bottom" delayMs={500}>
-          <button type="button" className={css.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: child.title })} disabled={pending}
+          <button type="button" className={subagentCatalogCss.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: child.title })} disabled={pending}
             onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openWorkflowAside?.(child); close(); }}>
             <span aria-hidden="true"><IconChevronRightOutline14/></span>
           </button>
         </Tooltip>}
       </div>
     </div>
-    {error && <p role="alert" className={css.notice}>{tx('common:subagents.workflow-open-failed')}</p>}
+    {error && <p role="alert" className={subagentCatalogCss.notice}>{tx('common:subagents.workflow-open-failed')}</p>}
   </div>;
 }

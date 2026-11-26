@@ -3,7 +3,7 @@ import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconInspectOutline12, IconApiOutline14, IconBrowseOutline16, IconEditOutline16, IconSearchOutline16, IconSparkle16 } from '../primitives/icons';
-import css from './Tool.module.css';
+import { toolCss } from './toolCss';
 import { TerminalBlock } from '../primitives/TerminalBlock';
 import { DiffBlock, type DiffHunk } from '../primitives/DiffBlock';
 import { ReadBlock } from '../primitives/ReadBlock';
@@ -31,37 +31,37 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
  const expandable = tool.variant !== 'image' || !!(tool.imageResult || tool.output || body || inspect);
  const summary = open ? tool.details?.expandedSummary ?? tool.summary : tool.summary;
  return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
- <div className={css.root} data-state={state} data-variant={tool.variant}>
- <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
+ <div className={toolCss.root} data-state={state} data-variant={tool.variant}>
+ <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.title} chevronClassName={toolCss.chevron}
  running={tool.state === 'running'}
  icon={tool.icon ?? <Icon size={14}/>}
  title={tool.title} open={open && expandable} expandable={expandable} expandOnRowClick={!onOpenPath} keepContentWhenOpen onToggle={toggle}
- collapsedContent={<>{tool.summary && <><span className={css.sep} data-shimmer-decoration aria-hidden/>
-   {onOpenPath ? <button type="button" className={`${css.summary} ${css.pathLink}`} title={tool.path}
+ collapsedContent={<>{tool.summary && <><span className={toolCss.sep} data-shimmer-decoration aria-hidden/>
+   {onOpenPath ? <button type="button" className={`${toolCss.summary} ${toolCss.pathLink}`} title={tool.path}
      onClick={event => { event.stopPropagation(); onOpenPath(); }} onKeyDown={event => event.stopPropagation()}>{summary}</button>
-     : <span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}><TextShimmer>{summary}</TextShimmer></span>}
- </>}{tool.details?.summarySuffix && <span className={css.summarySuffix}>{tool.details.summarySuffix}</span>}{tool.background && <span className={css.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
- <div className={css.bodyWrap}>
+     : <span className={toolCss.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}><TextShimmer>{summary}</TextShimmer></span>}
+ </>}{tool.details?.summarySuffix && <span className={toolCss.summarySuffix}>{tool.details.summarySuffix}</span>}{tool.background && <span className={toolCss.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
+ <div className={toolCss.bodyWrap}>
  {body ?? (tool.details ? <ToolDetails model={tool.details} onOpenAgent={onOpenAgent}/>
  : tool.variant === 'bash' ? <TerminalBlock command={tool.input ?? ''} output={tool.output} exitCode={tool.exitCode} background={tool.background}
    lifecycle={{ state: tool.state === 'success' ? 'done' : tool.state === 'failure' ? 'error' : tool.state === 'running' ? 'ongoing' : tool.state === 'assembled' ? 'idle' : 'warning', label: tx(`common:state.${tool.state}`) }}
-   running={tool.state === 'running' || tool.state === 'assembled'} maxLines={Infinity} className={css.terminalBody}
+   running={tool.state === 'running' || tool.state === 'assembled'} maxLines={Infinity} className={toolCss.terminalBody}
    labels={{ ...labels, signal: s => tx('tools:copy.signal-value', { p0: s }), exitCode: n => tx('tools:copy.exit-value', { p0: n }), noExitCode: tx('tools:tool-card.exit-status-unavailable'), running: tx('tools:tool-card.running'), failed: tx('tools:tool-card.failed'), done: tx('tools:tool-card.done'), noOutput: tx('tools:tool-card.no-output') }}/>
- : (tool.variant === 'write' || tool.variant === 'edit') && !['failure', 'cancelled', 'uncertain'].includes(tool.state) && tool.diffs?.length ? <><small className={css.diffCaption}>{tx('tools:tool-card.requested-changes')}</small><DiffBlock className={css.diffBody} diffs={tool.diffs} maxLines={8} labels={{ ...labels, files: n => tx('tools:copy.value-file-s', { p0: n }) }}/>{tool.output && !tool.background && <pre className={css.searchRecovery}>{tool.output}</pre>}</>
- : tool.variant === 'read' && tool.state === 'success' && !tool.background && tool.output !== undefined ? <ReadBlock className={css.readBody} label={tool.path} lines={tool.output.split('\n').map(text => ({ text }))} maxLines={8} labels={{ ...labels, window: (n, total) => tx('tools:copy.value-of-value-lines', { p0: n, p1: total }) }}/>
- : tool.variant === 'search' && tool.state === 'success' && !tool.background && tool.output !== undefined ? <SearchTextBlock className={css.searchBody} text={tool.output} label={tool.summary} truncated={!!tool.truncated}/>
- : tool.imageResult ? <div className={css.imageBody}>{tool.artifacts}
-   {(tool.path || tool.output) && <div className={css.imageMeta}>{tool.path && <div>{tool.path}</div>}{tool.output && <div>{tool.output}</div>}</div>}
+ : (tool.variant === 'write' || tool.variant === 'edit') && !['failure', 'cancelled', 'uncertain'].includes(tool.state) && tool.diffs?.length ? <><small className={toolCss.diffCaption}>{tx('tools:tool-card.requested-changes')}</small><DiffBlock className={toolCss.diffBody} diffs={tool.diffs} maxLines={8} labels={{ ...labels, files: n => tx('tools:copy.value-file-s', { p0: n }) }}/>{tool.output && !tool.background && <pre className={toolCss.searchRecovery}>{tool.output}</pre>}</>
+ : tool.variant === 'read' && tool.state === 'success' && !tool.background && tool.output !== undefined ? <ReadBlock className={toolCss.readBody} label={tool.path} lines={tool.output.split('\n').map(text => ({ text }))} maxLines={8} labels={{ ...labels, window: (n, total) => tx('tools:copy.value-of-value-lines', { p0: n, p1: total }) }}/>
+ : tool.variant === 'search' && tool.state === 'success' && !tool.background && tool.output !== undefined ? <SearchTextBlock className={toolCss.searchBody} text={tool.output} label={tool.summary} truncated={!!tool.truncated}/>
+ : tool.imageResult ? <div className={toolCss.imageBody}>{tool.artifacts}
+   {(tool.path || tool.output) && <div className={toolCss.imageMeta}>{tool.path && <div>{tool.path}</div>}{tool.output && <div>{tool.output}</div>}</div>}
  </div>
- : <div className={css.ioCard}>
-   {tool.input && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.in')}</span><span className={css.ioText}>{tool.input}</span></div>}
-   {tool.input && tool.output && !tool.background && <span className={css.ioDivider} aria-hidden/>}
-   {tool.output && !tool.background && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.out')}</span><span className={css.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
+ : <div className={toolCss.ioCard}>
+   {tool.input && <div className={toolCss.ioSection}><span className={toolCss.ioLabel}>{tx('tools:tool-card.in')}</span><span className={toolCss.ioText}>{tool.input}</span></div>}
+   {tool.input && tool.output && !tool.background && <span className={toolCss.ioDivider} aria-hidden/>}
+   {tool.output && !tool.background && <div className={toolCss.ioSection}><span className={toolCss.ioLabel}>{tx('tools:tool-card.out')}</span><span className={toolCss.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
  </div>)}
  {!tool.imageResult && tool.artifacts}
  {inspect && <ToolInspectionButton inspect={inspect}/>}
  </div></DisclosureRow>
- <span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span>
+ <span className={toolCss.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span>
 </div>{children && <div className="flex flex-col gap-[4px] mt-[4px] mb-[2px] ml-[22px] mr-0 pl-[8px] [border-left:0.5px_solid_var(--dsw-alias-border-l2)]">{children}</div>}</div>;
 }
 
@@ -74,5 +74,5 @@ export function ToolInspectionButton({ inspect }: { inspect: () => Promise<void>
     try { await inspect(); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setPending(false); }
   };
-  return <><button className={css.inspectButton} type="button" disabled={pending} aria-busy={pending} onClick={() => void run()}><IconInspectOutline12/>{tx('tools:tool-card.inspect')}</button>{error && <span role="alert">{error}</span>}</>;
+  return <><button className={toolCss.inspectButton} type="button" disabled={pending} aria-busy={pending} onClick={() => void run()}><IconInspectOutline12/>{tx('tools:tool-card.inspect')}</button>{error && <span role="alert">{error}</span>}</>;
 }

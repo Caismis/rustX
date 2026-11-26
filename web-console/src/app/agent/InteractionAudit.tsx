@@ -9,7 +9,7 @@ import { QuestionRow, type QuestionRowView } from '../../presentation/agent/Ques
 import type { Translate } from '../../locale/translation';
 import { questionPanelKey, useQuestionPanels } from './QuestionPanels';
 import { AgentConversationContext } from './subagent-context';
-import toolCss from '../../presentation/agent/Tool.module.css';
+import { toolCss } from '../../presentation/agent/toolCss';
 import { UserMessage } from '../../presentation/agent/Message';
 import { CopyMessage, MessageTime } from './TurnTail';
 

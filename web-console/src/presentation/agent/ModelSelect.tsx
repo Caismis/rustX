@@ -7,7 +7,7 @@ import { MenuGroup, observeStickyMenuGroups } from '../primitives/MenuGroup';
 import { rankByName } from '../primitives/rank-by-name';
 import { StateDot } from '../primitives/StateDot';
 import { IconCheckOutline16, IconCloseFill14, IconDataOutline16, IconChevronDownOutline14, IconChevronRightOutline14 } from '../primitives/icons';
-import css from './ModelSelect.module.css';
+import { modelSelectCss } from './modelSelectCss';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Popover, PopoverPopup } from '@/components/ui/popover';
 
@@ -147,48 +147,48 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
  const pendingRow = (intent: ModelSelectionIntent) => pending?.model === intent.model && (pending.kind === 'model' ? intent.kind === 'model' : pending.kind === intent.kind && (intent.kind !== 'profile' || pending.kind === 'profile' && pending.profile === intent.profile));
  let modelIndex = 0;
  const status = <>
-  {loading && !busy && !choices.length && <div className={css.status} role="status">{tx('agent:model-select.reading-native-models')}</div>}
-  {error && lastAction.current === 'load' && <div className={css.error}><span role="alert">{error}</span><button type="button" className={css.retry} disabled={disabled || busy} onClick={() => { lastAction.current = 'load'; load(true); }}>{tx('agent:agent-controls.reread-models')}</button></div>}
-  {current && !loading && !selected && <div className={css.warning} role="status">{current} {tx('agent:model-select.is-unavailable-in-this-workspace')}</div>}
-  {selected && !loading && profileUnavailable(selected, profile) && <div className={css.warning} role="status">{tx('agent:model-select.effort')} {profile} {tx('agent:model-select.is-unavailable-for')} {current} {tx('agent:model-select.in-this-workspace')}</div>}
+  {loading && !busy && !choices.length && <div className={modelSelectCss.status} role="status">{tx('agent:model-select.reading-native-models')}</div>}
+  {error && lastAction.current === 'load' && <div className={modelSelectCss.error}><span role="alert">{error}</span><button type="button" className={modelSelectCss.retry} disabled={disabled || busy} onClick={() => { lastAction.current = 'load'; load(true); }}>{tx('agent:agent-controls.reread-models')}</button></div>}
+  {current && !loading && !selected && <div className={modelSelectCss.warning} role="status">{current} {tx('agent:model-select.is-unavailable-in-this-workspace')}</div>}
+  {selected && !loading && profileUnavailable(selected, profile) && <div className={modelSelectCss.warning} role="status">{tx('agent:model-select.effort')} {profile} {tx('agent:model-select.is-unavailable-for')} {current} {tx('agent:model-select.in-this-workspace')}</div>}
  </>;
- return <Popover open={open} onOpenChange={(next, details) => { if (!next && !(details.reason === 'escape-key' && pane !== 'root')) close(details.reason === 'escape-key'); }}><div ref={root} className={css.root} onKeyDown={onKeyDown}
+ return <Popover open={open} onOpenChange={(next, details) => { if (!next && !(details.reason === 'escape-key' && pane !== 'root')) close(details.reason === 'escape-key'); }}><div ref={root} className={modelSelectCss.root} onKeyDown={onKeyDown}
   onBlur={event => { if (!(event.relatedTarget instanceof Node && (root.current?.contains(event.relatedTarget) || menu.current?.contains(event.relatedTarget)))) close(); }}
   onMouseDown={event => { if (event.target instanceof Element && event.target.closest('button')) event.preventDefault(); }}>
-  <button ref={trigger} data-model-select="" type="button" className={css.trigger} aria-label={tx('agent:model-select.model-and-effort')} title={[current ?? tx('agent:model-select.choose-model'), effortLabel].filter(Boolean).join(' · ')}
+  <button ref={trigger} data-model-select="" type="button" className={modelSelectCss.trigger} aria-label={tx('agent:model-select.model-and-effort')} title={[current ?? tx('agent:model-select.choose-model'), effortLabel].filter(Boolean).join(' · ')}
    aria-haspopup="menu" aria-expanded={open} aria-controls={open ? `${id}-menu` : undefined} aria-busy={busy} disabled={disabled && !busy} data-selection-focus={selectionFocus ? '' : undefined}
    onBlur={() => setSelectionFocus(false)} onClick={() => {
     if (open) close(true); else { setSelectionFocus(false); trigger.current?.focus(); setQuery(''); setHighlight(null); if (!selected) focusPane.current = 'drill'; setPane(selected ? 'root' : 'model'); setOpen(true); lastAction.current = 'load'; load(); }
    }}>
-   <IconDataOutline16 size={16} className={css.triggerIcon}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>
-   {effortLabel && <span className={css.triggerEffort}>{effortLabel}</span>}
-   <span className={css.triggerIndicator}>{busy ? <StateDot state="ongoing"/> : <IconChevronDownOutline14 className={clsx(css.chevron, open && css.chevronOpen)}/>}</span>
+   <IconDataOutline16 size={16} className={modelSelectCss.triggerIcon}/><span className={modelSelectCss.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>
+   {effortLabel && <span className={modelSelectCss.triggerEffort}>{effortLabel}</span>}
+   <span className={modelSelectCss.triggerIndicator}>{busy ? <StateDot state="ongoing"/> : <IconChevronDownOutline14 className={clsx(modelSelectCss.chevron, open && modelSelectCss.chevronOpen)}/>}</span>
   </button>
-  {open && <PopoverPopup ref={menu} id={`${id}-menu`} data-model-menu="" data-pane={pane} className={css.menu} role="menu" aria-label={tx('agent:model-select.model-and-effort')} aria-busy={loading || busy}
+  {open && <PopoverPopup ref={menu} id={`${id}-menu`} data-model-menu="" data-pane={pane} className={modelSelectCss.menu} role="menu" aria-label={tx('agent:model-select.model-and-effort')} aria-busy={loading || busy}
    anchor={trigger} positionMethod="fixed" side="top" align="end" sideOffset={8} collisionPadding={12} initialFocus={false} finalFocus={() => false} portalProps={{ container: portal }}
    onKeyDownCapture={event => { if (event.key === 'Escape' && pane !== 'root' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); back(); } }}>
    {pane === 'root' && <>
-    <button type="button" role="menuitem" aria-label={tx('agent:model-select.model')} data-pane="model" className={css.cell} onClick={() => drill('model')}><span className={css.cellLabel}>{tx('agent:model-select.model')}</span><span className={css.cellValue}>{current}</span><IconChevronRightOutline14 className={css.cellChevron}/></button>
-    {!!efforts.length && <button type="button" role="menuitem" aria-label={tx('agent:model-select.effort')} data-pane="effort" className={css.cell} onClick={() => drill('effort')}><span className={css.cellLabel}>{tx('agent:model-select.effort')}</span><span className={css.cellValue}>{effortLabel ?? modelDefaultLabel(tx, selected!)}</span><IconChevronRightOutline14 className={css.cellChevron}/></button>}
+    <button type="button" role="menuitem" aria-label={tx('agent:model-select.model')} data-pane="model" className={modelSelectCss.cell} onClick={() => drill('model')}><span className={modelSelectCss.cellLabel}>{tx('agent:model-select.model')}</span><span className={modelSelectCss.cellValue}>{current}</span><IconChevronRightOutline14 className={modelSelectCss.cellChevron}/></button>
+    {!!efforts.length && <button type="button" role="menuitem" aria-label={tx('agent:model-select.effort')} data-pane="effort" className={modelSelectCss.cell} onClick={() => drill('effort')}><span className={modelSelectCss.cellLabel}>{tx('agent:model-select.effort')}</span><span className={modelSelectCss.cellValue}>{effortLabel ?? modelDefaultLabel(tx, selected!)}</span><IconChevronRightOutline14 className={modelSelectCss.cellChevron}/></button>}
    </>}
    {pane === 'model' && <>
-    {showSearch && <div className={css.searchRow}><div className={clsx(css.search, query && css.searchWithQuery)}><TextInput unstyled ref={search} role="searchbox" type="text" aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} aria-controls={`${id}-models`} aria-activedescendant={activeIndex < 0 ? undefined : `${id}-model-${activeIndex}`} value={query} readOnly={busy} onChange={event => { setQuery(event.target.value); setHighlight(0); }}/></div>{query && <button type="button" className={css.searchClear} aria-label={tx('agent:model-picker.clear-search')} disabled={busy} onClick={() => { setQuery(''); setHighlight(0); search.current?.focus(); }}><IconCloseFill14/></button>}</div>}
-    <div ref={groups} id={`${id}-models`} className={css.groups}>
+    {showSearch && <div className={modelSelectCss.searchRow}><div className={clsx(modelSelectCss.search, query && modelSelectCss.searchWithQuery)}><TextInput unstyled ref={search} role="searchbox" type="text" aria-label={tx('agent:model-picker.search')} placeholder={tx('agent:model-picker.search')} aria-controls={`${id}-models`} aria-activedescendant={activeIndex < 0 ? undefined : `${id}-model-${activeIndex}`} value={query} readOnly={busy} onChange={event => { setQuery(event.target.value); setHighlight(0); }}/></div>{query && <button type="button" className={modelSelectCss.searchClear} aria-label={tx('agent:model-picker.clear-search')} disabled={busy} onClick={() => { setQuery(''); setHighlight(0); search.current?.focus(); }}><IconCloseFill14/></button>}</div>}
+    <div ref={groups} id={`${id}-models`} className={modelSelectCss.groups}>
      {modelGroups.map(group => <MenuGroup key={group.provider} label={group.provider}>{group.models.map(choice => {
       const index = modelIndex++, intent: ModelSelectionIntent = { kind: 'model', model: choice.id };
       return <button type="button" role="menuitemradio" aria-checked={choice.id === current} key={choice.id} aria-label={choice.id} id={`${id}-model-${index}`} tabIndex={showSearch ? -1 : 0} data-highlighted={index === activeIndex ? '' : undefined}
-       className={clsx(css.option, css.modelOption, index === activeIndex && css.optionActive)} disabled={disabled || loading || busy} title={choice.id}
+       className={clsx(modelSelectCss.option, modelSelectCss.modelOption, index === activeIndex && modelSelectCss.optionActive)} disabled={disabled || loading || busy} title={choice.id}
        onFocus={() => setHighlight(index)} onMouseMove={() => { if (!busy) { if (showSearch) setHighlight(index); else document.getElementById(`${id}-model-${index}`)?.focus(); } }} onClick={() => void submit(intent)}>
-       <span className={css.optionCopy}><span className={css.modelName}>{choice.id.includes('/') ? choice.id.slice(choice.id.indexOf('/') + 1) : choice.id}</span></span><span className={css.check}>{pendingRow(intent) ? <StateDot state="ongoing"/> : choice.id === current && <IconCheckOutline16/>}</span>
+       <span className={modelSelectCss.optionCopy}><span className={modelSelectCss.modelName}>{choice.id.includes('/') ? choice.id.slice(choice.id.indexOf('/') + 1) : choice.id}</span></span><span className={modelSelectCss.check}>{pendingRow(intent) ? <StateDot state="ongoing"/> : choice.id === current && <IconCheckOutline16/>}</span>
       </button>;
      })}</MenuGroup>)}
     </div>
-    {!loading && !visibleModels.length && <div className={css.empty} role="status">{tx('agent:model-picker.empty')}</div>}
-    {nextPage && <button type="button" className={css.option} disabled={loading || busy} onClick={() => void nextPage()}>{tx('common:activity.show-more')}</button>}
+    {!loading && !visibleModels.length && <div className={modelSelectCss.empty} role="status">{tx('agent:model-picker.empty')}</div>}
+    {nextPage && <button type="button" className={modelSelectCss.option} disabled={loading || busy} onClick={() => void nextPage()}>{tx('common:activity.show-more')}</button>}
    </>}
-   {pane === 'effort' && efforts.map(row => <button type="button" role="menuitemradio" aria-checked={effortChecked(row)} key={row.key} className={css.option} disabled={disabled || loading || busy} onClick={() => void submit(row.intent)}><span className={css.optionCopy}><span className={css.modelName}>{row.label}</span></span><span className={css.check}>{pendingRow(row.intent) ? <StateDot state="ongoing"/> : effortChecked(row) && <IconCheckOutline16/>}</span></button>)}
+   {pane === 'effort' && efforts.map(row => <button type="button" role="menuitemradio" aria-checked={effortChecked(row)} key={row.key} className={modelSelectCss.option} disabled={disabled || loading || busy} onClick={() => void submit(row.intent)}><span className={modelSelectCss.optionCopy}><span className={modelSelectCss.modelName}>{row.label}</span></span><span className={modelSelectCss.check}>{pendingRow(row.intent) ? <StateDot state="ongoing"/> : effortChecked(row) && <IconCheckOutline16/>}</span></button>)}
    {status}
-   {error && lastAction.current === 'select' && !busy && <button type="button" className={css.option} disabled={disabled} onClick={() => { lastAction.current = 'load'; load(true); }}>{tx('agent:agent-controls.reread-models')}</button>}
+   {error && lastAction.current === 'select' && !busy && <button type="button" className={modelSelectCss.option} disabled={disabled} onClick={() => { lastAction.current = 'load'; load(true); }}>{tx('agent:agent-controls.reread-models')}</button>}
   </PopoverPopup>}
  </div></Popover>;
 }

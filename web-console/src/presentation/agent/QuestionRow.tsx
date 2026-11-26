@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../primitives/icons';
-import css from './Tool.module.css';
+import { toolCss } from './toolCss';
 
 /** One question call's verdict and, once settled, its read-only record. */
 export type QuestionRowView =
@@ -32,18 +32,18 @@ export function QuestionRow({ row, inspect, title, kind = 'ask_user', renderQues
   // Dismissal is the user's own choice; an interrupt keeps the shared stopped semantics.
   const state = row.verdict === 'waiting' ? 'running' : row.verdict === 'interrupted' || row.verdict === 'timed-out' ? 'stopped' : 'ok';
   return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={row.id} data-tool-name={kind}>
-    <div className={css.root} data-state={state} data-tool={kind}>
-      <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
+    <div className={toolCss.root} data-state={state} data-tool={kind}>
+      <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.title} chevronClassName={toolCss.chevron}
         icon={<IconQuestionOutline14/>} title={title ?? tx('tools:ask.row-title')} open={open && expandable} expandable={expandable}
         expandOnRowClick={panelAction === undefined} keepContentWhenOpen onToggle={toggle}
-        collapsedContent={<><span className={css.sep} aria-hidden/><span className={css.summary}>{summary}</span>
+        collapsedContent={<><span className={toolCss.sep} aria-hidden/><span className={toolCss.summary}>{summary}</span>
           {panelAction && <button type="button" className="flex-none inline-flex items-center gap-[4px] ml-[8px] px-[10px] py-0 h-[calc(22px+var(--dsh-content-font-delta,0px))] border-none rounded-full bg-[var(--dsw-alias-button-floating-fill)] [color:var(--dsw-alias-label-primary)] [font-family:inherit] text-[calc(var(--dsh-content-font-size-secondary,13px)-1px)] leading-none whitespace-nowrap cursor-pointer transition-colors duration-100 hover:bg-[var(--dsw-alias-button-floating-hover)] [&_svg]:w-[13px] [&_svg]:h-[13px]"
             onClick={event => { event.stopPropagation(); panelAction.open(); }}
             onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}>
             <IconQuestionOutline14/>{panelAction.label}
           </button>}
         </>}>
-        {open && expandable && <div className={css.bodyWrap}>
+        {open && expandable && <div className={toolCss.bodyWrap}>
           {row.verdict === 'answered' ? <dl className="flex flex-col gap-[16px] max-h-[360px] mt-[4px] mr-0 mb-[4px] ml-[4px] px-[20px] py-[16px] overflow-y-auto [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[16px] bg-[var(--dsw-alias-bg-base)]">
             {row.questions.map((item, index) => <div className="flex flex-col gap-[2px] min-w-0" key={index}>
               <dt className="m-0 whitespace-pre-wrap wrap-anywhere text-[var(--dsh-content-font-size,14px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] [color:var(--dsw-alias-label-tertiary)]">{questionContent(item.question)}</dt>

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Task loader adapted from ui-primitives StateDot; see PROVENANCE.md. */
 import { StateDot, type StateDotState } from '../../presentation/primitives/StateDot';
-import css from './BackgroundJobs.module.css';
+import { backgroundJobsCss } from './backgroundJobsCss';
 
 /** Keep every visible task loader in phase, as the Harness job list does. */
 function syncSpinner(element: SVGSVGElement | null): void {
@@ -11,11 +11,11 @@ function syncSpinner(element: SVGSVGElement | null): void {
 }
 
 export function JobStateDot({ state, size = state === 'ongoing' ? 14 : 10, className = '' }: { state: StateDotState; size?: number; className?: string }) {
-  if (state !== 'ongoing') return <StateDot state={state} size={size} className={`${css.marker} ${className}`}/>;
-  return <svg ref={syncSpinner} className={`${css.spinner} ${className}`} data-state="ongoing" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-    <g className={css.spinnerMotion}>
-      <circle className={css.spinnerTrack} cx="12" cy="12" r="9.5"/>
-      <circle className={css.spinnerArc} cx="12" cy="12" r="9.5"/>
+  if (state !== 'ongoing') return <StateDot state={state} size={size} className={`${backgroundJobsCss.marker} ${className}`}/>;
+  return <svg ref={syncSpinner} className={`${backgroundJobsCss.spinner} ${className}`} data-state="ongoing" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    <g className={backgroundJobsCss.spinnerMotion}>
+      <circle className={backgroundJobsCss.spinnerTrack} cx="12" cy="12" r="9.5"/>
+      <circle className={backgroundJobsCss.spinnerArc} cx="12" cy="12" r="9.5"/>
     </g>
   </svg>;
 }

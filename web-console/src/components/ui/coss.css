@@ -127,6 +127,15 @@
     35% { transform: rotate(-4deg) translate(-0.4px, -0.9px); }
     70% { transform: rotate(1.6deg) translate(0.3px, 0.2px); }
   }
+  @keyframes dsh-job-dash {
+    0% { stroke-dasharray: 12 150; stroke-dashoffset: 0; }
+    50% { stroke-dasharray: 24 150; stroke-dashoffset: -6; }
+    100% { stroke-dasharray: 12 150; stroke-dashoffset: 0; }
+  }
+  @keyframes retry-shimmer {
+    from { background-position: 100% 50%; }
+    to { background-position: 0 50%; }
+  }
   @keyframes input-pending {
     from { opacity: 0.35; }
     to { opacity: 1; }

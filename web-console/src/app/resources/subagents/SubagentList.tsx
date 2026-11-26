@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
-import catalog from '../../../presentation/catalog/Catalog.module.css';
+import { catalogCss } from '../../../presentation/catalog/catalogCss';
 import { CardMenu } from '../../../presentation/catalog/CardMenu';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
 import { transferActions } from '../shared/ResourceTransfer';
@@ -40,7 +40,7 @@ export function SubagentList({ source, scope, revision, query, group, view, onOp
         else if (authored) onTransfer?.(scope, entry.name, authored.revision, action === 'copy-scope' ? 'copy' : 'move');
       }} />;
   };
-  if (!entries.length && (needle || !group)) return group ? null : <p className={catalog.state}>{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>;
+  if (!entries.length && (needle || !group)) return group ? null : <p className={catalogCss.state}>{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>;
   const title = group ?? tx('resources:subagents.own-group');
   return <ResourceGroup label={title} count={entries.length} view={view}
     empty={<p role="status">{tx('resources:empty')}</p>}>

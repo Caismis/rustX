@@ -27,6 +27,7 @@ export const jsonTreeCss = {
   copySlot: 'jt-copy-slot inline-flex w-[20px] h-[16px] opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto',
   actionButton: 'box-border inline-flex items-center justify-center w-[20px] h-[16px] m-0 p-0 border-0 rounded-[3px] [color:var(--dsw-alias-label-secondary)] bg-transparent cursor-pointer hover:[color:var(--dsw-alias-label-primary)] aria-pressed:[color:var(--dsw-alias-state-business-primary)] focus-visible:[outline:1px_solid_var(--dsw-alias-state-business-primary)] focus-visible:-outline-offset-1 data-[state=failed]:[color:var(--dsw-alias-state-error-primary)]',
   expander: 'jt-expander absolute z-2 top-0 left-0 inline-flex items-center justify-start box-border w-[8px] h-[16px] m-0 [color:var(--json-tree-icon)] cursor-pointer select-none before:w-0 before:h-0 before:[border-top:4px_solid_transparent] before:[border-bottom:4px_solid_transparent] before:[border-left:6px_solid_currentColor] before:content-[""] before:scale-75 before:[transform-origin:33.333%_center] hover:[color:var(--dsw-alias-label-primary)] focus-visible:outline-none',
+  expandIcon: '',
   collapseIcon: 'before:rotate-90',
   collapsedContent: 'mx-[1px] [color:var(--json-tree-punctuation)] cursor-pointer after:content-["…"]',
 };

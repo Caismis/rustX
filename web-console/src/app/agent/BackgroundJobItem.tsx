@@ -17,7 +17,7 @@ import { IconChevronDownOutline14, IconClockOutline16, IconStopFill16 } from '..
 import { ToolArtifacts } from '../components/Artifact';
 import { useActivityRequest } from '../components/useActivityRequest';
 import { jobActive, jobDot } from './job-state';
-import css from './BackgroundJobs.module.css';
+import { backgroundJobsCss } from './backgroundJobsCss';
 
 const KILL_FAILED_MS = 4000;
 
@@ -82,7 +82,7 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
   const progress = value.progress ? [value.progress.message, value.progress.completed == null ? undefined : value.progress.total == null ? tx('common:activity.completed', { n: value.progress.completed }) : `${value.progress.completed} / ${value.progress.total}`].filter(Boolean).join(' · ') : undefined;
   const elapsed = live ? timing ? now - Date.parse(timing.started_at) : undefined : value.result ? Number(value.result.duration_ms) : timing?.duration_ms ? Number(timing.duration_ms) : undefined;
   const durationText = elapsed !== undefined && Number.isFinite(elapsed) ? duration(elapsed, tx) : undefined;
-  const durationCell = durationText !== undefined ? <span className={css.duration}>{durationText}</span> : null;
+  const durationCell = durationText !== undefined ? <span className={backgroundJobsCss.duration}>{durationText}</span> : null;
   const tail = useLiveJobOutput(client, sessionId, expanded && live ? job.job_id : undefined, expanded && live && job.state !== 'publishing_terminal');
   const output = value.result ? jobResultOutput({ content: value.result.content }) ?? (live ? tail?.text : undefined) : tail?.text;
   const diagnostic = value.result && value.result.status.type !== 'cancelled' ? jobResultOutput({ status: value.result.status }) : undefined;
@@ -115,22 +115,22 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
   };
 
   const body = <>
-    <span className={css.glyph}><JobStateDot state={dot}/></span>
-    <MarqueeText ref={labelRef} className={css.label} data-job-label="">{label}</MarqueeText>
-    <span id={summaryId} className={css.visuallyHidden}>{`${value.tool_name} · ${stateText}`}</span>
+    <span className={backgroundJobsCss.glyph}><JobStateDot state={dot}/></span>
+    <MarqueeText ref={labelRef} className={backgroundJobsCss.label} data-job-label="">{label}</MarqueeText>
+    <span id={summaryId} className={backgroundJobsCss.visuallyHidden}>{`${value.tool_name} · ${stateText}`}</span>
     {durationCell}
   </>;
 
   const row = (
-    <div className={observable ? `${css.rowLine} ${css.rowInteractive}` : css.rowLine} data-job-row="" {...marquee}>
+    <div className={observable ? `${backgroundJobsCss.rowLine} ${backgroundJobsCss.rowInteractive}` : backgroundJobsCss.rowLine} data-job-row="" {...marquee}>
       {observable
-        ? <button type="button" className={css.row} aria-expanded={expanded} aria-label={tx(expanded ? 'common:activity.job-collapse' : 'common:activity.job-expand', { label })} aria-describedby={summaryId} onClick={onToggle}>{body}</button>
-        : <span className={css.row} aria-describedby={summaryId}>{body}</span>}
+        ? <button type="button" className={backgroundJobsCss.row} aria-expanded={expanded} aria-label={tx(expanded ? 'common:activity.job-collapse' : 'common:activity.job-expand', { label })} aria-describedby={summaryId} onClick={onToggle}>{body}</button>
+        : <span className={backgroundJobsCss.row} aria-describedby={summaryId}>{body}</span>}
       {client && canStop && (
         <Tooltip label={stopTitle} side="bottom" delayMs={500}>
           <button
             type="button"
-            className={armed ? `${css.stop} ${css.stopArmed}` : failure ? `${css.stop} ${css.stopFailed}` : css.stop}
+            className={armed ? `${backgroundJobsCss.stop} ${backgroundJobsCss.stopArmed}` : failure ? `${backgroundJobsCss.stop} ${backgroundJobsCss.stopFailed}` : backgroundJobsCss.stop}
             disabled={stop.disabled || pending}
             data-kill-state={pending ? 'pending' : armed ? 'armed' : failure ? 'failed' : 'idle'}
             aria-label={stopAria}
@@ -139,32 +139,32 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
             onClick={pressStop}
           >
             <IconStopFill16 size={12}/>
-            {armed && <span className={css.stopLabel}>{tx('common:activity.job-stop-action')}</span>}
+            {armed && <span className={backgroundJobsCss.stopLabel}>{tx('common:activity.job-stop-action')}</span>}
           </button>
         </Tooltip>
       )}
-      <span className={css.chevron} aria-hidden="true">
-        {observable ? <IconChevronDownOutline14 size={14} className={expanded ? css.chevronOpen : undefined}/> : null}
+      <span className={backgroundJobsCss.chevron} aria-hidden="true">
+        {observable ? <IconChevronDownOutline14 size={14} className={expanded ? backgroundJobsCss.chevronOpen : undefined}/> : null}
       </span>
     </div>
   );
 
-  return <li className={css.item}><section data-job-id={job.job_id} data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
+  return <li className={backgroundJobsCss.item}><section data-job-id={job.job_id} data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
     <HoverCard
       grouped
       disabled={onStop && canStop}
       anchor={row}
       content={
-        <div className={css.hoverDetails} data-session-panel-details="">
-          <div className={css.hoverLine}>{value.tool_name}</div>
-          <div className={css.hoverStatus}>
+        <div className={backgroundJobsCss.hoverDetails} data-session-panel-details="">
+          <div className={backgroundJobsCss.hoverLine}>{value.tool_name}</div>
+          <div className={backgroundJobsCss.hoverStatus}>
             <JobStateDot state={dot}/>
             <span>{stateText}</span>
           </div>
           {durationText !== undefined && (
-            <div className={css.hoverFacts}>
-              <span className={css.hoverFact} data-fact="duration">
-                <span className={css.hoverFactIcon} aria-hidden="true"><IconClockOutline16 size={14}/></span>
+            <div className={backgroundJobsCss.hoverFacts}>
+              <span className={backgroundJobsCss.hoverFact} data-fact="duration">
+                <span className={backgroundJobsCss.hoverFactIcon} aria-hidden="true"><IconClockOutline16 size={14}/></span>
                 {durationText}
               </span>
             </div>
@@ -172,19 +172,19 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
         </div>
       }
     />
-    {failure && <p role="alert" className={`${css.notice} ${css.noticeError}`}>{displayText(tx, failure)}</p>}
-    {expanded && observable && <div className={css.panel}>
-      {detailError && <div className={css.notice}><span role="alert">{detailError}</span><button type="button" className={css.sectionClear} onClick={() => setRetry(value => value + 1)}>{tx('common:activity.job-details')}</button></div>}
-      {deferred ? !detailError && <div className={css.notice}>{tx('common:activity.loading')}</div> : <>
-        {tail?.truncated && <div className={css.notice}>{tx('common:activity.job-output-gap')}</div>}
-        {tail?.error && <div className={`${css.notice} ${css.noticeError}`} role="alert">{tx('common:activity.job-output-error', { error: tail.error })}</div>}
+    {failure && <p role="alert" className={`${backgroundJobsCss.notice} ${backgroundJobsCss.noticeError}`}>{displayText(tx, failure)}</p>}
+    {expanded && observable && <div className={backgroundJobsCss.panel}>
+      {detailError && <div className={backgroundJobsCss.notice}><span role="alert">{detailError}</span><button type="button" className={backgroundJobsCss.sectionClear} onClick={() => setRetry(value => value + 1)}>{tx('common:activity.job-details')}</button></div>}
+      {deferred ? !detailError && <div className={backgroundJobsCss.notice}>{tx('common:activity.loading')}</div> : <>
+        {tail?.truncated && <div className={backgroundJobsCss.notice}>{tx('common:activity.job-output-gap')}</div>}
+        {tail?.error && <div className={`${backgroundJobsCss.notice} ${backgroundJobsCss.noticeError}`} role="alert">{tx('common:activity.job-output-error', { error: tail.error })}</div>}
         <TerminalBlock command={label} output={output} running={jobActive(value)} copyText={label} runStateDot={false} maxLines={Infinity} lifecycle={{ state: dot, label: status }} labels={{
           copy: tx('tools:tool-card.copy'), copied: tx('tools:tool-card.copied'), signal: signal => tx('tools:copy.signal-value', { p0: signal }), exitCode: code => tx('tools:copy.exit-value', { p0: code }), noExitCode: tx('tools:tool-card.exit-status-unavailable'),
           running: tx('tools:tool-card.running'), failed: tx('tools:tool-card.failed'), done: tx('tools:tool-card.done'), noOutput: tx(value.result?.managed_output ? 'common:activity.job-output-retained' : 'tools:tool-card.no-output'), collapseAria: tx('tools:tool-card.collapse-output'), collapse: tx('tools:tool-card.collapse'), expandAria: n => tx('tools:tool-card.show-value-more-lines', { p0: n }), expand: n => tx('tools:tool-card.show-value-more-lines', { p0: n }),
         }}/>
-        {diagnostic && <p className={dot === 'error' ? `${css.notice} ${css.noticeError}` : css.notice}>{diagnostic}</p>}
-        {value.result?.truncation?.truncated && <p className={css.notice}>{tx('common:activity.job-output-truncated')}</p>}
-        {value.result?.managed_output && 'diagnostic' in value.result.managed_output && <p className={`${css.notice} ${css.noticeError}`}>{value.result.managed_output.diagnostic}</p>}
+        {diagnostic && <p className={dot === 'error' ? `${backgroundJobsCss.notice} ${backgroundJobsCss.noticeError}` : backgroundJobsCss.notice}>{diagnostic}</p>}
+        {value.result?.truncation?.truncated && <p className={backgroundJobsCss.notice}>{tx('common:activity.job-output-truncated')}</p>}
+        {value.result?.managed_output && 'diagnostic' in value.result.managed_output && <p className={`${backgroundJobsCss.notice} ${backgroundJobsCss.noticeError}`}>{value.result.managed_output.diagnostic}</p>}
         {value.result && <ToolArtifacts result={value.result}/>}
       </>}
     </div>}

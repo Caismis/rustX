@@ -19,7 +19,7 @@ import { IconBranchOutline16, IconPinOutline16, IconPinFill16, IconCopyOutline16
   IconFolderClose16, IconFolderOpen16, IconPlusOutline16, IconTrashOutline16, IconTriangleRightFill14 } from '../primitives/icons';
 import type { GroupNode, SearchResultNode, SessionNode } from './types';
 import type { Translate } from '../../locale/translation';
-import css from './Rows.module.css'
+import { rowsCss } from './rowsCss';
 
 /** The standard locale seat, prop-passed from the browser root. */
 type RowTranslate = Translate
@@ -145,10 +145,10 @@ function WorkspaceHoverContent({ label, cwd, createdAt, t }: {
   t: RowTranslate
 }) {
   return (
-    <div className={css.hoverContent}>
-      <div className={css.hoverTitle}>{label}</div>
-      <div className={css.hoverPath}>{cwd}</div>
-      {createdAt !== undefined && <div className={css.hoverTime}>{createdLabel(createdAt, t)}</div>}
+    <div className={rowsCss.hoverContent}>
+      <div className={rowsCss.hoverTitle}>{label}</div>
+      <div className={rowsCss.hoverPath}>{cwd}</div>
+      {createdAt !== undefined && <div className={rowsCss.hoverTime}>{createdLabel(createdAt, t)}</div>}
     </div>
   )
 }
@@ -190,7 +190,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
   ]
   const ownRow = (
     <div
-      className={clsx(css.projectRow, menuOpen && css.menuOpen)}
+      className={clsx(rowsCss.projectRow, menuOpen && rowsCss.menuOpen)}
       role="treeitem"
       aria-expanded={row.expanded}
       tabIndex={0}
@@ -198,16 +198,16 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
       onClick={onToggle}
 
     >
-      <span className={clsx(css.slot, css.folder, active && css.folderActive)}>
+      <span className={clsx(rowsCss.slot, rowsCss.folder, active && rowsCss.folderActive)}>
         {row.expanded ? <IconFolderOpen16 /> : <IconFolderClose16 />}
       </span>
-      <button type="button" aria-label={tx('workspace:rows.toggle-value', { p0: label })} aria-expanded={row.expanded} className={clsx(css.slot, css.chevron)}>
-        <IconTriangleRightFill14 className={clsx(css.arrow, row.expanded && css.arrowOpen)} />
+      <button type="button" aria-label={tx('workspace:rows.toggle-value', { p0: label })} aria-expanded={row.expanded} className={clsx(rowsCss.slot, rowsCss.chevron)}>
+        <IconTriangleRightFill14 className={clsx(rowsCss.arrow, row.expanded && rowsCss.arrowOpen)} />
       </button>
-      <span className={css.projectText}>
-        <button type="button" className={css.titleButton} aria-label={tx('workspace:rows.select-workspace-value', { p0: label })} aria-current={group.workspaceId && group.containsCurrent ? "page" : undefined} onClick={event => { event.stopPropagation(); onSelect?.(); }}>{label}</button>
+      <span className={rowsCss.projectText}>
+        <button type="button" className={rowsCss.titleButton} aria-label={tx('workspace:rows.select-workspace-value', { p0: label })} aria-current={group.workspaceId && group.containsCurrent ? "page" : undefined} onClick={event => { event.stopPropagation(); onSelect?.(); }}>{label}</button>
       </span>
-      <span className={css.rowActions}>
+      <span className={rowsCss.rowActions}>
         {actions !== undefined && (
           <Menu
             open={menuOpen}
@@ -228,7 +228,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
             anchor={(
               <button
                 type="button"
-                className={css.iconButton}
+                className={rowsCss.iconButton}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 aria-label={t('workspace:actions.workspace.aria', { name: label })}
@@ -241,7 +241,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
         )}
         {row.workspaceId !== undefined && <button
           type="button"
-          className={css.iconButton}
+          className={rowsCss.iconButton}
           aria-label={t('workspace:actions.newSession.aria', { name: label })}
           onClick={(e) => { e.stopPropagation(); onCreate() }}
         >
@@ -293,7 +293,7 @@ function SessionStatusDots({ statuses }: { statuses: readonly SessionStatus[] })
     <>
       <StateDot state={statuses[0].state} />
       {statuses.map(status => (
-        <span className={css.visuallyHidden} key={status.label}>{status.label}</span>
+        <span className={rowsCss.visuallyHidden} key={status.label}>{status.label}</span>
       ))}
     </>
   )
@@ -303,14 +303,14 @@ function SessionStatusDots({ statuses }: { statuses: readonly SessionStatus[] })
 function SessionHoverContent({ node, now, t }: { node: SessionNode; now: number; t: RowTranslate }) {
   const statuses = sessionStatuses(node, t)
   return (
-    <div className={css.hoverContent}>
-      <div className={css.hoverTitle}>{displayTitle(node)}</div><div>{node.observation}</div>
+    <div className={rowsCss.hoverContent}>
+      <div className={rowsCss.hoverTitle}>{displayTitle(node)}</div><div>{node.observation}</div>
       {node.taskHover}
       {/* Same placeholder rule as the row's trailing cell: no timestamp
           before the first prompt. */}
-      {<div className={css.hoverTime}>{hoverTimeLabel(node.updatedAt, now, t)}</div>}
+      {<div className={rowsCss.hoverTime}>{hoverTimeLabel(node.updatedAt, now, t)}</div>}
       {statuses.map(status => (
-        <div className={css.hoverStatus} key={status.label}>
+        <div className={rowsCss.hoverStatus} key={status.label}>
           <StateDot state={status.state} />
           <span>{status.label}</span>
         </div>
@@ -342,7 +342,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
   return (
     <button
       type="button"
-      className={clsx(css.searchResultRow, selected && css.selected)}
+      className={clsx(rowsCss.searchResultRow, selected && rowsCss.selected)}
       role="treeitem"
       aria-selected={selected}
       aria-label={tx('workspace:rows.open-value', { p0: result.title })}
@@ -350,19 +350,19 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
       title={result.observation}
       onClick={() => { onOpen(result.id) }}
     >
-      <span className={css.searchResultHeading}>
-        <span className={css.slot}>
+      <span className={rowsCss.searchResultHeading}>
+        <span className={rowsCss.slot}>
           {primaryStatus && primaryStatus.state !== 'done' && (
             <SessionStatusDots statuses={statuses} />
           )}
         </span>
-        <span className={css.searchResultTitle}>{result.title}</span>
+        <span className={rowsCss.searchResultTitle}>{result.title}</span>
       </span>
-      <span className={css.searchResultMeta}>
+      <span className={rowsCss.searchResultMeta}>
         {result.observation && <span>{result.observation}</span>}
-        <span className={css.searchResultWorkspace}>{result.workspace || t('workspace:session.unclassified')}</span>
+        <span className={rowsCss.searchResultWorkspace}>{result.workspace || t('workspace:session.unclassified')}</span>
         {result.snippet !== undefined && (
-          <span className={css.searchResultSnippet}>{result.snippet}</span>
+          <span className={rowsCss.searchResultSnippet}>{result.snippet}</span>
         )}
       </span>
     </button>
@@ -387,9 +387,9 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
 /** The current composer draft has no native Session identity or actions. */
 export function DraftConversationRow({ focus }: { focus: () => void }) {
   const tx = useTranslation();
-  return <div className={clsx(css.sessionRow, css.selected)} role="treeitem" aria-selected="true" data-draft-conversation="" onClick={focus}>
-    <span className={css.slot}/>
-    <button type="button" className={clsx(css.title, css.titleButton)} aria-current="page">{tx('sidebar:session.new')}</button>
+  return <div className={clsx(rowsCss.sessionRow, rowsCss.selected)} role="treeitem" aria-selected="true" data-draft-conversation="" onClick={focus}>
+    <span className={rowsCss.slot}/>
+    <button type="button" className={clsx(rowsCss.title, rowsCss.titleButton)} aria-current="page">{tx('sidebar:session.new')}</button>
   </div>;
 }
 
@@ -437,7 +437,7 @@ export function SessionNodeItem({
   const ownRow = (
     <div
       className={clsx(
-        css.sessionRow, selected && css.selected, menuOpen && css.menuOpen,
+        rowsCss.sessionRow, selected && rowsCss.selected, menuOpen && rowsCss.menuOpen,
       )}
       role="treeitem"
       aria-busy={node.forking || undefined}
@@ -451,16 +451,16 @@ export function SessionNodeItem({
       {/* Pending interaction and own or descendant activity outrank the
           finished-but-unviewed reminder, which returns after activity stops
           and is cleared by opening the session. */}
-      <span className={css.slot}>
+      <span className={rowsCss.slot}>
         {showStatus ? <SessionStatusDots statuses={statuses} /> : node.taskMark}
       </span>
-<button ref={titleButton} type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
-      <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>
-      {node.pinned && <span className={css.pinIndicator} role="img" aria-label={t('workspace:row.pinned')}><IconPinFill16 size={14}/></span>}
-        <span className={css.rowActions} onClick={event => event.stopPropagation()}>
+<button ref={titleButton} type="button" className={clsx(rowsCss.title, rowsCss.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={rowsCss.observation}>{node.observation}</small>}</button>
+      <span className={rowsCss.time}>{timeLabel(row.updatedAt, now, t)}</span>
+      {node.pinned && <span className={rowsCss.pinIndicator} role="img" aria-label={t('workspace:row.pinned')}><IconPinFill16 size={14}/></span>}
+        <span className={rowsCss.rowActions} onClick={event => event.stopPropagation()}>
           <Menu
             open={menuOpen}
-            listClassName={css.sessionMenu}
+            listClassName={rowsCss.sessionMenu}
             onClose={() => { setMenuOpen(false) }}
             items={sessionMenuItems}
             onSelect={(id) => {
@@ -478,7 +478,7 @@ export function SessionNodeItem({
             anchor={(
               <button
                 type="button"
-                className={css.iconButton}
+                className={rowsCss.iconButton}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 data-session-actions={node.id} aria-label={t('workspace:actions.session.aria', { name: title })}
@@ -488,8 +488,8 @@ export function SessionNodeItem({
               </button>
             )}
           />
-          <Tooltip label={t('workspace:menu.deleteSession')} side="bottom" delayMs={500}><button type="button" className={css.iconButton} aria-label={t('workspace:menu.deleteSession')} onClick={() => { titleButton.current?.focus({ preventScroll: true }); onDelete(node.id); }}><IconTrashOutline16 size={14}/></button></Tooltip>
-          {onPin && <Tooltip label={pinLabel} side="bottom" delayMs={500}><button type="button" className={css.iconButton} aria-label={pinLabel} onClick={() => onPin(node.id)}>{node.pinned ? <IconPinFill16 size={14}/> : <IconPinOutline16 size={14}/>}</button></Tooltip>}
+          <Tooltip label={t('workspace:menu.deleteSession')} side="bottom" delayMs={500}><button type="button" className={rowsCss.iconButton} aria-label={t('workspace:menu.deleteSession')} onClick={() => { titleButton.current?.focus({ preventScroll: true }); onDelete(node.id); }}><IconTrashOutline16 size={14}/></button></Tooltip>
+          {onPin && <Tooltip label={pinLabel} side="bottom" delayMs={500}><button type="button" className={rowsCss.iconButton} aria-label={pinLabel} onClick={() => onPin(node.id)}>{node.pinned ? <IconPinFill16 size={14}/> : <IconPinOutline16 size={14}/>}</button></Tooltip>}
         </span>
     </div>
   )
