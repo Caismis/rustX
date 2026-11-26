@@ -78,5 +78,33 @@ constrained CPU affinity and the large reference assembly. The native path
 remains opt-in pending throughput, fidelity and resource evidence on the
 [#534 matrix](https://github.com/Caismis/rustX/issues/534).
 
+### Comparison results
+
+The Web production build at `6f7e04a77` ran on an AMD Ryzen 7 9800X3D under
+WSL with Chromium 153.0.8010.12 and SwiftShader. It used a local debug App
+Server. The three variants completed 60 opens at full CPU affinity and 24
+opens with two logical CPUs. The table reports first complete / full-detail
+display proxies in milliseconds. Values are medians of three paired samples,
+except the 200.76 MB B-spline pressure control, which has one pair per variant.
+
+| Model | Mode | Bulk-lexer WASM | Native 1 thread | Native 8 threads |
+| --- | --- | ---: | ---: | ---: |
+| Cube | Cold | 497 / 497 | 303 / 303 | 319 / 319 |
+| Cube | Warm | 248 / 248 | 231 / 231 | 198 / 198 |
+| 96-part assembly | Cold | 730 / 763 | 355 / 355 | 352 / 352 |
+| 96-part assembly | Warm | 331 / 347 | 264 / 264 | 248 / 248 |
+| 96-part assembly, two CPUs | Cold | 1564 / 1753 | 670 / 670 | 657 / 657 |
+| 96-part assembly, two CPUs | Warm | 708 / 748 | 431 / 431 | 385 / 385 |
+| B-spline pressure control | Cold | 10398 / 11578 | 9520 / 9520 | 9852 / 9852 |
+| B-spline pressure control | Warm | 8868 / 10081 | 9566 / 9566 | 9730 / 9730 |
+
+The native converter used up to approximately 1.17 GiB RSS on the pressure
+control. Separate fidelity tests with the same OCCT version confirmed matching
+triangle counts and occurrence bounds for the metric cube, inch cube and
+12-part colored assembly, and matched the assembly's authored color palette.
+The observed timing depends on fixture and warm-up. The reference hardware
+matrix, original timed-out 118.66 MB assembly, and separate Browser and Host
+process memory peaks remain open validation items.
+
 See [#602](https://github.com/Caismis/rustX/issues/602) and
 [#556](https://github.com/Caismis/rustX/pull/556).

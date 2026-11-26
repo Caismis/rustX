@@ -56,10 +56,14 @@ async function readTiming(directory: string, processMs: number, threads: 1 | 8):
  * Conversion admission remains held until the converter has physically exited. */
 export class NativeStepPreview {
   private converting = false;
+  private readonly config: StepPreviewConverterConfig;
+  private readonly timeoutMs: number;
 
-  constructor(private readonly config: StepPreviewConverterConfig, private readonly timeoutMs = 55_000) {
+  constructor(config: StepPreviewConverterConfig, timeoutMs = 55_000) {
     if (process.platform !== 'linux' || typeof config.executable !== 'string' || !isAbsolute(config.executable)
       || ![1, 8].includes(config.threads)) throw new Error('Invalid Linux native STEP converter configuration');
+    this.config = config;
+    this.timeoutMs = timeoutMs;
   }
 
   async open(root: string, path: string, reauthorize: () => Promise<void>, signal: AbortSignal): Promise<FilePreviewOperation> {

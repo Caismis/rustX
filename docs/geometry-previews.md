@@ -431,6 +431,12 @@ retained copy waits for that geometry when remounted. Plane changes reuse the
 admitted scene, viewport and existing outline resources, scheduling draws
 through the viewport's frame and fence.
 
+On Chromium 153 with SwiftShader, the transformed-assembly browser tests
+measured about 115 ms from first section activation to its display proxy.
+The maximum of 24 slider samples across delivery and Workbench was 55.3 ms.
+These software-rendered results exceed the 50 ms interaction target. The
+reference hardware matrix remains open.
+
 See [#551](https://github.com/Caismis/rustX/issues/551).
 
 ### Linux Workbench native STEP preview (#602)
