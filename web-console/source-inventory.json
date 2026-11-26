@@ -2062,7 +2062,6 @@
       "treatment": "retained mostly intact",
       "upstream_sha256": "0c65c0f0f14f9fdaf4dda6aeea6c73bf803c4591d64f53784928aaa559cc9b96",
       "retained_dependencies": [
-        "./DisclosureRow.module.css",
         "./TextShimmer",
         "./icons/index.tsx",
         "clsx",
@@ -2071,7 +2070,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4bd25e851b5f4bf12360fc82c42efa0a157925c28584e5c58ad01db9a7def5d4",
+      "local_sha256": "b9a7b52a0b8ed55aedae4d1466b90d0cfcb24c9914e3bcb63a0ab512cdaea03a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
@@ -2537,23 +2536,6 @@
           "treatment": "Inspected text-field focus: no external outline; component borders and invalid states remain independent."
         }
       ]
-    },
-    {
-      "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
-      "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint. #393: the panel is 1000px bounded by the viewport, min(820px, viewport − 48px) high, r24, and a size container; rail 216px. Narrow layout is an @container query on the panel's own width; the horizontal strip rules are deleted, and the modal shell keeps only its viewport bound on a media query. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
-      "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/slot registry",
-        "Harness Host/Remote/Session Controller/Workspace Controller",
-        "desktop/titlebar/update authority",
-        "provisional Session identity, archive, durable browser membership"
-      ],
-      "local_sha256": "a5135e3df8799e80efbedd120328f2ac954732a5fa4fae695d1409a5fe063435",
-      "retained_dependencies": [],
-      "classification": "B"
     },
     {
       "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
@@ -6198,30 +6180,6 @@
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.module.css",
-      "destination": "web-console/src/presentation/agent/WorkflowRunPanel.module.css",
-      "upstream_sha256": "aa60a5b61a67cca064ec18cc7a9414816308546ad4b74d10630a8a4c8baf949c",
-      "classification": "B",
-      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Workflow execution path: one chronological member list replaces block grouping; retain compact DSH run disclosure, status and focus presentation. Workflow child catalog: retain readable child counts and native status in narrow Workflow summaries.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "DSH workflow event assembler and phase/member lifecycle",
-        "DSH child Session navigation and controller",
-        "DSH Remote interaction settlement"
-      ],
-      "local_sha256": "322ba306cc5e51c074df483b4e660e266377818bc3d6c5b72bb3a54014b6d7ef",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "fa04126bf3cd35ed9ba3bc24d8255dc9e602dbd586647ce53753d0542ef67316",
-          "treatment": "Adapt the shared header content sizing and 6px gap, spaced run cards, compact kind-glyph seats and trailing status layout. Preserve bounded long labels and readable budget wrapping on narrow screens."
-        }
-      ]
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-primitives/src/MenuGroup.tsx",
       "destination": "web-console/src/presentation/primitives/MenuGroup.tsx",
       "upstream_sha256": "5cf45dc6fcb4aa892fd1e4c9d5e5ca8f8bee312ab1f8668f3063fcda0922e79d",
@@ -7116,7 +7074,6 @@
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "./PickerPopover",
-        "./SessionTasks.module.css",
         "./TaskDetail",
         "./copy",
         "./model",
@@ -7129,7 +7086,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "899469499356d49b18364401f875c374d0943512a730e245b674ec9404e8c5fb"
+      "local_sha256": "e2d23809cd139968b95519c45eeeccc86eee94100306d27bbcd30accda62ce17"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
