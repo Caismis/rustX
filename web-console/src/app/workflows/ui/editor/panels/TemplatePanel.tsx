@@ -17,7 +17,6 @@ import { RouteId } from './InferencePanels';
 import { useNode, type PanelProps } from './shared';
 import css from '../Editor.module.css';
 import styles from '../forms/WorkflowCode.module.css';
-import templateStyles from './TemplatePanel.module.css';
 
 const WorkflowCodeView=lazy(()=>import('../forms/WorkflowCodeView'));
 
@@ -51,8 +50,8 @@ function TemplateEditor(props:PanelProps) {
     <section className={clsx(styles.editor,expand.expanded&&styles.expanded)} style={expand.expanded?expand.bounds:undefined} aria-label={tx('workflows:data.template-code')} data-template-expanded={expand.expanded||undefined} onKeyDown={event=>{
       if(event.key==='Escape'&&!event.defaultPrevented&&expand.expanded){event.preventDefault();event.stopPropagation();expand.setExpanded(false);}
     }}>
-      <header><span>{tx('workflows:template.code')}</span><div className={templateStyles.tools}>
-        <a href="https://jinja.palletsprojects.com/en/3.1.x/templates/" target="_blank" rel="noreferrer" className={templateStyles.jinja}>{tx('workflows:template.jinja-only')}<IconQuestionOutline14/></a>
+      <header><span>{tx('workflows:template.code')}</span><div className="items-center">
+        <a href="https://jinja.palletsprojects.com/en/3.1.x/templates/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-[2px] mr-[4px] pr-[8px] [border-right:0.5px_solid_var(--dsw-alias-border-l3)] [color:var(--dsw-alias-label-tertiary)] text-[12px] font-normal no-underline hover:[color:var(--dsw-alias-label-primary)] hover:underline">{tx('workflows:template.jinja-only')}<IconQuestionOutline14/></a>
         <button type="button" className={css.promptTool} aria-label={tx(copy.copied?'workflows:prompt.copied':'workflows:prompt.copy')} title={tx('workflows:prompt.copy')} onClick={copy.onCopy} disabled={!field.text}>{copy.copied?<IconCheckOutline16/>:<IconCopyOutline16/>}</button>
         <button type="button" className={css.promptTool} aria-label={tx(expand.expanded?'workflows:prompt.collapse':'workflows:prompt.expand')} aria-pressed={expand.expanded} onClick={expand.toggle}><IconFullscreenOutline16/></button>
       </div></header>

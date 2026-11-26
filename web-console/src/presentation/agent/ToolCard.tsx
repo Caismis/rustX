@@ -4,7 +4,6 @@ import { useState, type ReactNode } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconInspectOutline12, IconApiOutline14, IconBrowseOutline16, IconEditOutline16, IconSearchOutline16, IconSparkle16 } from '../primitives/icons';
 import css from './Tool.module.css';
-import tree from './ToolTree.module.css';
 import { TerminalBlock } from '../primitives/TerminalBlock';
 import { DiffBlock, type DiffHunk } from '../primitives/DiffBlock';
 import { ReadBlock } from '../primitives/ReadBlock';
@@ -31,7 +30,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
  const state = tool.state === 'failure' ? 'error' : tool.state === 'cancelled' || tool.state === 'uncertain' ? 'stopped' : tool.state === 'success' ? 'ok' : tool.state;
  const expandable = tool.variant !== 'image' || !!(tool.imageResult || tool.output || body || inspect);
  const summary = open ? tool.details?.expandedSummary ?? tool.summary : tool.summary;
- return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
+ return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
  <div className={css.root} data-state={state} data-variant={tool.variant}>
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
  running={tool.state === 'running'}
@@ -63,7 +62,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
  {inspect && <ToolInspectionButton inspect={inspect}/>}
  </div></DisclosureRow>
  <span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span>
-</div>{children && <div className={tree.subCalls}>{children}</div>}</div>;
+</div>{children && <div className="flex flex-col gap-[4px] mt-[4px] mb-[2px] ml-[22px] mr-0 pl-[8px] [border-left:0.5px_solid_var(--dsw-alias-border-l2)]">{children}</div>}</div>;
 }
 
 /** Pure presentation: the Conversation owner supplies native location and fences. */

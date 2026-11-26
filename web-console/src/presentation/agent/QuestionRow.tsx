@@ -9,7 +9,6 @@ import { useState, type ReactNode } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../primitives/icons';
 import css from './Tool.module.css';
-import tree from './ToolTree.module.css';
 import card from './AskQuestionCard.module.css';
 
 /** One question call's verdict and, once settled, its read-only record. */
@@ -33,7 +32,7 @@ export function QuestionRow({ row, inspect, title, kind = 'ask_user', renderQues
   const expandable = row.verdict !== 'waiting' && row.questions.length > 0;
   // Dismissal is the user's own choice; an interrupt keeps the shared stopped semantics.
   const state = row.verdict === 'waiting' ? 'running' : row.verdict === 'interrupted' || row.verdict === 'timed-out' ? 'stopped' : 'ok';
-  return <div className={tree.callRow} data-tool-call-id={row.id} data-tool-name={kind}>
+  return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={row.id} data-tool-name={kind}>
     <div className={css.root} data-state={state} data-tool={kind}>
       <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
         icon={<IconQuestionOutline14/>} title={title ?? tx('tools:ask.row-title')} open={open && expandable} expandable={expandable}

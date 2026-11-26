@@ -12,7 +12,6 @@ import { AgentConversationContext } from './subagent-context';
 import toolCss from '../../presentation/agent/Tool.module.css';
 import { UserMessage } from '../../presentation/agent/Message';
 import { CopyMessage, MessageTime } from './TurnTail';
-import replyCss from './RecordedQuestionReply.module.css';
 
 type Item = RuntimeClientTranscriptEntry['item'];
 type Requested = Extract<Item, { type: 'interaction_requested' }>;
@@ -25,8 +24,8 @@ export function RecordedQuestionReply({ questions, answers, time }: { questions:
       : typeof value === 'boolean' ? tx(value ? 'interactions:questionnaire.true' : 'interactions:questionnaire.false') : String(value);
     return { question: question.question, header: question.header !== question.question && question.header, text };
   });
-  return <UserMessage label={tx('interactions:questionnaire.answers')} actions={<div className={replyCss.actions}><MessageTime time={time}/><CopyMessage text={rows.map(row => `${row.header ? `${row.header} — ` : ''}${row.question}\n${row.text}`).join('\n\n')}/></div>}>
-    <dl className={replyCss.details}>{rows.map((row, index) => <div key={index}><dt>{row.header && <small>{row.header}</small>}{row.question}</dt><dd>{row.text}</dd></div>)}</dl>
+  return <UserMessage label={tx('interactions:questionnaire.answers')} actions={<div className="flex items-center gap-[8px] pr-[4px]"><MessageTime time={time}/><CopyMessage text={rows.map(row => `${row.header ? `${row.header} — ` : ''}${row.question}\n${row.text}`).join('\n\n')}/></div>}>
+    <dl className="m-0 [&>div+div]:mt-[12px] [&_dt]:grid [&_dt]:gap-[3px] [&_dt]:[color:var(--dsw-alias-label-secondary)] [&_small]:text-[var(--dsh-content-font-size-secondary,13px)] [&_dd]:mt-[4px] [&_dd]:mx-0 [&_dd]:mb-0">{rows.map((row, index) => <div key={index}><dt>{row.header && <small>{row.header}</small>}{row.question}</dt><dd>{row.text}</dd></div>)}</dl>
   </UserMessage>;
 }
 /** Durable request/settlement receipts share only their exact native identity. */

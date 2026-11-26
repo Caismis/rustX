@@ -7,7 +7,6 @@ import { IconAgentPresetOutline16, IconApiOutline14 } from '../../presentation/p
 import { Content } from './Message';
 import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/Tool.module.css';
-import own from './InboundMessage.module.css';
 import { backgroundNotice } from '../../bindings/jobs';
 import { JobResultDetails } from './JobResultDetails';
 import { jobStateLabel } from '../../bindings/status-labels';
@@ -20,7 +19,7 @@ export const isUserBubble = (message: MessageBlock, parentAgentId?: string): mes
 export function InboundMessage({ message }: { message: Extract<MessageBlock, { role: 'user' }> }) {
   const tx = useTranslation(), [expanded, setExpanded] = useState(false), scope = useSubagents();
   const notice = backgroundNotice(message);
-  if (notice) return <div className={own.root} data-inbound-source="job">
+  if (notice) return <div className="my-[6px] [color:var(--dsw-alias-label-tertiary)]" data-inbound-source="job">
     <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron} icon={<IconApiOutline14/>} title={tx('common:activity.background-ended')} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={css.sep}/><span className={css.summary}>{notice.tool} · {jobStateLabel(tx, notice.state)}</span></>}>
       <JobResultDetails items={[notice]}/><Content messageId={message.id} blocks={message.content.slice(1)} markdown/>
     </DisclosureRow>
@@ -29,9 +28,9 @@ export function InboundMessage({ message }: { message: Extract<MessageBlock, { r
   const agent = scope?.agents.find(agent => agent.agent_id === agentId);
   const title = agentId ? tx('common:subagents.message', { name: agent?.title ?? tx('common:subagents.list') }) : tx('agent:message.context');
   const text = message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
-  return <div className={own.root} data-inbound-source={agentId ? 'agent' : 'context'}>
+  return <div className="my-[6px] [color:var(--dsw-alias-label-tertiary)]" data-inbound-source={agentId ? 'agent' : 'context'}>
     <DisclosureRow icon={<IconAgentPresetOutline16 size={14}/>} title={title} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={css.sep}/><span className={css.summary}>{text}</span></>}>
-      <div className={own.body}><Content messageId={message.id} blocks={message.content} markdown/></div>
+      <div className="max-h-[360px] overflow-auto px-[16px] py-[12px] [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-secondary)]"><Content messageId={message.id} blocks={message.content} markdown/></div>
     </DisclosureRow>
   </div>;
 }

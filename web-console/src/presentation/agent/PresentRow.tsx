@@ -10,8 +10,6 @@ import { useState } from 'react';
 import { DisclosureRow } from '../primitives/DisclosureRow';
 import { IconDeliverDocOutline14 } from '../primitives/icons';
 import css from './Tool.module.css';
-import tree from './ToolTree.module.css';
-import present from './PresentRow.module.css';
 
 /** One present call's native phase, declared paths and recorded result text. */
 export interface PresentRowView {
@@ -27,17 +25,17 @@ export function PresentRow({ row, inspect }: { row: PresentRowView; inspect?: ()
   const tx = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const expandable = row.details !== '';
-  return <div className={tree.callRow} data-tool-call-id={row.id} data-tool-name="present">
+  return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={row.id} data-tool-name="present">
     <div className={css.root} data-tool="present" data-state={row.phase === 'preparing' ? 'running' : row.phase} data-present-phase={row.phase}
       aria-label={row.phase === 'preparing' ? tx('tools:present.preparing') : undefined}>
       <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
         icon={<IconDeliverDocOutline14/>} title={tx('tools:present.title')} open={expanded && expandable} expandable={expandable}
         expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
         collapsedContent={<><span className={css.sep} aria-hidden/><span className={css.summary}>
-          <span className={present.status}>{tx(`tools:present.${row.phase}`)}</span>
-          {row.phase !== 'preparing' && <span className={present.paths}>{row.paths}</span>}
+          <span className="shrink-0">{tx(`tools:present.${row.phase}`)}</span>
+          {row.phase !== 'preparing' && <span className="overflow-hidden text-ellipsis whitespace-nowrap ml-[8px]">{row.paths}</span>}
         </span></>}>
-        {expanded && expandable && <div className={css.bodyWrap}><pre className={present.output}>{row.details}</pre>{inspect && <ToolInspectionButton inspect={inspect}/>}</div>}
+        {expanded && expandable && <div className={css.bodyWrap}><pre className="my-[8px] mx-0 p-[12px] rounded-[16px] bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-secondary)] whitespace-pre-wrap wrap-anywhere text-[12px]">{row.details}</pre>{inspect && <ToolInspectionButton inspect={inspect}/>}</div>}
       </DisclosureRow>
     </div>
   </div>;
