@@ -1090,8 +1090,8 @@ it('Harness ledger: each Turn opens on its own input, with the Request marker ab
   expect(document.querySelector('[data-structural="step"]')).toBeNull();
   fireEvent.click(row('RecordRow', 'trace:3'));
   // The promoted initial prompt sits outside the active Turn's rail.
-  expect(row('SystemPromptCell', 'trace:2').querySelector('[class*="turnRail"]')).toBeNull();
-  expect(row('RecordRow', 'trace:1').querySelector('[class*="turnRail"]')).not.toBeNull();
+  expect(row('SystemPromptCell', 'trace:2').querySelector('[class*="tj-turnrail"]')).toBeNull();
+  expect(row('RecordRow', 'trace:1').querySelector('[class*="tj-turnrail"]')).not.toBeNull();
   expect(row('SystemPromptCell', 'trace:2').textContent).toContain('Initial System Prompt');
   expect(row('SystemPromptCell', 'trace:2').textContent).not.toContain('Frozen prompt');
 });
@@ -1695,7 +1695,7 @@ it('checkpoint summaries and unscoped reused history display Between turns witho
   expect(row('RecordRow', 'trace:1').querySelector('[aria-label="Between turns"]')).not.toBeNull();
   fireEvent.click(row('RecordRow', 'trace:1'));
   expect(within(screen.getByRole('complementary', { name: 'Event details' })).getByText('Between turns')).toBeTruthy();
-  expect(document.querySelector('[class*="turnRail"]')).toBeNull();
+  expect(document.querySelector('[class*="tj-turnrail"]')).toBeNull();
   expect(JSON.stringify(records)).toBe(original);
 });
 

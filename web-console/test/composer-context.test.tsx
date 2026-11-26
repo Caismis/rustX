@@ -778,12 +778,12 @@ describe('Composer context stack lifecycle', () => {
   it('every dock shares the composer card column without viewport positioning', () => {
     const composer = (name: string) => readFileSync(resolve(process.cwd(), 'src/app/composer', name), 'utf8');
     for (const name of ['TodoDock', 'GoalDock', 'QueueDock']) {
-      const source = composer(`${name}.module.css`);
-      expect(source).toContain('width: calc(100% - 2 * var(--dsh-composer-side-clearance) - 4 * var(--dsh-composer-dock-inset));');
-      expect(source).toContain('max-width: calc(var(--dsh-composer-card-max-width) - 4 * var(--dsh-composer-dock-inset));');
-      expect(source).not.toMatch(/position:\s*(fixed|sticky)/);
+      const source = composer(`${name}.tsx`);
+      expect(source.replace(/\s+/g, '')).toContain('w-[calc(100%-2*var(--dsh-composer-side-clearance)-4*var(--dsh-composer-dock-inset))]');
+      expect(source.replace(/\s+/g, '')).toContain('max-w-[calc(var(--dsh-composer-card-max-width)-4*var(--dsh-composer-dock-inset))]');
+      expect(source).not.toMatch(/\b(fixed|sticky)\b/);
     }
-    expect(composer('ComposerContextStack.module.css')).toContain('--dsh-composer-dock-inset: 8px;');
+    expect(composer('ComposerContextStack.tsx')).toContain('[--dsh-composer-dock-inset:8px]');
   });
 });
 

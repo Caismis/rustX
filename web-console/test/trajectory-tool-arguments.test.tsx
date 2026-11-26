@@ -57,7 +57,7 @@ it.each([
   const text = listText(tx, item);
   expect(text).toBe(business === undefined ? 'bash' : `bash ${business}`);
   const ui = render(<CellContent item={item}/>);
-  expect(ui.container.querySelector('[class*="toolCallPayload"]')?.textContent).toBe(business);
+  expect(ui.container.querySelector('[class*="tj-toolcallpayload"]')?.textContent).toBe(business);
   expect(record.tool!.arguments!.text).toBe(raw);
 });
 
