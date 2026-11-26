@@ -18,7 +18,7 @@ fn canonical_schema_shape_fingerprint_matches_created_schema() {
     create_schema(&mut connection).unwrap();
     assert_eq!(
         schema_shape_fingerprint(&connection).unwrap(),
-        CANONICAL_SCHEMA_SHAPE_SHA256
+        CANONICAL_SCHEMA_SHAPE_BLAKE3
     );
 }
 
