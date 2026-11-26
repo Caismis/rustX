@@ -120,17 +120,6 @@ impl SubagentRegistry {
             .collect()
     }
 
-    /// Whether any terminal notification still owes observable delivery
-    /// work (drain observability).
-    #[must_use]
-    pub fn has_unresolved_delivery_work(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state
-            .records
-            .iter()
-            .any(|record| record.notification.has_pending_delivery())
-    }
-
     /// Cancels every active subagent (runtime drain).
     pub fn cancel_all(&self, reason: CancellationReason) {
         let ids: Vec<SubagentId> = {

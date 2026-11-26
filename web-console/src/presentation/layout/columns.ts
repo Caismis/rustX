@@ -26,8 +26,6 @@ export const SIDEBAR_AUTO_COLLAPSE = 1024
 export const RIGHTBAR_MIN = 300
 /** Maximum normal right panel width as a fraction of the frame. */
 export const RIGHTBAR_MAX_RATIO = 0.7
-/** First-open right panel preference as a fraction of the frame. */
-export const RIGHTBAR_DEFAULT_RATIO = 0.45
 
 /**
  * Clamp a panel width into its contract range.

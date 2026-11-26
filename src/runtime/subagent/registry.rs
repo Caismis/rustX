@@ -212,12 +212,6 @@ enum NotificationState {
     Failed,
 }
 
-impl NotificationState {
-    const fn has_pending_delivery(self) -> bool {
-        matches!(self, Self::Failed)
-    }
-}
-
 /// The registry-known arbitration phase of one live parent-authored steer
 /// ticket (Issue #193).
 ///

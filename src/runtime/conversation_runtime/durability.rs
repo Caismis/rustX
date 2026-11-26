@@ -237,25 +237,23 @@ impl RuntimeInner {
         if self.durability_gate.is_failed() {
             return;
         }
-        let retry_armed = {
+        let unretried_diagnostic = {
             let cycle = &mut state.foreground.admission_durability_cycle;
             if cycle.budget.try_consume(operation) {
                 cycle.pending_retry = Some(PendingDurabilityRetry {
                     operation,
-                    diagnostic: diagnostic.clone(),
+                    diagnostic,
                 });
-                true
+                None
             } else {
-                false
+                Some(diagnostic)
             }
         };
-        if retry_armed {
-            self.observe(ConversationObservation::DurableFailure {
-                message: diagnostic,
-            });
-            self.wake.notify.notify_one();
-        } else {
+        if let Some(diagnostic) = unretried_diagnostic {
             self.commit_failure_and_observe(operation, diagnostic);
+        } else {
+            self.observe(ConversationObservation::DurableFailure);
+            self.wake.notify.notify_one();
         }
     }
 

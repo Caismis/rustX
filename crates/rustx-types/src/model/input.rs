@@ -100,15 +100,6 @@ impl ModelInputMessage {
     pub fn canonical_id(&self) -> Option<&MessageId> {
         self.as_canonical().map(MessageBlock::id)
     }
-
-    /// Returns the runtime-authored text of a request-only item.
-    #[must_use]
-    pub fn request_only_text(&self) -> Option<String> {
-        match self {
-            Self::Canonical(_) | Self::Derived(_) => None,
-            Self::RequestOnly(context) => Some(context.render()),
-        }
-    }
 }
 
 /// The fixed native request-only context vocabulary.

@@ -42,7 +42,6 @@ export class ArtifactResources {
   release(url: string) { if (this.urls.delete(url)) URL.revokeObjectURL(url); }
   dispose() { this.disposed = true; for (const url of this.urls) URL.revokeObjectURL(url); this.urls.clear(); }
 }
-export const isTextMime = (mime?: string) => ['text/plain', 'text/markdown', 'application/json'].includes(mime ?? '');
 
 /** Only inert media/text MIME values from typed metadata; never filename inference.
  * Empty MIME lets Chromium decode semantic images directly from bounded bytes. */

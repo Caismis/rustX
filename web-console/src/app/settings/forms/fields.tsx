@@ -1,10 +1,9 @@
 import { message, displayText, type DisplayText } from '../../../locale/translation';
 import { SettingsNotice, useSettingsFeedback } from '../SettingsFeedback';
 import { useTranslation, useNotice } from '../../../locale/react';
-import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Button } from '../../../presentation/primitives/Button';
+import { useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
-import { Choice, Toggle } from '../primitives/aria';
+import { Toggle } from '../primitives/aria';
 import { UnitReset, type TypedUnitForm } from './bridge';
 import { formatRequestParams, parseRequestParams, sameJson, type RequestParams } from './request-params';
 import css from '../../../presentation/settings/SettingsContent.module.css';
@@ -73,24 +72,6 @@ export function Text<T>({ form, name, label, required = false, url = false, plac
   </label>}</Field>;
 }
 
-/** A secret-bearing authored field. The value is memory-only: it is never
- * persisted, never echoed into a URL, never logged and never read back from
- * native. Autofill is disabled so no browser store retains it either. */
-export function Secret<T>({ form, name, label, required = false }: {
-  form: TypedUnitForm<T>; name: FieldPath<T>; label: string; required?: boolean;
-}) {
-  return <Bound<T, string | null | undefined> form={form} name={name}>{(value, change, field) => <label>{label}
-    <input type="password" autoComplete="new-password" spellCheck={false} value={value ?? ''}
-      required={required} onBlur={field.handleBlur} onChange={event => change(event.target.value)} />
-  </label>}</Bound>;
-}
-
-export function Area<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
-  return <Bound<T, string | null | undefined> form={form} name={name}>{(value, change, field) => <label>{label}
-    <textarea value={value ?? ''} onBlur={field.handleBlur} onChange={event => change(event.target.value)} />
-  </label>}</Bound>;
-}
-
 export function Numeric<T>({ form, name, label, min = 1, empty = null, required = false, validate: additional, listenTo }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; min?: number; empty?: null | undefined; required?: boolean;
   validate?: (value: unknown) => DisplayText | undefined;
@@ -124,82 +105,9 @@ export function NumericText<T>({ form, name, label, required = false }: { form: 
   </label>}</Field>;
 }
 
-export function Enum<T, V extends string>({ form, name, label, options, empty }: {
-  form: TypedUnitForm<T>; name: FieldPath<T>; label: string;
-  options: readonly (readonly [V, string])[];
-  /** The label of the absent selection. Present exactly when the native unit
-   * distinguishes "no authored value" from every value it admits. */
-  empty?: string;
-}) {
-  const choices = empty === undefined ? options : ([['', empty], ...options] as readonly (readonly [string, string])[]);
-  return <Bound<T, V | null | undefined> form={form} name={name}>{(value, change) =>
-    <Choice label={label} value={(value ?? '') as string} options={choices}
-      onChange={next => change((next === '' ? null : next) as V)} />}</Bound>;
-}
-
 export function Bool<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
   return <Bound<T, boolean | null | undefined> form={form} name={name}>{(value, change) =>
     <Toggle label={label} checked={!!value} onChange={change} />}</Bound>;
-}
-
-/** A three-state boolean: on, off, or no authored value at all. Absent is
- * never collapsed into `false`. */
-export function TriBool<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
-  const tx = useTranslation();
-  return <Bound<T, boolean | null | undefined> form={form} name={name}>{(value, change) =>
-    <Choice label={label} value={value === undefined || value === null ? '' : String(value)}
-      options={[['', tx('settings:copy.native-default')], ['true', tx('settings:copy.on')], ['false', tx('settings:copy.off')]]}
-      onChange={next => change(next === '' ? undefined : next === 'true')} />}</Bound>;
-}
-
-/** A list of identities. An empty list is an authored empty list and is never
- * presented as an absent value. */
-export function Strings<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
-  const tx = useTranslation();
-  const Field = form.Field as unknown as (props: { name: string; mode: 'array'; children: (field: BoundField & { pushValue: (value: never) => void; removeValue: (index: number) => void }) => ReactNode }) => ReactNode;
-  return <Field name={name as string} mode="array">{field => {
-    const value = (field.state.value as string[] | null | undefined) ?? [];
-    return <fieldset><legend>{label}</legend>
-      {value.map((entry, index) => <div className={css.names} key={index}>
-        <input aria-label={tx('settings:extension-detail.value-value', { p0: label, p1: index + 1 })} value={entry}
-          onChange={event => field.handleChange(value.map((item, at) => at === index ? event.target.value : item) as never)} />
-        <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => field.removeValue(index)}>{tx('settings:controls.remove')}{' '}</Button>
-      </div>)}
-      <Button onClick={() => field.pushValue('' as never)}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
-      {!value.length && <p className={css.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
-    </fieldset>;
-  }}</Field>;
-}
-
-/** A `Record<string, string>` of named entries — MCP environment references,
- * headers and their literal counterparts.
- *
- * When `secret` is set the values are authored secrets: they are rendered as
- * password inputs, held in memory only, and never read back from native. */
-export function Entries<T>({ form, name, label, secret = false }: {
-  form: TypedUnitForm<T>; name: FieldPath<T>; label: string; secret?: boolean;
-}) {
-  return <Bound<T, Record<string, string> | null | undefined> form={form} name={name}>{(raw, change) =>
-    <EntryRows label={label} value={raw ?? {}} change={change} secret={secret} />}</Bound>;
-}
-export function EntryRows({ label, value, change, secret = false }: {
-  label: string; value: Record<string, string>; change: (value: Record<string, string>) => void; secret?: boolean;
-}) {
-  const tx = useTranslation();
-  const [key, setKey] = useState('');
-  const id = useId();
-  const duplicate = key !== '' && key in value;
-  return <fieldset><legend>{label}</legend>
-    {Object.entries(value).map(([entry, current]) => <div key={entry}>
-      <label>{entry}<input type={secret ? 'password' : 'text'} autoComplete={secret ? 'new-password' : undefined} value={current}
-        onChange={event => change({ ...value, [entry]: event.target.value })} /></label>
-      <Button onClick={() => { const next = { ...value }; delete next[entry]; change(next); }}>{tx('settings:controls.remove')}{' '}{entry}</Button>
-    </div>)}
-    <label htmlFor={id}>{label} {tx('settings:fields.name')}</label>
-    <input id={id} value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} />
-    <SettingsNotice text={duplicate ? `${key} ${tx('settings:fields.is-already-listed')}` : undefined}/>
-    <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
-  </fieldset>;
 }
 
 /** Provider-native request parameters bound to one form path. */

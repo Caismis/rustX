@@ -6,9 +6,8 @@
 import type { ReactNode } from 'react'
 import { classifyFileType, fileExtension } from './FileTypeIcon.tsx'
 import { isCodeFileType, isLinkCodeExtension } from './code-file-types.ts'
-const ICON_MEDIUM_STROKE = 1.3, ICON_REGULAR_STROKE = 1;
+const ICON_MEDIUM_STROKE = 1.3;
 import type { IconProps } from './icons/props.ts'
-
 
 /** Link categories with distinct leading glyphs. */
 export type LinkIconKind = 'code' | 'image' | 'document' | 'other'
@@ -95,15 +94,6 @@ function LinkIconArtwork({ kind, size = 14, className, strokeWidth }: WeightedLi
     /* v8 ignore next -- closed-union backstop; only reached if a kind is forged */
     default: return assertNever(kind)
   }
-}
-
-/**
- * Render a regular one-pixel link icon.
- * @param props - Link category, size, and optional class.
- * @returns The regular decorative link glyph.
- */
-export function LinkIconRegular(props: LinkIconProps): ReactNode {
-  return <LinkIconArtwork {...props} strokeWidth={ICON_REGULAR_STROKE} />
 }
 
 /**

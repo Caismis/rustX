@@ -446,33 +446,6 @@ impl ConversationInboundMailbox {
         Ok(accepted.sequence)
     }
 
-    /// Enqueues one producer-correlated ordinary inbound message through the
-    /// durable acceptance owner (exactly-once producer retry semantics).
-    ///
-    /// A retry with the same committed `correlation` resolves to the same
-    /// acceptance without allocating a second sequence.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same [`MailboxError`] variants as
-    /// [`ConversationInboundMailbox::enqueue`].
-    pub fn enqueue_correlated(
-        &self,
-        message: UserMessageBlock,
-        correlation: String,
-    ) -> Result<InboundSequence, MailboxError> {
-        let timestamp = message.timestamp.ok_or(MailboxError::MissingTimestamp)?;
-        let accepted = self.accept_draft(InboundDraft {
-            message_id: Some(message.id),
-            source: message.source,
-            kind: message.kind,
-            content: message.content,
-            timestamp,
-            correlation: Some(correlation),
-        })?;
-        Ok(accepted.sequence)
-    }
-
     /// The one durable acceptance linearization point: validate the draft,
     /// durably accept it, then publish the process-local observation and
     /// wake.

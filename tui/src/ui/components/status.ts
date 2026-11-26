@@ -36,7 +36,7 @@ import {
   sessionLabel,
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
-import { role, style, plainText, plainWidth } from "../theme.ts";
+import { role, plainWidth } from "../theme.ts";
 
 /**
  * The working label, or `undefined` when the runtime is not working.

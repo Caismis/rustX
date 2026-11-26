@@ -239,14 +239,7 @@ export function effectiveFacts(source: SourceSettings | undefined, mutation: Sou
 export function unitFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): UnitFacts {
   return { authored: authoredFacts(source, scope, mutation), effective: effectiveFacts(source, mutation), origin: unitProvenance(source, mutation) };
 }
-export function authoredStateLabel(tx: Translate, authored: AuthoredFacts, scope: SourceScope): string {
-  const workspace = scope === 'workspace';
-  return authored.state === 'present' ? (workspace ? tx('settings:copy.workspace-override-empty-selections-remain-explicit') : tx('settings:copy.user-authored-value'))
-    : authored.state === 'redacted' ? (workspace ? tx('settings:copy.workspace-override-value-never-projected') : tx('settings:copy.user-authored-value-value-never-projected'))
-      : authored.state === 'absent' ? (workspace ? tx('settings:copy.inherited-no-workspace-override') : tx('settings:copy.no-user-authored-value'))
-        : authored.state === 'invalid' ? tx('settings:copy.authored-source-is-invalid')
-          : tx('settings:copy.authored-source-unavailable');
-}
+
 export function effectiveStateLabel(tx: Translate, effective: EffectiveFacts): string {
   return effective.state === 'available' ? tx('settings:copy.native-effective-value-available')
     : effective.state === 'redacted' ? tx('settings:copy.native-effective-value-exists-the-literal-is-never-projected')

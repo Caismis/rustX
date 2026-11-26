@@ -3190,7 +3190,7 @@ byte on (the absolute path is runtime-owned typed continuation metadata —
 `ToolExecutionResult::managed_output` — which the canonical model-facing
 projection presents exactly once; the result's `artifacts` stay empty — text
 overflow is not an artifact),
-`TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
+`TERM -> 2-second grace -> KILL` cancellation driven by the supervisor,
 typed result semantics (zero exit success, non-zero exit failed with the
 code preserved, an explicit executor kill timeout as `TimedOut`, cancellation as `Cancelled`),
 explicit spill-capture failures (a spill that cannot be allocated or

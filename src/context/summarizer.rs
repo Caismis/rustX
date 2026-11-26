@@ -68,12 +68,6 @@ pub const SUMMARY_REASONING_MAX_CHARS: usize = 1_000;
 pub const SUMMARY_TOOL_ARGUMENTS_MAX_CHARS: usize = 1_000;
 
 impl SummaryRequest {
-    /// Whether this request covers at least one canonical message.
-    #[must_use]
-    pub fn advances_coverage(&self) -> bool {
-        !self.retired.is_empty()
-    }
-
     /// Renders the retired span as the deterministic plain-text transcript
     /// the summary model reads.
     ///
@@ -555,16 +549,6 @@ impl ModelBackedSummarizer {
     #[must_use]
     pub const fn instruction() -> &'static str {
         SUMMARY_INSTRUCTION
-    }
-
-    /// Renders the request input deterministically for the model.
-    ///
-    /// The rendering is a pure function of the request; see
-    /// [`SummaryRequest::render_transcript`] for why it is a bounded plain
-    /// transcript rather than the canonical JSON encoding.
-    #[must_use]
-    pub fn serialize_input(request: &SummaryRequest) -> String {
-        request.render_transcript()
     }
 }
 

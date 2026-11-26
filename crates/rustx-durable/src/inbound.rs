@@ -130,12 +130,6 @@ impl InboundItem {
     pub fn transcript_cursor(&self) -> Option<TranscriptCursor> {
         self.transcript_cursor
     }
-
-    /// Consumes the item and returns its canonical inbound message.
-    #[must_use]
-    pub fn into_message(self) -> UserMessageBlock {
-        self.message
-    }
 }
 
 /// One finite watermark-bounded pending batch.
@@ -170,11 +164,6 @@ impl InboundBatch {
     #[must_use]
     pub fn items(&self) -> &[InboundItem] {
         &self.items
-    }
-
-    /// Consumes the batch and returns its items in order.
-    pub fn into_items(self) -> Vec<InboundItem> {
-        self.items
     }
 }
 
