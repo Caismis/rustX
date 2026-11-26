@@ -4,7 +4,6 @@ import clsx from 'clsx'
 import { structuredPatch } from 'diff'
 import { FoldToggle } from './FoldToggle.tsx'
 import { writeClipboard } from './clipboard.ts'
-import css from './DiffBlock.module.css'
 
 /** Output lines shown before the height cap collapses the middle. */
 export const DEFAULT_DIFF_MAX_LINES = 16
@@ -58,11 +57,11 @@ function assertNever(value: never): never {
 
 /** The dim class per row kind (path/gap chrome vs the diff's own +/- colors). */
 const ROW_CLASS: Record<DiffRow['kind'], string | undefined> = {
-  path: css.path,
-  del: css.del,
-  add: css.add,
-  context: css.context,
-  gap: css.gap,
+  path: '[color:var(--dsw-alias-label-primary)] font-semibold pr-[56px]',
+  del: '[color:var(--dsw-alias-state-error-primary)] before:content-["-_"] before:[color:var(--dsw-alias-state-error-primary)]',
+  add: '[color:var(--dsw-alias-state-success-primary)] before:content-["+_"] before:[color:var(--dsw-alias-state-success-primary)]',
+  context: '[color:var(--dsw-alias-label-secondary)] before:content-["__"]',
+  gap: '[color:var(--dsw-alias-label-tertiary)]',
 }
 
 /** Bound synchronous edit-graph search; one replacement consumes two edits. */
@@ -205,17 +204,17 @@ export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, cl
   const tail = capped ? rows.slice(rows.length - tailLines) : []
 
   return (
-    <div className={clsx(css.block, className)} data-diff="">
-      <button type="button" className={css.copyButton} onClick={onCopy}>
+    <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-diff-radius:12px] [--dsl-diff-line-height:22px]', className)} data-diff="">
+      <button type="button" className="absolute top-[8px] right-[12px] z-[1] bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
         {copied ? labels.copied : labels.copy}
       </button>
-      <div className={css.body}>
+      <div className="px-[14px] py-[12px] [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
         {head.map((row, index) => (
-          <div key={index} className={clsx(css.line, ROW_CLASS[row.kind])}>{row.text}</div>
+          <div key={index} className={clsx('min-h-[var(--dsl-diff-line-height)] whitespace-pre', ROW_CLASS[row.kind])}>{row.text}</div>
         ))}
         {hidden > 0 && (
           <FoldToggle
-            className={css.expand}
+            className="block w-full p-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]"
             expanded={expanded}
             hidden={hidden}
             labels={labels}
@@ -223,10 +222,10 @@ export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, cl
           />
         )}
         {tail.map((row, index) => (
-          <div key={index} className={clsx(css.line, ROW_CLASS[row.kind])}>{row.text}</div>
+          <div key={index} className={clsx('min-h-[var(--dsl-diff-line-height)] whitespace-pre', ROW_CLASS[row.kind])}>{row.text}</div>
         ))}
       </div>
-      <div className={css.footer}>└ +{added} -{removed} · {labels.files(files)}</div>
+      <div className="pt-0 px-[14px] pb-[12px] [font:var(--dsw-font-markdown-code-block)] [color:var(--dsw-alias-label-tertiary)]">└ +{added} -{removed} · {labels.files(files)}</div>
     </div>
   )
 }

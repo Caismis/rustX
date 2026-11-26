@@ -3427,7 +3427,6 @@
       "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./DiffBlock.module.css",
         "./FoldToggle.tsx",
         "./clipboard.ts",
         "clsx",
@@ -3439,7 +3438,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "62a24439659760f574106ade3e4e670d24dc2c12e091fe5d725f38874c54f9bf"
+      "local_sha256": "2052ef7683a55acc04928ea20391f1e76dc7957d5226ae0794542e2835604bcb"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3479,22 +3478,6 @@
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
       "local_sha256": "b7758a5ead5586db405d2c6c916167bafc80c4546c13845eed748679733d30c9"
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-primitives/src/ReadBlock.module.css",
-      "destination": "web-console/src/presentation/primitives/ReadBlock.module.css",
-      "upstream_sha256": "51c238e23bfd3be92fc788b5b19d82cc0c3144ccec4aa644634073e60e077861",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "1f1dc1f03d20259e396bd79f8e75412a763e820c1af50b0a4f0efb11f23b5ab1"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4033,12 +4016,11 @@
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/icons",
-        "./StepGroup.module.css",
         "clsx",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "e3905fc83c91117b6112733c54234aab472d00c9b56ea189d5a66f0b2d251c8d"
+      "local_sha256": "f1f77ec73ffd167cc1fb24c8eff5bc071872909454b7e23a2192d917f1b48004"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css",

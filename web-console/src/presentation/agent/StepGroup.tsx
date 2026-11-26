@@ -8,7 +8,6 @@ import { useTranslation } from '../../locale/react';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { IconAgentPresetOutline16, IconApiOutline14, IconBrowseOutline16, IconChevronDownOutline14, IconChevronUpOutline14, IconCodeOutline16, IconEditOutline16, IconGlobeOutline14, IconPlanOutline14, IconQuestionOutline14, IconSearchOutline16, IconSparkle16, IconThinkOutline14 } from '../primitives/icons';
-import css from './StepGroup.module.css';
 
 /** Harness step-process categories, ranked by distinct calls in a group's title. */
 export type StepActivity = 'read' | 'readImage' | 'search' | 'write' | 'edit' | 'commands' | 'code'
@@ -75,18 +74,18 @@ export function StepGroup({ id, counts, open, onToggle, hidden = false, direct =
     return () => { observer.disconnect(); element.removeEventListener('scroll', sync); };
   }, [open]);
   const activity = counts[0]?.kind ?? 'thinking';
-  return <div className={css.root} hidden={hidden} data-step-process={id}>
-    <button hidden={direct} type="button" className={css.title} aria-expanded={open} aria-controls={bodyId}
+  return <div className="min-w-0" hidden={hidden} data-step-process={id}>
+    <button hidden={direct} type="button" className="group/step flex max-w-full items-center gap-[6px] p-0 border-0 bg-none [color:var(--dsw-alias-label-tertiary)] [font:inherit] text-[var(--dsh-content-font-size,14px)] leading-[calc(24px+var(--dsh-content-font-delta,0px))] text-left cursor-pointer transition-colors duration-100 motion-reduce:transition-none focus-visible:[color:var(--dsw-alias-label-secondary)] hover:[color:var(--dsw-alias-label-secondary)] aria-[expanded=true]:pb-[8px]" aria-expanded={open} aria-controls={bodyId}
       data-process-activity={activity} onClick={event => { event.currentTarget.focus(); onToggle(); }}>
-      <span className={css.leading} aria-hidden="true">
-        <span className={css.activityIcon}>{ICONS[activity]}</span>
-        <span className={css.chevron}>{open ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}</span>
+      <span className="relative flex-none inline-flex items-center justify-center w-[calc(16px+var(--dsh-content-font-delta,0px))] h-[calc(16px+var(--dsh-content-font-delta,0px))] [color:inherit] [&_svg]:w-[calc(14px+var(--dsh-content-font-delta,0px))] [&_svg]:h-[calc(14px+var(--dsh-content-font-delta,0px))] [&_svg[width="16"]]:w-[calc(16px+var(--dsh-content-font-delta,0px))] [&_svg[width="16"]]:h-[calc(16px+var(--dsh-content-font-delta,0px))]" aria-hidden="true">
+        <span className="absolute inset-0 inline-flex items-center justify-center transition-opacity duration-100 motion-reduce:transition-none opacity-100 group-hover/step:opacity-0 group-focus-visible/step:opacity-0 group-aria-[expanded=true]/step:opacity-0">{ICONS[activity]}</span>
+        <span className="absolute inset-0 inline-flex items-center justify-center transition-opacity duration-100 motion-reduce:transition-none opacity-0 group-hover/step:opacity-100 group-focus-visible/step:opacity-100 group-aria-[expanded=true]/step:opacity-100">{open ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}</span>
       </span>
-      <span className={css.label}>{title}{detail && ` · ${detail}`}</span>
+      <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{title}{detail && ` · ${detail}`}</span>
     </button>
     <div ref={body} id={bodyId} hidden={!open && !direct} data-step-process-body
-      className={clsx(css.body, direct && css.expandedBody, !direct && open && edges.up && css.fadeTop, !direct && open && edges.down && css.fadeBottom)}>
-      <div ref={content} className={css.content}>{children}</div>
+      className={clsx('max-h-[min(400px,50vh)] overflow-y-auto overscroll-behavior-y-auto [scrollbar-gutter:stable] [--dsh-chat-flow-gap:4px]', direct && 'max-h-none! overflow-visible! [scrollbar-gutter:auto]!', !direct && open && edges.up && edges.down ? '[mask-image:linear-gradient(to_bottom,transparent_0,#000_24px,#000_calc(100%-24px),transparent_100%)]' : !direct && open && edges.up ? '[mask-image:linear-gradient(to_bottom,transparent_0,#000_24px,#000_100%)]' : !direct && open && edges.down ? '[mask-image:linear-gradient(to_bottom,#000_0,#000_calc(100%-24px),transparent_100%)]' : undefined)}>
+      <div ref={content} className="flex flex-col [&>*]:shrink-0 [&>:not([hidden]):not(:empty)~:not([hidden]):not(:empty)]:mt-[var(--dsh-chat-flow-gap,4px)]">{children}</div>
     </div>
   </div>;
 }
