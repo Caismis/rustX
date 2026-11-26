@@ -1655,7 +1655,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "c09e027df169e562733292dfe1439853368e29b65a1262cf9eafc0c11350e461",
+      "local_sha256": "2ff245154ddd748ac946ce200b0b8e3b72718fcde81ee059d3cae34b3fb97300",
       "classification": "A"
     },
     {
@@ -2412,11 +2412,9 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [
-        "./PreviewPanel.module.css",
-        "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "cd1eed213e59ee1db19c4756969696c069e2da0d5b3b4e282486316cb78fcb92",
+      "local_sha256": "24984f9b5e0ba8e76a4df647b7521cdfb2c052bebe3e72e52da006ac4e6b23bb",
       "classification": "B"
     },
     {
@@ -3794,7 +3792,7 @@
         "Harness scroll ownership",
         "Total-sized virtualizer measurement cache"
       ],
-      "local_sha256": "485d70d553bd7eb2d95c018d2675b546634586284feb28d76aa8b46976080377"
+      "local_sha256": "942c4ca40bc536cd22a81e4c2756ebe5b8af4ce2d41a0fd2f83b3e1088be01c8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",
@@ -3974,7 +3972,6 @@
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "../../presentation/primitives/keyboard-composition",
-        "../../presentation/right-panel/SidebarRight.module.css",
         "../../presentation/right-panel/Workbench.module.css",
         "../../workspaces/host",
         "../../workspaces/workbench",
@@ -3993,7 +3990,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "6f2371038310ba1b9a4d640014d01092fa3f12362134aa33c2b149b374af9510",
+      "local_sha256": "89ec6a40a040efb45fe999fc68681a40671128ca2c6d48eb78dbc2ddacda33a6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -6970,7 +6967,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "e2d23809cd139968b95519c45eeeccc86eee94100306d27bbcd30accda62ce17"
+      "local_sha256": "a36e44e53ee86ea5bad9e609d5c7de0ec5e156d16faab4a2537dbb63d15be872"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -7317,18 +7314,6 @@
       ],
       "excluded_dependencies": [],
       "local_sha256": "da76e87ace7d0ef6fdda934ed48887eb973cf9b2340e859641903273596811c7"
-    },
-    {
-      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
-      "upstream": "packages/client/ui-session-panel/src/client/SessionPanel.module.css",
-      "destination": "web-console/src/app/agent/SessionPanel.module.css",
-      "classification": "B",
-      "treatment": "Session panel docked/overlay layout, dock probe geometry, empty section hiding, and fold row styling adapted from ui-session-panel SessionPanel.module.css.",
-      "upstream_sha256": "3f76a1b7bf1a793c1f24ef1e1467a38f5c9069d34577de1b729513b6463b624f",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "37976c2a358b05d204cd98c589250e714a75c814566400203dca80e76f696e42"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/recent-views.ts",
