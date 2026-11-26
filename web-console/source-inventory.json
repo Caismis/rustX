@@ -5028,19 +5028,6 @@
       "local_sha256": "1e62c6e79bfbdc0a5442f2770806c7c8f8a4bce1fa64ca26e034d25077d3eab7"
     },
     {
-      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/ExcelBody.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "upstream_sha256": "2d5a0130b0ccb63d5c1e387eec4f608f9bea96a0379d79027b279cb64be426bb",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
-      "destination": "web-console/src/app/components/workbench-documents/excel/ExcelBody.module.css",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Cordis runtime, slots and resource transport"
-      ],
-      "retained_dependencies": [],
-      "local_sha256": "f4dbab306c7512343286646d134a3edb5b26211abf7df6eebbb08f36e7439262"
-    },
-    {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/convert.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "fd41b4dd3e0edfe25e61f24a0d4e5032ba924c97d8428105a9c4bce438c2ecab",
