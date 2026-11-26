@@ -3131,7 +3131,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "1f3a9b13cb710aba1d19c4c8ab4b54e998c92859580fb563e386feee62573681"
+      "local_sha256": "2d3d29d6012ca1caec09752b64ef4038bc1c1a464b994b843794585fe5d7a351"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
@@ -6528,7 +6528,7 @@
           "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
         }
       ],
-      "local_sha256": "7ab71f59426f140b2ca7f62cdda853bd5f3e007d5538b20527cb8f8840401484"
+      "local_sha256": "e708e92d73d05e2ad7a6c7a7b9fd4cbcbebf10d94538441fb2533f3e6916ed00"
     }
   ],
   "inspected_only": [
