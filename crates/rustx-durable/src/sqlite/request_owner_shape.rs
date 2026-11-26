@@ -60,6 +60,10 @@ pub fn verify(connection: &Connection) -> Result<(), ConversationStoreError> {
             "invalid request owner shape index".into(),
         ));
     }
+    verify_stored_rows(connection)
+}
+
+pub fn verify_stored_rows(connection: &Connection) -> Result<(), ConversationStoreError> {
     let invalid: bool = connection
         .query_row(&query(), [], |row| row.get(0))
         .map_err(|error| {
