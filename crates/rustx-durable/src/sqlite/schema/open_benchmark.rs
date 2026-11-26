@@ -47,6 +47,9 @@ fn measure_native_schema_open_cost() {
             Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         let scope = Arc::new(super::super::schedule_read::ScheduleReadScope::default());
         scope.install(&connection).unwrap();
+        connection
+            .execute_batch("PRAGMA mmap_size = 16777216")
+            .unwrap();
         let mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();

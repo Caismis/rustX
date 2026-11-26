@@ -1220,6 +1220,14 @@ impl SqliteConversationStore {
             .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         if let Some(scope) = scope {
             scope.install(&connection)?;
+            // Short-lived probes otherwise copy the same warm schema and header
+            // pages through pread on every open. The cap is connection-local;
+            // SQLite still faults in only pages actually read.
+            connection
+                .execute_batch("PRAGMA mmap_size = 16777216")
+                .map_err(|error| {
+                    crate::sqlite::sqlite_error(&error, format!("configure schedule mmap: {error}"))
+                })?;
         }
         let mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
