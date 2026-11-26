@@ -1200,37 +1200,6 @@
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
-      "destination": "web-console/src/presentation/agent/Approval.module.css",
-      "upstream_sha256": "d2baf40fcc375fa4189322bf1b91b84e2d3335704a06fe0d294a9803817bdd64",
-      "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Session event assembler",
-        "Cordis slots and stores",
-        "Host/Remote runtime and permission presets",
-        "browser Tool lifecycle and interaction settlement"
-      ],
-      "local_sha256": "d22b644bae025ac5803d64ec6bc207b1d0cc637086032efe250d0e4ca41aedaf",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
-          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-          "upstream_sha256": "c7946195e6e30360e2b33de81074b4893d06ec7e8b4bc5b616eb8144f9c28317",
-          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
-        },
-        {
-          "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "ed28b90d275f84067e80a85fea9d81c48727bfe7b88df25c0bb5e884d9790c9a",
-          "treatment": "Adapt the current transcript panel action, read-only question flow and separated approval description to native rustX records; preserve index-based answers and native response ownership. No timed continuation, Remote, Cordis state or invented questions/options."
-        }
-      ]
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.tsx",
       "destination": "web-console/src/presentation/agent/ApprovalTakeover.tsx",
       "upstream_sha256": "e108d9a196672dc99613d5789569c6bd3f49ef689aa1e33817bc6cecfa03e6aa",
@@ -1560,23 +1529,6 @@
           "treatment": "Adapt the current transcript panel action, read-only question flow and separated approval description to native rustX records; preserve index-based answers and native response ownership. No timed continuation, Remote, Cordis state or invented questions/options."
         }
       ]
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.module.css",
-      "destination": "web-console/src/presentation/agent/Reasoning.module.css",
-      "upstream_sha256": "5c28a61623c3bda67513c728422141921909d5227dbfb6c2e8a1a2e7e59079b1",
-      "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Session event assembler",
-        "Cordis slots and stores",
-        "Host/Remote runtime and permission presets",
-        "browser Tool lifecycle and interaction settlement"
-      ],
-      "local_sha256": "cbcbb675e6c4780e5d1ea712ee4f1f873ea744375177b2574ca0d54a0a773a7c"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3380,9 +3332,7 @@
         "../primitives/DialogSurface",
         "../primitives/Menu",
         "../primitives/Modal.module.css",
-        "../primitives/RiskConfirmation.module.css",
         "../primitives/icons",
-        "./PermissionSelect.module.css",
         "@/components/ui/checkbox",
         "react"
       ],
@@ -3391,7 +3341,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "c04af138fa8ef5370b3cb2f5f5502602da330b22bbcfdeb90788fe8a4ce9ed0e",
+      "local_sha256": "4ad70d2c0ce080e9e8f1321516974fc973b71651a4c6a752b0ce69af0ca8de3c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",
@@ -3612,7 +3562,6 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
-        "./SearchBlock.module.css",
         "./head-tail-cap.ts",
         "./use-copy-feedback.ts",
         "clsx",
@@ -3623,7 +3572,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "0266583c68a0bce173b11959690314a453cbcc2515130fa6b4bc28177e70c158"
+      "local_sha256": "ceedd7f4e4d5670fa1c99d10d3099bd4258e80920f376862a73a947f24eb73e1"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4146,26 +4095,6 @@
       ]
     },
     {
-      "upstream": "packages/client/ui-tool/src/client/tool/components/AskQuestionCard.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "destination": "web-console/src/presentation/agent/AskQuestionCard.module.css",
-      "upstream_sha256": "e8796a15b635851f22a0190d991ba2cb8f0fa685c354a64db68f2bf0795873fb",
-      "classification": "B",
-      "treatment": "Pinned Harness styles; the radius token is inlined at its Harness value. Rich question renderers own Markdown block whitespace; plain ask_user questions retain pre-wrap.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "ee1d4f06b2d9231c220d27806ce1d5701c59c4cd7f1f40c784894a69ebc93707",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-tool/src/client/tool/components/QuestionToolRow.module.css",
-          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-          "upstream_sha256": "5f46deda95c0c9d1a961d3243005453e9c81bd2a75a5ea26da72d7d0b66862a8",
-          "treatment": "Adapt the current transcript panel action, read-only question flow and separated approval description to native rustX records; preserve index-based answers and native response ownership. No timed continuation, Remote, Cordis state or invented questions/options."
-        }
-      ]
-    },
-    {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatGroupSeat.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "destination": "web-console/src/presentation/agent/StepGroup.tsx",
@@ -4217,18 +4146,6 @@
       ],
       "excluded_dependencies": [],
       "local_sha256": "8969594b98fdf122034e0d6ae02fd0847a5fb551d5e874ce3f0bc6aa05386358"
-    },
-    {
-      "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.module.css",
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "destination": "web-console/src/presentation/primitives/StatDialog.module.css",
-      "upstream_sha256": "14228b7f038c2be37a01c08fe8b86cc4391e0016453a1f760e71621e527e3224",
-      "classification": "A",
-      "treatment": "Harness stat-dialog surface skin; radius and menu backdrop tokens inlined, fixed placement moved to the Base UI positioner.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [],
-      "local_sha256": "e58477a8632d49723e589ba2151e82cc3eb9174f5358bcc3e4bec9ed917881ac"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/token-format.ts",
@@ -5957,7 +5874,6 @@
       "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
       "upstream_sha256": "ffd8cc02a2f76b73c5f1f7a4338fb5df8985a1abe3473eea974a900236b48b50",
       "retained_dependencies": [
-        "./TextShimmer.module.css",
         "clsx",
         "react"
       ],
@@ -5966,7 +5882,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "6b0ea084da2751b349a23232bbb20803122563974af761e8c415698609a7bf06",
+      "local_sha256": "297a075de57952ee21bce4d2c63e6395741eadbfa14b930a1eb3108cbc0e71fc",
       "classification": "A"
     },
     {
@@ -6647,20 +6563,6 @@
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
       "local_sha256": "8559c5d40b6b895b3ae47be6dfc6878fca19b16631607d37fbd44b5c2d0a6c6b"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-attachment/src/client/ComposerAttachments.module.css",
-      "destination": "web-console/src/presentation/attachments/ComposerAttachments.module.css",
-      "upstream_sha256": "c2191478d35bd2c6a16355c60ac2801f4533bfcfcbb83309d9a03d7faeeee71e",
-      "classification": "A",
-      "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
-      ],
-      "local_sha256": "8270f5b40e7dae87418095ce0007e64fedaf926a3d9d6391ac8c44c6f8df3f5d"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

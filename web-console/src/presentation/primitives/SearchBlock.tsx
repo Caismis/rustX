@@ -4,7 +4,6 @@ import { useCallback, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { headTailCap } from './head-tail-cap.ts'
 import { useCopyFeedback } from './use-copy-feedback.ts'
-import css from './SearchBlock.module.css'
 
 /**
  * Result rows shown before the height cap collapses the middle. Matches
@@ -220,11 +219,11 @@ export function SearchBlock(props: SearchBlockProps) {
   const tail = tailHeader === undefined ? naturalTail : naturalTail.slice(1)
 
   const renderRow = (row: SearchRow): ReactNode => {
-    if (row.type === 'path') return <div className={css.line}>{row.path}</div>
+    if (row.type === 'path') return <div className="min-h-[var(--dsl-search-line-height)] pl-[14px] whitespace-pre">{row.path}</div>
     if (row.type === 'match') {
       return (
-        <div className={css.line}>
-          <span className={css.lineNumber}>{row.lineNumber}: </span>
+        <div className="min-h-[var(--dsl-search-line-height)] pl-[14px] whitespace-pre">
+          <span className="[color:var(--dsw-alias-label-tertiary)]">{row.lineNumber}: </span>
           {row.line}
         </div>
       )
@@ -232,37 +231,37 @@ export function SearchBlock(props: SearchBlockProps) {
     return (
       <button
         type="button"
-        className={css.fileHeader}
+        className="flex items-baseline gap-[8px] w-full min-h-[var(--dsl-search-line-height)] px-[14px] py-0 border-none bg-transparent cursor-pointer [font:inherit] text-left"
         aria-expanded={!row.collapsed}
         onClick={() => { toggleFile(row.index) }}
       >
-        <span className={css.filePath}>{row.path}</span>
-        <span className={css.fileCount}>{row.count}</span>
+        <span className="min-w-0 font-semibold [color:var(--dsw-alias-label-primary)] whitespace-pre">{row.path}</span>
+        <span className="flex-none [color:var(--dsw-alias-label-tertiary)]">{row.count}</span>
       </button>
     )
   }
 
   return (
-    <div className={clsx(css.block, className)} data-search={props.kind}>
-      <div className={css.header}>
-        <span className={css.summary}>{summaryText(props, shown, truncated, total)}</span>
+    <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-search-radius:12px] [--dsl-search-line-height:22px]', className)} data-search={props.kind}>
+      <div className="flex items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]">
+        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font:var(--dsw-font-xs-13)] [color:var(--dsw-alias-label-secondary)]">{summaryText(props, shown, truncated, total)}</span>
         {!empty && (
-          <button type="button" className={css.copyButton} onClick={onCopy}>
+          <button type="button" className="flex-none bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
             {copied ? props.labels.copied : props.labels.copy}
           </button>
         )}
       </div>
       {empty
-        ? <div className={css.empty}>{props.labels.noResults}</div>
+        ? <div className="px-[14px] py-[12px] [font:var(--dsw-font-markdown-code-block)] [color:var(--dsw-alias-label-tertiary)]">{props.labels.noResults}</div>
         : (
-          <div className={css.body}>
+          <div className="pt-[8px] pr-[14px] pb-[12px] pl-0 [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
             {head.map(row => (
               <div key={rowKey(row)}>{renderRow(row)}</div>
             ))}
             {hidden > 0 && (
               <button
                 type="button"
-                className={css.expand}
+                className="block w-full px-[14px] py-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]"
                 aria-expanded={expanded}
                 aria-label={expanded ? props.labels.collapseAria : props.labels.expandAria(hidden)}
                 onClick={onToggle}
@@ -290,11 +289,11 @@ export function SearchTextBlock({ text, label, truncated, className }: { text: s
   const { copied, onCopy } = useCopyFeedback(text);
   const lines = text.split('\n');
   const { hidden, capped, headLines, tailLines } = headTailCap(lines.length, 8, expanded);
-  return <div className={clsx(css.block, className)} data-search="opaque">
-    <div className={css.header}><span className={css.summary}>{label}{truncated ? tx('common:search-block.bounded-output') : ''}</span><button type="button" className={css.copyButton} onClick={onCopy}>{copied ? tx('common:search-block.copied') : tx('common:search-block.copy')}</button></div>
-    <div className={css.body}>{(capped ? lines.slice(0, headLines) : lines).map((line, index) => <div className={css.path} key={index}>{line}</div>)}
-      {hidden > 0 && <button type="button" className={css.expand} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? tx('common:search-block.collapse') : tx('common:search-block.show-value-more-lines', { p0: hidden })}</button>}
-      {capped && lines.slice(-tailLines).map((line, index) => <div className={css.path} key={`tail:${index}`}>{line}</div>)}
+  return <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-search-radius:12px] [--dsl-search-line-height:22px]', className)} data-search="opaque">
+    <div className="flex items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]"><span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font:var(--dsw-font-xs-13)] [color:var(--dsw-alias-label-secondary)]">{label}{truncated ? tx('common:search-block.bounded-output') : ''}</span><button type="button" className="flex-none bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>{copied ? tx('common:search-block.copied') : tx('common:search-block.copy')}</button></div>
+    <div className="pt-[8px] pr-[14px] pb-[12px] pl-0 [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">{(capped ? lines.slice(0, headLines) : lines).map((line, index) => <div key={index}>{line}</div>)}
+      {hidden > 0 && <button type="button" className="block w-full px-[14px] py-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? tx('common:search-block.collapse') : tx('common:search-block.show-value-more-lines', { p0: hidden })}</button>}
+      {capped && lines.slice(-tailLines).map((line, index) => <div key={`tail:${index}`}>{line}</div>)}
     </div>
   </div>;
 }
