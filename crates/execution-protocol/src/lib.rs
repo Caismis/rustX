@@ -710,6 +710,8 @@ pub struct Hello {
     pub generation: Generation,
     /// The exact normalized absolute workspace the Client claims.
     pub workspace: PathBuf,
+    /// The official Client-local `~/rustx` path used to publish resource locations.
+    pub user_root: PathBuf,
     /// The capabilities the Client claims to physically own.
     pub capabilities: BTreeSet<Capability>,
     /// The binding credential issued to this reservation.
@@ -725,6 +727,7 @@ impl fmt::Debug for Hello {
             .field("instance", &self.instance)
             .field("generation", &self.generation)
             .field("workspace", &self.workspace)
+            .field("user_root", &self.user_root)
             .field("capabilities", &self.capabilities)
             .field("credential", &self.credential)
             .finish()
@@ -795,6 +798,9 @@ pub enum Reject {
     /// The workspace is not exactly the reserved normalized absolute path.
     #[error("workspace mismatch")]
     WorkspaceMismatch,
+    /// The Client User root is malformed or differs from the admitted root on recovery.
+    #[error("Client User root mismatch")]
+    UserRootMismatch,
     /// A required capability is absent from the Hello.
     #[error("missing required capability")]
     MissingCapabilities,
@@ -1809,6 +1815,7 @@ mod tests {
             instance: ClientInstanceId::new("instance-1"),
             generation: Generation::try_from(1).unwrap(),
             workspace: PathBuf::from("/work/root"),
+            user_root: "/client/rustx".into(),
             capabilities: BTreeSet::from([Capability::Files, Capability::Process]),
             credential: credential(),
         }

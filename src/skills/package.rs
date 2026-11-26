@@ -299,6 +299,7 @@ struct Candidate {
     source: SkillSource,
     name: String,
     location: String,
+    offered: PathBuf,
     canonical: PathBuf,
     package: Option<SkillPackage>,
     bound: bool,
@@ -314,12 +315,9 @@ pub(crate) struct UserSkillCapture {
 
 impl UserSkillCapture {
     pub(crate) fn candidates(&self) -> impl Iterator<Item = (PathBuf, bool)> + '_ {
-        self.candidates.iter().map(|candidate| {
-            (
-                PathBuf::from(&candidate.location),
-                candidate.package.is_some(),
-            )
-        })
+        self.candidates
+            .iter()
+            .map(|candidate| (candidate.offered.clone(), candidate.package.is_some()))
     }
 }
 
@@ -463,7 +461,11 @@ impl SkillDiscovery {
                     &mut diagnostics,
                     &self.cancellation,
                     tree,
-                    workspace_client.is_some(),
+                    match (client.is_some(), source) {
+                        (false, _) => CollectionView::Native,
+                        (true, SkillSource::Workspace) => CollectionView::BoundWorkspace,
+                        (true, SkillSource::User) => CollectionView::BoundUser,
+                    },
                 )?);
             }
         }
@@ -507,8 +509,13 @@ pub(crate) fn capture_user_skills(
         root: Native.canonical(root).unwrap_or_else(|_| root.to_owned()),
     };
     let mut diagnostics = Vec::new();
-    let candidates =
-        collect_automatic_source(&source, &mut diagnostics, cancellation, &Native, false)?;
+    let candidates = collect_automatic_source(
+        &source,
+        &mut diagnostics,
+        cancellation,
+        &Native,
+        CollectionView::BoundUser,
+    )?;
     Ok(UserSkillCapture {
         root: source,
         candidates,
@@ -623,6 +630,13 @@ fn invalid_collection(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollectionView {
+    Native,
+    BoundWorkspace,
+    BoundUser,
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "the collection source owns discovery, diagnostics and the offered paths"
@@ -632,8 +646,9 @@ fn collect_automatic_source(
     diagnostics: &mut Vec<SkillDiagnostic>,
     cancellation: &crate::runtime::CancellationSignal,
     tree: &dyn SkillTree,
-    bound: bool,
+    view: CollectionView,
 ) -> io::Result<Vec<Candidate>> {
+    let bound = view == CollectionView::BoundWorkspace;
     let source = root.source;
     tree.observe(&root.root);
     let collection = match tree.entry(&root.root) {
@@ -654,12 +669,17 @@ fn collect_automatic_source(
         }
         Err(error) => Err(error),
     }
-    .map(|directory| super::discovery::collect_from(&directory, cancellation, tree));
-    let files = match collection {
-        Ok(collection) if collection.error.is_none() => collection.files,
+    .map(|directory| {
+        (
+            super::discovery::collect_from(&directory, cancellation, tree),
+            directory,
+        )
+    });
+    let (files, collection_root) = match collection {
+        Ok((collection, directory)) if collection.error.is_none() => (collection.files, directory),
         failed => {
             let error = match failed {
-                Ok(collection) => collection.error.expect("matched failed collection"),
+                Ok((collection, _)) => collection.error.expect("matched failed collection"),
                 Err(error) => error,
             };
             if bound {
@@ -686,8 +706,16 @@ fn collect_automatic_source(
             continue;
         };
         let fallback_name = directory.to_string_lossy().into_owned();
-        let location = file.display().to_string();
-        let location_for_tools = if bound { &canonical } else { &file };
+        // Bound User locations cross filesystem namespaces. Retain only their
+        // collection-relative spelling in the catalog until Client projection.
+        let logical = if view == CollectionView::BoundUser {
+            file.strip_prefix(&collection_root)
+                .map_err(io::Error::other)?
+        } else {
+            &file
+        };
+        let location = logical.display().to_string();
+        let location_for_tools = if bound { &canonical } else { logical };
         let result = match tree.frontmatter(&canonical, cancellation) {
             Ok(header) => discover_package(
                 location_for_tools,
@@ -731,6 +759,7 @@ fn collect_automatic_source(
             source,
             name,
             location,
+            offered: file,
             canonical,
             package,
             bound,

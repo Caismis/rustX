@@ -264,6 +264,7 @@ struct Inner {
 
 struct RecoveryProof {
     verifier: [u8; 32],
+    user_root: PathBuf,
     capabilities: BTreeSet<Capability>,
     deadline: Option<Instant>,
 }
@@ -285,6 +286,7 @@ fn recovery_admission_is_closed_at_the_fixed_deadline() {
     let mut state = binding.inner();
     state.recovery = Some(RecoveryProof {
         verifier: [0; 32],
+        user_root: "/client/rustx".into(),
         capabilities: BTreeSet::new(),
         deadline: None,
     });
@@ -404,6 +406,8 @@ struct PendingPair {
     deadline: Instant,
     /// The data lane's connection identity, reserved for the commit.
     connection: ConnectionId,
+    /// The Client-owned resource root reported by the data lane.
+    user_root: PathBuf,
     /// The capabilities the data Hello claimed.
     capabilities: BTreeSet<Capability>,
     /// The held data channel — `None` only in the narrow window between
@@ -507,7 +511,7 @@ impl Binding {
             &hello.instance,
             hello.generation,
             &hello.workspace,
-            Some(&hello.capabilities),
+            Some(hello),
         )?;
         match inner.phase {
             BindingPhase::Reserved => {
@@ -560,7 +564,7 @@ impl Binding {
         instance: &ClientInstanceId,
         generation: Generation,
         workspace: &Path,
-        capabilities: Option<&BTreeSet<Capability>>,
+        data_hello: Option<&Hello>,
     ) -> Result<(), Reject> {
         let offered: [u8; 32] = Sha256::digest(credential.as_bytes()).into();
         let launch = constant_time_eq_32(&self.verifier, &offered);
@@ -589,6 +593,13 @@ impl Binding {
         if workspace.as_os_str() != self.reservation.workspace.as_os_str() {
             return Err(Reject::WorkspaceMismatch);
         }
+        if let Some(hello) = data_hello
+            && (!is_normalized_absolute_path(&hello.user_root)
+                || recovery.is_some_and(|proof| proof.user_root != hello.user_root))
+        {
+            return Err(Reject::UserRootMismatch);
+        }
+        let capabilities = data_hello.map(|hello| &hello.capabilities);
         if let Some(capabilities) = capabilities
             && !self
                 .reservation
@@ -670,7 +681,7 @@ impl Binding {
             &hello.instance,
             hello.generation,
             &hello.workspace,
-            Some(&hello.capabilities),
+            Some(hello),
         ) {
             return Ok(Err(reject));
         }
@@ -708,6 +719,7 @@ impl Binding {
             deadline,
             connection,
             capabilities: hello.capabilities.clone(),
+            user_root: hello.user_root.clone(),
             channel: None,
             shutdown: None,
             wake: None,
@@ -841,6 +853,7 @@ impl Binding {
             inner.recovery = Some(RecoveryProof {
                 verifier: Sha256::digest(credential.as_bytes()).into(),
                 capabilities: pending.capabilities.clone(),
+                user_root: pending.user_root.clone(),
                 deadline: None,
             });
         }
@@ -859,6 +872,7 @@ impl Binding {
             channel: pending.channel.take().expect("channel checked above"),
             connection: pending.connection,
             capabilities: pending.capabilities,
+            user_root: pending.user_root,
             admission: self.admission(),
             deadline: pending.deadline,
         })
@@ -1437,6 +1451,7 @@ impl Binding {
                             usable: true,
                             closed: false,
                             capabilities: commit.capabilities,
+                            user_root: commit.user_root,
                             connection: commit.connection,
                             admission: commit.admission,
                         }))
@@ -1554,6 +1569,8 @@ pub(super) struct PairCommit {
     channel: RecordChannel,
     /// The data lane's reserved connection identity.
     connection: ConnectionId,
+    /// The Client-owned resource root reported by the data lane.
+    user_root: PathBuf,
     /// The capabilities the data Hello claimed.
     capabilities: BTreeSet<Capability>,
     /// The shared admission both lanes' replies carry.

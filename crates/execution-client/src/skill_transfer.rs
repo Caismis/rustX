@@ -65,14 +65,24 @@ struct PendingFile {
 }
 
 impl Transfer {
+    /// Release this lane's unfinished sync without dropping published leases.
+    pub(super) fn lane_lost(&mut self) -> io::Result<()> {
+        let cleanup = self.abort();
+        self.sync = None;
+        cleanup
+    }
+
     pub(super) fn dispatch(
         &mut self,
         root: &Path,
+        selected_collection: &Path,
         request: &Request,
         arbitration: &Arbitration,
     ) -> io::Result<Reply> {
         match request {
-            Request::BeginSync { authority } => self.begin_sync(root, authority),
+            Request::BeginSync { authority } => {
+                self.begin_sync(root, selected_collection, authority)
+            }
             Request::BeginPackage { version } => self.begin_package(version),
             Request::Retain { version } => self.retain(version),
             Request::Directory { path } => self.directory(path),
@@ -100,15 +110,24 @@ impl Transfer {
         }
     }
 
-    fn begin_sync(&mut self, root: &Path, authority: &str) -> io::Result<Reply> {
+    fn begin_sync(
+        &mut self,
+        root: &Path,
+        selected_collection: &Path,
+        authority: &str,
+    ) -> io::Result<Reply> {
         if self.sync.is_some() || !valid_cache_id(authority) {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        let home = root.parent().ok_or(io::ErrorKind::InvalidInput)?;
-        let home = PackageDirectory::open(home)?;
-        let product = ensure_directory(&home, OsStr::new("rustx"))?.0;
-        let agents = ensure_directory(&product, OsStr::new(".agents"))?.0;
-        let skills = ensure_directory(&agents, OsStr::new("skills"))?.0;
+        if super::skills::UserSkills::collection_path(root)? != selected_collection {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        // This root is chosen locally by the Client, not supplied on the
+        // wire. Resolve its configured aliases before pinning it; all cache
+        // descendants still use no-follow, descriptor-relative operations.
+        let product = ensure_selected_collection(root)?;
+        let skills = ensure_selected_collection(selected_collection)?;
+        product.verify()?;
         // Serialize creation and marker verification across Client processes.
         // Never truncate or unlink an existing file at this reserved name.
         let initializer = File::from(rustix::fs::openat(
@@ -418,6 +437,34 @@ fn ensure_directory(
     Ok((parent.child(name)?, created))
 }
 
+/// Create only the missing suffix of the Client-selected physical collection.
+fn ensure_selected_collection(path: &Path) -> io::Result<PackageDirectory> {
+    if !rustx_execution_protocol::is_normalized_absolute_path(path) {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    let mut directory = loop {
+        match PackageDirectory::open(ancestor) {
+            Ok(directory) => break directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(
+                    ancestor
+                        .file_name()
+                        .ok_or(io::ErrorKind::InvalidInput)?
+                        .to_owned(),
+                );
+                ancestor = ancestor.parent().ok_or(io::ErrorKind::InvalidInput)?;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    for name in missing.iter().rev() {
+        directory = ensure_directory(&directory, name)?.0;
+    }
+    Ok(directory)
+}
+
 fn ensure_owned(parent: &PackageDirectory, name: &OsStr) -> io::Result<PackageDirectory> {
     let (directory, created) = ensure_directory(parent, name)?;
     if created {
@@ -574,6 +621,40 @@ mod tests {
     fn authority() -> String {
         "a".repeat(64)
     }
+
+    #[test]
+    fn missing_home_is_created_only_for_a_required_transfer_and_never_cleaned() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("missing/one/two/three");
+        let root = home.join("rustx");
+        let mut skills = super::super::skills::UserSkills::from_home(Some(home.clone()));
+        let arbitration = Arbitration::new();
+        assert!(matches!(
+            skills
+                .dispatch(&Request::Collection { probe: None }, &arbitration)
+                .unwrap(),
+            Reply::Collection { identity: None, .. }
+        ));
+        assert!(!home.exists());
+        let mut transfer = Transfer::default();
+        assert_eq!(
+            call(
+                &mut transfer,
+                &root,
+                &arbitration,
+                Request::BeginSync {
+                    authority: authority()
+                }
+            )
+            .unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(root.join(".agents/skills/.rustx-sync").is_dir());
+        assert_eq!(fs::metadata(&home).unwrap().permissions().mode() & 0o077, 0);
+        transfer.lane_lost().unwrap();
+        transfer.lane_lost().unwrap();
+        assert!(home.is_dir());
+    }
     fn version(byte: char) -> String {
         byte.to_string().repeat(64)
     }
@@ -587,7 +668,8 @@ mod tests {
         arbitration: &Arbitration,
         request: Request,
     ) -> io::Result<Reply> {
-        transfer.dispatch(root, &request, arbitration)
+        let collection = super::super::skills::UserSkills::collection_path(root)?;
+        transfer.dispatch(root, &collection, &request, arbitration)
     }
 
     #[test]
@@ -912,5 +994,326 @@ mod tests {
                 .join(version('e'))
                 .exists()
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one lane loss across staged and published versions"
+    )]
+    fn lane_loss_discards_only_the_stage_and_keeps_published_leases() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let arbitration = Arbitration::new();
+        let mut first = Transfer::default();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::BeginSync {
+                authority: authority(),
+            },
+        )
+        .unwrap();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::BeginPackage {
+                version: version('e'),
+            },
+        )
+        .unwrap();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(1),
+                executable: false,
+            },
+        )
+        .unwrap();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eA==".into(),
+            },
+        )
+        .unwrap();
+        call(&mut first, &root, &arbitration, Request::EndFile).unwrap();
+        call(&mut first, &root, &arbitration, Request::Publish).unwrap();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::BeginPackage {
+                version: version('f'),
+            },
+        )
+        .unwrap();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(4),
+                executable: false,
+            },
+        )
+        .unwrap();
+        call(
+            &mut first,
+            &root,
+            &arbitration,
+            Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eA==".into(),
+            },
+        )
+        .unwrap();
+        let owner = root.join(".agents/skills/.rustx-sync").join(authority());
+        assert!(fs::read_dir(&owner).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".stage-")
+        }));
+        first.lane_lost().unwrap();
+        first.lane_lost().unwrap();
+        assert!(first.sync.is_none());
+        assert!(!owner.join(version('f')).exists());
+        assert!(fs::read_dir(&owner).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".stage-")
+        }));
+        assert_eq!(
+            fs::read(owner.join(version('e')).join("data/SKILL.md")).unwrap(),
+            b"x"
+        );
+
+        let mut second = Transfer::default();
+        assert_eq!(
+            call(
+                &mut second,
+                &root,
+                &arbitration,
+                Request::BeginSync {
+                    authority: authority()
+                }
+            )
+            .unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(matches!(
+            call(
+                &mut second,
+                &root,
+                &arbitration,
+                Request::Retain {
+                    version: version('e')
+                }
+            )
+            .unwrap(),
+            Reply::Retained { .. }
+        ));
+        drop(second);
+        let lease = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(owner.join(version('e')).join(LEASE))
+            .unwrap();
+        assert_eq!(
+            rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
+            rustix::io::Errno::AGAIN
+        );
+        drop(first);
+        rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap();
+    }
+
+    #[test]
+    fn transfer_resolves_local_home_and_product_aliases_without_following_cache_links() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("home");
+        let home_alias = temporary.path().join("home-alias");
+        let product = temporary.path().join("configured-product");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&product).unwrap();
+        symlink(&home, &home_alias).unwrap();
+        symlink(&product, home.join("rustx")).unwrap();
+        let mut transfer = Transfer::default();
+        let arbitration = Arbitration::new();
+        assert_eq!(
+            call(
+                &mut transfer,
+                &home_alias.join("rustx"),
+                &arbitration,
+                Request::BeginSync {
+                    authority: authority()
+                }
+            )
+            .unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(
+            product
+                .join(".agents/skills/.rustx-sync")
+                .join(authority())
+                .is_dir()
+        );
+        transfer.lane_lost().unwrap();
+
+        let alternate_root = temporary.path().join("alternate-product");
+        let collection_target = temporary.path().join("collection-target");
+        fs::create_dir_all(alternate_root.join(".agents")).unwrap();
+        fs::create_dir(&collection_target).unwrap();
+        symlink(&collection_target, alternate_root.join(".agents/skills")).unwrap();
+        assert_eq!(
+            call(
+                &mut transfer,
+                &alternate_root,
+                &arbitration,
+                Request::BeginSync {
+                    authority: authority()
+                }
+            )
+            .unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(
+            collection_target
+                .join(".rustx-sync")
+                .join(authority())
+                .is_dir()
+        );
+        transfer.lane_lost().unwrap();
+
+        let third_root = temporary.path().join("third-product");
+        let agents_target = temporary.path().join("agents-target");
+        fs::create_dir(&third_root).unwrap();
+        fs::create_dir(&agents_target).unwrap();
+        symlink(&agents_target, third_root.join(".agents")).unwrap();
+        assert_eq!(
+            call(
+                &mut transfer,
+                &third_root,
+                &arbitration,
+                Request::BeginSync {
+                    authority: authority()
+                }
+            )
+            .unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(
+            agents_target
+                .join("skills/.rustx-sync")
+                .join(authority())
+                .is_dir()
+        );
+        transfer.lane_lost().unwrap();
+
+        let unowned = temporary.path().join("unowned");
+        fs::create_dir(&unowned).unwrap();
+        let linked = temporary.path().join("linked-product");
+        fs::create_dir_all(linked.join(".agents/skills")).unwrap();
+        symlink(&unowned, linked.join(".agents/skills/.rustx-sync")).unwrap();
+        assert!(
+            call(
+                &mut transfer,
+                &linked,
+                &arbitration,
+                Request::BeginSync {
+                    authority: authority()
+                }
+            )
+            .is_err()
+        );
+        assert!(fs::read_dir(unowned).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn transfer_refuses_a_retargeted_collection_before_creating_cache() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("rustx");
+        let first = temporary.path().join("first");
+        let second = temporary.path().join("second");
+        fs::create_dir_all(root.join(".agents")).unwrap();
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let link = root.join(".agents/skills");
+        symlink(&first, &link).unwrap();
+        let selected = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        fs::remove_file(&link).unwrap();
+        symlink(&second, &link).unwrap();
+        let error = Transfer::default()
+            .dispatch(
+                &root,
+                &selected,
+                &Request::BeginSync {
+                    authority: authority(),
+                },
+                &Arbitration::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!first.join(".rustx-sync").exists());
+        assert!(!second.join(".rustx-sync").exists());
+
+        // Once a stage was authorized, a later alias change must not move
+        // its cleanup to a different collection.
+        fs::remove_file(&link).unwrap();
+        symlink(&first, &link).unwrap();
+        let mut transfer = Transfer::default();
+        let arbitration = Arbitration::new();
+        assert_eq!(
+            transfer
+                .dispatch(
+                    &root,
+                    &selected,
+                    &Request::BeginSync {
+                        authority: authority()
+                    },
+                    &arbitration
+                )
+                .unwrap(),
+            Reply::SyncStarted
+        );
+        assert_eq!(
+            transfer
+                .dispatch(
+                    &root,
+                    &selected,
+                    &Request::BeginPackage {
+                        version: version('f')
+                    },
+                    &arbitration
+                )
+                .unwrap(),
+            Reply::Accepted
+        );
+        fs::remove_file(&link).unwrap();
+        symlink(&second, &link).unwrap();
+        transfer.lane_lost().unwrap();
+        let owner = first.join(".rustx-sync").join(authority());
+        assert!(fs::read_dir(owner).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".stage-")
+        }));
+        assert!(!second.join(".rustx-sync").exists());
     }
 }

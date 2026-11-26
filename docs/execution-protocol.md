@@ -135,6 +135,7 @@ pub struct Hello {
     pub instance: ClientInstanceId,
     pub generation: Generation,
     pub workspace: PathBuf,
+    pub user_root: PathBuf,
     pub capabilities: BTreeSet<Capability>,
     pub credential: BindingCredential,
 }

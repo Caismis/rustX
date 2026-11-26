@@ -10,16 +10,23 @@ use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::is_normalized_absolute_path;
 use rustx_execution_protocol::save::Sha256Hex;
 use rustx_execution_protocol::skills::{
-    MAX_DIGEST_BYTES, Probe, Reply, Request, valid_package_path, valid_probe_name,
+    COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER, COLLECTION_PROOF_MARKER_CONTENT,
+    EntryIdentity, MAX_DIGEST_BYTES, PackageIdentity, Probe, Reply, Request,
+    valid_identity_packages, valid_package_path, valid_probe_name,
 };
 use sha2::{Digest, Sha256};
 
 pub(super) struct UserSkills {
     root: Option<PathBuf>,
+    selected_collection: Option<PathBuf>,
     transfer: super::skill_transfer::Transfer,
 }
 
 impl UserSkills {
+    pub(super) fn lane_lost(&mut self) -> io::Result<()> {
+        self.transfer.lane_lost()
+    }
+
     pub(super) fn reply(
         &mut self,
         request: &Request,
@@ -44,13 +51,14 @@ impl UserSkills {
     pub(super) fn from_home(home: Option<PathBuf>) -> Self {
         Self::from_root(
             home.filter(|home| is_normalized_absolute_path(home))
-                .map(|home| home.join("rustx")),
+                .and_then(|home| crate::resolve_user_root(&home).ok()),
         )
     }
 
     fn from_root(root: Option<PathBuf>) -> Self {
         Self {
             root,
+            selected_collection: None,
             transfer: super::skill_transfer::Transfer::default(),
         }
     }
@@ -61,7 +69,27 @@ impl UserSkills {
         arbitration: &super::mutation::Arbitration,
     ) -> io::Result<Reply> {
         match request {
-            Request::Root { .. } | Request::Digest { .. } => {
+            Request::Root { .. } => self.inquire_checked(request, Some(arbitration)),
+            Request::Collection { .. } => {
+                let reply = self.inquire_checked(request, Some(arbitration))?;
+                let Reply::Collection { path, .. } = &reply else {
+                    return Err(io::ErrorKind::InvalidData.into());
+                };
+                if self
+                    .selected_collection
+                    .as_ref()
+                    .is_some_and(|selected| selected != path)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Client Skill collection changed",
+                    ));
+                }
+                self.selected_collection = Some(path.clone());
+                Ok(reply)
+            }
+            Request::Packages { .. } | Request::Digest { .. } => {
+                self.check_selected_collection()?;
                 self.inquire_checked(request, Some(arbitration))
             }
             _ => {
@@ -72,9 +100,38 @@ impl UserSkills {
                         "Client home is unavailable",
                     )
                 })?;
-                self.transfer.dispatch(root, request, arbitration)
+                let cleanup = matches!(request, Request::AbortPackage | Request::EndSync);
+                let collection = match (&self.selected_collection, cleanup) {
+                    (Some(selected), true) => selected.clone(),
+                    _ => Self::collection_path(root)?,
+                };
+                if !cleanup
+                    && self
+                        .selected_collection
+                        .as_ref()
+                        .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Client Skill collection changed",
+                    ));
+                }
+                let selected = self.selected_collection.get_or_insert(collection);
+                self.transfer.dispatch(root, selected, request, arbitration)
             }
         }
+    }
+
+    fn check_selected_collection(&self) -> io::Result<()> {
+        if let (Some(root), Some(selected)) = (&self.root, &self.selected_collection)
+            && &Self::collection_path(root)? != selected
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Client Skill collection changed",
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -82,6 +139,7 @@ impl UserSkills {
         self.inquire_checked(request, None)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one fixed-root inquiry dispatcher")]
     fn inquire_checked(
         &self,
         request: &Request,
@@ -105,14 +163,119 @@ impl UserSkills {
                     probe,
                 })
             }
+            Request::Collection { probe } => {
+                let collection = Self::collection_path(root)?;
+                let directory = match PackageDirectory::open(&collection) {
+                    Ok(directory) => Some(directory),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                        ) =>
+                    {
+                        None
+                    }
+                    Err(error) => return Err(error),
+                };
+                let identity = directory
+                    .as_ref()
+                    .map(Self::directory_identity)
+                    .transpose()?;
+                let probe = match probe {
+                    Some(name) if valid_probe_name(name) => {
+                        if let Some(directory) = &directory {
+                            Self::collection_probe(directory, name, arbitration)?
+                        } else {
+                            None
+                        }
+                    }
+                    Some(_) => return Err(io::ErrorKind::InvalidInput.into()),
+                    None => None,
+                };
+                if let Some(directory) = &directory {
+                    directory.verify()?;
+                }
+                if Self::collection_path(root)? != collection {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                Ok(Reply::Collection {
+                    path: collection,
+                    identity,
+                    probe,
+                })
+            }
+            Request::Packages { packages } => {
+                if !valid_identity_packages(packages) {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                let collection = Self::collection_path(root)?;
+                if self
+                    .selected_collection
+                    .as_ref()
+                    .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                let directory = match PackageDirectory::open(&collection) {
+                    Ok(directory) => directory,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound
+                                | io::ErrorKind::PermissionDenied
+                                | io::ErrorKind::NotADirectory
+                        ) =>
+                    {
+                        return Ok(Reply::Packages {
+                            packages: vec![None; packages.len()],
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let mut identities = Vec::with_capacity(packages.len());
+                for package in packages {
+                    if let Some(arbitration) = arbitration {
+                        arbitration.check_grant()?;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    identities.push(Self::package_identity(&directory, package)?);
+                }
+                directory.verify()?;
+                if Self::collection_path(root)? != collection
+                    || self
+                        .selected_collection
+                        .as_ref()
+                        .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                Ok(Reply::Packages {
+                    packages: identities,
+                })
+            }
             Request::Digest { package } => {
                 if !valid_package_path(package) {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
-                let collection = root.join(".agents/skills");
+                let collection = Self::collection_path(root)?;
+                if self
+                    .selected_collection
+                    .as_ref()
+                    .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
                 let directory = match PackageDirectory::open(&collection) {
                     Ok(directory) => directory,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                        ) =>
+                    {
                         return Ok(Reply::Digest { digest: None });
                     }
                     Err(error) => return Err(error),
@@ -128,10 +291,136 @@ impl UserSkills {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                     Err(error) => return Err(error),
                 };
+                directory.verify()?;
+                if Self::collection_path(root)? != collection
+                    || self
+                        .selected_collection
+                        .as_ref()
+                        .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
                 Ok(Reply::Digest { digest })
             }
             _ => Err(io::ErrorKind::InvalidInput.into()),
         }
+    }
+
+    /// Resolve only the Client-selected collection and its existing local
+    /// ancestors. Missing suffixes are returned without creating anything.
+    pub(super) fn collection_path(root: &Path) -> io::Result<PathBuf> {
+        let requested = root.join(".agents/skills");
+        let mut ancestor = requested.as_path();
+        let mut missing = Vec::new();
+        loop {
+            match ancestor.canonicalize() {
+                Ok(mut physical) => {
+                    if std::fs::metadata(&physical)?.is_dir() {
+                        PackageDirectory::open(&physical)?.verify()?;
+                    }
+                    for component in missing.iter().rev() {
+                        physical.push(component);
+                    }
+                    return Ok(physical);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    match std::fs::symlink_metadata(ancestor) {
+                        Ok(_) => return Err(io::ErrorKind::NotFound.into()),
+                        Err(missing_error)
+                            if matches!(
+                                missing_error.kind(),
+                                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                            ) => {}
+                        Err(other) => return Err(other),
+                    }
+                    missing.push(
+                        ancestor
+                            .file_name()
+                            .ok_or(io::ErrorKind::InvalidInput)?
+                            .to_owned(),
+                    );
+                    ancestor = ancestor.parent().ok_or(io::ErrorKind::InvalidInput)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn package_identity(
+        root: &PackageDirectory,
+        relative: &Path,
+    ) -> io::Result<Option<PackageIdentity>> {
+        let package = match root.descend(relative) {
+            Ok(package) => package,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) || error.raw_os_error() == Some(libc::ELOOP) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let named = match package.entry_metadata(Path::new("SKILL.md")) {
+            Ok(metadata) if metadata.is_file => metadata,
+            Ok(_) => return Ok(None),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let marker = match package.file(Path::new("SKILL.md")) {
+            Ok(marker) => marker,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) || error.raw_os_error() == Some(libc::ELOOP) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let opened = rustx_confined_fs::FileMetadata::of(&marker)?;
+        if named != opened || package.entry_metadata(Path::new("SKILL.md"))? != opened {
+            return Ok(None);
+        }
+        let directory = Self::directory_identity(&package)?;
+        let marker = marker.metadata()?;
+        package.verify()?;
+        Ok(Some(PackageIdentity {
+            directory,
+            marker: EntryIdentity {
+                device: rustx_execution_protocol::DecimalU64::new(marker.dev()),
+                inode: rustx_execution_protocol::DecimalU64::new(marker.ino()),
+            },
+        }))
+    }
+
+    fn directory_identity(directory: &PackageDirectory) -> io::Result<EntryIdentity> {
+        directory.verify()?;
+        let metadata = File::from(directory.descriptor().try_clone()?).metadata()?;
+        Ok(EntryIdentity {
+            device: rustx_execution_protocol::DecimalU64::new(metadata.dev()),
+            inode: rustx_execution_protocol::DecimalU64::new(metadata.ino()),
+        })
     }
 
     fn probe(
@@ -144,18 +433,76 @@ impl UserSkills {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
+        Self::probe_opened(&directory, name, arbitration)
+    }
+
+    fn collection_probe(
+        collection: &PackageDirectory,
+        name: &str,
+        arbitration: Option<&super::mutation::Arbitration>,
+    ) -> io::Result<Option<Probe>> {
+        let directory = match collection.child(std::ffi::OsStr::new(COLLECTION_PROOF_DIRECTORY)) {
+            Ok(directory) => directory,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) || error.raw_os_error() == Some(libc::ELOOP) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let mut marker = match directory.file(Path::new(COLLECTION_PROOF_MARKER)) {
+            Ok(file) => file,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) || error.raw_os_error() == Some(libc::ELOOP) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let opened = rustx_confined_fs::FileMetadata::of(&marker)?;
+        let mut content = Vec::new();
+        Read::by_ref(&mut marker)
+            .take(128)
+            .read_to_end(&mut content)?;
+        if content != COLLECTION_PROOF_MARKER_CONTENT
+            || rustx_confined_fs::FileMetadata::of(&marker)? != opened
+            || directory.entry_metadata(Path::new(COLLECTION_PROOF_MARKER))? != opened
+        {
+            return Ok(None);
+        }
+        Self::probe_opened(&directory, name, arbitration)
+    }
+
+    fn probe_opened(
+        directory: &PackageDirectory,
+        name: &str,
+        arbitration: Option<&super::mutation::Arbitration>,
+    ) -> io::Result<Option<Probe>> {
         let file = match directory.file(Path::new(name)) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        Ok(
-            bounded_digest(file, 64, arbitration)?.map(|(metadata, digest)| Probe {
-                device: rustx_execution_protocol::DecimalU64::new(metadata.dev()),
-                inode: rustx_execution_protocol::DecimalU64::new(metadata.ino()),
-                digest,
-            }),
-        )
+        let opened = rustx_confined_fs::FileMetadata::of(&file)?;
+        let digest = bounded_digest(file, 64, arbitration)?;
+        if directory.entry_metadata(Path::new(name))? != opened {
+            return Ok(None);
+        }
+        Ok(digest.map(|(metadata, digest)| Probe {
+            device: rustx_execution_protocol::DecimalU64::new(metadata.dev()),
+            inode: rustx_execution_protocol::DecimalU64::new(metadata.ino()),
+            digest,
+        }))
     }
 }
 
@@ -344,5 +691,116 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn collection_path_resolves_local_aliases_without_creating_missing_components() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("home");
+        let physical_home = temporary.path().join("physical-home");
+        fs::create_dir(&physical_home).unwrap();
+        std::os::unix::fs::symlink(&physical_home, &home).unwrap();
+        let product = physical_home.join("actual-product");
+        fs::create_dir(&product).unwrap();
+        std::os::unix::fs::symlink(&product, physical_home.join("rustx")).unwrap();
+        let agents = temporary.path().join("actual-agents");
+        fs::create_dir(&agents).unwrap();
+        std::os::unix::fs::symlink(&agents, product.join(".agents")).unwrap();
+        let root = crate::resolve_user_root(&home).unwrap();
+        assert_eq!(root, product);
+        assert_eq!(
+            UserSkills::collection_path(&root).unwrap(),
+            agents.join("skills")
+        );
+        assert!(!agents.join("skills").exists());
+        std::os::unix::fs::symlink(temporary.path().join("missing"), agents.join("skills"))
+            .unwrap();
+        assert!(UserSkills::collection_path(&root).is_err());
+    }
+
+    #[test]
+    fn non_directory_collection_is_unavailable_without_mutation() {
+        for entry in [".agents", ".agents/skills"] {
+            let home = tempfile::tempdir().unwrap();
+            let product = home.path().join("rustx");
+            fs::create_dir_all(product.join(entry).parent().unwrap()).unwrap();
+            let file = product.join(entry);
+            fs::write(&file, b"personal file").unwrap();
+            let skills = UserSkills::from_home(Some(home.path().to_path_buf()));
+            assert!(matches!(
+                skills
+                    .inquire(&Request::Collection { probe: None })
+                    .unwrap(),
+                Reply::Collection {
+                    identity: None,
+                    probe: None,
+                    ..
+                }
+            ));
+            assert_eq!(fs::read(file).unwrap(), b"personal file");
+        }
+    }
+
+    #[test]
+    fn package_identity_is_fixed_to_skill_marker_and_refuses_linked_packages() {
+        let home = tempfile::tempdir().unwrap();
+        let collection = home.path().join("rustx/.agents/skills");
+        let package = collection.join("guide");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("SKILL.md"), b"instructions").unwrap();
+        std::os::unix::fs::symlink(&package, collection.join("alias")).unwrap();
+        let skills = UserSkills::from_home(Some(home.path().to_path_buf()));
+        let Reply::Packages { packages } = skills
+            .inquire(&Request::Packages {
+                packages: vec!["guide".into(), "alias".into()],
+            })
+            .unwrap()
+        else {
+            panic!("identity reply")
+        };
+        assert!(packages[0].is_some());
+        assert!(packages[1].is_none());
+        assert!(
+            skills
+                .inquire(&Request::Packages {
+                    packages: vec!["../outside".into()]
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retargeted_collection_is_rejected_before_transfer() {
+        let home = tempfile::tempdir().unwrap();
+        let product = home.path().join("rustx");
+        let first = home.path().join("first");
+        let second = home.path().join("second");
+        fs::create_dir(&product).unwrap();
+        fs::create_dir_all(first.join("skills")).unwrap();
+        fs::create_dir_all(second.join("skills")).unwrap();
+        std::os::unix::fs::symlink(&first, product.join(".agents")).unwrap();
+        let mut skills = UserSkills::from_home(Some(home.path().to_path_buf()));
+        let arbitration = super::super::mutation::Arbitration::new();
+        let Reply::Collection { path, .. } = skills
+            .dispatch(&Request::Collection { probe: None }, &arbitration)
+            .unwrap()
+        else {
+            panic!("collection")
+        };
+        assert_eq!(path, first.join("skills"));
+        fs::remove_file(product.join(".agents")).unwrap();
+        std::os::unix::fs::symlink(&second, product.join(".agents")).unwrap();
+        assert!(
+            skills
+                .dispatch(
+                    &Request::BeginSync {
+                        authority: "a".repeat(64)
+                    },
+                    &arbitration
+                )
+                .is_err()
+        );
+        assert!(!first.join("skills/.rustx-sync").exists());
+        assert!(!second.join("skills/.rustx-sync").exists());
     }
 }

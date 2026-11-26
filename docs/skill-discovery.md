@@ -79,13 +79,17 @@ and standalone Markdown files remain browseable.
 
 ## Global User Skills on a Client
 
+The data Hello pins the Client's canonical User root to the binding. Each
+subsequent root inquiry must report that same path, including after recovery.
+
 The Host's `~/rustx/.agents/skills` is the User authority. At Client bind,
 rustX synchronizes its valid discoverable packages before publishing their Client
 paths. Malformed definitions retain their diagnostics; their attachment trees
-are not opened or copied. A fresh random file in the Host `~/rustx` must be observed with the
-same device, inode, and contents by the Client before a shared root can skip
-copying. Equal path strings alone are insufficient. Discarding a Client never
-removes the standing User root.
+are not opened or copied. Copy elision requires fresh identity probes in the
+standing `~/rustx` root and the actual Skill collection, plus matching directory
+and `SKILL.md` identities for every admitted package. Configured HOME and
+`rustx` aliases resolve to Client-readable physical paths. Equal path strings
+alone are insufficient. Discarding a Client never removes the standing User root.
 
 Separate filesystems use an ownership-marked cache under
 `<client-home>/rustx/.agents/skills/.rustx-sync`. An immutable package version
@@ -105,8 +109,9 @@ private staging directory and releases its leases.
 The Client inquiry stream-hashes only the named package's `SKILL.md`, up to
 the 512 MiB per-package bound.
 A matching digest skips the package without examining attachments. Attachments
-can consequently remain stale when `SKILL.md` is unchanged; this is an
-intentional performance tradeoff. A missing or different digest causes a whole
+can consequently remain stale when `SKILL.md` is unchanged, including when an
+attachment subtree has a different mount view; this is an intentional
+performance tradeoff. A missing or different digest causes a whole
 package copy. Copies stream regular files and directories with a 512 MiB
 per-package and 1 GiB per-bind payload cap; executable files remain executable.
 A collection-level link to a package directory is resolved and pinned; links
@@ -125,8 +130,20 @@ cancel and revoke use the independent control lane. Each exchange has its own
 deadline; a healthy transfer can continue making progress beyond the inquiry
 and admission budget.
 
+Losing the data connection releases the synchronization lock and discards
+its unpublished stage. Versions already published stay pinned by the Client
+while a same-instance connection recovers. A lost publication reply retains
+its unknown outcome.
+
 The execution-boundary change and User Skill sync share one release gate:
 do not ship the boundary without both this behavior and #612 in place.
+On Linux, verify the combined release revision with
+`sh test-support/prove_paired_skill_read.sh` in addition to the package's
+bound-resource protocol preflight. This uses a real Client with a separate
+filesystem view to exercise the published Skill path through Read and verify
+file-tool write denial. The broader mount-view acceptance can include the same
+check by setting `RUSTX_PAIRED_RELEASE_PROOF=1`. Packaging may run on macOS;
+the Linux paired proof remains a release requirement.
 
 ## Workspace change hints
 

@@ -72,8 +72,8 @@ const _: () = {
     );
 };
 
-/// Official User tree in this Client's filesystem namespace.
-pub(crate) fn client_user_root() -> Option<PathBuf> {
+/// The Client's locally configured home, before resolving User-tree aliases.
+pub(crate) fn client_home_directory() -> Option<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| is_normalized_absolute_path(home))
@@ -83,7 +83,42 @@ pub(crate) fn client_user_root() -> Option<PathBuf> {
                 .flatten()
                 .map(|user| user.dir)
         })
-        .map(|home| home.join("rustx"))
+        .filter(|home| is_normalized_absolute_path(home))
+}
+
+/// Resolve only locally selected HOME/`rustx` aliases. Published paths use a
+/// physical spelling which the Client's no-follow file tools can open.
+fn resolve_user_root(home: &Path) -> io::Result<PathBuf> {
+    let configured = home.join("rustx");
+    for prefix in configured.ancestors() {
+        match fs::symlink_metadata(prefix) {
+            Ok(_) => {
+                // A dangling link is an existing entry. Canonicalization must
+                // succeed before any missing descendants can be appended.
+                let mut physical = prefix.canonicalize()?;
+                if !physical.is_dir() {
+                    return Err(io::ErrorKind::NotADirectory.into());
+                }
+                physical.extend(
+                    configured
+                        .strip_prefix(prefix)
+                        .map_err(io::Error::other)?
+                        .iter(),
+                );
+                return Ok(physical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::ErrorKind::NotFound.into())
+}
+
+/// Official User tree in this Client's filesystem namespace.
+pub(crate) fn client_user_root() -> Option<PathBuf> {
+    client_home_directory()
+        .and_then(|home| resolve_user_root(&home).ok())
+        .filter(|root| is_normalized_absolute_path(root))
 }
 
 fn main() -> ExitCode {
@@ -232,6 +267,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
         instance: bootstrap.instance,
         generation: bootstrap.generation,
         workspace: bootstrap.workspace,
+        user_root: client_user_root().ok_or("Client User directory unavailable")?,
         // Independently known, fixed, actually implemented capabilities —
         // never read from the file.
         capabilities: BTreeSet::from([
@@ -361,6 +397,10 @@ fn recover_pair(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one Client binding and lane-recovery lifecycle"
+)]
 fn serve_session(
     mut pair: Pair,
     root: &PackageDirectory,
@@ -436,6 +476,10 @@ fn serve_session(
                     {
                         break Err(String::from("execution pair violated the protocol"));
                     }
+                    state
+                        .skills
+                        .lane_lost()
+                        .map_err(|_| String::from("unresolved User Skill transfer cleanup"))?;
                     let cutoff = if revocation.started() {
                         *recovery_cutoff.get_or_insert(cutoff)
                     } else {
@@ -961,6 +1005,8 @@ fn serve_requests(
                 let inquiry = matches!(
                     request,
                     rustx_execution_protocol::skills::Request::Root { .. }
+                        | rustx_execution_protocol::skills::Request::Collection { .. }
+                        | rustx_execution_protocol::skills::Request::Packages { .. }
                         | rustx_execution_protocol::skills::Request::Digest { .. }
                 );
                 let transfer = if inquiry {

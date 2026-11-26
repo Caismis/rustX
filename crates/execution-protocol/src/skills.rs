@@ -23,6 +23,18 @@ pub const MAX_PACKAGE_PATH_BYTES: usize = 4096;
 pub const MAX_PACKAGE_DEPTH: usize = 128;
 /// Maximum files and directories in a transferred package.
 pub const MAX_PACKAGE_ENTRIES: usize = 16_384;
+/// Maximum package identities checked in one shared-root inquiry.
+pub const MAX_IDENTITY_PACKAGES: usize = 256;
+/// Maximum aggregate UTF-8 path bytes and components in one identity inquiry.
+pub const MAX_IDENTITY_PATH_BYTES: usize = 64 * 1024;
+/// Maximum aggregate normal path components in one identity inquiry.
+pub const MAX_IDENTITY_COMPONENTS: usize = 4096;
+/// Reserved hidden directory used only for fresh collection identity probes.
+pub const COLLECTION_PROOF_DIRECTORY: &str = ".rustx-sync-proof";
+/// Ownership marker within the reserved proof directory.
+pub const COLLECTION_PROOF_MARKER: &str = ".rustx-owned";
+/// Exact marker contents, written only when the proof directory is created.
+pub const COLLECTION_PROOF_MARKER_CONTENT: &[u8] = b"rustx skill collection proof v1\n";
 
 /// A SHA-256-shaped lower-case cache identifier, never a path.
 #[must_use]
@@ -71,6 +83,31 @@ pub fn valid_probe_name(name: &str) -> bool {
         })
 }
 
+/// Validate a bounded list of collection-relative package directories. An
+/// empty path names the collection itself, never an arbitrary filesystem path.
+#[must_use]
+pub fn valid_identity_packages(packages: &[PathBuf]) -> bool {
+    if packages.len() > MAX_IDENTITY_PACKAGES {
+        return false;
+    }
+    let mut bytes = 0usize;
+    let mut components = 0usize;
+    for package in packages {
+        let Some(text) = package.to_str() else {
+            return false;
+        };
+        if !text.is_empty() && !valid_package_path(package) {
+            return false;
+        }
+        bytes = bytes.saturating_add(text.len());
+        components = components.saturating_add(package.components().count());
+        if bytes > MAX_IDENTITY_PATH_BYTES || components > MAX_IDENTITY_COMPONENTS {
+            return false;
+        }
+    }
+    true
+}
+
 /// An inquiry addressed to the Client's fixed User root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -79,6 +116,12 @@ pub enum Request {
     /// freshly generated root-identity probe. Only the reserved probe name
     /// form is accepted; this is not an arbitrary file reader.
     Root { probe: Option<String> },
+    /// Return the locally resolved official collection and inspect only a
+    /// reserved, fresh probe directly beneath it when requested.
+    Collection { probe: Option<String> },
+    /// Inspect package directory identities and their fixed `SKILL.md` files.
+    /// No arbitrary leaf path or file contents can be requested.
+    Packages { packages: Vec<PathBuf> },
     /// Hash only the named package's `SKILL.md`, with a fixed byte budget.
     Digest { package: PathBuf },
     /// Enter one authority's owned cache and acquire its nonblocking sync lock.
@@ -122,12 +165,39 @@ pub struct Probe {
     pub digest: Sha256Hex,
 }
 
+/// Device/inode identity of a locally opened filesystem object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryIdentity {
+    pub device: crate::DecimalU64,
+    pub inode: crate::DecimalU64,
+}
+
+/// A package directory and its fixed regular `SKILL.md` marker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageIdentity {
+    pub directory: EntryIdentity,
+    pub marker: EntryIdentity,
+}
+
 /// The result of an inquiry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Reply {
     /// The Client-local `~/rustx` and optional proof for the requested probe.
     Root { path: PathBuf, probe: Option<Probe> },
+    /// The Client-local collection and optional fresh-probe evidence.
+    Collection {
+        path: PathBuf,
+        identity: Option<EntryIdentity>,
+        probe: Option<Probe>,
+    },
+    /// One result per requested package, in order; missing or unsafe entries
+    /// have no identity and cannot establish a shared-root skip.
+    Packages {
+        packages: Vec<Option<PackageIdentity>>,
+    },
     /// The digest, or `None` when the instruction file is missing or too big.
     Digest { digest: Option<Sha256Hex> },
     /// The authority lock is held by this binding.
@@ -173,5 +243,14 @@ mod tests {
             ".rustx-skill-probe-0123456789abcdef0123456789abcdef"
         ));
         assert!(!valid_probe_name("../../etc/passwd"));
+        assert!(valid_identity_packages(&[
+            PathBuf::new(),
+            PathBuf::from("nested/package")
+        ]));
+        assert!(!valid_identity_packages(&[PathBuf::from("../outside")]));
+        assert!(!valid_identity_packages(&vec![
+            PathBuf::new();
+            MAX_IDENTITY_PACKAGES + 1
+        ]));
     }
 }

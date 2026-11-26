@@ -99,6 +99,7 @@ pub struct LocalExecutionEndpoint {
     /// connection lands; the operation-identity source for every
     /// managed process this endpoint dispatches.
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
+    user_root: std::sync::OnceLock<PathBuf>,
     managed_output: std::sync::OnceLock<bool>,
     stdio_mcp: std::sync::OnceLock<bool>,
     user_skill_flights: skill_sync::SyncFlights,
@@ -338,6 +339,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            user_root: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
             user_skill_flights: skill_sync::SyncFlights::default(),
@@ -400,6 +402,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            user_root: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
             user_skill_flights: skill_sync::SyncFlights::default(),
@@ -562,6 +565,7 @@ impl LocalExecutionEndpoint {
                 let _ = self
                     .stdio_mcp
                     .set(connection.supports(Capability::StdioMcp));
+                let _ = self.user_root.set(connection.user_root().to_owned());
                 let _ = self.admission.set(connection.admission().clone());
                 let retired = slot.replace(connection);
                 drop(slot);
@@ -843,7 +847,11 @@ impl LocalExecutionEndpoint {
             &rustx_execution_protocol::skills::Request::Root { probe },
             deadline,
         )? {
-            rustx_execution_protocol::skills::Reply::Root { path, probe } => Ok((path, probe)),
+            rustx_execution_protocol::skills::Reply::Root { path, probe }
+                if self.user_root.get() == Some(&path) =>
+            {
+                Ok((path, probe))
+            }
             _ => Err(io::ErrorKind::InvalidData.into()),
         }
     }
@@ -4491,6 +4499,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
+            user_root: "/client/rustx".into(),
             capabilities: BTreeSet::from([
                 Capability::Connection,
                 Capability::ReadRange,
@@ -4849,6 +4858,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
+            user_root: "/client/rustx".into(),
             capabilities,
             credential: published.credential.clone(),
         };
@@ -5403,6 +5413,7 @@ mod tests {
                 instance: published.instance.clone(),
                 generation: published.generation,
                 workspace: published.workspace.clone(),
+                user_root: "/client/rustx".into(),
                 capabilities: BTreeSet::from([Capability::Connection]),
                 credential: published.credential.clone(),
             }),

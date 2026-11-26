@@ -17,7 +17,9 @@ use rustix::fs::{AtFlags, Mode, OFlags};
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::save::Sha256Hex;
 use rustx_execution_protocol::skills::{
-    MAX_DIGEST_BYTES, MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES, MAX_SYNC_BYTES, Reply, Request,
+    COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER, COLLECTION_PROOF_MARKER_CONTENT,
+    EntryIdentity, MAX_DIGEST_BYTES, MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES, MAX_SYNC_BYTES,
+    PackageIdentity, Probe, Reply, Request, valid_identity_packages,
 };
 use rustx_execution_protocol::{DecimalU64, MAX_RAW_CHUNK_BYTES};
 use rustx_execution_server::LocalConnection;
@@ -189,7 +191,268 @@ impl Drop for ProbeFile<'_> {
     }
 }
 
+fn new_probe(root: &PackageDirectory) -> io::Result<Option<(ProbeFile<'_>, Probe)>> {
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).map_err(io::Error::other)?;
+    let name = format!(".rustx-skill-probe-{}", uuid::Uuid::new_v4().simple());
+    let descriptor = match rustix::fs::openat(
+        root.descriptor(),
+        name.as_str(),
+        OFlags::CREATE | OFlags::EXCL | OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(error) if error == rustix::io::Errno::ACCESS || error == rustix::io::Errno::ROFS => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let cleanup = ProbeFile { root, name };
+    let mut file = File::from(descriptor);
+    file.write_all(&random)?;
+    let metadata = file.metadata()?;
+    root.verify()?;
+    Ok(Some((
+        cleanup,
+        Probe {
+            device: DecimalU64::new(metadata.dev()),
+            inode: DecimalU64::new(metadata.ino()),
+            digest: Sha256Hex::from_digest(Sha256::digest(random).into()),
+        },
+    )))
+}
+
+fn directory_identity(directory: &PackageDirectory) -> io::Result<EntryIdentity> {
+    directory.verify()?;
+    let metadata = File::from(directory.descriptor().try_clone()?).metadata()?;
+    Ok(EntryIdentity {
+        device: DecimalU64::new(metadata.dev()),
+        inode: DecimalU64::new(metadata.ino()),
+    })
+}
+
+/// A hidden, ownership-marked child keeps subsequent probe writes out of the
+/// collection's non-recursive source watches. Never remove or adopt an
+/// existing unmarked directory in the standing User tree.
+fn collection_proof_directory(
+    collection: &PackageDirectory,
+) -> io::Result<Option<PackageDirectory>> {
+    collection.verify()?;
+    let created = match rustix::fs::mkdirat(
+        collection.descriptor(),
+        COLLECTION_PROOF_DIRECTORY,
+        Mode::from_raw_mode(0o700),
+    ) {
+        Ok(()) => true,
+        Err(rustix::io::Errno::EXIST) => false,
+        Err(rustix::io::Errno::ACCESS | rustix::io::Errno::ROFS) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let directory = match collection.child(std::ffi::OsStr::new(COLLECTION_PROOF_DIRECTORY)) {
+        Ok(directory) => directory,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound
+                    | io::ErrorKind::NotADirectory
+                    | io::ErrorKind::PermissionDenied
+            ) || error.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = File::from(directory.descriptor().try_clone()?).metadata()?;
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+        return Ok(None);
+    }
+    if created {
+        let mut marker = File::from(rustix::fs::openat(
+            directory.descriptor(),
+            COLLECTION_PROOF_MARKER,
+            OFlags::CREATE | OFlags::EXCL | OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )?);
+        marker.write_all(COLLECTION_PROOF_MARKER_CONTENT)?;
+    } else {
+        let mut marker = match directory.file(Path::new(COLLECTION_PROOF_MARKER)) {
+            Ok(marker) => marker,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) || error.raw_os_error() == Some(libc::ELOOP) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let metadata = marker.metadata()?;
+        if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+            return Ok(None);
+        }
+        let mut content = Vec::new();
+        Read::by_ref(&mut marker)
+            .take(128)
+            .read_to_end(&mut content)?;
+        if content != COLLECTION_PROOF_MARKER_CONTENT {
+            return Ok(None);
+        }
+    }
+    directory.verify()?;
+    Ok(Some(directory))
+}
+
+fn host_package_identities(
+    collection: &PackageDirectory,
+    root: &Path,
+    files: &[PathBuf],
+    signal: &crate::runtime::CancellationSignal,
+    deadline: Instant,
+) -> io::Result<Option<(Vec<PathBuf>, Vec<PackageIdentity>)>> {
+    let mut packages = Vec::with_capacity(files.len());
+    for marker in files {
+        if marker.file_name().is_none_or(|name| name != "SKILL.md") {
+            return Ok(None);
+        }
+        let relative = marker
+            .strip_prefix(root)
+            .map_err(|_| io::ErrorKind::InvalidData)?;
+        packages.push(relative.parent().unwrap_or(Path::new("")).to_owned());
+    }
+    if !valid_identity_packages(&packages) {
+        return Ok(None);
+    }
+    let mut identities = Vec::with_capacity(files.len());
+    for package_path in &packages {
+        crate::package_io::check_cancelled(signal)?;
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let Ok(directory) = collection.descend(package_path) else {
+            return Ok(None);
+        };
+        let named = match directory.entry_metadata(Path::new("SKILL.md")) {
+            Ok(metadata) if metadata.is_file => metadata,
+            _ => return Ok(None),
+        };
+        let Ok(marker_file) = directory.file(Path::new("SKILL.md")) else {
+            return Ok(None);
+        };
+        if rustx_confined_fs::FileMetadata::of(&marker_file)? != named
+            || directory.entry_metadata(Path::new("SKILL.md"))? != named
+        {
+            return Ok(None);
+        }
+        let metadata = marker_file.metadata()?;
+        let directory_identity = directory_identity(&directory)?;
+        directory.verify()?;
+        identities.push(PackageIdentity {
+            directory: directory_identity,
+            marker: EntryIdentity {
+                device: DecimalU64::new(metadata.dev()),
+                inode: DecimalU64::new(metadata.ino()),
+            },
+        });
+    }
+    collection.verify()?;
+    Ok(Some((packages, identities)))
+}
+
 impl LocalExecutionEndpoint {
+    fn inspect_skill_collection(
+        &self,
+        probe: Option<String>,
+        deadline: Instant,
+    ) -> io::Result<(PathBuf, Option<EntryIdentity>, Option<Probe>)> {
+        match self.user_skills_inquiry(&Request::Collection { probe }, deadline)? {
+            Reply::Collection {
+                path,
+                identity,
+                probe,
+            } => Ok((path, identity, probe)),
+            _ => Err(io::ErrorKind::InvalidData.into()),
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one pair of fixed User roots and its bounded package proof"
+    )]
+    fn shared_skill_collection(
+        &self,
+        host_home: &Path,
+        host_collection: &Path,
+        client_root: &Path,
+        client_collection: &Path,
+        client_identity: Option<&EntryIdentity>,
+        files: &[PathBuf],
+        signal: &crate::runtime::CancellationSignal,
+        deadline: Instant,
+    ) -> io::Result<bool> {
+        let collection = PackageDirectory::open(host_collection)?;
+        let host_identity = directory_identity(&collection)?;
+        if client_identity != Some(&host_identity) {
+            return Ok(false);
+        }
+        let Some(proof_directory) = collection_proof_directory(&collection)? else {
+            return Ok(false);
+        };
+        let Some((probe, expected)) = new_probe(&proof_directory)? else {
+            return Ok(false);
+        };
+        let (path, identity, observed) =
+            self.inspect_skill_collection(Some(probe.name.clone()), deadline)?;
+        if path != client_collection
+            || identity.as_ref() != Some(&host_identity)
+            || observed.as_ref() != Some(&expected)
+        {
+            return Ok(false);
+        }
+        let Some((packages, host_before)) =
+            host_package_identities(&collection, host_collection, files, signal, deadline)?
+        else {
+            return Ok(false);
+        };
+        let Reply::Packages { packages: client } = self.user_skills_inquiry(
+            &Request::Packages {
+                packages: packages.clone(),
+            },
+            deadline,
+        )?
+        else {
+            return Err(io::ErrorKind::InvalidData.into());
+        };
+        if client
+            .iter()
+            .zip(&host_before)
+            .any(|(actual, expected)| actual.as_ref() != Some(expected))
+        {
+            return Ok(false);
+        }
+        let Some((after_packages, host_after)) =
+            host_package_identities(&collection, host_collection, files, signal, deadline)?
+        else {
+            return Ok(false);
+        };
+        if packages != after_packages || host_before != host_after {
+            return Ok(false);
+        }
+        let (path, identity, observed) =
+            self.inspect_skill_collection(Some(probe.name.clone()), deadline)?;
+        let (root, root_shared) = self.shared_user_skill_root(host_home, deadline)?;
+        collection.verify()?;
+        proof_directory.verify()?;
+        Ok(path == client_collection
+            && identity.as_ref() == Some(&host_identity)
+            && observed.as_ref() == Some(&expected)
+            && root == client_root
+            && root_shared
+            && host_home.join("rustx/.agents/skills").canonicalize()? == host_collection)
+    }
+
     /// Return the Client's root and whether it is demonstrably the same
     /// physical standing root as the Host's. A missing or non-writable Host
     /// root cannot prove sharing and therefore never enables the skip.
@@ -198,13 +461,15 @@ impl LocalExecutionEndpoint {
         host_home: &Path,
         deadline: Instant,
     ) -> io::Result<(PathBuf, bool)> {
-        let host_root = host_home.join("rustx");
-        let root = match PackageDirectory::open(&host_root) {
-            Ok(root) => root,
+        let configured = host_home.join("rustx");
+        let host_root = match configured.canonicalize() {
+            Ok(path) => path,
             Err(error)
                 if matches!(
                     error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
                 ) =>
             {
                 let (path, _) = self.inspect_user_skill_root(None, deadline)?;
@@ -212,38 +477,27 @@ impl LocalExecutionEndpoint {
             }
             Err(error) => return Err(error),
         };
-        let mut random = [0u8; 32];
-        getrandom::fill(&mut random).map_err(io::Error::other)?;
-        let name = format!(".rustx-skill-probe-{}", uuid::Uuid::new_v4().simple());
-        let descriptor = match rustix::fs::openat(
-            root.descriptor(),
-            name.as_str(),
-            OFlags::CREATE | OFlags::EXCL | OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        ) {
-            Ok(descriptor) => descriptor,
+        let root = match PackageDirectory::open(&host_root) {
+            Ok(root) => root,
             Err(error)
-                if error == rustix::io::Errno::ACCESS || error == rustix::io::Errno::ROFS =>
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) =>
             {
                 let (path, _) = self.inspect_user_skill_root(None, deadline)?;
                 return Ok((path, false));
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
-        let _cleanup = ProbeFile {
-            root: &root,
-            name: name.clone(),
+        let Some((probe, expected)) = new_probe(&root)? else {
+            let (path, _) = self.inspect_user_skill_root(None, deadline)?;
+            return Ok((path, false));
         };
-        let mut probe = File::from(descriptor);
-        probe.write_all(&random)?;
-        let metadata = probe.metadata()?;
-        let expected = Sha256Hex::from_digest(Sha256::digest(random).into());
-        let (path, observed) = self.inspect_user_skill_root(Some(name), deadline)?;
-        let shared = observed.is_some_and(|observed| {
-            observed.device.get() == metadata.dev()
-                && observed.inode.get() == metadata.ino()
-                && observed.digest == expected
-        });
+        let (path, observed) = self.inspect_user_skill_root(Some(probe.name.clone()), deadline)?;
+        let shared = observed == Some(expected) && configured.canonicalize()? == host_root;
         root.verify()?;
         Ok((path, shared))
     }
@@ -276,9 +530,10 @@ impl LocalExecutionEndpoint {
         deadline: Instant,
         flight: &SyncFlight,
     ) -> io::Result<UserSkillSync> {
-        let (client_root, shared) = self.shared_user_skill_root(host_home, deadline)?;
+        let (client_root, root_shared) = self.shared_user_skill_root(host_home, deadline)?;
         flight.progressed();
-        let client_collection = client_root.join(".agents/skills");
+        let (client_collection, client_identity, _) =
+            self.inspect_skill_collection(None, deadline)?;
         let host_collection = host_home.join("rustx/.agents/skills");
         let capture = crate::skills::package::capture_user_skills(&host_collection, signal)?;
         flight.progressed();
@@ -293,36 +548,44 @@ impl LocalExecutionEndpoint {
             }
             Err(error) => return Err(error),
         };
-        let found: Vec<_> = capture.candidates().collect();
-        if shared {
-            let paths = found
-                .into_iter()
-                .map(|(marker, _)| {
-                    let relative = marker
-                        .strip_prefix(&host_collection)
-                        .map_err(|_| io::ErrorKind::InvalidData)?;
-                    Ok((relative.to_path_buf(), client_collection.join(relative)))
-                })
-                .collect::<io::Result<_>>()?;
-            return Ok(UserSkillSync {
-                collection: client_collection,
-                paths,
-                capture,
-            });
-        }
         let mut invalid_paths = BTreeMap::new();
         let mut valid_files = Vec::new();
-        for (marker, valid) in found {
+        for (marker, valid) in capture.candidates() {
             if valid {
                 valid_files.push(marker);
             } else {
                 let relative = marker
                     .strip_prefix(&host_collection)
                     .map_err(|_| io::ErrorKind::InvalidData)?;
-                invalid_paths.insert(relative.to_owned(), client_collection.join(relative));
+                let diagnostic = PathBuf::from(relative.to_string_lossy().into_owned());
+                invalid_paths.insert(diagnostic.clone(), client_collection.join(diagnostic));
             }
         }
         if valid_files.is_empty() {
+            return Ok(UserSkillSync {
+                collection: client_collection,
+                paths: invalid_paths,
+                capture,
+            });
+        }
+        if root_shared
+            && self.shared_skill_collection(
+                host_home,
+                &host_collection,
+                &client_root,
+                &client_collection,
+                client_identity.as_ref(),
+                &valid_files,
+                signal,
+                deadline,
+            )?
+        {
+            for marker in valid_files {
+                let relative = marker
+                    .strip_prefix(&host_collection)
+                    .map_err(|_| io::ErrorKind::InvalidData)?;
+                invalid_paths.insert(relative.to_owned(), client_collection.join(relative));
+            }
             return Ok(UserSkillSync {
                 collection: client_collection,
                 paths: invalid_paths,
@@ -427,7 +690,7 @@ fn read_authority(root: &PackageDirectory) -> io::Result<[u8; 32]> {
 }
 
 fn standing_root_authority(path: &Path) -> io::Result<[u8; 32]> {
-    let root = PackageDirectory::open(path)?;
+    let root = PackageDirectory::open(&path.canonicalize()?)?;
     match read_authority(&root) {
         Ok(value) => return Ok(value),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}

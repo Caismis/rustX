@@ -453,6 +453,272 @@ fn websocket_revoke_during_skill_transfer_removes_only_the_private_stage() {
     assert_eq!(fs::read(personal.join("SKILL.md")).unwrap(), b"personal");
 }
 
+fn skill_transfer(
+    connection: &mut rustx_execution_server::LocalConnection,
+    request: &rustx_execution_protocol::skills::Request,
+) -> rustx_execution_protocol::skills::Reply {
+    connection
+        .user_skill_transfer_until(request, Instant::now() + Duration::from_secs(30))
+        .unwrap()
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one staged transfer across lane recovery"
+)]
+fn websocket_skill_transfer_recovers_after_a_staged_chunk() {
+    use rustx_execution_protocol::DecimalU64;
+    use rustx_execution_protocol::skills::{Reply, Request};
+    let rig = ws_rig();
+    let (_home, home) = private_dir();
+    let personal = home.join("rustx/.agents/skills/personal");
+    fs::create_dir_all(&personal).unwrap();
+    fs::write(personal.join("SKILL.md"), b"personal").unwrap();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = accept_connection(&rig, &mut child);
+    let authority = "a".repeat(64);
+    let abandoned = "b".repeat(64);
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginSync {
+                authority: authority.clone()
+            }
+        ),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginPackage {
+                version: abandoned.clone()
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(4),
+                executable: false,
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eA==".into(),
+            }
+        ),
+        Reply::Accepted
+    );
+    let owner = home
+        .join("rustx/.agents/skills/.rustx-sync")
+        .join(&authority);
+    assert!(fs::read_dir(&owner).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stage-")
+    }));
+
+    rig.binding.disconnect(first.connection_id());
+    let mut recovered = accept_connection(&rig, &mut child);
+    assert_ne!(recovered.connection_id(), first.connection_id());
+    assert_eq!(recovered.admission(), first.admission());
+    assert!(!owner.join(&abandoned).exists());
+    assert!(fs::read_dir(&owner).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stage-")
+    }));
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::BeginSync { authority }),
+        Reply::SyncStarted
+    );
+    let fresh = "c".repeat(64);
+    assert_eq!(
+        skill_transfer(
+            &mut recovered,
+            &Request::BeginPackage {
+                version: fresh.clone()
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut recovered,
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(1),
+                executable: false,
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut recovered,
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eQ==".into(),
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::EndFile),
+        Reply::Accepted
+    );
+    assert!(matches!(
+        skill_transfer(&mut recovered, &Request::Publish),
+        Reply::Published { .. }
+    ));
+    assert_eq!(
+        fs::read(owner.join(fresh).join("data/SKILL.md")).unwrap(),
+        b"y"
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::EndSync),
+        Reply::SyncEnded
+    );
+    assert_eq!(fs::read(personal.join("SKILL.md")).unwrap(), b"personal");
+    recovered.control().unwrap().request_revoke().unwrap();
+    drop(first);
+    drop(recovered);
+    expect_success(&mut child);
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one published lease across lane recovery"
+)]
+fn websocket_skill_transfer_preserves_published_lease_after_recovery() {
+    use rustix::fs::FlockOperation;
+    use rustx_execution_protocol::DecimalU64;
+    use rustx_execution_protocol::skills::{Reply, Request};
+    let rig = ws_rig();
+    let (_home, home) = private_dir();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = accept_connection(&rig, &mut child);
+    let authority = "d".repeat(64);
+    let version = "e".repeat(64);
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginSync {
+                authority: authority.clone()
+            }
+        ),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginPackage {
+                version: version.clone()
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(1),
+                executable: false,
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eA==".into(),
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(&mut first, &Request::EndFile),
+        Reply::Accepted
+    );
+    let Reply::Published { package } = skill_transfer(&mut first, &Request::Publish) else {
+        panic!("published");
+    };
+    let owner = home
+        .join("rustx/.agents/skills/.rustx-sync")
+        .join(&authority);
+    let lease = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(owner.join(&version).join(".lease"))
+        .unwrap();
+
+    rig.binding.disconnect(first.connection_id());
+    let mut recovered = accept_connection(&rig, &mut child);
+    assert_eq!(recovered.admission(), first.admission());
+    assert_eq!(
+        fs::read(
+            home.join("rustx/.agents/skills")
+                .join(&package)
+                .join("SKILL.md")
+        )
+        .unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
+        rustix::io::Errno::AGAIN
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::BeginSync { authority }),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::Retain { version }),
+        Reply::Retained {
+            package,
+            bytes: DecimalU64::new(1),
+        }
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::EndSync),
+        Reply::SyncEnded
+    );
+    assert_eq!(
+        rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
+        rustix::io::Errno::AGAIN
+    );
+    recovered.control().unwrap().request_revoke().unwrap();
+    drop(first);
+    drop(recovered);
+    expect_success(&mut child);
+    rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap();
+}
+
 /// Accepts and returns the live `LocalConnection` for tests that drive
 /// typed dispatch themselves — the data half then the pairing control
 /// lane, both inside one handshake budget.

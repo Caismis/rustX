@@ -3,6 +3,13 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[path = "session_creation/skill_root_identity.rs"]
+mod skill_root_identity;
+
+#[cfg(target_os = "linux")]
+mod paired_release;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_bound_load_rechecks_user_revision_at_retained_publication() {
     use crate::local_runtime::configuration::settings::SourceTarget;

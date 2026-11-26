@@ -21,6 +21,7 @@ pub struct LocalConnection {
     /// and `Drop` never send it twice.
     pub(super) closed: bool,
     pub(super) capabilities: BTreeSet<Capability>,
+    pub(super) user_root: PathBuf,
     pub(super) connection: ConnectionId,
     pub(super) admission: Admission,
 }
@@ -179,6 +180,12 @@ impl LocalConnection {
     #[must_use]
     pub fn admission(&self) -> &Admission {
         &self.admission
+    }
+
+    /// The User resource base as seen by this admitted peer.
+    #[must_use]
+    pub fn user_root(&self) -> &Path {
+        &self.user_root
     }
 
     /// Whether this peer advertised a capability at admission.
@@ -441,7 +448,7 @@ impl LocalConnection {
         deadline: Instant,
     ) -> io::Result<rustx_execution_protocol::skills::Reply> {
         use rustx_execution_protocol::skills::{
-            Reply, Request, valid_package_path, valid_probe_name,
+            Reply, Request, valid_identity_packages, valid_package_path, valid_probe_name,
         };
         if !self.supports(Capability::UserSkills) {
             return Err(io::ErrorKind::Unsupported.into());
@@ -450,10 +457,19 @@ impl LocalConnection {
             Request::Root { probe: Some(name) } if !valid_probe_name(name) => {
                 return Err(io::ErrorKind::InvalidInput.into());
             }
+            Request::Collection { probe: Some(name) } if !valid_probe_name(name) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            Request::Packages { packages } if !valid_identity_packages(packages) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
             Request::Digest { package } if !valid_package_path(package) => {
                 return Err(io::ErrorKind::InvalidInput.into());
             }
-            Request::Root { .. } | Request::Digest { .. } => {}
+            Request::Root { .. }
+            | Request::Collection { .. }
+            | Request::Packages { .. }
+            | Request::Digest { .. } => {}
             _ => return Err(io::ErrorKind::InvalidInput.into()),
         }
         let response = self.exchange_admitted(
@@ -469,15 +485,34 @@ impl LocalConnection {
                     path,
                     probe: evidence,
                 }),
-            ) if is_normalized_absolute_path(&path)
-                && path.file_name().is_some_and(|name| name == "rustx")
-                && (probe.is_some() || evidence.is_none()) =>
-            {
+            ) if is_normalized_absolute_path(&path) && (probe.is_some() || evidence.is_none()) => {
                 Ok(Reply::Root {
                     path,
                     probe: evidence,
                 })
             }
+            (
+                Request::Collection { probe },
+                ClientReply::UserSkills(Reply::Collection {
+                    path,
+                    identity,
+                    probe: evidence,
+                }),
+            ) if is_normalized_absolute_path(&path) && (probe.is_some() || evidence.is_none()) => {
+                Ok(Reply::Collection {
+                    path,
+                    identity,
+                    probe: evidence,
+                })
+            }
+            (
+                Request::Packages { packages },
+                ClientReply::UserSkills(Reply::Packages {
+                    packages: identities,
+                }),
+            ) if packages.len() == identities.len() => Ok(Reply::Packages {
+                packages: identities,
+            }),
             (Request::Digest { .. }, ClientReply::UserSkills(reply @ Reply::Digest { .. })) => {
                 Ok(reply)
             }
@@ -519,7 +554,10 @@ impl LocalConnection {
                 data_base64.len() <= MAX_RAW_CHUNK_BYTES.div_ceil(3) * 4
             }
             Request::EndFile | Request::Publish | Request::AbortPackage | Request::EndSync => true,
-            Request::Root { .. } | Request::Digest { .. } => false,
+            Request::Root { .. }
+            | Request::Collection { .. }
+            | Request::Packages { .. }
+            | Request::Digest { .. } => false,
         };
         if !valid {
             return Err(io::ErrorKind::InvalidInput.into());
