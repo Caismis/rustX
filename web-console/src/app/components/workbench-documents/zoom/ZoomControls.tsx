@@ -4,7 +4,6 @@ import { forwardRef, useEffect, useImperativeHandle, useState, type ReactNode } 
 import { Button, IconChevronDownOutlineRegular, IconPlusOutlineRegular, Menu, Tooltip,
   type MenuEntry } from '../primitives'
 import { MAX_FIXED_ZOOM, MIN_FIXED_ZOOM, ZOOM_OPTIONS, ZOOM_STEP, type ZoomLabels } from './types.ts'
-import css from './ZoomControls.module.css'
 
 function steppedZoom(zoom: number, direction: -1 | 1): number {
   const step = direction === -1 ? Math.ceil(zoom / ZOOM_STEP) - 1 : Math.floor(zoom / ZOOM_STEP) + 1
@@ -44,12 +43,17 @@ export const ZoomControls = forwardRef<ZoomControlsHandle, {
   ]
   const selectedId = fitWidth ? 'fit-width'
     : ZOOM_OPTIONS.includes(displayZoom as typeof ZOOM_OPTIONS[number]) ? String(displayZoom) : undefined
-  return <div className={`${css.panel} ${visible ? css.visible : ''}`} role="toolbar" aria-label={labels.controls}
+  const panelBase = 'absolute z-[2] start-1/2 bottom-[14px] flex items-center gap-[2px] box-border px-[6px] py-[4px] border-0 rounded-[var(--dsw-radius-lg)] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-specific-menu)] shadow-[var(--dsw-elevation-prominent)] text-[12px] leading-[18px] [will-change:opacity,translate,scale] motion-reduce:[transition-duration:0.01ms]'
+  const panelHidden = 'opacity-0 pointer-events-none translate-x-[-50%] translate-y-[16px] scale-[0.98] transition-[opacity,translate,scale] duration-[160ms] ease-in'
+  const panelShown = 'opacity-100 pointer-events-auto translate-x-[-50%] translate-y-0 scale-100 transition-[opacity,translate,scale] duration-[180ms] ease-out'
+  // Touch devices cannot hover the toolbar into view: it is always visible.
+  const panelCoarse = '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:translate-y-0 [@media(hover:none)]:scale-100 [@media(pointer:coarse)]:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:translate-y-0 [@media(pointer:coarse)]:scale-100'
+  return <div className={`${panelBase} ${visible ? panelShown : panelHidden} ${panelCoarse}`} role="toolbar" aria-label={labels.controls}
     data-document-zoom-controls data-document-zoom-visible={visible || undefined}
     onPointerEnter={() => { setHovered(true) }} onPointerLeave={() => { setHovered(false) }}
     onFocusCapture={() => { setFocused(true) }} onBlurCapture={() => { setFocused(false) }}>
     <Tooltip label={labels.out} side="top">
-      <span className={css.controlAnchor}><Button size="sm" className={css.zoomButton} aria-label={labels.out}
+      <span className="flex"><Button size="sm" className="box-border w-[28px] p-0 flex-none [&_svg]:size-[14px]" aria-label={labels.out}
         disabled={displayZoom <= MIN_FIXED_ZOOM} onMouseDown={(event) => { event.preventDefault() }}
         onClick={() => { onZoom(steppedZoom(displayZoom, -1)) }}>
         <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
@@ -57,8 +61,8 @@ export const ZoomControls = forwardRef<ZoomControlsHandle, {
         </svg>
       </Button></span>
     </Tooltip>
-    <Menu open={open} align="start" dense listClassName={css.zoomMenu}
-      anchor={<Button size="sm" className={css.percent} aria-label={labels.menu} aria-expanded={open}
+    <Menu open={open} align="start" dense listClassName="[--menu-min-width:112px] [box-shadow:var(--dsw-elevation-prominent)]"
+      anchor={<Button size="sm" className="box-border inline-flex items-center justify-center gap-[2px] w-[58px] px-[6px] [font-variant-numeric:tabular-nums] [&_svg]:size-[12px] [&_svg]:flex-none" aria-label={labels.menu} aria-expanded={open}
         onMouseDown={(event) => { event.preventDefault() }} onClick={() => { setOpen(value => !value) }}>
         <span>{labels.value(Math.round(displayZoom * 100))}</span>
         <IconChevronDownOutlineRegular size={12} />
@@ -69,7 +73,7 @@ export const ZoomControls = forwardRef<ZoomControlsHandle, {
         else onZoom(Number(selected))
       }} />
     <Tooltip label={labels.into} side="top">
-      <span className={css.controlAnchor}><Button size="sm" className={css.zoomButton} aria-label={labels.into}
+      <span className="flex"><Button size="sm" className="box-border w-[28px] p-0 flex-none [&_svg]:size-[14px]" aria-label={labels.into}
         disabled={displayZoom >= MAX_FIXED_ZOOM} onMouseDown={(event) => { event.preventDefault() }}
         onClick={() => { onZoom(steppedZoom(displayZoom, 1)) }}>
         <IconPlusOutlineRegular size={14} />
