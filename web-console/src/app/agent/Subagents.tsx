@@ -7,7 +7,7 @@ import { useTranslation } from '../../locale/react';
 import { SubagentMenu } from './SubagentCatalog';
 import { SubagentObservationNotice } from './SubagentObservationNotice';
 import { AgentCard } from '../components/ActivityCards';
-import conversationCss from '../../presentation/agent/Conversation.module.css';
+import { conversationCss } from '../../presentation/agent/conversationCss';
 
 import { SubagentContext as Context, useSubagents } from './subagent-context';
 import { meterDemand, type MeterScope } from '../../client/agent-meters';

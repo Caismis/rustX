@@ -23,7 +23,7 @@ import { navigateTabs } from '../../presentation/primitives/tabs';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { sessionDisplayTitle } from '../../bindings/session-title';
 import { SessionConfiguration } from '../SessionConfiguration';
-import agentCss from '../../presentation/agent/Conversation.module.css';
+import { conversationCss } from '../../presentation/agent/conversationCss';
 export function ConversationHeader({ host, authority, client, sessionId, summary, view, authorityRevision, connected, attached, commandOpen, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback, previewToggle }: {
   host: ProductHostWorkspaces; authority: WorkspaceAuthority; settingsFeedback?: ReactNode; previewToggle?: ReactNode; client: AppServerClient; sessionId?: string; summary?: SessionSummary; view?: SessionView; authorityRevision?: number; connected: boolean; attached: boolean; commandOpen: boolean;
   invokeCommand: (request: { id: 'tree' }) => void;
@@ -36,23 +36,23 @@ export function ConversationHeader({ host, authority, client, sessionId, summary
   const [failure, setFailure] = useToastNotice(owner);
   const error = failure?.text;
   const exportSession = () => { if (!sessionId) return; setFailure(''); void client.exportSession(sessionId).catch(cause => setFailure(actionError(cause))); };
-  return <header className={`${agentCss.header} ${!sessionId ? agentCss.headerBlank : ""}`}>
-      <div className={agentCss.titleRow}>
-        {sessionId && <div className={agentCss.titleCluster}>
+  return <header className={`${conversationCss.header} ${!sessionId ? conversationCss.headerBlank : ""}`}>
+      <div className={conversationCss.titleRow}>
+        {sessionId && <div className={conversationCss.titleCluster}>
           <SubagentHeader title={sessionDisplayTitle(tx, summary ?? { id: sessionId })}/>
         </div>}
-        <div className={agentCss.headerUtilities}>
+        <div className={conversationCss.headerUtilities}>
           {sessionId && !subagents?.selected && <SessionPanelToggle client={client} sessionId={sessionId}/>}
           {sessionId && summary && !subagents?.selected && <SessionTasks key={`${authorityRevision}:${sessionId}`} client={client} sessionId={sessionId} nodeId={view?.nodeId ?? summary.active_node} disabled={!connected || !!view?.deleting}/>}
           {subagents?.selected && <div id="subagent-header-actions"/>}
           {sessionId && summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: sessionId, active_node: summary.active_node }} disabled={!connected || !!view?.deleting}/>}
           {sessionId && !subagents?.selected && <SessionActions client={client} sessionId={sessionId} connected={connected} attached={attached} commandOpen={commandOpen} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
         </div>
-        <div className={agentCss.headerCorner}>{previewToggle}</div>
+        <div className={conversationCss.headerCorner}>{previewToggle}</div>
       </div>
       {view && !subagents?.selected && <SessionConfiguration key={`${authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />}
       {settingsFeedback}
-      {sessionId && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
+      {sessionId && displayPreferences.codingView && <div className={conversationCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${conversationCss.tab} ${conversationMode === mode ? conversationCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
       {error && <Toast key={failure?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setFailure('')}/>}
       </header>;
 }
@@ -64,7 +64,7 @@ function SessionActions({ client, sessionId, connected, attached, commandOpen, t
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const safe = useClientSelector(client, state => lineageSwitchSafe(state.views[sessionId]));
   return <Menu open={sessionMenuOpen} onClose={() => setSessionMenuOpen(false)} align="end" dense autoFocus
-          anchor={<Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.session-actions')} aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}><IconEllipsisOutline16 /></Button>}
+          anchor={<Button size="sm" className={conversationCss.iconButton} aria-label={tx('agent:conversation-header.session-actions')} aria-haspopup="menu" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen(value => !value)}><IconEllipsisOutline16 /></Button>}
           items={[{ id: 'export', label: tx('agent:conversation-header.export'), icon: <IconDownloadOutline16/>, disabled: !connected }, { id: 'tree', label: tx('agent:conversation-header.session-tree'), icon: <IconForkOutline16/>, disabled: !attached || commandOpen || !safe }]}
           onSelect={id => { setSessionMenuOpen(false); if (id === 'tree') tree(); else if (id === 'export') exportSession(); }} />;
 }

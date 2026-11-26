@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
-import css from '../../presentation/agent/Conversation.module.css';
+import { conversationCss } from '../../presentation/agent/conversationCss';
 
 /** Shared sticky seat: every conversation measures its own visible composer. */
 export function ComposerSeat({ children }: { children: ReactNode }) {
@@ -18,5 +18,5 @@ export function ComposerSeat({ children }: { children: ReactNode }) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  return <div ref={seat} className={css.composerSeat} data-composer-seat="">{children}</div>;
+  return <div ref={seat} className={conversationCss.composerSeat} data-composer-seat="">{children}</div>;
 }

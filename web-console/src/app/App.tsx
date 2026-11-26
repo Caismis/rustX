@@ -60,7 +60,7 @@ import { NavigationGuardProvider, useNavigationGuard } from './settings/forms/gu
 import { ConnectionController } from '../connection/controller';
 import { ConnectionFeedback } from './ConnectionFeedback';
 import { RightPanel } from '../presentation/right-panel/RightPanel';
-import agentCss from '../presentation/agent/Conversation.module.css';
+import { conversationCss } from '../presentation/agent/conversationCss';
 import { Button } from '../presentation/primitives/Button';
 import { IconPanelLeftOutline16, IconQuestionOutline14 } from '../presentation/primitives/icons';
 import { sessionDisplayTitle } from '../bindings/session-title';
@@ -449,10 +449,10 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} host={workspaceHost} authority={workspaceAuthority} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
     {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
-    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${agentCss.root}`} data-phase={activeSessionId ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={activeSessionId ? 'session-title' : undefined} aria-label={activeSessionId ? undefined : tx('agent:conversation-header.product-title')}>
+    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${conversationCss.root}`} data-phase={activeSessionId ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={activeSessionId ? 'session-title' : undefined} aria-label={activeSessionId ? undefined : tx('agent:conversation-header.product-title')}>
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} sessionId={activeSessionId} summary={activeSummary} view={view} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
-        previewToggle={previews.mode === 'collapsed' && <>{sideQuestionAvailable && <Button size="sm" className={agentCss.iconButton} data-side-question-toggle aria-label={tx('agent:btw.title')} title={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></Button>}<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button></>} invokeCommand={invokeCommand}
+        previewToggle={previews.mode === 'collapsed' && <>{sideQuestionAvailable && <Button size="sm" className={conversationCss.iconButton} data-side-question-toggle aria-label={tx('agent:btw.title')} title={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></Button>}<Button size="sm" className={conversationCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={conversationCss.mirrored} /></Button></>} invokeCommand={invokeCommand}
         openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} transition={sessionTransition?.sessionId === view.id ? sessionTransition.action : undefined} recover={action => {
@@ -468,10 +468,10 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         }
       }} />}
 
-      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={activeSessionId && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={activeSessionId && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
+      <section className={`conversation-panel ${conversationCss.body}`} id="conversation-view" role={activeSessionId && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={activeSessionId && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ConversationQuestionPanels client={client} sessionId={view?.id}>
-      <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
+      <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={conversationCss.scrollBody} data-conversation-scroll>
       <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={activeSessionId} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}
         messageVersionFocus={messageVersionFocus}
         onRetryMessage={(locator, replacementText) => {

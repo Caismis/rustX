@@ -2,7 +2,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from '../../locale/react';
 import { displayedWidth, readWidthPreference, saveWidthPreference, WIDTH_EDGE, WIDTH_MIN } from './conversation-width';
-import css from '../../presentation/agent/Conversation.module.css';
+import { conversationCss } from '../../presentation/agent/conversationCss';
 
 /** CSS publication is local to this column; dragging never invalidates Session. */
 export function ConversationWidthControls({ active }: { active: boolean }) {
@@ -57,7 +57,7 @@ export function ConversationWidthControls({ active }: { active: boolean }) {
   useLayoutEffect(() => { if (!active) end(false); }, [active]);
   const usable = active && geometry.column >= WIDTH_MIN + WIDTH_EDGE && (geometry.column - geometry.width) / 2 >= 58;
   return <><span ref={marker} hidden data-conversation-width-owner/>{usable && (['left','right'] as const).map(side => <div key={side}
-    className={css.widthHandle} data-side={side} data-width-handle={side} role="slider" tabIndex={0}
+    className={conversationCss.widthHandle} data-side={side} data-width-handle={side} role="slider" tabIndex={0}
     aria-label={tx(side === 'left' ? 'agent:reading.width-left' : 'agent:reading.width-right')}
     aria-orientation="horizontal" aria-valuemin={WIDTH_MIN} aria-valuemax={Math.max(WIDTH_MIN, geometry.column-WIDTH_EDGE)} aria-valuenow={Math.round(geometry.width)}
     onPointerDown={event => {
