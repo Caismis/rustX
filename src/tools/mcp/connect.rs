@@ -433,7 +433,7 @@ impl McpServerRuntime {
                 if binding.credentials.client_owned
                     && transport_config
                         .custom_headers
-                        .contains_key(http::header::HOST)
+                        .contains_key(&http::header::HOST)
                 {
                     return Err(McpError::Configuration(
                         "Workspace MCP requests must use the HTTP authority of their configured origin".into(),
