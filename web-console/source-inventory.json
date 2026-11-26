@@ -548,7 +548,6 @@
         "../../locale/translation",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
-        "./TodoDock.module.css",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -559,7 +558,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e64665808d56947ba58fce44d32e58f1d975271456eff28e18300e043527f3c8"
+      "local_sha256": "0593627f96d129b3b9be3a9c82561ae53494c7a63ec3791c546935370aa33223"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -3353,46 +3352,6 @@
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-permission-presets/src/client/PermissionSelect.module.css",
-      "destination": "web-console/src/presentation/agent/PermissionSelect.module.css",
-      "upstream_sha256": "dc6cea246e452bfef40b1085c5b624b742c509bf54c8ea5fd15c2c8ca52be328",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "df8b24ac01d7f98e24529cff9f218360cf7acf5b20f144e9e640e79c21efe8bd",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-permission-presets/src/client/PermissionSelect.module.css",
-          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-          "upstream_sha256": "479464c75eb3f4ed6e2fd1d8e41632fed6c9a0e7a48f0287094195ae0524d51d",
-          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
-        }
-      ]
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-primitives/src/RiskConfirmation.module.css",
-      "destination": "web-console/src/presentation/primitives/RiskConfirmation.module.css",
-      "upstream_sha256": "c4c8e339a9f12ebf21c785cd6217898733f8a053f63d5aee936611fcd319ef27",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "9d1ac2d4619ce81a4b9586adeceffa284628c27275df437387205f4cbc55181e"
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
       "destination": "web-console/src/presentation/agent/TurnProcess.tsx",
       "upstream_sha256": "d397f1e92f76585fa49b924b3d43d829ad503a4ffa821660234d4b51e5cc743f",
@@ -3573,22 +3532,6 @@
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
       "local_sha256": "ceedd7f4e4d5670fa1c99d10d3099bd4258e80920f376862a73a947f24eb73e1"
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-primitives/src/SearchBlock.module.css",
-      "destination": "web-console/src/presentation/primitives/SearchBlock.module.css",
-      "upstream_sha256": "52efb46feb6fadaac29ae52b3d2face1c442eb83cbde93d7163b1d15ac0c4be0",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "4862a42c0e6602d3a5cea9fb9354e09d920cbe2294bd04579609468dc8c95bf7"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -5886,20 +5829,6 @@
       "classification": "A"
     },
     {
-      "upstream": "packages/client/ui-primitives/src/TextShimmer.module.css",
-      "destination": "web-console/src/presentation/primitives/TextShimmer.module.css",
-      "treatment": "Adapted Harness retry disclosure and activity shimmer. Uses existing native Trace request facts; no browser retry scheduling or inferred delays/limits.",
-      "upstream_sha256": "2353d6d72be5150aee3b528e7ae081a941f508f4ee3aa17243d6b0cc3b4240c7",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness retry event protocol and runtime authority"
-      ],
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "8b8efac648dc9d9d925674efe32e9584f0fd69d9dd23f4d32c5f4bb207413db2",
-      "classification": "A"
-    },
-    {
       "upstream": "packages/client/ui-theme/src/client/AppearanceRow.tsx",
       "destination": "web-console/src/presentation/settings/AppearanceRow.tsx",
       "treatment": "Ported three preference cubes and selected appearance from Harness. Browser preference remains separate from resolved system color scheme.",
@@ -6492,14 +6421,13 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../primitives/icons",
-        "./AttachmentRail.module.css",
         "clsx",
         "react"
       ],
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "c1e95f0aeff933b2b78a8cf0b83051c66dd9be3bef4271b51cd1fe58baeedd27"
+      "local_sha256": "4203d9ce0f2dd300dcd98d20936895ffdbfce70c81028f3d8eb7f1beadeda180"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

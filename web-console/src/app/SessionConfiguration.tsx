@@ -6,7 +6,6 @@ import type { AppServerClient } from '../client/app-server';
 import type { SessionView, ConnectionState } from '../client/contracts';
 import { Button } from '../presentation/primitives/Button';
 import { StateDot, type StateDotState } from '../presentation/primitives/StateDot';
-import css from '../presentation/agent/SessionConfiguration.module.css';
 import { useSessionConfiguration, type SessionConfigurationActor } from './settings/machines/react';
 import { applicationOwners, observedResult, observedUnitLabel, observedUnits, openOwnerLabel, sourceTargetKey, unitApplication } from './settings/projection';
 
@@ -56,7 +55,7 @@ function ConfigurationObservation({ actor, client, connection, openOwningSetting
   const detail = (rows: typeof observations) => rows.map(row => row.result.state === 'failed' || row.result.state === 'uncertain'
     ? tx('common:copy.value-failed-value', { p0: observedUnitLabel(tx, row.unit), p1: row.result.diagnostic })
     : observedUnitLabel(tx, row.unit));
-  return <section aria-label={tx('common:session-configuration.session-configuration')} className={css.banner}>
+  return <section aria-label={tx('common:session-configuration.session-configuration')} className="flex flex-col gap-[6px] min-w-0 mt-[8px] mx-0 mb-0 [color:var(--dsw-alias-label-primary)] text-[13px] leading-[20px] [container:session-configuration/inline-size]">
     {unavailable && <Line state="unavailable" text={tx('common:copy.configuration-status-unavailable-retaining-the-last-observation')} />}
     {waiting.length > 0 && <Line state="waiting" text={tx('common:copy.configuration-applies-after-current-work')} detail={detail(waiting)} />}
     {failed.length > 0 && <Line state="failed" text={tx('common:copy.configuration-failed-previous-kept')} detail={detail(failed)}
@@ -69,7 +68,7 @@ function ConfigurationObservation({ actor, client, connection, openOwningSetting
       </>} />}
     {uncertain.length > 0 && <Line state="failed" text={tx('common:copy.configuration-uncertain')} detail={detail(uncertain)} />}
     {restart.length > 0 && <Line state="waiting" text={tx('common:copy.configuration-restart-required')} detail={detail(restart)} />}
-    {readError && <p role="alert" className={css.alert}>{readError}</p>}
+    {readError && <p role="alert" className="m-0 px-[12px] py-[6px] rounded-[12px] [color:var(--dsw-alias-label-primary)] bg-[color-mix(in_srgb,var(--dsw-alias-state-error-primary)_8%,transparent)] [border-left:3px_solid_var(--dsw-alias-state-error-primary)] wrap-anywhere">{readError}</p>}
   </section>;
 }
 
@@ -83,12 +82,12 @@ const dots: Record<LineState, StateDotState> = { unavailable: 'idle', waiting: '
 function Line({ state, text, detail, actions }: {
   state: LineState; text: string; detail?: readonly string[]; actions?: ReactNode;
 }) {
-  return <div className={css.line} data-state={state}>
-    <StateDot state={dots[state]} className={css.dot} />
-    <div className={css.text}>
+  return <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] [grid-template-areas:'dot_text_actions'] items-center gap-x-[10px] gap-y-[6px] min-w-0 min-h-[40px] box-border pt-[6px] pr-[8px] pb-[6px] pl-[12px] [border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[12px] bg-[var(--dsw-alias-bg-module-platform)] data-[state=failed]:[border-color:color-mix(in_srgb,var(--dsw-alias-state-error-primary)_40%,transparent)] [@container_session-configuration_(max-width:560px)]:grid-cols-[auto_minmax(0,1fr)] [@container_session-configuration_(max-width:560px)]:[grid-template-areas:'dot_text'_'._actions'] [@container_session-configuration_(max-width:560px)]:pr-[10px]" data-state={state}>
+    <StateDot state={dots[state]} className="[grid-area:dot] self-start mt-[5px]" />
+    <div className="[grid-area:text] min-w-0 wrap-anywhere [&_p]:m-0">
       <p role="status">{text}</p>
-      {!!detail?.length && <ul className={css.detail}>{detail.map(item => <li key={item}>{item}</li>)}</ul>}
+      {!!detail?.length && <ul className="mt-[2px] mx-0 mb-0 p-0 list-none [color:var(--dsw-alias-label-secondary)] text-[12px] leading-[18px]">{detail.map(item => <li key={item}>{item}</li>)}</ul>}
     </div>
-    {actions && <div className={css.actions}>{actions}</div>}
+    {actions && <div className="[grid-area:actions] flex flex-wrap justify-end gap-[6px] min-w-0 [@container_session-configuration_(max-width:560px)]:justify-start [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:text-left [&_button]:h-auto [&_button]:min-h-[28px]">{actions}</div>}
   </div>;
 }

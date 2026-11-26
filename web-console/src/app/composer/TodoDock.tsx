@@ -12,7 +12,6 @@ import type { TodoTask } from '../../../../protocol/app-server/v80';
 import type { TodoDockState } from '../../bindings/composer-context';
 import { IconChecklistOutline14, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import { StateDot } from '../../presentation/primitives/StateDot';
-import css from './TodoDock.module.css';
 
 /** Zero-count segments are omitted; a non-empty list keeps at least one. */
 function progress(tx: Translate, tasks: readonly TodoTask[]) {
@@ -39,18 +38,18 @@ export function TodoDock({ state }: { state: TodoDockState }) {
   // not capability discovery; that belongs to the capability/settings surfaces.
   if (state.kind === 'absent' || !listed) return null;
   const { tasks } = state;
-  return <section className={css.root} aria-label={tx('agent:todo-dock.to-dos')} data-todo-state="current">
-    <button type="button" className={css.header} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : listId} onClick={() => setCollapsed(value => !value)}>
-      <span className={css.lead} aria-hidden><IconChecklistOutline14 /></span><span className={css.title}>{tx('agent:todo-dock.to-dos')}</span>
-      <span className={css.progress}>{progress(tx, tasks)}{state.deferred && <>{tasks.length ? ' · ' : ''}{tx('common:activity.loading')}</>}</span>
-      <span className={css.chevron} data-collapsed={collapsed} aria-hidden><IconChevronDownOutline14 /></span>
+  return <section className="box-border flex-none overflow-hidden my-0 mx-auto w-[calc(100%-2*var(--dsh-composer-side-clearance)-4*var(--dsh-composer-dock-inset))] max-w-[calc(var(--dsh-composer-card-max-width)-4*var(--dsh-composer-dock-inset))] flex flex-col gap-[8px] px-[12px] py-[6px] border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-specific-menu)] [backdrop-filter:var(--dsw-menu-backdrop-filter)] shadow-[var(--dsw-elevation-panel)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)]" aria-label={tx('agent:todo-dock.to-dos')} data-todo-state="current">
+    <button type="button" className="box-border flex items-center gap-[10px] w-full p-0 border-none bg-transparent [color:inherit] [font:inherit] text-left cursor-pointer focus-visible:[outline:2px_solid_var(--dsw-alias-label-tertiary)] focus-visible:-outline-offset-2 focus-visible:rounded-[12px]" aria-expanded={!collapsed} aria-controls={collapsed ? undefined : listId} onClick={() => setCollapsed(value => !value)}>
+      <span className="grid flex-none place-items-center [color:var(--dsw-alias-label-tertiary)] w-[16px] h-[16px]" aria-hidden><IconChecklistOutline14 /></span><span className="flex-none text-[13px] leading-[24px] font-medium [color:var(--dsw-alias-label-primary)]">{tx('agent:todo-dock.to-dos')}</span>
+      <span className="flex-auto min-w-0 overflow-hidden text-[13px] leading-[20px] [color:var(--dsw-alias-label-tertiary)] text-ellipsis whitespace-nowrap">{progress(tx, tasks)}{state.deferred && <>{tasks.length ? ' · ' : ''}{tx('common:activity.loading')}</>}</span>
+      <span className="grid flex-none place-items-center [color:var(--dsw-alias-label-tertiary)] w-[16px] h-[16px] data-[collapsed=true]:rotate-180" data-collapsed={collapsed} aria-hidden><IconChevronDownOutline14 /></span>
     </button>
-    {!collapsed && <><ol id={listId} className={css.list}>{tasks.map(task => {
+    {!collapsed && <><ol id={listId} className="flex flex-col gap-[8px] max-h-[180px] m-0 p-0 overflow-y-auto list-none">{tasks.map(task => {
       const text = task.status === 'in_progress' && task.active_form ? task.active_form : task.subject;
-      return <li key={task.id} className={css.item} data-status={task.status} data-task-id={task.id}>
-        <span className={css.glyph} role="img" aria-label={STATUS[task.status]}><StateDot state={task.status === 'completed' ? 'done' : task.status === 'in_progress' ? 'ongoing' : 'idle'} /></span>
-        <span className={css.content} title={text}>{text}</span>
-        {!!task.blocked_by?.length && <span className={css.dependency}>{tx('agent:todo-dock.after')}{' '}{task.blocked_by.map(id => `#${id}`).join(', ')}</span>}
+      return <li key={task.id} className="flex items-center gap-[10px] min-w-0 text-[13px] leading-[20px] [color:var(--dsw-alias-label-secondary)]" data-status={task.status} data-task-id={task.id}>
+        <span className="grid flex-none place-items-center [color:var(--dsw-alias-label-tertiary)] w-[16px] h-[16px]" role="img" aria-label={STATUS[task.status]}><StateDot state={task.status === 'completed' ? 'done' : task.status === 'in_progress' ? 'ongoing' : 'idle'} /></span>
+        <span className="flex-auto min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={text}>{text}</span>
+        {!!task.blocked_by?.length && <span className="flex-none text-[12px] [color:var(--dsw-alias-label-tertiary)] whitespace-nowrap">{tx('agent:todo-dock.after')}{' '}{task.blocked_by.map(id => `#${id}`).join(', ')}</span>}
       </li>;
     })}</ol>{state.deferred && <p role="status">{tx('common:activity.loading')}</p>}</>}
   </section>;

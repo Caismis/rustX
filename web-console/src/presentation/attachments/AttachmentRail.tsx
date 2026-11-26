@@ -7,7 +7,6 @@ import clsx from 'clsx'
 import {
   IconChevronLeftOutline14 as IconChevronLeftOutlineRegular, IconChevronRightOutline14 as IconChevronRightOutlineRegular,
 } from '../primitives/icons'
-import css from './AttachmentRail.module.css'
 
 /** One ordered draft attachment rendered by the rail owner. */
 export interface AttachmentRailItem {
@@ -135,11 +134,11 @@ export function AttachmentRail<T extends AttachmentRailItem>({ items, labels, re
     el.scrollBy({ left: direction * Math.max(el.clientWidth - 64, 200), behavior: pageBehavior() })
   }
   return (
-    <div className={css.root}>
+    <div className="relative min-w-0">
       {edges.left && (
         <button
           type="button"
-          className={clsx(css.arrow, css.arrowLeft)}
+          className={clsx('absolute top-1/2 z-[2] grid place-items-center w-[24px] h-[24px] p-0 border-0 rounded-full [corner-shape:round] bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-panel)] cursor-pointer -translate-y-1/2 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] hover:bg-[var(--dsw-alias-interactive-bg-hover-solid)] left-[4px]')}
           aria-label={labels.scrollLeft}
           onClick={() => { page(-1) }}
         >
@@ -148,19 +147,19 @@ export function AttachmentRail<T extends AttachmentRailItem>({ items, labels, re
       )}
       <div
         ref={railRef}
-        className={css.rail}
+        className="flex items-stretch gap-[10px] overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)]"
         role="group"
         aria-label={labels.group}
         onScroll={updateEdges}
       >
         {items.map(item => (
-          <div key={item.id} className={css.item}>{renderItem(item)}</div>
+          <div key={item.id} className="flex-none h-[64px]">{renderItem(item)}</div>
         ))}
       </div>
       {edges.right && (
         <button
           type="button"
-          className={clsx(css.arrow, css.arrowRight)}
+          className={clsx('absolute top-1/2 z-[2] grid place-items-center w-[24px] h-[24px] p-0 border-0 rounded-full [corner-shape:round] bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-panel)] cursor-pointer -translate-y-1/2 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] hover:bg-[var(--dsw-alias-interactive-bg-hover-solid)] right-[4px]')}
           aria-label={labels.scrollRight}
           onClick={() => { page(1) }}
         >
