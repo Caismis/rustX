@@ -31,7 +31,6 @@ import { Message, Content } from './Message';
 import { messageContinuation, useMessageBlocks } from './message-blocks';
 import { AssistantMessage, UserMessage, MessageFile } from '../../presentation/agent/Message';
 import type { Submission } from '../../client/contracts';
-import pendingCss from './PendingMessage.module.css';
 import { TurnDeliveries } from './TurnDeliveries';
 import { TurnChanges } from './TurnChanges';
 import { CreatedTasks } from '../scheduler/CreatedTasks';
@@ -480,7 +479,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     });
     const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
     return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-chat-flow-kind="user" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
-      other={<UserMessage actions={<div className={tailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>}/></div>;
+      other={<UserMessage actions={<div className={tailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className="whitespace-pre-wrap wrap-anywhere">{text}</div> : undefined}</UserMessage>}/></div>;
   };
   return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}

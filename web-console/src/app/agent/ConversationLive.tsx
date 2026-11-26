@@ -29,7 +29,6 @@ import { useMessageVersions } from './message-version-reading';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
-import pendingCss from './PendingMessage.module.css';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
@@ -173,10 +172,10 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   );
   if (sessionId && tracePreview) return wrapCanvas(<Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { if (readingOwner.connected) void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>);
   if (sessionId && mode === 'trajectory' && readingOwner.coldReadable && !view?.trace) return <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
-    {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
+    {readingOwner.loading && !waiting && <div className="flex flex-col gap-[20px] pb-[16px] w-full max-w-[var(--dsh-chat-content-width)] mx-auto"><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
   </ChatViewport>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
-    {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
+    {readingOwner.loading && !waiting && <div className="flex flex-col gap-[20px] pb-[16px] w-full max-w-[var(--dsh-chat-content-width)] mx-auto"><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
     <PendingMessage client={client} sessionId={sessionId}/>
   </ChatViewport> : null;
   return wrapCanvas(mode === 'trajectory' && view.trace
@@ -203,7 +202,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
         userMessageHistory={messageControls && !view.readingPreview && !view.retrying ? {
           versions, retry: onRetryMessage, switchVersion,
         } : undefined}/>}
-      {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
+      {view.configurationObservation?.error && <div className="flex flex-col gap-[20px] pb-[16px] w-full max-w-[var(--dsh-chat-content-width)] mx-auto"><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>
       </ChatViewport></ToolInspectionContext></JournalSourceProvider>);
@@ -257,7 +256,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
 }
 
 function ConversationSkeleton({ label, phase }: { label: string; phase?: string }) {
-  return <div className={pendingCss.skeleton} role="status" aria-label={label} data-first-submission={phase}>
+  return <div className="grid gap-[0.7em] w-[min(100%,32rem)] py-[0.5em] animate-pending-reveal motion-reduce:[animation-timing-function:step-end] [&_span]:h-[0.75em] [&_span]:rounded-[0.25em] [&_span]:bg-[linear-gradient(100deg,transparent_30%,var(--dsw-alias-bg-skeleton)_50%,transparent_70%)_100%_0/240%_100%_var(--dsw-alias-bg-skeleton)] [&_span]:animate-pending-sweep motion-reduce:[&_span]:animate-none [&_span:nth-child(2)]:w-[86%] [&_span:last-child]:w-[57%]" role="status" aria-label={label} data-first-submission={phase}>
     <span aria-hidden="true"/><span aria-hidden="true"/><span aria-hidden="true"/>
   </div>;
 }
@@ -269,10 +268,10 @@ export function PendingMessage({ client, sessionId }: { client: AppServerClient;
   const accepted = submissions?.find(value => value.messageId === flow?.acceptedMessageId);
   if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase) && !accepted) return null;
   const text = accepted?.content ? accepted.content.flatMap(value => value.type === 'text' ? [value.text] : []).join('\n') : flow.draft.text;
-  return <div className={pendingCss.root} data-pending-message="" data-provisional-message-id={accepted?.messageId} data-chat-anchor-key={accepted ? 'message:' + accepted.messageId : undefined}>
+  return <div className="flex flex-col gap-[20px] pb-[16px] w-full max-w-[var(--dsh-chat-content-width)] mx-auto" data-pending-message="" data-provisional-message-id={accepted?.messageId} data-chat-anchor-key={accepted ? 'message:' + accepted.messageId : undefined}>
     <UserMessage label={tx('agent:message.your-message')} attachments={flow.attachments.length > 0 ? flow.attachments.map(file => file.type.startsWith('image/')
       ? <AttachmentCard key={file.id} name={file.name} image/>
-      : <MessageFile key={file.id} name={file.name} bytes={file.size}/>) : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>
+      : <MessageFile key={file.id} name={file.name} bytes={file.size}/>) : undefined}>{text !== '' ? <div className="whitespace-pre-wrap wrap-anywhere">{text}</div> : undefined}</UserMessage>
     <AssistantMessage label={tx('agent:message.assistant-response')}><ConversationSkeleton label={tx('agent:submission.sending')} phase={flow.phase}/></AssistantMessage>
   </div>;
 }
