@@ -52,6 +52,7 @@
   --animate-pending-reveal: pending-reveal .16s ease-out .2s backwards;
   --animate-pending-sweep: pending-sweep 2s ease-in-out infinite;
   --animate-fade-in: drop-fade-in 160ms ease-out;
+  --animate-state-chase: dsh-state-dot-chase 1s infinite;
   --animate-marquee-arrive: dsh-marquee-arrive 0s var(--dsh-marquee-duration) forwards;
   --animate-marquee-travel: dsh-marquee-travel var(--dsh-marquee-duration) linear forwards;
   --animate-toast-success-odd: toast-success-odd 0.32s cubic-bezier(0.5, 1, 0.89, 1);
@@ -72,6 +73,12 @@
   @keyframes drop-fade-in {
     from { opacity: 0; }
     to { opacity: 1; }
+  }
+  @keyframes dsh-state-dot-chase {
+    0%, 12.4% { opacity: 1; }
+    12.5%, 24.9% { opacity: 0.6; }
+    25%, 37.4% { opacity: 0.35; }
+    37.5%, 100% { opacity: 0.15; }
   }
   @keyframes dsh-marquee-arrive {
     to { mask-image: linear-gradient(to right, transparent, #000 12px); }

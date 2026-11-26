@@ -1,7 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import clsx from 'clsx'
 import { Spinner } from '@/components/ui/spinner'
-import css from './StateDot.module.css'
 
 /**
  * State semantic: green done / amber user-attention / blue running ring /
@@ -26,7 +25,7 @@ export function StateDot({ state, size = 10, className }: {
   }
   return (
     <span
-      className={clsx(css.dot, className)}
+      className={clsx('relative inline-block flex-none data-[state=done]:[color:var(--dsw-alias-state-success-primary)] data-[state=warning]:[color:var(--dsw-alias-state-warn-primary)] data-[state=error]:[color:var(--dsw-alias-state-error-primary)] data-[state=idle]:[color:var(--dsw-alias-label-tertiary)] before:content-[""] before:absolute before:inset-0 before:rounded-full before:bg-current before:opacity-10 after:content-[""] after:absolute after:inset-[20%] after:rounded-full after:bg-current', className)}
       data-state={state}
       style={{ width: size, height: size }}
       aria-hidden="true"

@@ -2429,7 +2429,6 @@
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "94e287b278d5481d6812dae820a95afee6856d34b4056bfd84017f43a5b43ad2",
       "retained_dependencies": [
-        "./StateDot.module.css",
         "@/components/ui/spinner",
         "clsx"
       ],
@@ -2441,7 +2440,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "8f5aba6a9118c95ae838fd22110565fd8428d87ed27b60785687c7a9526e449a",
+      "local_sha256": "ca2abe66907168529cf2da142c0edfd7663e977ae94bb366d7720b411d69cb2e",
       "classification": "A"
     },
     {
@@ -3474,15 +3473,14 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
-        "../primitives/icons",
-        "./TurnProcess.module.css"
+        "../primitives/icons"
       ],
       "excluded_dependencies": [
         "Cordis slots and runtime authority",
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "42cf33fc1c2e9c9e468670d68d08827dcbe36c06175f2029fa77341c30cbeb78",
+      "local_sha256": "16c12b2cdce624f95caa1d35d0ba71f5beb08ed4372c09f520fef4e436b30c06",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
@@ -3766,19 +3764,6 @@
       ],
       "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
       "local_sha256": "7f1ca5197eae67a888e39ea401d7f54377135950787929c91b4096b8f6148dbc"
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css",
-      "destination": "web-console/src/app/agent/AgentStatus.module.css",
-      "treatment": "Adapted disclosure axes, separator and indentation; native anchored status sections replace Harness context producer/forms.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness context projection and producer forms"
-      ],
-      "retained_dependencies": [],
-      "upstream_sha256": "233b9e4d400343d4aadd91b6977fd9108c020168916acdf4996adf8774eb791f",
-      "local_sha256": "cf83b90d9857e7ad3f0e37fa2f1a79836cd475de8c5d1ec281f8ab8e95e0ae4e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4819,10 +4804,9 @@
       "retained_dependencies": [
         "../primitives/Tooltip",
         "../primitives/icons",
-        "./CodeToolbar.module.css",
         "./highlight"
       ],
-      "local_sha256": "3b909a08e8575726f1e8122a4988bf09472672ad592cca0ea24b5faf12462a6e"
+      "local_sha256": "99ef74bf388e4b33708c6e12ca4e895ec47ae01fbd47525e0841d1f2de8812d2"
     },
     {
       "upstream": "packages/client/ui-primitives/src/CodeCard.module.css",
@@ -6036,7 +6020,6 @@
         "../../presentation/primitives/TextShimmer",
         "../trajectory/TraceFields",
         "./AgentTranscript",
-        "./ModelRetry.module.css",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -6044,7 +6027,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "49cbf51ace04d5a02b125c4d85421adba58345e35158057e851b672f92c84d39",
+      "local_sha256": "eaadf3b8bf07a5fe29f451136b50aadd58a3e123b0bb3e2c9094654ba9607723",
       "classification": "A"
     },
     {
@@ -6107,20 +6090,6 @@
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "local_sha256": "0aff608d2c2e97f0b30ab80d1e7c631e104b84dce8d6a112de36380444e45439",
-      "classification": "A"
-    },
-    {
-      "upstream": "packages/client/ui-theme/src/client/AppearanceRow.module.css",
-      "destination": "web-console/src/presentation/settings/AppearanceRow.module.css",
-      "treatment": "Harness appearance tokens and selected cards in three equal grid columns, including narrow Settings panels. Explicit user-requested no-wrap layout; browser preference remains separate from the resolved system color scheme.",
-      "upstream_sha256": "2e1f8f44ee41256aaf6af103d38edb7220a3e0a82099be8e9d3e0b75a5e4f6c4",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Host preference storage and Cordis slots"
-      ],
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "f6c18460620ad8f34a2da1fc63513b066219092817254b0123747a052d652c89",
       "classification": "A"
     },
     {
@@ -6775,20 +6744,6 @@
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-attachment/src/DropOverlay.module.css",
-      "destination": "web-console/src/presentation/attachments/DropOverlay.module.css",
-      "upstream_sha256": "cce5c2b38f9db422895d498ea652fad36276b6117a8e02d7b5dbe4960e000189",
-      "classification": "A",
-      "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
-      ],
-      "local_sha256": "44d09e7498fbfcc415f320501437539fe04de0cb3abbea7fb9eec7ae700d5c08"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-attachment/src/client/ComposerAttachments.module.css",
       "destination": "web-console/src/presentation/attachments/ComposerAttachments.module.css",
       "upstream_sha256": "c2191478d35bd2c6a16355c60ac2801f4533bfcfcbb83309d9a03d7faeeee71e",
@@ -6818,20 +6773,6 @@
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
       "local_sha256": "ac0b29829493c317bc0851896d153c9f235bbe75ac834d8953ddd1a35b85d5b4"
-    },
-    {
-      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "upstream": "packages/client/ui-primitives/src/ImageLightbox.module.css",
-      "destination": "web-console/src/presentation/primitives/ImageLightbox.module.css",
-      "upstream_sha256": "cc2b6346c0a6443fbe94c274c129ccbf8cd8ca4dd0dac672cf64402fd22e25eb",
-      "classification": "A",
-      "treatment": "Attachment alignment: DSH document-wide drop mask/listeners, 64px image thumbnails/lightbox, 240px file cards and paged horizontal attachment rail. Native rustX draft, binary transfer, receipts and uncertain-status recovery remain authoritative; images are workspace files, not provider-native image blocks.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
-      ],
-      "local_sha256": "bab0d2d0282f45946b4a1953b93953b97c3ee7804de157123649e3b4c4819c0e"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
