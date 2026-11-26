@@ -19,7 +19,6 @@ import {
 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { ArtifactContext } from '../components/Artifact';
-import css from './QueueDock.module.css';
 import { Textarea } from '@/components/ui/textarea';
 
 type OperationKind = 'edit' | 'remove' | 'steer';
@@ -28,7 +27,7 @@ type QueueAttachment =
   | { readonly type: 'image'; readonly artifactId?: string; readonly file?: File; readonly alt?: string | null }
   | { readonly type: 'file'; readonly name: string; readonly bytes?: number };
 
-const QueueGlyph = () => <span className={css.lead} aria-hidden><IconQueueOutline14 /></span>;
+const QueueGlyph = () => <span className="grid flex-none place-items-center [color:var(--dsw-alias-label-tertiary)]" aria-hidden><IconQueueOutline14 /></span>;
 
 function queueAttachments(
   content: readonly UserContentBlock[],
@@ -75,10 +74,10 @@ function rowTextPreview(content: readonly UserContentBlock[]): string {
 
 function QueueFile({ name, bytes, label }: { name: string; bytes?: number; label: string }) {
   return (
-    <span className={css.file} aria-label={label} title={name}>
-      <span className={css.fileIcon} aria-hidden><FileTypeIcon path={name} size={16} /></span>
-      <span className={css.fileName}>{name}</span>
-      {bytes !== undefined && <span className={css.fileSize}>{fileSizeText(bytes)}</span>}
+    <span className="inline-flex flex-[0_1_180px] items-center gap-[4px] min-w-[74px] h-[24px] px-[6px] py-0 overflow-hidden [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-base)] box-border" aria-label={label} title={name}>
+      <span className="inline-flex flex-none w-[16px] h-[16px]" aria-hidden><FileTypeIcon path={name} size={16} /></span>
+      <span className="min-w-0 overflow-hidden [color:var(--dsw-alias-label-primary-dimmed)] [font:var(--dsw-font-xs-13)] text-ellipsis whitespace-nowrap">{name}</span>
+      {bytes !== undefined && <span className="flex-none [color:var(--dsw-alias-label-tertiary)] text-[10px] whitespace-nowrap">{fileSizeText(bytes)}</span>}
     </span>
   );
 }
@@ -119,8 +118,8 @@ function QueueThumb({ artifactId, file, label }: {
     };
   }, [artifactId, file, resources]);
   return url === null
-    ? <span className={css.thumb} aria-hidden />
-    : <img className={css.thumb} src={url} alt={label} />;
+    ? <span className="flex-none w-[24px] h-[24px] [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[var(--dsw-radius-xs)] bg-[var(--dsw-alias-bg-base)] object-cover" aria-hidden />
+    : <img className="flex-none w-[24px] h-[24px] [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[var(--dsw-radius-xs)] bg-[var(--dsw-alias-bg-base)] object-cover" src={url} alt={label} />;
 }
 
 export function QueueDock({ rows, submissions, running, disabled = false, edit, remove, steer, attachmentMetadata, observation, readCut }: {
@@ -288,9 +287,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   };
   const saveDisabled = !draft || locked || staleDraft || !draft.text.trim() || !edit;
   const discardDisabled = pendingOperation;
-  const editor = draft ? <div className={css.editPanel}>
-    <div className={css.editorField}>
-      <Textarea unstyled ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
+  const editor = draft ? <div className="flex items-center flex-1 gap-[8px] flex-wrap min-w-0 p-0 text-[13px]">
+    <div className="flex-1 min-w-0">
+      <Textarea unstyled ref={editorNode} className="box-border block w-full min-w-0 min-h-[28px] max-h-[127px] m-0 px-[8px] py-[3px] [border:0.5px_solid_var(--dsw-alias-border-l4)] rounded-[var(--dsw-radius-sm)] outline-none bg-[var(--dsw-alias-bg-base)] [color:var(--dsw-alias-label-primary)] [font:var(--dsw-font-xs-13)] [font-family:Inter,var(--dsw-font-family)] overflow-y-auto resize-none focus:[border-color:var(--dsw-alias-state-business-primary)]" autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
         onChange={event => {
           const text = event.currentTarget.value;
           clearCopyState();
@@ -307,38 +306,38 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
           }
         }} />
     </div>
-    <div className={css.actions}>
+    <div className="flex flex-none items-center gap-[8px] flex-wrap">
       <Tooltip label={tx('agent:queue-dock.save')} side="bottom" delayMs={500} disabled={saveDisabled}>
-        <button aria-label={tx('agent:queue-dock.save')} type="button" className={css.action} disabled={saveDisabled} onClick={() => { if (edit && !saveDisabled) void apply(() => edit(draft.expected, draft.text), 'edit'); }}><IconCheckOutline14 size={14} /></button>
+        <button aria-label={tx('agent:queue-dock.save')} type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={saveDisabled} onClick={() => { if (edit && !saveDisabled) void apply(() => edit(draft.expected, draft.text), 'edit'); }}><IconCheckOutline14 size={14} /></button>
       </Tooltip>
-      {staleDraft ? <button type="button" className={css.action} disabled={!draft.text} onClick={copyDraft}>{tx('agent:queue-dock.copy-draft')}</button> : null}
+      {staleDraft ? <button type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={!draft.text} onClick={copyDraft}>{tx('agent:queue-dock.copy-draft')}</button> : null}
       {detachedDraft ? (
-        <button type="button" className={css.action} disabled={discardDisabled} onClick={discardDraft}>{tx('agent:queue-dock.discard-draft')}</button>
+        <button type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={discardDisabled} onClick={discardDraft}>{tx('agent:queue-dock.discard-draft')}</button>
       ) : (
         <Tooltip label={tx('agent:queue-dock.cancel-edit')} side="bottom" delayMs={500} disabled={locked}>
-          <button aria-label={tx('agent:queue-dock.cancel-edit')} type="button" className={css.action} disabled={locked} onClick={cancelEdit}><IconCloseOutline16 size={14} /></button>
+          <button aria-label={tx('agent:queue-dock.cancel-edit')} type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={locked} onClick={cancelEdit}><IconCloseOutline16 size={14} /></button>
         </Tooltip>
       )}
       {!detachedDraft && staleDraft && currentDraft && !currentDraft.deferred ? (
-        <button type="button" className={css.action} disabled={locked} onClick={() => setDraft(current => current ? { ...current, expected: expected(currentDraft), messageId: currentDraft.message.id, notPending: false } : current)}>{tx('agent:queue-dock.use-latest-version')}</button>
+        <button type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={locked} onClick={() => setDraft(current => current ? { ...current, expected: expected(currentDraft), messageId: currentDraft.message.id, notPending: false } : current)}>{tx('agent:queue-dock.use-latest-version')}</button>
       ) : null}
     </div>
     {staleDraft ? (
-      <p className={css.draftStatus} role="status">{detachedDraft ? tx('agent:queue-dock.this-message-is-no-longer-queued') : tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav')}</p>
+      <p className="flex-[1_0_100%] m-0 [color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)]" role="status">{detachedDraft ? tx('agent:queue-dock.this-message-is-no-longer-queued') : tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav')}</p>
     ) : null}
     {copyStatus ? (
-      <p className={css.draftStatus} role="status">{tx(copyStatus === 'copied' ? 'agent:queue-dock.draft-copied' : 'agent:queue-dock.copy-draft-failed')}</p>
+      <p className="flex-[1_0_100%] m-0 [color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)]" role="status">{tx(copyStatus === 'copied' ? 'agent:queue-dock.draft-copied' : 'agent:queue-dock.copy-draft-failed')}</p>
     ) : null}
   </div> : null;
-  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} aria-busy={pendingOperation} data-queue-dock="">
-    <div className={css.panel}>
-      {count > 1 ? <button type="button" className={css.header} aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listId} onClick={() => setCollapsed(value => !value)}>
-        <QueueGlyph /><span className={css.count}>{count} {tx('agent:queue-dock.queued')}</span>
+  return <section className="box-border flex-none mt-0 mx-auto mb-[calc(0px-var(--dsh-composer-stack-gap)-3px)] w-[calc(100%-2*var(--dsh-composer-side-clearance)-4*var(--dsh-composer-dock-inset))] max-w-[calc(var(--dsh-composer-card-max-width)-4*var(--dsh-composer-dock-inset))]" aria-label={tx('agent:queue-dock.queue')} aria-busy={pendingOperation} data-queue-dock="">
+    <div className="overflow-hidden w-full px-0 py-[2px] [border:0.5px_solid_var(--dsw-alias-border-l1)] border-b-0! rounded-t-[var(--dsw-radius-lg)] rounded-b-none bg-[var(--dsw-specific-menu)] [backdrop-filter:var(--dsw-menu-backdrop-filter)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)]">
+      {count > 1 ? <button type="button" className="box-border flex items-center gap-[10px] w-full h-[36px] px-[12px] py-[4px] border-none rounded-[var(--dsw-radius-md)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-left cursor-pointer focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2 disabled:cursor-default" aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listId} onClick={() => setCollapsed(value => !value)}>
+        <QueueGlyph /><span className="flex-auto min-w-0 [font-family:Inter,var(--dsw-font-family)] text-[13px] font-medium leading-[24px]">{count} {tx('agent:queue-dock.queued')}</span>
         {/* A collapsed header keeps sending/accepted provisional submissions visible. */}
-        {!listed && echoes.length > 0 ? <span className={css.status} role="status">{tx('agent:submission.sending')}</span> : null}
-        <span className={css.chevron} aria-hidden>{listed ? <IconChevronDownOutline14 /> : <IconChevronUpOutline14 />}</span>
+        {!listed && echoes.length > 0 ? <span className="flex-none [color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)] whitespace-nowrap" role="status">{tx('agent:submission.sending')}</span> : null}
+        <span className="grid flex-none place-items-center [color:var(--dsw-alias-label-tertiary)] w-[14px] h-[14px]" aria-hidden>{listed ? <IconChevronDownOutline14 /> : <IconChevronUpOutline14 />}</span>
       </button> : null}
-      {count > 0 ? <ul id={listId} className={css.list} hidden={!listed}>
+      {count > 0 ? <ul id={listId} className="max-h-[180px] m-0 p-0 overflow-y-auto list-none" hidden={!listed}>
         {listed && rows.map(row => {
           const origin = inboundOrigin(tx, row.message);
           const attachments = queueAttachments(row.message.content, attachmentMetadata);
@@ -355,19 +354,19 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
           const editDisabled = locked || !edit || !!editBlockedReason;
           const removeDisabled = locked || !remove;
           const steerDisabled = locked || !steer || !running;
-          return <li key={`inbound:${row.sequence}`} className={css.row} data-inbound-sequence={row.sequence} data-message-id={row.message.id}>
+          return <li key={`inbound:${row.sequence}`} className="qd-row box-border flex items-center gap-[10px] w-full min-h-[36px] pt-[4px] pr-[5px] pb-[4px] pl-[12px] rounded-[var(--dsw-radius-md)] [.qd-row+&]:shadow-[inset_0_1px_0_var(--dsw-alias-border-l1)]" data-inbound-sequence={row.sequence} data-message-id={row.message.id}>
             {count === 1 ? <QueueGlyph /> : null}
             {currentDraft === row && !staleDraft ? editor : <>
               {attachments.length > 0 ? (
-                <span className={css.attachments}>
+                <span className="flex flex-none gap-[4px] min-w-0 max-w-[55%] overflow-hidden [.qd-pending_&]:shrink">
                   {attachments.map((item, index) => item.type === 'image'
                     ? <QueueThumb key={`${item.artifactId ?? item.file?.name ?? ''}:${index}`} artifactId={item.artifactId} file={item.file} label={item.alt || tx('agent:queue-dock.image')} />
                     : <QueueFile key={`${item.name}:${index}`} name={item.name} bytes={item.bytes} label={tx('agent:queue-dock.file', { name: item.name })} />)}
                 </span>
               ) : null}
-              <span className={css.preview}>{previewText}</span>
-              {origin ? <span className={css.status}>{origin}</span> : null}
-              {row.message.source === 'human' && isPlainMessageKind(row.message.kind) ? <div className={css.actions}>
+              <span className="flex-auto min-w-0 overflow-hidden [font:var(--dsw-font-xs-13)] [font-family:Inter,var(--dsw-font-family)] [color:var(--dsw-alias-label-primary-dimmed)] text-ellipsis whitespace-nowrap">{previewText}</span>
+              {origin ? <span className="flex-none [color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)] whitespace-nowrap">{origin}</span> : null}
+              {row.message.source === 'human' && isPlainMessageKind(row.message.kind) ? <div className="flex flex-none items-center gap-[8px] flex-wrap">
                 <Tooltip label={tx('agent:queue-dock.edit')} side="bottom" delayMs={500} disabled={editDisabled}>
                   <button
                     ref={element => {
@@ -376,7 +375,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                     }}
                     aria-label={tx('agent:queue-dock.edit')}
                     type="button"
-                    className={css.action}
+                    className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2"
                     disabled={editDisabled}
                     title={editBlockedReason}
                     onClick={() => {
@@ -387,10 +386,10 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                   ><IconEditOutline16 size={14} /></button>
                 </Tooltip>
                 <Tooltip label={tx('agent:queue-dock.remove')} side="bottom" delayMs={500} disabled={removeDisabled}>
-                  <button aria-label={tx('agent:queue-dock.remove')} type="button" className={css.action} disabled={removeDisabled} onClick={() => { if (remove) void apply(() => remove(expected(row)), 'remove'); }}><IconTrashOutline16 size={14} /></button>
+                  <button aria-label={tx('agent:queue-dock.remove')} type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={removeDisabled} onClick={() => { if (remove) void apply(() => remove(expected(row)), 'remove'); }}><IconTrashOutline16 size={14} /></button>
                 </Tooltip>
                 <Tooltip label={tx('agent:queue-dock.steer')} side="bottom" delayMs={500} disabled={steerDisabled}>
-                  <button aria-label={tx('agent:queue-dock.steer')} type="button" className={css.action} disabled={steerDisabled} title={running ? undefined : tx('agent:queue-dock.steer-unavailable')} onClick={() => { if (steer) void apply(() => steer(expected(row)), 'steer'); }}><IconSendOutline14 size={14} /></button>
+                  <button aria-label={tx('agent:queue-dock.steer')} type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" disabled={steerDisabled} title={running ? undefined : tx('agent:queue-dock.steer-unavailable')} onClick={() => { if (steer) void apply(() => steer(expected(row)), 'steer'); }}><IconSendOutline14 size={14} /></button>
                 </Tooltip>
               </div> : null}
             </>}
@@ -403,34 +402,34 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
           const previewText = previewBlocks.length > 0 ? contentPreview(tx, previewBlocks) : '';
           return <li
             key={isSending ? `sending:${submission.sendingInputId}` : `accepted:${submission.messageId}`}
-            className={`${css.row} ${css.pendingRow}`}
+            className={`qd-row box-border flex items-center gap-[10px] w-full min-h-[36px] pt-[4px] pr-[5px] pb-[4px] pl-[12px] rounded-[var(--dsw-radius-md)] [.qd-row+&]:shadow-[inset_0_1px_0_var(--dsw-alias-border-l1)] qd-pending`}
             data-submission-echo=""
             data-sending-input-id={submission.sendingInputId}
             data-accepted-message-id={isSending ? undefined : submission.messageId}
           >
             {count === 1 ? <QueueGlyph /> : null}
             {attachments.length > 0 ? (
-              <span className={css.attachments}>
+              <span className="flex flex-none gap-[4px] min-w-0 max-w-[55%] overflow-hidden [.qd-pending_&]:shrink">
                 {attachments.map((item, index) => item.type === 'image'
                   ? <QueueThumb key={`${item.artifactId ?? item.file?.name ?? ''}:${index}`} artifactId={item.artifactId} file={item.file} label={item.alt || tx('agent:queue-dock.image')} />
                   : <QueueFile key={`${item.name}:${index}`} name={item.name} bytes={item.bytes} label={tx('agent:queue-dock.file', { name: item.name })} />)}
               </span>
             ) : null}
-            <span className={css.preview}>{previewText}</span>
-            <span className={css.status} role="status">{tx('agent:submission.sending')}</span>
-            <div className={css.actions}>
-              <button type="button" className={css.action} aria-label={tx('agent:queue-dock.edit')} title={tx('agent:submission.sending')} disabled><IconEditOutline16 size={14} /></button>
-              <button type="button" className={css.action} aria-label={tx('agent:queue-dock.remove')} title={tx('agent:submission.sending')} disabled><IconTrashOutline16 size={14} /></button>
-              <button type="button" className={css.action} aria-label={tx('agent:queue-dock.steer')} title={tx('agent:submission.sending')} disabled><IconSendOutline14 size={14} /></button>
+            <span className="flex-auto min-w-0 overflow-hidden [font:var(--dsw-font-xs-13)] [font-family:Inter,var(--dsw-font-family)] [color:var(--dsw-alias-label-primary-dimmed)] text-ellipsis whitespace-nowrap">{previewText}</span>
+            <span className="flex-none [color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)] whitespace-nowrap" role="status">{tx('agent:submission.sending')}</span>
+            <div className="flex flex-none items-center gap-[8px] flex-wrap">
+              <button type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" aria-label={tx('agent:queue-dock.edit')} title={tx('agent:submission.sending')} disabled><IconEditOutline16 size={14} /></button>
+              <button type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" aria-label={tx('agent:queue-dock.remove')} title={tx('agent:submission.sending')} disabled><IconTrashOutline16 size={14} /></button>
+              <button type="button" className="min-h-[32px] px-[8px] py-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] cursor-pointer [&[aria-label]]:grid [&[aria-label]]:flex-none [&[aria-label]]:place-items-center [&[aria-label]]:w-[28px] [&[aria-label]]:h-[28px] [&[aria-label]]:min-h-0 [&[aria-label]]:p-0 [&[aria-label]]:rounded-full [&[aria-label]]:[corner-shape:round] [&[aria-label]]:[color:var(--dsw-alias-label-tertiary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] disabled:opacity-45 disabled:cursor-default focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:-outline-offset-2" aria-label={tx('agent:queue-dock.steer')} title={tx('agent:submission.sending')} disabled><IconSendOutline14 size={14} /></button>
             </div>
           </li>;
         })}
       </ul> : null}
-      {detachedDraft ? <div className={count > 0 ? `${css.detachedDraft} ${css.detachedDraftSeparated}` : css.detachedDraft} data-queue-draft="detached">
+      {detachedDraft ? <div className={count > 0 ? "box-border flex items-center gap-[10px] w-full px-[5px] pl-[12px] py-[6px] shadow-[inset_0_1px_0_var(--dsw-alias-border-l1)]" : "box-border flex items-center gap-[10px] w-full px-[5px] pl-[12px] py-[6px]"} data-queue-draft="detached">
         {count === 0 ? <QueueGlyph /> : null}
         {editor}
       </div> : null}
-      {notice && (!detachedDraft || operation) ? <p className={css.notice} role="status">{notice}</p> : null}
+      {notice && (!detachedDraft || operation) ? <p className="px-[12px] py-[8px] text-[13px]" role="status">{notice}</p> : null}
     </div>
   </section>;
 }

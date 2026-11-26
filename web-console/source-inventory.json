@@ -493,7 +493,6 @@
         "../../presentation/primitives/file-size",
         "../../presentation/primitives/icons",
         "../components/Artifact",
-        "./QueueDock.module.css",
         "@/components/ui/textarea",
         "react"
       ],
@@ -505,7 +504,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e85d7495aff78873bbf28801fd13c2c977a08ab7f0c242616435ee0b677ec813"
+      "local_sha256": "ccd87b73d71702e3eeeafd28439d5a4fc8ccc327def6964c11ba6adc2d90677e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -6865,22 +6864,6 @@
         "Harness schedule mutation and delivery authority"
       ],
       "local_sha256": "b002c33b35bc71cac3dae4f59359bed49ddc3cbd04a93057f5a1d9b4ac50bfbd"
-    },
-    {
-      "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
-      "upstream": "packages/client/ui-schedule/src/client/ScheduleCatalogAction.module.css",
-      "destination": "web-console/src/app/scheduler/SessionTasks.module.css",
-      "upstream_sha256": "095cc2a325a6ee6a90de58ca2494835a87c3cb16a0c346dbde09c810551006e1",
-      "classification": "B",
-      "treatment": "Harness task layout, pickers, cron descriptions and bilingual copy adapted to exact native task bindings and bounded reads. rustX owns CAS edits, pause/resume, Workflow results and cancellation; original Host stores, RPCs and runtime authority are excluded.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Host and Peer services",
-        "Cordis slots and stores",
-        "Harness schedule mutation and delivery authority"
-      ],
-      "local_sha256": "dcf6ede231307e76e7149e1fb612a1093723c6306a369993c95d1344ebb71416"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
