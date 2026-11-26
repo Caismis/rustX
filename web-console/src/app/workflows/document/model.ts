@@ -13,9 +13,6 @@ export type Value = WorkflowValue;
 export type Predicate = WorkflowPredicate;
 export type Edge = WorkflowEdgeDefinition;
 
-/** The creatable native node kinds, in palette order. */
-export const NODE_KINDS = ['agent', 'model', 'tool', 'code', 'template', 'list', 'classifier', 'aggregate', 'branch', 'iteration', 'loop', 'loop_end', 'assigner', 'review', 'return'] as const satisfies readonly NodeKind[];
-
 /** The kinds that own a body. */
 export type ContainerKind = 'loop' | 'iteration';
 export type Container = Extract<NodeDefinition, { type: ContainerKind }>;
@@ -42,11 +39,6 @@ export const ROOT: BlockPath = [];
  * Native node IDs contain no `/`. */
 export function blockKey(path: BlockPath): string {
   return path.length ? path.map(step => `${step.node}/body`).join('/') : 'root';
-}
-
-/** The native authored path of a block: `block`, `block.nodes.r.body`, … */
-export function nativeBlockPath(path: BlockPath): string {
-  return path.reduce((native, step) => `${native}.nodes.${step.node}.body`, 'block');
 }
 
 export function sameBlockPath(left: BlockPath, right: BlockPath): boolean {

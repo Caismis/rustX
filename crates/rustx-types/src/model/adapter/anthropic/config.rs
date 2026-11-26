@@ -38,13 +38,6 @@ impl AnthropicAdapterConfig {
         }
     }
 
-    /// Overrides the `anthropic-version` request header.
-    #[must_use]
-    pub fn with_anthropic_version(mut self, version: impl Into<String>) -> Self {
-        self.anthropic_version = version.into();
-        self
-    }
-
     /// Injects an HTTP client instead of building a default one.
     ///
     /// This is the narrow test seam used by deterministic tests that point

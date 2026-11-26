@@ -29,10 +29,6 @@ export function setPositions(document: WorkflowDocument, block: BlockPath, posit
   return { ...document, editor: { ...editor, nodes } };
 }
 
-export function positionsIn(document: WorkflowDocument, block: BlockPath): Record<string, WorkflowPosition> {
-  return Object.fromEntries((document.editor?.nodes ?? []).filter(node => sameBlockPath(node.address.block, block) && node.position).map(node => [node.address.node, node.position!]));
-}
-
 /** Authored display order has no execution meaning. Newly declared fields use
  * deterministic key order after explicitly ordered fields. */
 export function orderedKeys(document: WorkflowDocument, target: WorkflowOrderTarget, keys: readonly string[]): string[] {

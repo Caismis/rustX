@@ -4,12 +4,10 @@
 .settings h3 { margin: 18px 0 10px; font-size: 16px; font-weight: 500; }
 .settings h4 { margin: 14px 0 8px; font-size: 14px; font-weight: 500; }
 .settings p { margin: 8px 0; }
-.settings header, .actions, .rowHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings header, .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .settings header { justify-content: space-between; }
 .actions { margin-top: 12px; }
-.hint, .settings dt { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
-.card { border: .5px solid var(--dsw-alias-border-l4); border-radius: 16px; padding: 12px 14px; min-width: 0; overflow-wrap: anywhere; }
-.rowHead > strong { font-size: 14px; font-weight: 500; flex: 1; }
+.hint { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .badge { display: inline-flex; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; padding: 1px 6px; border: .5px solid var(--dsw-alias-border-l3); border-radius: 4px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
 /* A toned badge keeps full-contrast text: the word carries the meaning, and the
    state color is a border and a leading marker, never the text itself. */
@@ -36,9 +34,6 @@
 .settings :disabled:not(button) { opacity: .5; }
 .settings summary { font-size: 13px; padding: 10px 0; }
 .settings details + details { border-top: .5px solid var(--dsw-alias-border-l2); }
-.settings dl { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 8px 16px; }
-.settings dl > div { display: contents; }
-.settings dd { margin: 0; min-width: 0; font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font-size: 12px; }
 .settings table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .settings th, .settings td { text-align: left; padding: 8px; border-bottom: .5px solid var(--dsw-alias-border-l2); overflow-wrap: anywhere; }
@@ -50,7 +45,7 @@
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .names { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
 .names input { flex: 1; }
-@media (max-width: 680px) { .grid, .settings dl { grid-template-columns: minmax(0, 1fr); } .actions { align-items: stretch; } .settings th, .settings td { padding: 4px; } }
+@media (max-width: 680px) { .grid { grid-template-columns: minmax(0, 1fr); } .actions { align-items: stretch; } .settings th, .settings td { padding: 4px; } }
 
 /* ---- The Settings surface's page vocabulary (#393) ----------------------
    Scoped to `.page` (the Settings section) so the Inspector, which shares
@@ -106,18 +101,17 @@
 /* Secondary text in the Settings pages sits on the card fill as often as on the
    panel, so it takes the secondary label color, which keeps WCAG AA contrast
    on both in both themes; the tertiary color does not on the card fill. */
-.page .hint, .page dt { color: var(--dsw-alias-label-secondary); }
+.page .hint { color: var(--dsw-alias-label-secondary); }
 .page .review { margin: 12px 0 0; }
 /* An identity input and the action that adds it share one baseline. */
 .page .actions:has(> label) { align-items: flex-end; }
 .page .actions > label { padding-bottom: 0; }
-.page dl { margin: 0; }
 
 /* A designed state for a target with nothing to present yet. */
 .pending { padding: 24px 16px; border: .5px dashed var(--dsw-alias-border-l3); border-radius: 16px; color: var(--dsw-alias-label-secondary); font-size: 13px; text-align: center; }
 
 @container settings (max-width: 680px) {
-  .page .grid, .page dl { grid-template-columns: minmax(0, 1fr); }
+  .page .grid { grid-template-columns: minmax(0, 1fr); }
   .page .actions { align-items: stretch; }
   .page .unit { padding: 12px; }
   .page .unit[data-draft] .actions { margin-inline: -12px; padding-inline: 12px; margin-bottom: -12px; }

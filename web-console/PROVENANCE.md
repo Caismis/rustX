@@ -1926,7 +1926,7 @@ RightPanel gains occupant-appropriate close labels. The current ToolCard preserv
 exact native Tool names separately from display labels when reconciling #351.
 Native Settings adapters retain their historical attribution and record their
 new modifications; they are not relabelled as freshly copied upstream code.
-`SettingsContent.tsx`, ResourceInventory, NativeFacts, draft ownership and native
+`SettingsContent.tsx`, ResourceInventory, draft ownership and native
 artifact adapters are rustX-authored composition/props, not copied Harness sources.
 
 Every changed derived destination has an explicit treatment update and local hash.

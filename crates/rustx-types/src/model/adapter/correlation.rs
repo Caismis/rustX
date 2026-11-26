@@ -106,15 +106,6 @@ pub fn compute_labels_at_boundary(
     compute_labels(request, request.continuation_boundary()?)
 }
 
-/// Compute the correlation [`Plan`] for a request on a fresh slot; equivalent
-/// to the adapter's incremental cache and deterministic for journal readers.
-pub fn compute_plan(
-    request: &crate::model::types::ModelRequest,
-    boundary: Option<usize>,
-) -> Result<Plan, String> {
-    plan::prepare(&mut CorrelationSlot::default(), request, boundary)
-}
-
 /// Compute the [`Plan`] against the caller-owned incremental [`CorrelationSlot`];
 /// the adapter's request cache carries the slot between requests so unchanged
 /// prefixes are not re-planned. Deterministically identical to a fresh slot.

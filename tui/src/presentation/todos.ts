@@ -6,11 +6,9 @@
  */
 
 import type {
-  MessageBlock,
   TodoSnapshot,
   TodoStatus,
   TodoTask,
-  ToolExecutionResult,
 } from "../protocol/app-server.ts";
 import { sanitizeField } from "../sanitize.ts";
 import type { PresentationState } from "./state.ts";
@@ -58,13 +56,6 @@ export function isTodoComposed(
   return state?.effectivePlugins?.todo != null;
 }
 
-/** Tasks that are neither completed nor tombstoned. */
-export function openTasks(snapshot: TodoSnapshot): TodoTask[] {
-  return (snapshot.tasks ?? []).filter(
-    (task) => task.status !== "completed" && task.status !== "deleted",
-  );
-}
-
 /** Tasks the panel shows: everything the runtime still considers live. */
 export function visibleTasks(snapshot: TodoSnapshot): TodoTask[] {
   return (snapshot.tasks ?? []).filter((task) => task.status !== "deleted");
@@ -80,46 +71,6 @@ export function progress(snapshot: TodoSnapshot): {
     done: visible.filter((task) => task.status === "completed").length,
     total: visible.length,
   };
-}
-
-/**
- * The list one canonical message published, or `undefined`.
- *
- * A message from another tool, and a rejected `todo` call — which publishes
- * nothing — both leave the list alone, which matches the runtime, where a
- * rejected call leaves the list untouched.
- */
-export function publishedTodos(
-  message: MessageBlock,
-): TodoSnapshot | undefined {
-  if (message.role !== "tool" || message.tool_id !== TODO_TOOL_ID) {
-    return undefined;
-  }
-  return publishedSnapshot(message.result);
-}
-
-/**
- * The snapshot a settled result published, or `undefined`.
- *
- * The value is validated structurally rather than trusted: this client
- * renders it, so a malformed payload must be ignored rather than drawn.
- */
-function publishedSnapshot(
-  result: ToolExecutionResult,
-): TodoSnapshot | undefined {
-  if (result.status.type !== "success") {
-    return undefined;
-  }
-  for (const content of result.content ?? []) {
-    if (content.type !== "json") {
-      continue;
-    }
-    const snapshot = parseSnapshot(content.value);
-    if (snapshot !== undefined) {
-      return snapshot;
-    }
-  }
-  return undefined;
 }
 
 /**

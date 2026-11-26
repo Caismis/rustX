@@ -292,14 +292,6 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
   return { byCallId, anchoredCalls, anchoredResults, foldedResults, orphans };
 }
 
-/** The correlated entity of one call id, when the state knows of it. */
-export function correlatedTool(
-  correlation: ToolCorrelation,
-  callId: ToolCallId,
-): CorrelatedTool | undefined {
-  return correlation.byCallId.get(callId);
-}
-
 /**
  * Whether a committed tool result message is already shown by its call's card.
  *

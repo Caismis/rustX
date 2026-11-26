@@ -107,8 +107,6 @@ mod requirements;
 /// unrelated to this pin.
 pub const MANAGED_FASTMCP_VERSION: &str = "4.0.3";
 
-/// The fixed custom tool root below a Workspace.
-pub const TOOLS_DIRECTORY: &str = ".agents";
 /// The reserved `mcpServers` namespace owned by rustX-managed Python
 /// packages (Issue #174).
 ///
@@ -117,8 +115,6 @@ pub const TOOLS_DIRECTORY: &str = ".agents";
 /// at configuration validation), so one [`McpServerId`] can never have two
 /// owners.
 pub const MANAGED_MCP_NAMESPACE: &str = "python:";
-/// The fixed package container below [`TOOLS_DIRECTORY`].
-pub const TOOLS_ROOT: &str = "tools";
 /// The fixed `FastMCP` server module of a package.
 pub const SERVER_FILE: &str = "server.py";
 /// The fixed dependency manifest of a package (required, even when empty).

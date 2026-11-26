@@ -3,8 +3,8 @@ import { useContext, useEffect, useRef, useState, type Key, type ReactNode, type
 import { DialogSurface, useDialogPortal, useOverlayActive } from '../../../presentation/primitives/DialogSurface';
 import clsx from 'clsx';
 import {
-  Button as AriaButton, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
-  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, OverlayTriggerStateContext, Popover as AriaPopover, SearchField, Select, SelectValue,
+  Button as AriaButton, Disclosure, DisclosurePanel, Heading, Input, Label,
+  ListBox, ListBoxItem, OverlayTriggerStateContext, Popover as AriaPopover, SearchField, Select, SelectValue,
   Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs, Text,
 } from 'react-aria-components';
 import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
@@ -23,14 +23,13 @@ function Popover(props: React.ComponentProps<typeof AriaPopover>) {
 /** The bounded React Aria adoption of the Settings workflows.
  *
  * React Aria Components own interaction and accessibility semantics here and
- * nothing else: keyboard navigation and roving focus, menu/list/select interaction, accessible tabs, disclosure
+ * nothing else: keyboard navigation and roving focus, select interaction, accessible tabs, disclosure
  * behavior and search-field semantics. Every visual decision stays in the
  * existing Harness-derived rustX token family, so no competing design system
  * is imported and no Spectrum stylesheet is loaded.
  *
  * These wrappers exist because the same interaction appears many times across
- * the six pages — a resource list, an enum, a destructive confirmation, an
- * advanced section. A primitive used exactly once is used directly at its call
+ * the six pages — an enum, a destructive confirmation, an advanced section. A primitive used exactly once is used directly at its call
  * site instead, so this module never becomes a speculative design system. */
 
 /** A closed enum. Native remains the authority on which values are legal; this
@@ -56,61 +55,6 @@ export function Search({ label, value, onChange, placeholder }: {
   return <SearchField className={css.search} value={value} onChange={onChange} aria-label={label}>
     <Input placeholder={placeholder} />
   </SearchField>;
-}
-
-/** One row of a resource list. Identity and the native facts about it are
- * separate fields on purpose: a list never collapses kind, ownership, validity,
- * preparation and availability into one badge. */
-export interface ResourceRow {
-  readonly id: string;
-  readonly name: string;
-  /** The native facts, each rendered as its own element. */
-  readonly facts: ReactNode;
-  readonly detail?: ReactNode;
-  /** Contextual actions. Each submits through the same native mutation
-   * identity and transaction owner as its page's primary editor. */
-  readonly actions?: readonly RowAction[];
-}
-export interface RowAction { readonly id: string; readonly label: string; readonly danger?: boolean; readonly run: () => void }
-
-/** A resource list with pointer and keyboard parity.
- *
- * React Aria owns arrow-key navigation, typeahead and the Enter/Space action,
- * so opening a detail from the keyboard is the same navigation decision as
- * clicking it, and both reach the one navigation owner. */
-export function ResourceList({ label, rows, selected, onOpen, empty }: {
-  label: string; rows: readonly ResourceRow[]; selected?: string;
-  onOpen: (id: string) => void; empty?: ReactNode;
-}) {
-  const tx = useTranslation();
-  if (!rows.length) return <p className={css.empty}>{empty ?? tx('settings:copy.no-matching-definitions-in-this-native-projection')}</p>;
-  return <GridList className={css.list} aria-label={label} selectionMode="single"
-    selectedKeys={selected ? [selected] : []} onAction={key => onOpen(String(key))}>
-    {rows.map(row => <GridListItem key={row.id} id={row.id} className={css.row} textValue={row.name} aria-label={row.name}>
-      {/* The identity and its contextual actions share the first line; the
-          native facts follow as secondary badges, then any detail. */}
-      <div className={css.rowTop}>
-        <span className={css.rowName}>{row.name}</span>
-        {!!row.actions?.length && <RowActions label={tx('settings:aria.actions-for-value', { p0: row.name })} actions={row.actions} />}
-      </div>
-      <span className={css.rowFacts}>{row.facts}</span>
-      {row.detail}
-    </GridListItem>)}
-  </GridList>;
-}
-
-/** The contextual action menu of one resource. Its trigger is a React Aria
- * button so that pressing it is handled by the menu and never also activates
- * the surrounding row. */
-export function RowActions({ label, actions }: { label: string; actions: readonly RowAction[] }) {
-  return <MenuTrigger>
-    <AriaButton aria-label={label} className={`${buttonCss.button} ${buttonCss.ghost} ${buttonCss.sm}`}>⋯</AriaButton>
-    <Popover className={css.popover}>
-      <Menu aria-label={label} onAction={key => actions.find(action => action.id === key)?.run()}>
-        {actions.map(action => <MenuItem key={action.id} id={action.id} className={css.menuItem} data-danger={action.danger || undefined}>{action.label}</MenuItem>)}
-      </Menu>
-    </Popover>
-  </MenuTrigger>;
 }
 
 /** An advanced or secondary section. Progressive disclosure is how Settings

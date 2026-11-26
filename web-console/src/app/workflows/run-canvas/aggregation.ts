@@ -99,15 +99,6 @@ export function isActiveAggregateStatus(status: AggregateNodeStatus): boolean {
   return status === 'running' || status === 'waiting' || status === 'draining' || status === 'pending';
 }
 
-export function isAbnormalAggregateStatus(status: AggregateNodeStatus): boolean {
-  return status === 'failed'
-    || status === 'timed_out'
-    || status === 'denied'
-    || status === 'cancelled'
-    || status === 'outcome_unknown'
-    || status === 'incomplete';
-}
-
 function mergeVisitState(
   traceState: WorkflowNodeTraceState | undefined,
   liveState: WorkflowNodeTraceState | undefined,

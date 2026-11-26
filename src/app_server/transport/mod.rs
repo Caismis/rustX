@@ -20,8 +20,6 @@ pub mod websocket;
 
 /// Maximum UTF-8 JSON bytes in either direction, excluding stdio LF.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
-/// Normal projection/read target leaves headroom for the complete envelope.
-pub const NORMAL_RECORD_BYTES: usize = 786_432;
 /// Maximum queued outbound records (plus one being written).
 pub const OUTBOUND_MESSAGES: usize = 32;
 /// Explicit queued encoded-byte budget; every record is size-checked before

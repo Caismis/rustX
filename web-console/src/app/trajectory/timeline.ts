@@ -77,9 +77,6 @@ function laneOf(kind: TraceKind): number {
   return 0;
 }
 
-/** Lane titles, top to bottom. */
-export const TRAJECTORY_LANES = ['Input', 'Model', 'Tools'] as const;
-
 /** Kinds whose failure state should read as an error in the overview. */
 function isError(record: TraceRecord): boolean {
   return record.state === 'failed' || record.state === 'timed_out' || record.state === 'denied';

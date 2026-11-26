@@ -37,13 +37,13 @@ async fn transient_select_failure_recovers_and_admits_once() {
 
     // The transient failure is surfaced exactly once as a DurableFailure.
     let observations = await_observation(pending.as_ref(), |o| {
-        matches!(o, ConversationObservation::DurableFailure { .. })
+        matches!(o, ConversationObservation::DurableFailure)
     })
     .await;
     assert_eq!(
         observations
             .iter()
-            .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
+            .filter(|o| matches!(o, ConversationObservation::DurableFailure))
             .count(),
         1,
         "exactly one transient DurableFailure observation"
@@ -185,7 +185,7 @@ async fn select_then_adopt_failures_get_independent_bounded_retries() {
     let observations = pending.drain_fixture_facts();
     let transient = observations
         .iter()
-        .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
+        .filter(|o| matches!(o, ConversationObservation::DurableFailure))
         .count();
     assert_eq!(
         transient, 2,
@@ -385,7 +385,7 @@ async fn persistent_adopt_failure_enters_durability_failed() {
     .await;
     let transient = observations
         .iter()
-        .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
+        .filter(|o| matches!(o, ConversationObservation::DurableFailure))
         .count();
     assert_eq!(
         transient, 1,
