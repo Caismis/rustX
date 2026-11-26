@@ -372,10 +372,15 @@ it.each([
   const second = await f.server.waitFor('schedule/get', 2);
   await act(async () => f.server.socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(f.server.commit(second)).replace('"n":912346', '"n":' + unsafe) })));
   f.server.held.delete('schedule/get');
+  // The rebase must consume the unsafe detail, not a stale representable
+  // summary: the conflict banner exists as soon as any newer revision is
+  // observed, while the unrepresentable-arguments detail settles on its own
+  // asynchronous chain.
+  const editor = schedulerModel(f.server.client).editor(value);
+  await waitFor(() => expect(editor.getSnapshot().incoming?.unsafeArguments).toBe(true));
   fireEvent.click(await screen.findByRole('button', { name: 'Keep my edits' }));
   expect(input.disabled).toBe(true);
   expect(((await screen.findByRole('button', { name: 'Save changes' })) as HTMLButtonElement).disabled).toBe(true);
-  const editor = schedulerModel(f.server.client).editor(value);
   expect(editor.dirty).toBe(true);
   expect(editor.getSnapshot().draft.content).toBe(authoredContent);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
