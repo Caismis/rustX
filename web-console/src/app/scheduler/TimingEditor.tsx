@@ -12,7 +12,7 @@ import { IconCalendarOutlineRegular } from './CalendarIcon';
 import type { TaskTranslate } from './copy';
 import { browserZone, secondPrecision, zoneLabel, type TimingDraft, type TimingKind } from './timing';
 import { cronPreview, parseCronExpression } from './cron';
-import css from './TaskManager.module.css';
+import { taskManagerCss } from './taskManagerCss';
 import { schedCss } from './schedCss';
 
 const choices = ['weekly', 'weekdays', 'daily', 'hour', 'minute', 'second', 'once', 'cron'] as const;
@@ -40,32 +40,32 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
   const [zoneQuery, setZoneQuery] = useState<string | undefined>();
   const zoneLabels = useMemo(() => zones.map(zone => zone.label), [zones]);
   const zoneByLabel = useMemo(() => new Map(zones.map(zone => [zone.label, zone])), [zones]);
-  return <section className={css.ruleCard} aria-label={t('timing.title')}>
-    <div className={css.ruleRows}>
-      <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.repeat')}</span>
+  return <section className={taskManagerCss.ruleCard} aria-label={t('timing.title')}>
+    <div className={taskManagerCss.ruleRows}>
+      <div className={taskManagerCss.ruleRow}><span className={taskManagerCss.ruleLabel}>{t('timing.repeat')}</span>
         <Menu open={menu} onClose={() => setMenu(false)} items={choices.map(id => ({ id, label: label(id) }))} selectedId={selected} onSelect={id => select(id as Choice)}
-          anchor={<Button size="sm" className={css.ruleCurrent} disabled={disabled} aria-label={t('timing.repeat')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{label(selected)}<IconChevronDownOutline14/></Button>}/>
+          anchor={<Button size="sm" className={taskManagerCss.ruleCurrent} disabled={disabled} aria-label={t('timing.repeat')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{label(selected)}<IconChevronDownOutline14/></Button>}/>
       </div>
-      {value.kind === 'interval' ? <div className={css.ruleRow}><label className={css.ruleLabel} htmlFor={id + '-quantity'}>{t('timing.number')}</label>
-        <div className={css.ruleInterval}><Input id={id + '-quantity'} className={css.ruleIntervalInput} type="number" min={value.unit === 'second' ? 60 : 1} step="any" disabled={disabled} value={value.quantity} onChange={event => update({ quantity: event.target.value })}/>
-          <span className={css.ruleIntervalUnit}>{t(value.unit === 'hour' ? 'timing.hours' : value.unit === 'minute' ? 'timing.minutes' : 'timing.seconds')}</span></div>
+      {value.kind === 'interval' ? <div className={taskManagerCss.ruleRow}><label className={taskManagerCss.ruleLabel} htmlFor={id + '-quantity'}>{t('timing.number')}</label>
+        <div className={taskManagerCss.ruleInterval}><Input id={id + '-quantity'} className={taskManagerCss.ruleIntervalInput} type="number" min={value.unit === 'second' ? 60 : 1} step="any" disabled={disabled} value={value.quantity} onChange={event => update({ quantity: event.target.value })}/>
+          <span className={taskManagerCss.ruleIntervalUnit}>{t(value.unit === 'hour' ? 'timing.hours' : value.unit === 'minute' ? 'timing.minutes' : 'timing.seconds')}</span></div>
       </div> : <>
-        {value.kind === 'weekly' && <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.weekday')}</span><div className={css.ruleWeekdays} role="group" aria-label={t('timing.weekday')}>
+        {value.kind === 'weekly' && <div className={taskManagerCss.ruleRow}><span className={taskManagerCss.ruleLabel}>{t('timing.weekday')}</span><div className={taskManagerCss.ruleWeekdays} role="group" aria-label={t('timing.weekday')}>
           {([1, 2, 3, 4, 5, 6, 7] as const).map(day => <button key={day} type="button" disabled={disabled} aria-pressed={value.weekdays.includes(day)} onClick={() => update({ weekdays: value.weekdays.includes(day) ? value.weekdays.filter(value => value !== day) : [...value.weekdays, day] })}>{t(('frequency.weekday.' + day) as 'frequency.weekday.1')}</button>)}
         </div></div>}
-        {value.kind === 'once' && <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.date')}</span>
-          <button ref={date} type="button" className={clsx(css.pickerTrigger, schedCss.pickerButton)} disabled={disabled} aria-label={t('timing.date')} aria-haspopup="dialog" aria-expanded={picker === 'date'} onClick={() => setPicker(picker === 'date' ? undefined : 'date')}><span>{value.date.replaceAll('-', '/')}</span><IconCalendarOutlineRegular/></button>
+        {value.kind === 'once' && <div className={taskManagerCss.ruleRow}><span className={taskManagerCss.ruleLabel}>{t('timing.date')}</span>
+          <button ref={date} type="button" className={clsx(taskManagerCss.pickerTrigger, schedCss.pickerButton)} disabled={disabled} aria-label={t('timing.date')} aria-haspopup="dialog" aria-expanded={picker === 'date'} onClick={() => setPicker(picker === 'date' ? undefined : 'date')}><span>{value.date.replaceAll('-', '/')}</span><IconCalendarOutlineRegular/></button>
           <DatePicker open={picker === 'date'} anchorRef={date} value={value.date} onPick={date => update({ date })} onClose={() => setPicker(undefined)} t={t}/>
         </div>}
-        {value.kind !== 'cron' && <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.time')}</span>
-          <button ref={clock} type="button" className={clsx(css.pickerTrigger, schedCss.pickerButton)} disabled={disabled} aria-label={t('timing.time')} aria-haspopup="dialog" aria-expanded={picker === 'time'} onClick={() => setPicker(picker === 'time' ? undefined : 'time')}><span>{value.kind === 'once' ? secondPrecision(value.time) : value.time.slice(0, 5)}</span><IconClockOutline16/></button>
+        {value.kind !== 'cron' && <div className={taskManagerCss.ruleRow}><span className={taskManagerCss.ruleLabel}>{t('timing.time')}</span>
+          <button ref={clock} type="button" className={clsx(taskManagerCss.pickerTrigger, schedCss.pickerButton)} disabled={disabled} aria-label={t('timing.time')} aria-haspopup="dialog" aria-expanded={picker === 'time'} onClick={() => setPicker(picker === 'time' ? undefined : 'time')}><span>{value.kind === 'once' ? secondPrecision(value.time) : value.time.slice(0, 5)}</span><IconClockOutline16/></button>
           <ClockPicker open={picker === 'time'} anchorRef={clock} value={value.time} seconds={value.kind === 'once'} onPick={time => update({ time })} onClose={() => setPicker(undefined)} t={t}/>
         </div>}
-        {value.kind === 'cron' && <div className={css.ruleRow}><label className={css.ruleLabel} htmlFor={id + '-cron'}>{t('timing.expression')}</label><div className={css.ruleControl}>
-          <Input id={id + '-cron'} className={css.ruleInput} disabled={disabled} value={value.expression} spellCheck={false} onChange={event => update({ expression: event.target.value })}/>
-          <p className={parsed ? css.ruleHint : css.ruleHintError}>{parsed ? cronPreview(parsed, t, locale) : t('timing.invalid-cron')}</p>
+        {value.kind === 'cron' && <div className={taskManagerCss.ruleRow}><label className={taskManagerCss.ruleLabel} htmlFor={id + '-cron'}>{t('timing.expression')}</label><div className={taskManagerCss.ruleControl}>
+          <Input id={id + '-cron'} className={taskManagerCss.ruleInput} disabled={disabled} value={value.expression} spellCheck={false} onChange={event => update({ expression: event.target.value })}/>
+          <p className={parsed ? taskManagerCss.ruleHint : taskManagerCss.ruleHintError}>{parsed ? cronPreview(parsed, t, locale) : t('timing.invalid-cron')}</p>
         </div></div>}
-        <div className={css.ruleRow}><span className={css.ruleLabel}>{t('timing.zone')}</span>
+        <div className={taskManagerCss.ruleRow}><span className={taskManagerCss.ruleLabel}>{t('timing.zone')}</span>
           <div className={schedCss.zoneCombo}><Autocomplete items={zoneLabels} filteredItems={zoneQuery === undefined ? zoneLabels : undefined}
             value={zoneQuery ?? zoneLabel(value.zone, locale)} onValueChange={setZoneQuery} openOnInputClick disabled={disabled}>
             <AutocompleteInput aria-label={t('timing.zone')} placeholder={t('timing.zone-search')} showTrigger onBlur={() => setZoneQuery(undefined)} />
@@ -80,6 +80,6 @@ export function TimingEditor({ value, change, disabled, t, locale }: {
         </div>
       </>}
     </div>
-    {value.kind === 'once' && <p className={css.ruleHint}>{t('timing.timezone-note')}</p>}
+    {value.kind === 'once' && <p className={taskManagerCss.ruleHint}>{t('timing.timezone-note')}</p>}
   </section>;
 }

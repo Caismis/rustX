@@ -5905,22 +5905,6 @@
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
-      "upstream": "packages/client/ui-schedule/src/client/TaskManagerPage.module.css",
-      "destination": "web-console/src/app/scheduler/TaskManager.module.css",
-      "upstream_sha256": "25d66435c5597219d676e4fc4f018398780b402cc1cb8408277c7b21c2066544",
-      "classification": "B",
-      "treatment": "Harness task layout, pickers, cron descriptions and bilingual copy adapted to exact native task bindings and bounded reads. rustX owns CAS edits, pause/resume, Workflow results and cancellation; original Host stores, RPCs and runtime authority are excluded.",
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Harness Host and Peer services",
-        "Cordis slots and stores",
-        "Harness schedule mutation and delivery authority"
-      ],
-      "local_sha256": "c208435550707d7c42af59a7fb10979ad98b0afdb0809b0a5121871f35c65557"
-    },
-    {
-      "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
       "upstream": "packages/client/ui-schedule/src/client/task-cron.ts",
       "destination": "web-console/src/app/scheduler/cron.ts",
       "upstream_sha256": "6e8e0f90de055b1bd9bafbac6207c7d53ea221b73a9fdb1f9892b86d8138b318",
@@ -6034,12 +6018,12 @@
         "../../presentation/primitives/Modal",
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
-        "./TaskManager.module.css",
         "./TaskRule",
         "./TaskRuns",
         "./copy",
         "./model",
         "./schedCss",
+        "./taskManagerCss",
         "react"
       ],
       "excluded_dependencies": [
@@ -6047,7 +6031,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "b38b1a2d2c3559a9376345d28531c6c7c99d6fc2a27bbc0c86a3f0d2df2b0717"
+      "local_sha256": "6b44d6b804be4bfcb98f16605f6e3cc2f9289e96d44669e7105d8e7adfb98ef0"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -6062,11 +6046,11 @@
         "../../../shared/json-numbers",
         "../../locale/react",
         "../../presentation/primitives/Button",
-        "./TaskManager.module.css",
         "./TimingEditor",
         "./copy",
         "./model",
         "./schedCss",
+        "./taskManagerCss",
         "./timing",
         "@/components/ui/textarea",
         "@/presentation/primitives/Input",
@@ -6077,7 +6061,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "335204affdaafdbb6e78680bec6eb000e2bc59457db133e63605e3516fe73b53"
+      "local_sha256": "6e8a2ba4e40bbac60b44b83d2b3064923ab56daac2541e1623a6bce535e6c33c"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -6095,10 +6079,10 @@
         "./CalendarIcon",
         "./ClockPicker",
         "./DatePicker",
-        "./TaskManager.module.css",
         "./copy",
         "./cron",
         "./schedCss",
+        "./taskManagerCss",
         "./timing",
         "@/components/ui/autocomplete",
         "clsx",
@@ -6109,7 +6093,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "a20e2a3f0a6b1d6cfc027519352cd057589304842c5ceb8e001b3e9266d5b6eb"
+      "local_sha256": "9db8a125842444278ad8d683a9f71d7a0a49e1864bf041d22b6273bde10b750e"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -6153,11 +6137,11 @@
         "../../workspaces/host",
         "./TaskCreateDialog",
         "./TaskDetail",
-        "./TaskManager.module.css",
         "./copy",
         "./creation",
         "./model",
         "./schedCss",
+        "./taskManagerCss",
         "./timing",
         "@tanstack/react-virtual",
         "clsx",
@@ -6168,7 +6152,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "3f4df09efb7c3c8697248193e968c76057884ea501ef4ffbadc09bd4be40831d"
+      "local_sha256": "61c3e70be53053d29f95e66533799ef97aad4e6500fcec02ea3e1ea6f3b1b66a"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

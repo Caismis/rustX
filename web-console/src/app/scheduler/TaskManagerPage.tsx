@@ -15,7 +15,7 @@ import { taskCreation } from './creation';
 import { TaskCreateDialog } from './TaskCreateDialog';
 import { useTaskCopy } from './copy';
 import { frequency, displayInstant } from './timing';
-import css from './TaskManager.module.css';
+import { taskManagerCss } from './taskManagerCss';
 import { schedCss } from './schedCss';
 
 type Filter = 'enabled' | 'disabled' | 'completed' | 'all';
@@ -52,35 +52,35 @@ export function TaskManagerPage({ client, host, authority, openSession }: { clie
   const virtual = useVirtualizer({ count: rows.length, getItemKey: index => taskKey(taskRef(rows[index])), getScrollElement: () => scroll.current, estimateSize: () => 80, gap: 2, overscan: 5, initialRect: { width: 700, height: 800 } });
   const selectedKey = selected && taskKey(selected.ref);
   const status = (state: Filter) => t(state === 'enabled' ? 'status.active' : state === 'disabled' ? 'status.paused' : state === 'completed' ? 'status.completed' : 'statusFilter.all');
-  return <section className={clsx(css.page, selected && css.hasDetails)} aria-label={t('title')} data-shell-route="schedules">
-    <div className={css.listPane}><div ref={scroll} className={css.pageScroll}><div className={css.pageContent}>
-      <header className={css.pageHeading}><h1>{t('title')}</h1><div className={css.creationActions}>
-        <Button size="sm" className={css.headerAction} disabled={!connected || loading} onClick={() => void model.refresh()}>{t('action.refresh')}</Button>
-        <Button variant="primary" size="sm" className={css.headerAction} icon={<IconPlusOutline16/>} onClick={newTask}>{t('new.action')}</Button>
+  return <section className={clsx(taskManagerCss.page, selected && taskManagerCss.hasDetails)} aria-label={t('title')} data-shell-route="schedules">
+    <div className={taskManagerCss.listPane}><div ref={scroll} className={taskManagerCss.pageScroll}><div className={taskManagerCss.pageContent}>
+      <header className={taskManagerCss.pageHeading}><h1>{t('title')}</h1><div className={taskManagerCss.creationActions}>
+        <Button size="sm" className={taskManagerCss.headerAction} disabled={!connected || loading} onClick={() => void model.refresh()}>{t('action.refresh')}</Button>
+        <Button variant="primary" size="sm" className={taskManagerCss.headerAction} icon={<IconPlusOutline16/>} onClick={newTask}>{t('new.action')}</Button>
       </div></header>
-      <div className={css.filters}><div className={css.filterTabs} role="group" aria-label={t('statusFilter.label')}>
-        {(['enabled', 'disabled', 'completed', 'all'] as const).map(value => <button key={value} type="button" className={clsx(css.filterTab, filter === value && css.filterTabActive)} aria-pressed={filter === value} onClick={() => setFilter(value)}>{status(value)}</button>)}
+      <div className={taskManagerCss.filters}><div className={taskManagerCss.filterTabs} role="group" aria-label={t('statusFilter.label')}>
+        {(['enabled', 'disabled', 'completed', 'all'] as const).map(value => <button key={value} type="button" className={clsx(taskManagerCss.filterTab, filter === value && taskManagerCss.filterTabActive)} aria-pressed={filter === value} onClick={() => setFilter(value)}>{status(value)}</button>)}
       </div></div>
-      <div className={css.searchTools}><div className={css.searchField}><Input type="search" icon={<IconSearchOutline16/>} aria-label={t('search.label')} placeholder={t('search.placeholder')} value={query} onChange={event => setQuery(event.target.value)}/>
-        {query && <Button size="sm" className={css.searchClear} aria-label={t('search.clear')} onClick={() => setQuery('')}><IconCloseOutline16/></Button>}
+      <div className={taskManagerCss.searchTools}><div className={taskManagerCss.searchField}><Input type="search" icon={<IconSearchOutline16/>} aria-label={t('search.label')} placeholder={t('search.placeholder')} value={query} onChange={event => setQuery(event.target.value)}/>
+        {query && <Button size="sm" className={taskManagerCss.searchClear} aria-label={t('search.clear')} onClick={() => setQuery('')}><IconCloseOutline16/></Button>}
       </div></div>
-      {!connected && <p className={css.notice} role="status">{t('connection.disconnected')}</p>}
-      {issue && <div className={css.notice} role="alert"><p>{t('list.partial')}</p><Button size="sm" disabled={!connected || loading} onClick={() => void model.refresh()}>{t('list.retry')}</Button></div>}
+      {!connected && <p className={taskManagerCss.notice} role="status">{t('connection.disconnected')}</p>}
+      {issue && <div className={taskManagerCss.notice} role="alert"><p>{t('list.partial')}</p><Button size="sm" disabled={!connected || loading} onClick={() => void model.refresh()}>{t('list.retry')}</Button></div>}
       {loading && !records.length && <p role="status" className={schedCss.loading}>{t('list.loading')}</p>}
       {searching && !rows.length && <p role="status" className={schedCss.loading}>{t('search.content-loading')}</p>}
       {searchFailed && <p role="alert" className={schedCss.loading}>{t('search.content-error')}</p>}
-      {!loading && !searching && rows.length === 0 && <div className={css.empty}><span className={css.emptyGlyph}><IconClockOutline16 size={32}/></span>
+      {!loading && !searching && rows.length === 0 && <div className={taskManagerCss.empty}><span className={taskManagerCss.emptyGlyph}><IconClockOutline16 size={32}/></span>
         <h2>{t(search ? 'list.noMatches' : filter === 'disabled' ? 'list.paused-empty' : filter === 'completed' ? 'list.ended-empty' : 'list.empty')}</h2>
-        {!search && <Button className={css.emptyAction} onClick={newTask}>{t('empty.action')}</Button>}
+        {!search && <Button className={taskManagerCss.emptyAction} onClick={newTask}>{t('empty.action')}</Button>}
       </div>}
-      <ul className={css.listRows} aria-label={t('list.label')} aria-busy={loading || searching} style={{ height: virtual.getTotalSize(), position: 'relative' }}>
+      <ul className={taskManagerCss.listRows} aria-label={t('list.label')} aria-busy={loading || searching} style={{ height: virtual.getTotalSize(), position: 'relative' }}>
         {virtual.getVirtualItems().map(item => { const row = rows[item.index], key = taskKey(taskRef(row)), next = row.state === 'enabled' && row.next_due_utc && displayInstant(row.next_due_utc, locale, now);
           return <li key={key} ref={virtual.measureElement} data-index={item.index} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: 'translateY(' + item.start + 'px)' }}>
-            <Button className={clsx(css.row, selectedKey === key && css.selectedRow, row.state !== 'enabled' && css.endedRow)} aria-expanded={selectedKey === key}
+            <Button className={clsx(taskManagerCss.row, selectedKey === key && taskManagerCss.selectedRow, row.state !== 'enabled' && taskManagerCss.endedRow)} aria-expanded={selectedKey === key}
               onClick={() => setSelected({ ref: taskRef(row), title: row.title })}>
-              <span className={css.rowGlyph}><IconClockOutline16/></span><span className={css.rowContent}>
-                <span className={css.rowTitle}>{row.title}</span><span className={css.rowSummary}><span className={css.metadata}>{status(row.state)}</span><span className={css.metadata}>{frequency(row.spec, t, locale)}</span>
-                  {row.target.type === 'workflow' && <span className={css.metadata}>{t('target.workflow')}</span>}{next && <span className={css.metadata}>{t('detail.nextRun')} · {next.absolute} ({next.relative})</span>}
+              <span className={taskManagerCss.rowGlyph}><IconClockOutline16/></span><span className={taskManagerCss.rowContent}>
+                <span className={taskManagerCss.rowTitle}>{row.title}</span><span className={taskManagerCss.rowSummary}><span className={taskManagerCss.metadata}>{status(row.state)}</span><span className={taskManagerCss.metadata}>{frequency(row.spec, t, locale)}</span>
+                  {row.target.type === 'workflow' && <span className={taskManagerCss.metadata}>{t('target.workflow')}</span>}{next && <span className={taskManagerCss.metadata}>{t('detail.nextRun')} · {next.absolute} ({next.relative})</span>}
                 </span>
               </span>
             </Button>

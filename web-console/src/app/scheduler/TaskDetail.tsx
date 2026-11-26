@@ -12,7 +12,7 @@ import { taskKey, taskRef, type TaskRef, useTaskCatalog, TaskChangeError } from 
 import { useTaskCopy } from './copy';
 import { TaskRule } from './TaskRule';
 import { TaskRuns } from './TaskRuns';
-import css from './TaskManager.module.css';
+import { taskManagerCss } from './taskManagerCss';
 import { schedCss } from './schedCss';
 
 export function TaskTabTitle({ client, identity, fallback }: { client: AppServerClient; identity: string; fallback: string }) {
@@ -38,8 +38,8 @@ export function TaskDeleteDialog({ client, record, close, deleted }: {
     } finally { if (mounted.current) setBusy(false); }
   };
   return <Modal open title={t('delete.confirm')} closeLabel={t('action.cancel')} description={t('delete.explanation')} onClose={close}
-    className={css.confirmDialog} footer={<div className={css.confirmActions}><Button onClick={close}>{t('action.cancel')}</Button>
-      <Button variant="primary" className={css.deleteButton} disabled={!connected || busy} onClick={() => void remove()}>{t(busy ? 'delete.pending' : 'action.delete')}</Button></div>}>
+    className={taskManagerCss.confirmDialog} footer={<div className={taskManagerCss.confirmActions}><Button onClick={close}>{t('action.cancel')}</Button>
+      <Button variant="primary" className={taskManagerCss.deleteButton} disabled={!connected || busy} onClick={() => void remove()}>{t(busy ? 'delete.pending' : 'action.delete')}</Button></div>}>
     <p>{record.title}</p>
     {failure && <p role="alert">{t(failure === 'conflict' ? 'edit.conflict' : failure === 'uncertain' ? 'edit.uncertain' : 'delete.failed')}</p>}
   </Modal>;
@@ -89,10 +89,10 @@ export function TaskDetail({ client, task, title, close, openSession }: {
     finally { setChanging(false); }
   };
   const row = loaded && record;
-  return <aside ref={aside} className={css.detail} tabIndex={-1} aria-label={t('detail.label')} data-task-detail>
-    <div className={css.detailTabsBar}>
-      <div className={css.detailTabs} role="tablist" aria-label={t('detail.tabs')}>
-        {(['rule', 'records'] as const).map((name, index, tabs) => <button type="button" key={name} id={tabId + '-tab-' + name} role="tab" className={css.detailTab}
+  return <aside ref={aside} className={taskManagerCss.detail} tabIndex={-1} aria-label={t('detail.label')} data-task-detail>
+    <div className={taskManagerCss.detailTabsBar}>
+      <div className={taskManagerCss.detailTabs} role="tablist" aria-label={t('detail.tabs')}>
+        {(['rule', 'records'] as const).map((name, index, tabs) => <button type="button" key={name} id={tabId + '-tab-' + name} role="tab" className={taskManagerCss.detailTab}
           aria-selected={tab === name} aria-controls={tabId + '-panel-' + name} tabIndex={tab === name ? 0 : -1}
           onClick={() => setTab(name)} onKeyDown={event => {
             if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -100,28 +100,28 @@ export function TaskDetail({ client, task, title, close, openSession }: {
             if (next === undefined) return; event.preventDefault(); setTab(tabs[next]); (event.currentTarget.parentElement?.children[next] as HTMLElement)?.focus();
           }}>{t(name === 'rule' ? 'detail.rule' : 'records.title')}</button>)}
       </div>
-      <div className={css.detailActions}>
+      <div className={taskManagerCss.detailActions}>
         {openSession && <Tooltip label={session ? t('scope.original') + ' · ' + sessionName : t('scope.unavailable')}>
-          <Button size="sm" className={css.detailIconButton} aria-label={t('scope.original')} disabled={!connected || !session} onClick={() => openSession(task)}><IconLinkOutline16/></Button>
+          <Button size="sm" className={taskManagerCss.detailIconButton} aria-label={t('scope.original')} disabled={!connected || !session} onClick={() => openSession(task)}><IconLinkOutline16/></Button>
         </Tooltip>}
         <Menu open={menu} onClose={() => setMenu(false)} align="end" items={[
           { id: 'toggle', label: t(record?.state === 'enabled' ? 'action.pause' : 'action.resume'), disabled: !connected || !record || record.state === 'completed' || changing || unresolved },
           { id: 'delete', label: t('action.delete'), icon: <IconTrashOutline16/>, danger: true, disabled: !connected || !record || unresolved },
         ]} onSelect={id => { setMenu(false); if (id === 'delete' && record) setDeleting(record); else void toggle(); }}
-          anchor={<Button size="sm" className={css.detailIconButton} aria-label={t('detail.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconEllipsisOutline16/></Button>}/>
-        {close && <Button size="sm" className={css.detailIconButton} aria-label={t('detail.close')} onClick={close}><IconCloseOutline16/></Button>}
+          anchor={<Button size="sm" className={taskManagerCss.detailIconButton} aria-label={t('detail.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconEllipsisOutline16/></Button>}/>
+        {close && <Button size="sm" className={taskManagerCss.detailIconButton} aria-label={t('detail.close')} onClick={close}><IconCloseOutline16/></Button>}
       </div>
     </div>
-    <div className={css.detailScroll}>
-      {!connected && <p className={css.detailNotice} role="status">{t('connection.disconnected')}</p>}
-      {unresolved && <section className={css.saveFailure} role="alert"><p>{t('edit.uncertain')}</p>
+    <div className={taskManagerCss.detailScroll}>
+      {!connected && <p className={taskManagerCss.detailNotice} role="status">{t('connection.disconnected')}</p>}
+      {unresolved && <section className={taskManagerCss.saveFailure} role="alert"><p>{t('edit.uncertain')}</p>
         <Button size="sm" disabled={!connected || changing} onClick={() => void retry()}>{t(changing ? 'action.saving' : 'edit.retry-previous')}</Button>
       </section>}
-      {retryFailure && <p role="alert" className={css.detailNotice}>{t(retryFailure === 'conflict' ? 'edit.conflict' : retryFailure === 'uncertain' ? 'edit.uncertain' : 'edit.invalid')}</p>}
-      {connected && loaded && record && loaded.revision !== record.revision && <p className={css.detailNotice} role="status">{t('list.refreshing')} <Button size="sm" onClick={() => void reload()}>{t('action.retry')}</Button></p>}
-      {(loading || catalogLoading) && !loaded && <div className={css.empty}><p role="status">{t('list.loading')}</p></div>}
-      {(failure || issue && !record) && <div className={css.notice} role="alert"><p>{t('list.error')}</p><Button size="sm" onClick={() => { void model.refreshNode(task); if (record) void reload(); }}>{t('action.retry')}</Button></div>}
-      {!loading && !catalogLoading && (!loaded || !record) && !failure && !issue && <div className={css.empty}><h2>{title}</h2><p>{t('list.no-task')}</p></div>}
+      {retryFailure && <p role="alert" className={taskManagerCss.detailNotice}>{t(retryFailure === 'conflict' ? 'edit.conflict' : retryFailure === 'uncertain' ? 'edit.uncertain' : 'edit.invalid')}</p>}
+      {connected && loaded && record && loaded.revision !== record.revision && <p className={taskManagerCss.detailNotice} role="status">{t('list.refreshing')} <Button size="sm" onClick={() => void reload()}>{t('action.retry')}</Button></p>}
+      {(loading || catalogLoading) && !loaded && <div className={taskManagerCss.empty}><p role="status">{t('list.loading')}</p></div>}
+      {(failure || issue && !record) && <div className={taskManagerCss.notice} role="alert"><p>{t('list.error')}</p><Button size="sm" onClick={() => { void model.refreshNode(task); if (record) void reload(); }}>{t('action.retry')}</Button></div>}
+      {!loading && !catalogLoading && (!loaded || !record) && !failure && !issue && <div className={taskManagerCss.empty}><h2>{title}</h2><p>{t('list.no-task')}</p></div>}
       {row && <div id={tabId + '-panel-' + tab} role="tabpanel" aria-labelledby={tabId + '-tab-' + tab}>
         <div hidden={tab !== 'rule'}><TaskRule value={loaded} record={record} model={model} connected={verified && !unresolved && !changing} reload={reload}/></div>
         {tab === 'records' && <TaskRuns record={record} model={model} connected={connected} generation={connection.generation}/>}

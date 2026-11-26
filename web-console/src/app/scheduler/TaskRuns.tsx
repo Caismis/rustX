@@ -6,7 +6,7 @@ import { useLocale } from '../../locale/react';
 import { useTaskCopy, type TaskManagerKey } from './copy';
 import { type SchedulerModel, taskKey, taskRef } from './model';
 import { displayInstant } from './timing';
-import css from './TaskManager.module.css';
+import { taskManagerCss } from './taskManagerCss';
 import { schedCss } from './schedCss';
 
 export function TaskRuns({ record, model, connected, generation }: { record: ScheduleHeader; model: SchedulerModel; connected: boolean; generation: number }) {
@@ -50,20 +50,20 @@ export function TaskRuns({ record, model, connected, generation }: { record: Sch
     return ({ completed: 'records.completed', cancelled: 'records.cancelled', timed_out: 'records.timed-out', rejected_before_start: 'records.rejected',
       interrupted: 'records.interrupted', outcome_unknown: 'records.unknown' } as const)[value.start.state.outcome.type];
   };
-  if (!receipt) return <p className={css.emptyTitle}>{t('records.empty')}</p>;
+  if (!receipt) return <p className={taskManagerCss.emptyTitle}>{t('records.empty')}</p>;
   const when = displayInstant(receipt.trigger_id.occurrence_utc, locale);
-  return <div className={css.recordsPanel}>
-    <article className={css.delivery}>
-      <span className={css.deliveryGlyph}><IconClockOutline16/></span>
-      <div className={css.deliveryBody}><header className={css.deliveryHead}><time className={css.deliveryTime} dateTime={receipt.trigger_id.occurrence_utc}>{when.absolute}</time>
+  return <div className={taskManagerCss.recordsPanel}>
+    <article className={taskManagerCss.delivery}>
+      <span className={taskManagerCss.deliveryGlyph}><IconClockOutline16/></span>
+      <div className={taskManagerCss.deliveryBody}><header className={taskManagerCss.deliveryHead}><time className={taskManagerCss.deliveryTime} dateTime={receipt.trigger_id.occurrence_utc}>{when.absolute}</time>
         <span>{start ? shown ? t(status(shown)) : t('records.loading') : t('records.queued')}</span></header>
         <p>{t('records.latest-only')}</p>
-        {!start && <p className={css.detailNotice}>{t('records.trigger-help')}</p>}
+        {!start && <p className={taskManagerCss.detailNotice}>{t('records.trigger-help')}</p>}
         {loading && <p role="status">{t('records.loading')}</p>}
         {error && <div role="alert"><p>{t('records.error')}</p><Button size="sm" disabled={loading || !connected} onClick={() => void read()}>{t('action.retry')}</Button></div>}
         {shown && <>
           {shown.start.cancellation_requested_at && <p role="status">{t('records.cancellation')}</p>}
-          {(shown.capacity_blocked || shown.start.recovery_blocked) && <p className={css.detailNotice}>{t('records.blocked')}</p>}
+          {(shown.capacity_blocked || shown.start.recovery_blocked) && <p className={taskManagerCss.detailNotice}>{t('records.blocked')}</p>}
           {shown.start.state.type === 'settled' && shown.start.state.outcome.type === 'outcome_unknown' && <p>{t('records.unknown-detail')}</p>}
           {shown.start.state.type === 'settled' && shown.start.state.outcome.type === 'rejected_before_start' && <p>{t('records.failed-start')}</p>}
           <div className={schedCss.inlineActions}>

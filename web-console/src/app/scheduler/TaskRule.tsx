@@ -7,7 +7,7 @@ import { TaskChangeError, taskRef, type SchedulerModel } from './model';
 import { useTaskCopy } from './copy';
 import { timingValue, sameTiming, TimingInputError, displayInstant } from './timing';
 import { TimingEditor } from './TimingEditor';
-import css from './TaskManager.module.css';
+import { taskManagerCss } from './taskManagerCss';
 import { schedCss } from './schedCss';
 import { hasUnrepresentableProperty, readJson } from '../../../shared/json-numbers';
 import { Input as TextInput } from '@/presentation/primitives/Input';
@@ -73,29 +73,29 @@ export function TaskRule({ value, record, model, connected, reload }: {
   const cancel = editor.discard;
   const instant = record.state === 'enabled' && record.next_due_utc ? displayInstant(record.next_due_utc, locale) : undefined;
   return <>
-    <header className={css.detailHeader}>
-      {finished ? <h2 className={css.readonlyName}>{value.title}</h2> : <TextInput className={css.editName} aria-label={t('detail.name')} value={draft.title} disabled={disabled} maxLength={240} onChange={event => editor.edit({ ...draft, title: event.target.value })}/>}
+    <header className={taskManagerCss.detailHeader}>
+      {finished ? <h2 className={taskManagerCss.readonlyName}>{value.title}</h2> : <TextInput className={taskManagerCss.editName} aria-label={t('detail.name')} value={draft.title} disabled={disabled} maxLength={240} onChange={event => editor.edit({ ...draft, title: event.target.value })}/>}
     </header>
-    {record.state === 'disabled' && <p className={css.detailNotice} role="status">{t('task.paused-note')}</p>}
-    {instant && <div className={css.nextRun}><span>{t('detail.nextRun')}</span><span>{instant.absolute} <span className={css.nextRunRelative}>({instant.relative})</span></span></div>}
-    <div className={css.ruleCard}>
+    {record.state === 'disabled' && <p className={taskManagerCss.detailNotice} role="status">{t('task.paused-note')}</p>}
+    {instant && <div className={taskManagerCss.nextRun}><span>{t('detail.nextRun')}</span><span>{instant.absolute} <span className={taskManagerCss.nextRunRelative}>({instant.relative})</span></span></div>}
+    <div className={taskManagerCss.ruleCard}>
       <label className={schedCss.instructionLabel} htmlFor={'task-content-' + record.id.ordinal}>{t(value.target.type === 'workflow' ? 'content.arguments' : 'content.label')}</label>
-      {finished ? <pre className={css.readonlyPrompt}>{readOnlyArguments ? t('content.unsafe-saved') : draft.content}</pre> : <Textarea id={'task-content-' + record.id.ordinal} className={css.instruction} value={readOnlyArguments ? '' : draft.content} disabled={disabled || readOnlyArguments} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
+      {finished ? <pre className={taskManagerCss.readonlyPrompt}>{readOnlyArguments ? t('content.unsafe-saved') : draft.content}</pre> : <Textarea id={'task-content-' + record.id.ordinal} className={taskManagerCss.instruction} value={readOnlyArguments ? '' : draft.content} disabled={disabled || readOnlyArguments} spellCheck={value.target.type !== 'workflow'} onChange={event => editor.edit({ ...draft, content: event.target.value })}/>}
     </div>
-    {readOnlyArguments && !finished && <p className={css.detailNotice} role="status">{t('content.unsafe-saved')}</p>}
-    {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('target.workflow-name', { name: record.target.workflow_id })}</p>}
-    {record.target.type === 'workflow' && <p className={css.detailNotice}>{t('content.workflow-version')}</p>}
+    {readOnlyArguments && !finished && <p className={taskManagerCss.detailNotice} role="status">{t('content.unsafe-saved')}</p>}
+    {record.target.type === 'workflow' && <p className={taskManagerCss.detailNotice}>{t('target.workflow-name', { name: record.target.workflow_id })}</p>}
+    {record.target.type === 'workflow' && <p className={taskManagerCss.detailNotice}>{t('content.workflow-version')}</p>}
     <TimingEditor value={draft.timing} change={timing => editor.edit({ ...draft, timing })} disabled={disabled} t={t} locale={locale}/>
-    {record.last_failure && <p className={css.detailNotice} role="alert">{t('task.failure')}</p>}
-    {savedRefreshError && <p role="status" className={css.detailNotice}>{t('edit.saved-refresh')}</p>}
-    {incoming && <section className={css.saveFailure} role="alert">
+    {record.last_failure && <p className={taskManagerCss.detailNotice} role="alert">{t('task.failure')}</p>}
+    {savedRefreshError && <p role="status" className={taskManagerCss.detailNotice}>{t('edit.saved-refresh')}</p>}
+    {incoming && <section className={taskManagerCss.saveFailure} role="alert">
       <p>{t('edit.conflict')}</p><strong>{t('edit.latest')}</strong><p>{incoming.values.title}</p>
       <pre className={schedCss.savedVersion}>{incoming.unsafeArguments ? t('content.unsafe-saved') : incoming.values.content}</pre>
       <div className={schedCss.inlineActions}><Button size="sm" onClick={cancel}>{t('edit.use-latest')}</Button><Button size="sm" onClick={editor.rebase}>{t('edit.keep-edits')}</Button></div>
     </section>}
-    {dirty && !finished && <footer className={css.saveFooter}>
-      <div className={css.saveNotice}>{t('edit.unsaved')}</div>
-      {(validation || error) && <p className={css.saveFailure} role="alert">{validation ?? t(error === 'conflict' ? 'edit.conflict' : error === 'uncertain' ? 'edit.uncertain' : 'edit.invalid')}</p>}
+    {dirty && !finished && <footer className={taskManagerCss.saveFooter}>
+      <div className={taskManagerCss.saveNotice}>{t('edit.unsaved')}</div>
+      {(validation || error) && <p className={taskManagerCss.saveFailure} role="alert">{validation ?? t(error === 'conflict' ? 'edit.conflict' : error === 'uncertain' ? 'edit.uncertain' : 'edit.invalid')}</p>}
       <div className={schedCss.inlineActions}><Button disabled={saving} onClick={cancel}>{t('action.cancel')}</Button>
         <Button variant="primary" disabled={disabled || !!validation || !!incoming} onClick={() => void save()}>{t(saving ? 'action.saving' : 'action.save')}</Button></div>
     </footer>}
