@@ -595,10 +595,6 @@ impl Binding {
         }
         if let Some(hello) = data_hello
             && (!is_normalized_absolute_path(&hello.user_root)
-                || hello
-                    .user_root
-                    .file_name()
-                    .is_none_or(|name| name != "rustx")
                 || recovery.is_some_and(|proof| proof.user_root != hello.user_root))
         {
             return Err(Reject::UserRootMismatch);

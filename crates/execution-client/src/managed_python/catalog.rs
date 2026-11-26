@@ -146,11 +146,7 @@ impl Catalog {
         let store_root = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
-            .or_else(|| {
-                user.as_deref()
-                    .and_then(Path::parent)
-                    .map(|home| home.join(".local/share"))
-            })
+            .or_else(|| crate::client_home_directory().map(|home| home.join(".local/share")))
             .map(|data| data.join("rustx/environments/python-tools"));
         Self {
             workspace: workspace.to_path_buf(),

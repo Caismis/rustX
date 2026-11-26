@@ -300,12 +300,10 @@ impl FileWritePolicy {
         let mut protected_roots = Vec::new();
         if let Some(user_root) = crate::client_user_root() {
             protected_roots.push(user_root.join(".agents/skills"));
-            if let Some(parent) = user_root.parent()
-                && let Ok(canonical) = parent.canonicalize()
-            {
-                let root = canonical.join("rustx/.agents/skills");
-                if !protected_roots.contains(&root) {
-                    protected_roots.push(root);
+            if let Some(home) = crate::client_home_directory() {
+                let authored = home.join("rustx/.agents/skills");
+                if !protected_roots.contains(&authored) {
+                    protected_roots.push(authored);
                 }
             }
         }

@@ -694,6 +694,15 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 }
 
 #[test]
+fn admission_retains_the_physical_spelling_of_an_aliased_user_root() {
+    let (binding, credential) = Binding::reserve(reservation()).unwrap();
+    let mut hello = valid_hello(&credential);
+    hello.user_root = "/volumes/client/standing-resources".into();
+    let (connection, _peer) = live(&binding, &hello);
+    assert_eq!(connection.user_root(), hello.user_root);
+}
+
+#[test]
 fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 

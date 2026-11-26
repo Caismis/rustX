@@ -1138,12 +1138,16 @@ or an unavailable continuation with the business result intact.
 ### Bound Session resource policy
 
 Revision 10 carries the Client's normalized absolute User root in the data
-Hello. Recovery pins that root to the admitted Client instance. A local sibling,
+Hello. The Client resolves its locally configured home and product-root aliases
+to a physical spelling. The Python Store still uses the Client's own data home.
+Recovery pins the reported root to the admitted Client instance. A local sibling,
 remote Client and short-lived container each report the root in their own
 filesystem namespace. The Server publishes bound Skill locations under
 the Client-visible collection and Managed Python User locations under
 `<client-user-root>/.agents/tools`. It reads authoritative global Skill
-metadata from its own standing tree.
+metadata from its own standing tree. Bound User Skill addresses retain a
+collection-relative name until projection, so a non-UTF-8 Host ancestor cannot
+invalidate a representable Client address.
 
 Read, Write, Edit, Grep and Glob accept Client absolute paths and
 Workspace-relative paths. The Client retains directory descriptors, rejects

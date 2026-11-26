@@ -18,9 +18,14 @@ impl SkillDiscoveryOutcome {
             return Ok(());
         };
         let project = |location: &mut String| -> io::Result<()> {
-            let relative = Path::new(location)
-                .strip_prefix(&source_root)
-                .map_err(|_| io::ErrorKind::InvalidData)?;
+            let address = Path::new(location);
+            let relative = if address.is_absolute() {
+                address
+                    .strip_prefix(&source_root)
+                    .map_err(io::Error::other)?
+            } else {
+                address
+            };
             resolve(relative)?
                 .to_str()
                 .ok_or(io::ErrorKind::InvalidData)?
@@ -102,5 +107,54 @@ impl SkillDiscoveryOutcome {
         self.diagnostics.sort();
         self.diagnostics.dedup();
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::super::{
+        AutomaticSkillRoot, CollectionView, Native, collect_automatic_source, merge_candidates,
+    };
+    use super::*;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn a_non_utf8_host_ancestor_does_not_affect_client_skill_addresses() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = AutomaticSkillRoot {
+            source: SkillSource::User,
+            root: temp
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(OsString::from_vec(vec![0xff]))
+                .join("skills"),
+        };
+        let marker = root.root.join("guide/SKILL.md");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, "---\nname: guide\ndescription: Example\n---\nBody").unwrap();
+        let mut diagnostics = Vec::new();
+        let candidates = collect_automatic_source(
+            &root,
+            &mut diagnostics,
+            &crate::runtime::CancellationSignal::new(),
+            &Native,
+            CollectionView::BoundUser,
+        )
+        .unwrap();
+        let mut outcome = merge_candidates(candidates, diagnostics);
+        outcome.roots.push(root);
+        let visible = Path::new("/client/rustx/.agents/skills");
+        outcome
+            .publish_user_paths(visible, |relative| Ok(visible.join(relative)))
+            .unwrap();
+        assert_eq!(outcome.packages.len(), 1);
+        assert_eq!(
+            Path::new(outcome.packages[0].location()),
+            visible.join("guide/SKILL.md")
+        );
+        assert_eq!(outcome.packages[0].instruction_source(), marker);
+        assert_eq!(outcome.diagnostics, [] as [SkillDiagnostic; 0]);
     }
 }

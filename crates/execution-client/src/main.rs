@@ -71,8 +71,8 @@ const _: () = {
     );
 };
 
-/// Official User tree in this Client's filesystem namespace.
-pub(crate) fn client_user_root() -> Option<PathBuf> {
+/// The Client's locally configured home, before resolving User-tree aliases.
+pub(crate) fn client_home_directory() -> Option<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| is_normalized_absolute_path(home))
@@ -82,7 +82,40 @@ pub(crate) fn client_user_root() -> Option<PathBuf> {
                 .flatten()
                 .map(|user| user.dir)
         })
-        .map(|home| home.join("rustx"))
+        .filter(|home| is_normalized_absolute_path(home))
+}
+
+/// Resolve only locally selected HOME/`rustx` aliases. Published paths use a
+/// physical spelling which the Client's no-follow file tools can open.
+fn resolve_user_root(home: &Path) -> io::Result<PathBuf> {
+    let configured = home.join("rustx");
+    match configured.canonicalize() {
+        Ok(path) if path.is_dir() => Ok(path),
+        Ok(_) => Err(io::ErrorKind::NotADirectory.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A dangling `rustx` symlink is not an absent directory that the
+            // Client may create; preserve it and fail closed.
+            match fs::symlink_metadata(&configured) {
+                Err(missing) if missing.kind() == io::ErrorKind::NotFound => {
+                    let physical_home = home.canonicalize()?;
+                    if !physical_home.is_dir() {
+                        return Err(io::ErrorKind::NotADirectory.into());
+                    }
+                    Ok(physical_home.join("rustx"))
+                }
+                Ok(_) => Err(io::ErrorKind::NotFound.into()),
+                Err(other) => Err(other),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Official User tree in this Client's filesystem namespace.
+pub(crate) fn client_user_root() -> Option<PathBuf> {
+    client_home_directory()
+        .and_then(|home| resolve_user_root(&home).ok())
+        .filter(|root| is_normalized_absolute_path(root))
 }
 
 fn main() -> ExitCode {
