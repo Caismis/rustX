@@ -245,6 +245,49 @@ impl Drop for WorkerExit {
     }
 }
 
+impl Work {
+    /// A physical join failure settles only work still owned by generation.
+    /// Other owners keep their decision, including an unpaid terminal status.
+    fn worker_join_failed(&self) -> bool {
+        let mut state = self.state.lock().expect("asynchronous compaction state");
+        match &state.phase {
+            Phase::Installing(_) => return false,
+            Phase::Terminal | Phase::Failed(_) => {
+                return state.published.as_ref() != Some(&state.status);
+            }
+            Phase::Ready(_)
+                if state
+                    .published
+                    .as_ref()
+                    .is_some_and(|status| status.phase == CompactionOperationPhase::Ready) =>
+            {
+                return false;
+            }
+            Phase::Capturing | Phase::Generating | Phase::Ready(_) => {}
+        }
+        state.status.waiting_attempt_id = None;
+        if state.superseded || state.cancel_requested || self.admission.cancellation.is_cancelled()
+        {
+            state.phase = Phase::Terminal;
+            state.status.phase = if state.superseded {
+                CompactionOperationPhase::Superseded
+            } else {
+                CompactionOperationPhase::Cancelled
+            };
+            state.status.diagnostic = None;
+        } else {
+            let error = ContextError::new(
+                ContextErrorKind::AuxiliarySupervisionFailed,
+                "asynchronous compaction worker exited unexpectedly",
+            );
+            state.status.phase = CompactionOperationPhase::Failed;
+            state.status.diagnostic = Some(error.message.clone());
+            state.phase = Phase::Failed(error);
+        }
+        true
+    }
+}
+
 impl RuntimeInner {
     fn async_work(&self, admission: &CompactionAdmission) -> Option<Arc<Work>> {
         self.async_compaction
@@ -478,20 +521,11 @@ impl RuntimeInner {
             .expect("asynchronous compaction join")
             .take();
         if let Some(join) = join {
-            if join.await.is_err() {
-                let error = ContextError::new(
-                    ContextErrorKind::AuxiliarySupervisionFailed,
-                    "asynchronous compaction worker exited unexpectedly",
-                );
-                let mut state = work.state.lock().expect("asynchronous compaction state");
-                state.phase = Phase::Failed(error.clone());
-                state.status.phase = CompactionOperationPhase::Failed;
-                state.status.diagnostic = Some(error.message);
-                state.status.waiting_attempt_id = None;
-                drop(state);
-                if let Err(error) = self.publish_async_status(&work) {
-                    self.fail_async_durability(&error);
-                }
+            if join.await.is_err()
+                && work.worker_join_failed()
+                && let Err(error) = self.publish_async_status(&work)
+            {
+                self.fail_async_durability(&error);
             }
             work.joined.store(true, Ordering::Release);
             work.lifecycle
@@ -597,17 +631,20 @@ impl RuntimeInner {
             let ready = match selection {
                 Ok(CompactionDelivery::Ready(ready)) => ready,
                 Ok(CompactionDelivery::Failed(_)) => return,
-                Err((operation, diagnostic)) => {
-                    // Keep shutdown behind this terminal publication even
-                    // though no foreground installation was started.
-                    let admission = self.lifecycle.try_enter_running();
+                Err((work, error)) => {
+                    // Selection and the absorbing gate share the coordinator
+                    // boundary. No foreground retry owns this idle read.
+                    let _admission = self.lifecycle.try_enter_running();
+                    self.commit_failure_and_observe(
+                        DurableOperation::SelectPendingBatch,
+                        error.to_string(),
+                    );
                     drop(state);
-                    let disposition = if admission.is_ok() {
-                        CompactionDisposition::Failed(diagnostic)
-                    } else {
-                        CompactionDisposition::Cancelled
-                    };
-                    let _ = coordinator.settle(&operation, disposition);
+                    if let Err(error) = self.publish_async_status(&work) {
+                        self.fail_async_durability(&error);
+                    }
+                    work.changed.notify_waiters();
+                    let _ = self.begin_drain();
                     return;
                 }
             };
@@ -699,6 +736,15 @@ impl RuntimeInner {
                 .materialize_selected_media(&mut request.messages, &history.input_manifest)
                 .map_err(CompactionExecutionError::Context)?;
             request.images = images;
+            // Price the same future request before and after installation.
+            // Materialize first so the history still matches its input manifest.
+            request.messages = crate::context::engine::assemble_context_input(
+                &request.messages,
+                &staged_request_context,
+                None,
+                None,
+            )
+            .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
             let constraints = crate::context::engine::CompactionConstraints {
                 staged_request_context: &staged_request_context,
                 ..crate::context::engine::CompactionConstraints::default()
@@ -806,7 +852,8 @@ impl RuntimeCompactionCoordinator {
         inner: &RuntimeInner,
         admission: Option<&CompactionAdmission>,
         idle: bool,
-    ) -> Option<Result<CompactionDelivery, (CompactionAdmission, String)>> {
+    ) -> Option<Result<CompactionDelivery, (Arc<Work>, crate::runtime::inbound::MailboxError)>>
+    {
         let work = inner
             .async_compaction
             .lock()
@@ -836,11 +883,16 @@ impl RuntimeCompactionCoordinator {
                     match inner.mailbox.has_pending() {
                         Ok(true) => return None,
                         Err(error) => {
-                            state.phase = Phase::Installing(generated.clone());
-                            return Some(Err((
-                                work.admission.clone(),
-                                format!("idle compaction could not check pending input: {error}"),
-                            )));
+                            state.phase = Phase::Terminal;
+                            state.status.phase = CompactionOperationPhase::Failed;
+                            state.status.waiting_attempt_id = None;
+                            state.status.diagnostic = Some(
+                                format!("idle compaction could not check pending input: {error}")
+                                    .chars()
+                                    .take(256)
+                                    .collect(),
+                            );
+                            return Some(Err((work.clone(), error)));
                         }
                         Ok(false) => {}
                     }

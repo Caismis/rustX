@@ -478,7 +478,7 @@ describe("presentation projection", () => {
       },
     ]);
 
-    assert.equal(compactionNotice(state), undefined);
+    assert.match(compactionNotice(state)!, /previous failure/);
     const reopened = replaceFromSnapshot(snapshot({ context: state.context }), state.cursor);
     assert.match(compactionNotice(reopened)!, /previous failure/);
     assert.equal(state.context.compaction_count, 2);
@@ -521,6 +521,49 @@ describe("presentation projection", () => {
     const cursor = runtimeCursor(1);
     const next = reduce(initial(), { cursor, event: { type: 'checkpoint_advanced', transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) } });
     assert.match(compactionNotice(next)!, /unseen summary failure/);
+  });
+
+  it('preserves a first-seen failure for either checkpoint event and on cold attach', () => {
+    const failed = { live: false, status: { operation_id: 'old', admission_generation: '1', phase: 'failed' as const,
+      accepted_fragments: 0, diagnostic: 'unknown order', triggering_attempt_id: null, waiting_attempt_id: null } };
+    const context = { compaction_in_progress: false, compaction_count: 1, latest_compaction: {
+      operation_id: 'manual', generation: '1', checkpoint_id: 'new-checkpoint', activation_id: '1',
+      tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10',
+    }, compaction_operations: [failed] };
+    assert.match(compactionNotice(replaceFromSnapshot(snapshot({ context }), runtimeCursor(1)))!, /unknown order/);
+    for (const type of ['context_compacted', 'checkpoint_advanced'] as const) {
+      const cursor = runtimeCursor(1);
+      const event: RuntimeClientEvent = type === 'context_compacted' ? { type, context }
+        : { type, transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) };
+      assert.match(compactionNotice(reduce(initial(), { cursor, event }))!, /unknown order/);
+    }
+  });
+
+  it('retains dismissals across checkpoint repairs and preserves newer and unknown failures', () => {
+    const operation = (id: string, generation: string, phase: 'failed' | 'committed' = 'failed') => ({
+      live: false, status: { operation_id: id, admission_generation: generation, phase, accepted_fragments: 0,
+        diagnostic: phase === 'failed' ? `${id} failure` : null, triggering_attempt_id: null, waiting_attempt_id: null },
+    });
+    const head = (activation: string) => ({ operation_id: `manual-${activation}`, generation: activation,
+      checkpoint_id: `checkpoint-${activation}`, activation_id: activation,
+      tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10' });
+    const old = operation('old', '1'), unknown = operation('unknown', '2'), newer = operation('newer', '3');
+    const base = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [old] };
+    let state = replaceFromSnapshot(snapshot({ context: base }), runtimeCursor(1));
+    const first = { ...base, compaction_count: 1, latest_compaction: head('1'), compaction_operations: [old, unknown] };
+    state = replaceFromSnapshot(snapshot({ context: first }), runtimeCursor(2), state);
+    assert.match(compactionNotice(state)!, /unknown failure/);
+    const second = { ...first, compaction_count: 2, latest_compaction: head('2'), compaction_operations: [old, unknown, newer] };
+    const cursor = runtimeCursor(3);
+    state = reduce(state, { cursor, event: { type: 'checkpoint_advanced', transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context: second }), cursor) } });
+    assert.match(compactionNotice(state)!, /newer failure/);
+    state = replaceFromSnapshot(snapshot({ context: second }), runtimeCursor(4), state);
+    assert.match(compactionNotice(state)!, /newer failure/);
+    const afterCommit = { ...second, compaction_operations: [old, unknown, operation('committed', '3', 'committed'), operation('latest', '4')] };
+    const cold = replaceFromSnapshot(snapshot({ context: afterCommit }), runtimeCursor(5));
+    assert.match(compactionNotice(cold)!, /latest failure/);
+    const onlyOld = replaceFromSnapshot(snapshot({ context: { ...afterCommit, compaction_operations: afterCommit.compaction_operations.slice(0, 3) } }), runtimeCursor(5));
+    assert.equal(compactionNotice(onlyOld), undefined);
   });
 
   it("rebuilds a mid-stream assistant message from the snapshot alone", () => {

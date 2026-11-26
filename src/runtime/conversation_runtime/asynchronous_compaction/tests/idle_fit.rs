@@ -353,7 +353,40 @@ async fn failed_idle_inbox_probe_publishes_a_terminal_failure_without_activating
                 .contains("injected pending-inbox probe failure")
         );
     }
-    fixture.runtime.inner.reap_async_compaction(true).await;
+    let failure = fixture.runtime.inner.durability_gate.failure().unwrap();
+    assert_eq!(failure.operation, DurableOperation::SelectPendingBatch);
+    assert!(
+        failure
+            .diagnostic
+            .contains("injected pending-inbox probe failure")
+    );
+    let coordinator = RuntimeCompactionCoordinator(Arc::downgrade(&fixture.runtime.inner));
+    assert!(
+        coordinator
+            .admit(&AttemptId::new("after-failed-probe"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .runtime
+            .submit_inbound(text_content("after failed probe"))
+            .is_err()
+    );
+    within_liveness_guard(
+        "probe failure stops the admission driver",
+        fixture.runtime.inner.wake.wait_until_exited(),
+    )
+    .await;
+    let result = within_liveness_guard(
+        "durability failure drains idle compaction",
+        fixture.runtime.shutdown(),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail })
+        if detail.contains("injected pending-inbox probe failure"))
+    );
     assert!(
         fixture
             .runtime
@@ -361,12 +394,30 @@ async fn failed_idle_inbox_probe_publishes_a_terminal_failure_without_activating
             .async_work(&fixture.admission)
             .is_none()
     );
-    fixture.runtime.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_install_prices_rearmed_user_reminder_and_commits_only_checkpoint() {
     let fixture = ready_fixture().await;
+    let (context, mut request) = current_input(&fixture.runtime);
+    let (history, _) = fixture.runtime.inner.store.auxiliary_history().unwrap();
+    request.messages = history.messages;
+    let before_without_reminder = context.engine.estimate_frozen_request(&request);
+    request
+        .messages
+        .push(ModelInputMessage::Canonical(MessageBlock::User(
+            UserMessageBlock {
+                id: MessageId::new("expected-before-reminder"),
+                content: crate::context::assembly::permission_reminder_content(
+                    &crate::runtime::permission::permission_reminder_text(ApprovalMode::Automatic),
+                ),
+                source: UserSource::Runtime,
+                kind: InboundKind::Context(ContextKind::NativeEnvironment),
+                timestamp: None,
+            },
+        )));
+    let expected_before = context.engine.estimate_frozen_request(&request);
+    assert!(expected_before > before_without_reminder);
     set_input_limit(&fixture, fixture.with_reminder);
     install_at_idle(&fixture).await;
     assert!(
@@ -404,15 +455,18 @@ async fn idle_install_prices_rearmed_user_reminder_and_commits_only_checkpoint()
         .filter_map(|event| match &event.event {
             RuntimeEvent::CompactionCompleted {
                 operation_id,
+                tokens_before,
                 estimated_tokens_after,
                 ..
-            } if operation_id == &fixture.admission.operation_id => Some(*estimated_tokens_after),
+            } if operation_id == &fixture.admission.operation_id => {
+                Some((tokens_before.input_tokens, *estimated_tokens_after))
+            }
             _ => None,
         })
         .collect();
     assert_eq!(
         prices,
-        [fixture.with_reminder],
+        [(expected_before, fixture.with_reminder)],
         "the native receipt prices the complete future request"
     );
     assert_eq!(

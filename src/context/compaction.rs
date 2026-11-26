@@ -142,6 +142,89 @@ impl FrozenConstraints {
     }
 }
 
+/// Provenance of the retired prefix, shared by admission and construction.
+struct SummaryProvenance {
+    sources: std::collections::BTreeMap<crate::runtime::identity::MessageId, CanonicalMessageRef>,
+    checkpoint_sources:
+        std::collections::BTreeMap<crate::runtime::identity::CheckpointId, CheckpointSourceRef>,
+    includes_previous_summary: bool,
+}
+
+impl SummaryProvenance {
+    fn collect(
+        messages: &crate::model::selected_input::SelectedModelInput,
+        retired_count: usize,
+        conversation_id: &ConversationId,
+        previous: Option<&crate::durable::projection::ProjectionCheckpoint>,
+    ) -> Result<Self, CompactionExecutionError> {
+        let mut result = Self {
+            sources: std::collections::BTreeMap::new(),
+            checkpoint_sources: std::collections::BTreeMap::new(),
+            includes_previous_summary: false,
+        };
+        for message in messages.iter().take(retired_count) {
+            match message {
+                crate::model::ModelInputMessage::Canonical(original) => {
+                    let source = CanonicalMessageRef::of(conversation_id, original);
+                    result.sources.insert(source.message_id.clone(), source);
+                }
+                crate::model::ModelInputMessage::Derived(derived) => {
+                    if derived
+                        .transformations
+                        .contains(&SemanticTransformation::Summary)
+                    {
+                        result.includes_previous_summary = true;
+                    } else {
+                        for source in &derived.sources {
+                            result
+                                .sources
+                                .insert(source.message_id.clone(), source.clone());
+                        }
+                        for source in &derived.checkpoint_sources {
+                            result
+                                .checkpoint_sources
+                                .insert(source.checkpoint_id.clone(), source.clone());
+                        }
+                    }
+                }
+                crate::model::ModelInputMessage::RequestOnly(_) => {
+                    return Err(CompactionExecutionError::Durable(
+                        "core-owned input entered historical compaction".into(),
+                    ));
+                }
+            }
+        }
+        if let Some(previous) = previous
+            && result.includes_previous_summary
+        {
+            let source = CheckpointSourceRef {
+                conversation_id: conversation_id.clone(),
+                checkpoint_id: previous.candidate.checkpoint_id.clone(),
+                content_digest: previous.fingerprint.clone(),
+            };
+            result
+                .checkpoint_sources
+                .insert(source.checkpoint_id.clone(), source);
+        }
+        Ok(result)
+    }
+
+    fn admit(&self, retained: &[CheckpointItem]) -> Result<(), CompactionExecutionError> {
+        let refs = self
+            .sources
+            .len()
+            .saturating_add(self.checkpoint_sources.len());
+        if !crate::context::checkpoint::inline_provenance_fits(refs, retained) {
+            return Err(ContextError::new(
+                ContextErrorKind::CannotFit,
+                "compaction provenance exceeds inline budget before summary invocation",
+            )
+            .into());
+        }
+        Ok(())
+    }
+}
+
 /// Immutable source and invocation inputs shared by generation and its result.
 struct CapturedSource {
     history: crate::durable::projection::HistoricalModelInput,
@@ -149,6 +232,7 @@ struct CapturedSource {
     historical_items: Vec<CheckpointItem>,
     previous: Option<crate::durable::projection::ProjectionCheckpoint>,
     retired_count: usize,
+    provenance: SummaryProvenance,
     attribution: CompactionAttribution,
     engine: super::engine::ContextEngine,
     projection: super::projection::ContextProjection,
@@ -542,41 +626,15 @@ pub(crate) async fn capture_compaction(
             Err(error) => return Err(error.into()),
         }
     };
-    // Inline provenance is a finite capability. Admit it before invoking
-    // the provider rather than generating a candidate we cannot commit.
-    let mut refs = std::collections::BTreeSet::new();
-    let mut retained_refs = 0usize;
-    for (index, item) in historical_items.iter().enumerate() {
-        if index < retired_count {
-            match &item.message {
-                crate::context::checkpoint::CheckpointMessage::Original(r) => {
-                    refs.insert((r.conversation_id.clone(), r.message_id.clone()));
-                }
-                crate::context::checkpoint::CheckpointMessage::Derived(d)
-                    if !d.transformations.contains(&SemanticTransformation::Summary) =>
-                {
-                    refs.extend(
-                        d.sources
-                            .iter()
-                            .map(|r| (r.conversation_id.clone(), r.message_id.clone())),
-                    );
-                }
-                crate::context::checkpoint::CheckpointMessage::Derived(_) => {}
-            }
-        } else {
-            retained_refs += item.call_sources.len();
-            if let crate::context::checkpoint::CheckpointMessage::Derived(d) = &item.message {
-                retained_refs += d.sources.len() + d.checkpoint_sources.len();
-            }
-        }
-    }
-    if refs.len() + retained_refs + usize::from(previous.is_some()) > 1024 {
-        return Err(ContextError::new(
-            ContextErrorKind::CannotFit,
-            "compaction provenance exceeds inline budget before summary invocation",
-        )
-        .into());
-    }
+    // Compute the exact Summary provenance once, before any Summary call.
+    // The same values are used to build the eventual candidate.
+    let provenance = SummaryProvenance::collect(
+        &projection.messages,
+        retired_count,
+        conversation_id,
+        previous.as_ref(),
+    )?;
+    provenance.admit(&historical_items[retired_count..])?;
     // This is the same already-captured media projection the primary request
     // sees. It renders upload paths without reading the referenced files and
     // preserves every projected occurrence's index for coverage evidence.
@@ -593,6 +651,7 @@ pub(crate) async fn capture_compaction(
             historical_items,
             previous,
             retired_count,
+            provenance,
             attribution,
             engine,
             projection,
@@ -860,47 +919,11 @@ pub(crate) async fn generate_compaction(
             "there is no eligible historical material to summarize",
         )
     })?;
-    let mut sources = std::collections::BTreeMap::new();
-    let mut checkpoint_sources = std::collections::BTreeMap::new();
-    let mut includes_previous_summary = false;
-    for message in projection.messages.iter().take(retired_count) {
-        match message {
-            crate::model::ModelInputMessage::Canonical(original) => {
-                let source = CanonicalMessageRef::of(conversation_id, original);
-                sources.insert(source.message_id.clone(), source);
-            }
-            crate::model::ModelInputMessage::Derived(derived) => {
-                if derived
-                    .transformations
-                    .contains(&SemanticTransformation::Summary)
-                {
-                    includes_previous_summary = true;
-                } else {
-                    for source in &derived.sources {
-                        sources.insert(source.message_id.clone(), source.clone());
-                    }
-                    for source in &derived.checkpoint_sources {
-                        checkpoint_sources.insert(source.checkpoint_id.clone(), source.clone());
-                    }
-                }
-            }
-            crate::model::ModelInputMessage::RequestOnly(_) => {
-                return Err(CompactionExecutionError::Durable(
-                    "core-owned input entered historical compaction".into(),
-                ));
-            }
-        }
-    }
-    if let Some(previous) = previous
-        && includes_previous_summary
-    {
-        let source = CheckpointSourceRef {
-            conversation_id: conversation_id.clone(),
-            checkpoint_id: previous.candidate.checkpoint_id.clone(),
-            content_digest: previous.fingerprint.clone(),
-        };
-        checkpoint_sources.insert(source.checkpoint_id.clone(), source);
-    }
+    let SummaryProvenance {
+        sources,
+        checkpoint_sources,
+        includes_previous_summary,
+    } = &source.provenance;
     let ids: Vec<_> = sources.keys().cloned().collect();
     let mut canonical_sources = Vec::new();
     for ids in ids.chunks(64) {
@@ -917,15 +940,15 @@ pub(crate) async fn generate_compaction(
         crate::context::compaction_metadata::retired_span_metadata(&canonical_sources);
     let inherited_metadata = previous
         .as_ref()
-        .filter(|_| includes_previous_summary)
+        .filter(|_| *includes_previous_summary)
         .and_then(|p| p.candidate.summary_metadata.as_ref());
     let metadata = crate::message::types::CompactionSummaryMetadata::accumulate(
         inherited_metadata,
         physical_metadata.read_files().to_vec(),
         physical_metadata.modified_files().to_vec(),
     );
-    let source_values: Vec<_> = sources.into_values().collect();
-    let checkpoint_values: Vec<_> = checkpoint_sources.into_values().collect();
+    let source_values: Vec<_> = sources.values().cloned().collect();
+    let checkpoint_values: Vec<_> = checkpoint_sources.values().cloned().collect();
     let history_before = engine.estimate_model_input(&projection.messages, "", &[]);
     let (candidate, after_projection, after) = loop {
         let derived = DerivedModelMessage {
@@ -1289,3 +1312,6 @@ pub(crate) fn resource_failure(
         error => CompactionExecutionError::Durable(error.to_string()),
     }
 }
+
+#[cfg(test)]
+mod provenance_tests;

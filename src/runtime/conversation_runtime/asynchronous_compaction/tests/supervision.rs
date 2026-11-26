@@ -74,6 +74,73 @@ async fn aborted_worker_publishes_failure_wakes_waiter_and_releases_admission() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn late_worker_join_error_preserves_ready_installer_and_committed_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let (runtime, _, _) = fixture(&directory, summary_turn_script("retained fact")).await;
+    let admission = start_background(&runtime).await;
+    let work = runtime.inner.async_work(&admission).unwrap();
+    // The generation task has physically returned with Ready already durable.
+    // Inject a failure in the remaining supervised tail after the handoff.
+    let worker = work.join.lock().unwrap().take().unwrap();
+    worker.await.unwrap();
+    assert!(!work.worker_join_failed());
+    let coordinator = RuntimeCompactionCoordinator(Arc::downgrade(&runtime.inner));
+    assert!(matches!(
+        coordinator.take_ready(),
+        Some(CompactionDelivery::Ready(_))
+    ));
+    assert!(!work.worker_join_failed());
+    coordinator
+        .settle(&admission, CompactionDisposition::Defer(None))
+        .unwrap();
+    runtime.inner.install_ready_async_when_idle().await;
+    let before = journal_statuses(&runtime, &admission);
+    *work.join.lock().unwrap() = Some(tokio::spawn(async {
+        panic!("injected post-handoff join failure")
+    }));
+    runtime.inner.reap_async_compaction(true).await;
+    assert!(work.joined.load(Ordering::Acquire));
+    assert!(work.lifecycle.lock().unwrap().is_none());
+    assert!(runtime.inner.async_work(&admission).is_none());
+    assert_eq!(
+        before.last().unwrap().phase,
+        CompactionOperationPhase::Committed
+    );
+    assert_eq!(journal_statuses(&runtime, &admission), before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn join_failure_before_ready_publication_honors_accepted_cancellation() {
+    for cancelled in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _, _) = fixture(&directory, summary_turn_script("retained fact")).await;
+        let admission = start_background(&runtime).await;
+        let work = runtime.inner.async_work(&admission).unwrap();
+        let worker = work.join.lock().unwrap().take().unwrap();
+        worker.await.unwrap();
+        // Recreate the generation handoff immediately before Ready publication,
+        // including the named-cancellation flag that can precede its token.
+        {
+            let mut state = work.state.lock().unwrap();
+            assert!(matches!(state.phase, Phase::Ready(_)));
+            state.published.as_mut().unwrap().phase = CompactionOperationPhase::Generating;
+            state.cancel_requested = cancelled;
+        }
+        assert!(work.worker_join_failed());
+        let state = work.state.lock().unwrap();
+        if cancelled {
+            assert_eq!(state.status.phase, CompactionOperationPhase::Cancelled);
+            assert!(state.status.diagnostic.is_none());
+        } else {
+            assert_eq!(state.status.phase, CompactionOperationPhase::Failed);
+            assert!(
+                matches!(&state.phase, Phase::Failed(error) if error.kind == ContextErrorKind::AuxiliarySupervisionFailed)
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_primary_staging_returns_the_ready_result_to_its_owner() {
     let directory = tempfile::tempdir().unwrap();
     let (runtime, _, store) = fixture(&directory, summary_turn_script("retained fact")).await;

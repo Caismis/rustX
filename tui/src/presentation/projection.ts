@@ -127,8 +127,9 @@ function emptyResources(): PresentationState["resources"] {
  */
 const historyBindings = new WeakMap<PresentationState,ContentBinding[]>();
 const nativeSnapshots = new WeakMap<PresentationState, RuntimeClientSnapshot>();
-export function replaceFromSnapshot(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): PresentationState {
+export function replaceFromSnapshot(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor, previous?: PresentationState): PresentationState {
   const state = presentSnapshot(snapshot, cursor);
+  reconcileCompactionNotices(previous, state);
   nativeSnapshots.set(state, snapshot);
   return state;
 }
@@ -180,7 +181,11 @@ function settledSummaryNotices(context: PresentationState['context']): string[] 
   return (context.compaction_operations ?? [])
     .filter(({status, live}) => ['failed', 'cancelled', 'superseded', 'no_effect'].includes(status.phase)
       || (!live && ['generating', 'retrying', 'foreground_waiting', 'ready'].includes(status.phase)))
-    .map(({status}) => status.operation_id);
+    .map(({status}) => compactionNoticeKey(status));
+}
+
+export function compactionNoticeKey(status: { operation_id: string; admission_generation: string }): string {
+  return JSON.stringify([status.operation_id, status.admission_generation]);
 }
 
 function checkpointAdvanced(before: PresentationState['context'], after: PresentationState['context']): boolean {
@@ -189,16 +194,28 @@ function checkpointAdvanced(before: PresentationState['context'], after: Present
   return activation != null && activation !== previous && BigInt(activation) > BigInt(previous ?? 0);
 }
 
+function reconcileCompactionNotices(previous: PresentationState | undefined, next: PresentationState): void {
+  const prior = previous?.conversationId === next.conversationId ? previous : undefined;
+  const observed = new Set(prior ? settledSummaryNotices(prior.context) : []);
+  const dismissed = new Set(prior?.dismissedCompactionNotices);
+  const advanced = prior != null && checkpointAdvanced(prior.context, next.context);
+  const committed = (next.context.compaction_operations ?? []).filter(({ status }) => status.phase === 'committed');
+  const current = new Set(settledSummaryNotices(next.context));
+  for (const { status } of next.context.compaction_operations ?? []) {
+    const key = compactionNoticeKey(status);
+    if (current.has(key) && ((advanced && observed.has(key))
+      || committed.some(item => BigInt(item.status.admission_generation) > BigInt(status.admission_generation)))) dismissed.add(key);
+  }
+  const retained = [...dismissed].filter(key => current.has(key));
+  if (retained.length) next.dismissedCompactionNotices = retained;
+  else delete next.dismissedCompactionNotices;
+}
+
 export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
   const { cursor } = protocolEvent;
   let { event } = protocolEvent;
   if (event.type === 'checkpoint_advanced') {
-    const next = replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
-    if (next.conversationId === state.conversationId) {
-      next.dismissedCompactionNotices = checkpointAdvanced(state.context, next.context)
-        ? settledSummaryNotices(state.context) : state.dismissedCompactionNotices;
-    }
-    return next;
+    return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor, state);
   }
   const native = nativeSnapshots.get(state);
   if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
@@ -206,16 +223,11 @@ export function reduce(state: PresentationState, protocolEvent: ProjectedEvent):
   const projected = foldRuntimeEvent(native, event);
   const fields = nativeFields(projected);
   let view: TranscriptView = transcriptView(state);
-  let dismissed = checkpointAdvanced(state.context, fields.context)
-    ? settledSummaryNotices(state.context) : state.dismissedCompactionNotices;
   for (const fact of transitionFacts(event)) {
     view = adaptTranscript(view, fact, projected);
-    if (fact.type === 'context_compacted') {
-      dismissed = settledSummaryNotices(fact.context);
-    }
   }
   const next: PresentationState = { ...view, ...fields, cursor };
-  if (dismissed?.length) next.dismissedCompactionNotices = dismissed;
+  reconcileCompactionNotices(state, next);
   nativeSnapshots.set(next, projected);
   preserveHistoryBindings(state, next);
   return next;

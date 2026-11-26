@@ -92,6 +92,24 @@ pub struct CheckpointItem {
     pub result_call: Option<CheckpointCallCoordinate>,
 }
 
+/// Whether a proposed prefix and the remaining checkpoint items fit the
+/// inline reference budget. Retained references consume a slot per occurrence.
+#[must_use]
+pub fn inline_provenance_fits(mut refs: usize, retained: &[CheckpointItem]) -> bool {
+    for item in retained {
+        refs = refs.saturating_add(item.call_sources.len());
+        if let CheckpointMessage::Derived(derived) = &item.message {
+            refs = refs
+                .saturating_add(derived.sources.len())
+                .saturating_add(derived.checkpoint_sources.len());
+        }
+        if refs > 1024 {
+            return false;
+        }
+    }
+    refs <= 1024
+}
+
 /// Exact auxiliary Summary Call that generated one retained checkpoint.
 ///
 /// This is source execution provenance, not an input-identity inference. The
@@ -174,22 +192,10 @@ impl CheckpointCandidate {
                 return Err("coverage capture belongs to another conversation".into());
             }
         }
-        let mut refs = 0_usize;
-        for item in &self.items {
-            refs = refs
-                .checked_add(item.call_sources.len())
-                .ok_or("checkpoint provenance overflow")?;
-            if let CheckpointMessage::Derived(derived) = &item.message {
-                refs = refs
-                    .checked_add(derived.sources.len())
-                    .and_then(|n| n.checked_add(derived.checkpoint_sources.len()))
-                    .ok_or("checkpoint provenance overflow")?;
-            }
-            if refs > 1024 {
-                return Err(CheckpointError::Capacity(
-                    "checkpoint inline provenance budget exceeded",
-                ));
-            }
+        if !inline_provenance_fits(0, &self.items) {
+            return Err(CheckpointError::Capacity(
+                "checkpoint inline provenance budget exceeded",
+            ));
         }
         serde_json::to_writer(ByteBudget(8 * 1024 * 1024), self)
             .map_err(|_| CheckpointError::Capacity("checkpoint body byte budget exceeded"))

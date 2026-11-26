@@ -65,6 +65,24 @@ it('keeps a failure first seen when reconnect reveals a checkpoint of unknown re
   expect(view.container.querySelector('[data-compaction-operation="unseen"]')).toBeTruthy();
 });
 
+it('retains earlier dismissals through successive checkpoints and preserves newly seen failures', async () => {
+  server = new Server();
+  const old = operation('old', '1', 'failed'), unknown = operation('unknown', '2', 'failed'), newer = operation('newer', '3', 'failed');
+  const base = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [old] };
+  server.snapshots.set('A', { ...snapshot(), context: base });
+  await server.attached('A');
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  const first = { ...base, compaction_count: 1, projection_head: { ...projectionHead(), activation_id: '1' }, compaction_operations: [old, unknown] };
+  await act(async () => { await server.update('A', { ...snapshot(), context: first }); });
+  expect(view.container.querySelector('[data-compaction-operation="old"]')).toBeNull();
+  expect(view.container.querySelector('[data-compaction-operation="unknown"]')).toBeTruthy();
+  const second = { ...first, compaction_count: 2, projection_head: { ...projectionHead(), activation_id: '2' }, compaction_operations: [old, unknown, newer] };
+  await act(async () => { await server.update('A', { ...snapshot(), context: second }); });
+  expect(view.container.querySelector('[data-compaction-operation="old"]')).toBeNull();
+  expect(view.container.querySelector('[data-compaction-operation="unknown"]')).toBeNull();
+  expect(view.container.querySelector('[data-compaction-operation="newer"]')).toBeTruthy();
+});
+
 it('retains dismissal across a seat remount and branch round trip while showing a first-seen failure', async () => {
   server = new Server();
   await server.attached('A');

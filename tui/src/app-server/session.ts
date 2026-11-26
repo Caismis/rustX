@@ -251,14 +251,17 @@ export class AppServerSession {
       await client.close();
       throw Error('Mismatched Thread resume identity.');
     }
-    const applied=previous ? previous.#observation.applied : undefined;
-    const resume=previous && client.authorityId!==undefined && client.authorityId===previous.#client.authorityId && applied!==undefined && previous.#state.cursor===applied && previous.#checkpoint?.cursor===applied
+    const sameAttachment=previous && client.authorityId!==undefined && client.authorityId===previous.#client.authorityId
       && previous.#target.session_id===attached.target.session_id && previous.#target.conversation_id===attached.target.conversation_id
       && previous.#target.runtime_incarnation===attached.target.runtime_incarnation ? previous : undefined;
+    const applied=sameAttachment ? sameAttachment.#observation.applied : undefined;
+    const resume=sameAttachment && applied!==undefined && sameAttachment.#state.cursor===applied && sameAttachment.#checkpoint?.cursor===applied
+      ? sameAttachment : undefined;
     const checkpoint=(resume ? resume.#checkpoint : undefined) ?? (await client.call('session/checkpoint',{target:attached.target,trace_records:[]},'checkpoint')).checkpoint;
     validateRootCheckpoint(attached.target, checkpoint, resume ? resume.#observation.applied : undefined);
     const session = new AppServerSession(client, attached.target,
-      (resume ? resume.#state : undefined) ?? replaceFromSnapshot(checkpointSnapshot(checkpoint), checkpoint.cursor), nodeId,unknownModelSelections);
+      (resume ? resume.#state : undefined) ?? replaceFromSnapshot(checkpointSnapshot(checkpoint), checkpoint.cursor,
+        sameAttachment ? sameAttachment.#state : undefined), nodeId,unknownModelSelections);
     session.#checkpoint = checkpoint;
     prepared?.(session);
     const stopTemporaryRouting = prepared ? () => {} : client.onNotification(notification => session.applyNotification(notification));
@@ -895,7 +898,7 @@ export class AppServerSession {
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {
     this.#epoch += 1;
-    this.#state = replaceFromSnapshot(snapshot, cursor);
+    this.#state = replaceFromSnapshot(snapshot, cursor, this.#state);
     this.#observationError = undefined;
     for (const listener of [...this.#snapshotListeners]) {
       listener();

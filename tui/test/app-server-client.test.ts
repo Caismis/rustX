@@ -34,6 +34,7 @@ import {
 } from "../src/app-server/client.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import { AppServerSession } from "../src/app-server/session.ts";
+import { compactionNotice } from "../src/ui/components/status.ts";
 import type {
   AttachmentTarget,
   MethodResult,
@@ -464,6 +465,28 @@ describe("authoritative repair", () => {
     });
     await repair;
     assert.equal(session.state.cursor, "60");
+  });
+
+  it('retains observed notice dismissal across successive resyncs', async () => {
+    const { client, transport } = await initialized();
+    const session = await attached(client, transport, target());
+    const failure = (id: string, generation: string) => ({ live: false, status: { operation_id: id, admission_generation: generation,
+      phase: 'failed' as const, accepted_fragments: 0, diagnostic: `${id} failure`, triggering_attempt_id: null, waiting_attempt_id: null } });
+    const old = failure('old', '1'), unknown = failure('unknown', '2');
+    const base = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [old] };
+    const next = { ...base, compaction_count: 1, latest_compaction: { operation_id: 'manual', generation: '1',
+      checkpoint_id: 'checkpoint-1', activation_id: '1', tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10' },
+      compaction_operations: [old, unknown] };
+    for (const [index, context] of [base, next, next].entries()) {
+      const repair = session.resync(), count = index + 2, cursor = runtimeCursor(60 + index);
+      const request = (await transport.log.awaitMethod('session/checkpoint', count)).at(-1)!;
+      transport.respond(request.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot({ conversation_id: session.target.conversation_id, context }), cursor) });
+      const subscribe = (await transport.log.awaitMethod('session/subscribe', count)).at(-1)!;
+      transport.respond(subscribe.id, { type: 'subscribed', after_cursor: cursor });
+      await repair;
+      assert.match(compactionNotice(session.state)!, index ? /unknown failure/ : /old failure/);
+      if (index) assert.equal(session.state.dismissedCompactionNotices?.length, 1);
+    }
   });
 
   it("repairs again when the repair's own cursor has already fallen out of the ring", async () => {
