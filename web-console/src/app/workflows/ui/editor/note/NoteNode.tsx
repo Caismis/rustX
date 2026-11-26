@@ -19,7 +19,6 @@ import { ShortcutKeys } from '../../../../../presentation/primitives/ShortcutKey
 import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../../presentation/primitives/icons';
 import { IconBold, IconBulletList, IconExternal, IconFontSize, IconItalic, IconLink, IconPencil, IconStrikethrough, IconUnlink } from '../../icons';
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from '../shortcuts';
-import css from './Note.module.css';
 import { Input as TextInput } from '@/presentation/primitives/Input';
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu';
 import { Popover, PopoverPopup, PopoverTrigger } from '@/components/ui/popover';
@@ -33,16 +32,24 @@ export const NoteActions = createContext<{
   remove(id: string): void;
 }>({ editable: false, change() {}, copy() {}, duplicate() {}, remove() {} });
 
+const NOTE_THEME_VARS: Record<string, string> = {
+  blue: '[--note-bg:light-dark(#eff8ff,#102a56)] [--note-title:light-dark(#d1e9ff,#194185)] [--note-border:light-dark(#84caff,#1570ef)] [--note-outer:#2e90fa]',
+  cyan: '[--note-bg:light-dark(#ecfdff,#0d2d3a)] [--note-title:light-dark(#cff9fe,#155b75)] [--note-border:light-dark(#67e3f9,#088ab2)] [--note-outer:#06aed4]',
+  green: '[--note-bg:light-dark(#edfcf2,#052e1c)] [--note-title:light-dark(#d3f8df,#095c37)] [--note-border:light-dark(#73e2a3,#099250)] [--note-outer:#16b364]',
+  yellow: '[--note-bg:light-dark(#fefbe8,#713b12)] [--note-title:light-dark(#fef7c3,#854a0e)] [--note-border:light-dark(#fde272,#ca8504)] [--note-outer:#eaaa08]',
+  pink: '[--note-bg:light-dark(#fdf2fa,#4e0d30)] [--note-title:light-dark(#fce7f6,#851651)] [--note-border:light-dark(#faa7e0,#dd2590)] [--note-outer:#ee46bc]',
+  violet: '[--note-bg:light-dark(#ece9fe,#2e125e)] [--note-title:light-dark(#ece9fe,#491c96)] [--note-border:light-dark(#c3b5fd,#7839ee)] [--note-outer:#875bf7]',
+};
 const THEMES: readonly WorkflowNoteTheme[] = ['blue', 'cyan', 'green', 'yellow', 'pink', 'violet'];
 const FONT_SIZES = [['12px', 'small'], ['14px', 'medium'], ['16px', 'large']] as const;
 const DEFAULT_FONT_SIZE = '12px';
 // Dify's note link check.
 const URL_PATTERN = /((([A-Za-z]{3,9}:(?:\/\/)?)(?:[-;:&=+$,\w]+@)?[A-Za-z0-9.-]+|(?:www.|[-;:&=+$,\w]+@)[A-Za-z0-9.-]+)((?:\/[+~%/.\w-]*)?\??[-+=&;%@.\w]*#?\w*))/;
 const THEME: EditorThemeClasses = {
-  paragraph: css.paragraph,
-  list: { ul: css.list, listitem: css.listItem },
-  link: clsx(css.link, 'nodrag nopan nowheel'),
-  text: { bold: css.bold, italic: css.italic, strikethrough: css.strikethrough },
+  paragraph: 'm-0 text-[12px] leading-[18px]',
+  list: { ul: 'm-0 p-0 text-[12px] leading-[18px] list-disc', listitem: 'mt-0 mb-0 mr-[8px] ml-[18px]' },
+  link: clsx('cursor-pointer font-medium [color:var(--dsw-alias-state-business-primary)] underline decoration-[1px] underline-offset-2', 'nodrag nopan nowheel'),
+  text: { bold: 'font-medium', italic: 'italic', strikethrough: 'line-through' },
 };
 
 /** A note's text is its Lexical state as JSON. Text that is not one, as a
@@ -62,15 +69,15 @@ function load(editor: LexicalEditor, text: string) {
  * text is the Lexical editor state as JSON; selecting it shows the toolbar. */
 export const NoteNode = memo(function NoteNode({ id, note, selected, resizer }: { id: string; note: WorkflowNote; selected: boolean; resizer: ReactNode }) {
   const tx = useTranslation(), { editable } = useContext(NoteActions), editing = selected && editable;
-  return <div className={clsx(css.note, css[note.theme], selected && css.selected)}>
+  return <div className={clsx('relative flex flex-col w-full h-full box-border [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-[var(--dsw-radius-sm)] bg-(--note-bg) [color:var(--dsw-alias-label-secondary)]', NOTE_THEME_VARS[note.theme], selected && '[border-color:var(--note-border)]')}>
     <LexicalComposer initialConfig={{ namespace: 'workflow-note', nodes: [LinkNode, ListNode, ListItemNode], editorState: note.text ? lexicalState(note.text) : null, theme: THEME, editable, onError: error => { throw error; } }}>
       {resizer}
-      <div className={css.titleBar} />
-      <div className={clsx(css.body, selected && 'nodrag nopan nowheel')}>
-        <div className={css.editor}>
+      <div className="flex-none h-[8px] rounded-t-[var(--dsw-radius-xs)] rounded-b-none bg-(--note-title) opacity-50" />
+      <div className={clsx('flex-1 min-h-0 overflow-y-auto px-[12px] py-[10px]', selected && 'nodrag nopan nowheel')}>
+        <div className="relative">
           <RichTextPlugin ErrorBoundary={LexicalErrorBoundary}
-            contentEditable={<ContentEditable className={clsx(css.editable, selected && css.editing)} aria-label={tx('workflows:note.title')} spellCheck={false} />}
-            placeholder={<div className={css.placeholder}>{tx('workflows:note.placeholder')}</div>} />
+            contentEditable={<ContentEditable className={clsx('min-h-[18px] outline-none [caret-color:var(--dsw-alias-state-business-primary)] select-text', selected && 'cursor-text')} aria-label={tx('workflows:note.title')} spellCheck={false} />}
+            placeholder={<div className="absolute top-0 left-0 text-[12px] leading-[18px] [color:var(--dsw-alias-label-tertiary)] pointer-events-none select-none">{tx('workflows:note.placeholder')}</div>} />
         </div>
       </div>
       <LinkPlugin />
@@ -142,7 +149,7 @@ function Tools({ id, theme }: { id: string; theme: WorkflowNoteTheme }) {
   const tx = useTranslation(), [editor] = useLexicalComposerContext(), actions = useContext(NoteActions), format = useFormat();
   const [colors, setColors] = useState(false), [sizes, setSizes] = useState(false);
   const command = (label: string, pressed: boolean, icon: ReactNode, run: () => void) =>
-    <button type="button" className={clsx(css.command, pressed && css.pressed)} aria-label={label} title={label} aria-pressed={pressed}
+    <button type="button" className={clsx('flex flex-none items-center justify-center w-[32px] h-[32px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:var(--dsw-alias-label-tertiary)] [font:inherit] cursor-pointer data-[popup-open]:bg-[var(--dsw-alias-interactive-bg-hover)] data-[popup-open]:[color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-secondary)] nt-command [.nt-command+&]:ml-[2px]', pressed && 'bg-[var(--dsw-alias-interactive-bg-active)]! [color:var(--dsw-alias-state-business-primary)]! hover:bg-[var(--dsw-alias-interactive-bg-active)]! hover:[color:var(--dsw-alias-state-business-primary)]!')} aria-label={label} title={label} aria-pressed={pressed}
       onMouseDown={event => event.preventDefault()} onClick={run}>{icon}</button>;
   const link = () => {
     if (format.link) { unlink(format.link.key); return; }
@@ -161,37 +168,37 @@ function Tools({ id, theme }: { id: string; theme: WorkflowNoteTheme }) {
   const size = (value: string) => editor.update(() => { const selection = $getSelection(); if ($isRangeSelection(selection)) $patchStyleText(selection, { 'font-size': value }); });
   const sizeLabel = tx(`workflows:note.${FONT_SIZES.find(([value]) => value === format.fontSize)?.[1] ?? 'small'}`);
   return <>
-    <div className={clsx(css.toolbar, 'nodrag nopan nowheel')} role="toolbar" aria-label={tx('workflows:note.title')} onMouseDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
+    <div className={clsx('absolute top-[-41px] left-1/2 z-40 inline-flex items-center p-[2px] border-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-specific-menu)] shadow-[var(--dsw-elevation-prominent)] -translate-x-1/2 whitespace-nowrap', 'nodrag nopan nowheel')} role="toolbar" aria-label={tx('workflows:note.title')} onMouseDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
       <Popover open={colors} onOpenChange={setColors}>
-        <PopoverTrigger className={css.command} aria-label={tx('workflows:note.color')} title={tx('workflows:note.color')}><span className={clsx(css.swatch, css[theme])} /></PopoverTrigger>
-        <PopoverPopup side="top" sideOffset={4} className={css.colors}>
-          {THEMES.map(value => <button key={value} type="button" className={clsx(css.color, css[value], value === theme && css.current)} aria-label={tx(`workflows:note.${value}`)} title={tx(`workflows:note.${value}`)}
-            onClick={() => { actions.change(id, { theme: value }); setColors(false); }}><span className={css.swatch} /></button>)}
+        <PopoverTrigger className="flex flex-none items-center justify-center w-[32px] h-[32px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:var(--dsw-alias-label-tertiary)] [font:inherit] cursor-pointer data-[popup-open]:bg-[var(--dsw-alias-interactive-bg-hover)] data-[popup-open]:[color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-secondary)] nt-command [.nt-command+&]:ml-[2px]" aria-label={tx('workflows:note.color')} title={tx('workflows:note.color')}><span className={clsx('block w-[16px] h-[16px] box-border [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-full bg-(--note-title)', NOTE_THEME_VARS[theme])} /></PopoverTrigger>
+        <PopoverPopup side="top" sideOffset={4} className="grid grid-cols-[repeat(3,32px)] gap-[2px] p-[2px] border-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-specific-menu)] shadow-[var(--dsw-elevation-prominent)] outline-none [&>[data-slot=popover-viewport]]:p-0">
+          {THEMES.map(value => <button key={value} type="button" className={clsx('relative flex items-center justify-center w-[32px] h-[32px] border-0 rounded-[var(--dsw-radius-sm)] bg-none cursor-pointer before:content-[""] before:absolute before:w-[20px] before:h-[20px] before:box-border before:[border:1.5px_solid_var(--note-outer)] before:rounded-full before:opacity-0 hover:before:opacity-100', NOTE_THEME_VARS[value], value === theme && 'before:opacity-100!')} aria-label={tx(`workflows:note.${value}`)} title={tx(`workflows:note.${value}`)}
+            onClick={() => { actions.change(id, { theme: value }); setColors(false); }}><span className="block w-[16px] h-[16px] box-border [border:0.5px_solid_var(--dsw-alias-border-l1)] rounded-full bg-(--note-title)" /></button>)}
         </PopoverPopup>
       </Popover>
-      <span className={css.divider} />
+      <span className="flex-none w-[1px] h-[14px] mx-[4px] bg-[var(--dsw-alias-border-l2)]" />
       <Popover open={sizes} onOpenChange={setSizes}>
-        <PopoverTrigger className={css.fontSize} aria-label={tx('workflows:note.font-size')}><IconFontSize size={16} />{sizeLabel}</PopoverTrigger>
-        <PopoverPopup side="bottom" align="start" sideOffset={2} className={css.sizes} initialFocus={false} finalFocus={false}>
-          {FONT_SIZES.map(([value, name]) => <button key={value} type="button" className={css.size} onMouseDown={event => event.preventDefault()} onClick={() => { size(value); setSizes(false); }}>
+        <PopoverTrigger className="flex flex-none items-center justify-center gap-[4px] h-[32px] pl-[8px] pr-[6px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:var(--dsw-alias-label-tertiary)] [font:inherit] text-[13px] font-medium cursor-pointer data-[popup-open]:bg-[var(--dsw-alias-interactive-bg-hover)] data-[popup-open]:[color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-secondary)]" aria-label={tx('workflows:note.font-size')}><IconFontSize size={16} />{sizeLabel}</PopoverTrigger>
+        <PopoverPopup side="bottom" align="start" sideOffset={2} className="w-[120px] p-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-specific-menu)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-prominent)] outline-none [&>[data-slot=popover-viewport]]:p-0" initialFocus={false} finalFocus={false}>
+          {FONT_SIZES.map(([value, name]) => <button key={value} type="button" className="flex items-center justify-between w-full h-[32px] pr-[8px] pl-[12px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:inherit] [font:inherit] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] [&_svg]:[color:var(--dsw-alias-state-business-primary)]" onMouseDown={event => event.preventDefault()} onClick={() => { size(value); setSizes(false); }}>
             <span style={{ fontSize: value }}>{tx(`workflows:note.${name}`)}</span>{format.fontSize === value && <IconCheckOutline16 />}
           </button>)}
         </PopoverPopup>
       </Popover>
-      <span className={css.divider} />
+      <span className="flex-none w-[1px] h-[14px] mx-[4px] bg-[var(--dsw-alias-border-l2)]" />
       {command(tx('workflows:note.bold'), format.bold, <IconBold size={16} />, () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold'))}
       {command(tx('workflows:note.italic'), format.italic, <IconItalic size={16} />, () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic'))}
       {command(tx('workflows:note.strikethrough'), format.strikethrough, <IconStrikethrough size={16} />, () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough'))}
       {command(tx('workflows:note.link'), !!format.link, <IconLink size={16} />, link)}
       {command(tx('workflows:note.bullet-list'), format.bullet, <IconBulletList size={16} />, bullet)}
-      <span className={css.divider} />
+      <span className="flex-none w-[1px] h-[14px] mx-[4px] bg-[var(--dsw-alias-border-l2)]" />
       <Menu modal={false}>
-        <MenuTrigger className={css.command} aria-label={tx('workflows:note.more')} title={tx('workflows:note.more')}><IconEllipsisOutline16 /></MenuTrigger>
-        <MenuPopup side="bottom" align="end" sideOffset={4} className={css.menu}>
-          <MenuItem className={css.menuItem} onClick={() => actions.copy(id)}>{tx('workflows:canvas.copy')}<ShortcutKeys keys={COPY_KEYS} /></MenuItem>
-          <MenuItem className={css.menuItem} onClick={() => actions.duplicate(id)}>{tx('workflows:canvas.duplicate')}<ShortcutKeys keys={DUPLICATE_KEYS} /></MenuItem>
-          <MenuSeparator className={css.separator} />
-          <MenuItem className={clsx(css.menuItem, css.destructive)} onClick={() => actions.remove(id)}>{tx('workflows:note.delete')}<ShortcutKeys keys={DELETE_KEYS} /></MenuItem>
+        <MenuTrigger className="flex flex-none items-center justify-center w-[32px] h-[32px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:var(--dsw-alias-label-tertiary)] [font:inherit] cursor-pointer data-[popup-open]:bg-[var(--dsw-alias-interactive-bg-hover)] data-[popup-open]:[color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-secondary)] nt-command [.nt-command+&]:ml-[2px]" aria-label={tx('workflows:note.more')} title={tx('workflows:note.more')}><IconEllipsisOutline16 /></MenuTrigger>
+        <MenuPopup side="bottom" align="end" sideOffset={4} className="min-w-[192px] p-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-specific-menu)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-prominent)] outline-none [&>div]:p-0">
+          <MenuItem className="flex items-center justify-between gap-[16px] h-[32px] px-[12px] rounded-[var(--dsw-radius-sm)] text-[13px] cursor-pointer outline-none data-[highlighted]:bg-[var(--dsw-alias-interactive-bg-hover)] [&>span:last-child]:[color:var(--dsw-alias-label-tertiary)]" onClick={() => actions.copy(id)}>{tx('workflows:canvas.copy')}<ShortcutKeys keys={COPY_KEYS} /></MenuItem>
+          <MenuItem className="flex items-center justify-between gap-[16px] h-[32px] px-[12px] rounded-[var(--dsw-radius-sm)] text-[13px] cursor-pointer outline-none data-[highlighted]:bg-[var(--dsw-alias-interactive-bg-hover)] [&>span:last-child]:[color:var(--dsw-alias-label-tertiary)]" onClick={() => actions.duplicate(id)}>{tx('workflows:canvas.duplicate')}<ShortcutKeys keys={DUPLICATE_KEYS} /></MenuItem>
+          <MenuSeparator className="h-[1px] my-[4px] mx-[-4px] bg-[var(--dsw-alias-border-l2)]" />
+          <MenuItem className={clsx('flex items-center justify-between gap-[16px] h-[32px] px-[12px] rounded-[var(--dsw-radius-sm)] text-[13px] cursor-pointer outline-none data-[highlighted]:bg-[var(--dsw-alias-interactive-bg-hover)] [&>span:last-child]:[color:var(--dsw-alias-label-tertiary)]', 'data-[highlighted]:[color:var(--dsw-alias-state-error-primary)]')} onClick={() => actions.remove(id)}>{tx('workflows:note.delete')}<ShortcutKeys keys={DELETE_KEYS} /></MenuItem>
         </MenuPopup>
       </Menu>
     </div>
@@ -216,16 +223,16 @@ function LinkBar({ link, unlink }: { link: { key: string; url: string }; unlink:
   if (dismissed) return null;
   if (!anchorElement) return null;
   return <Popover open onOpenChange={(next, details) => { if (!next) dismiss(details.reason === 'escape-key'); }}><PopoverPopup ref={bar} anchor={anchorElement} positionMethod="fixed" side="top" align="center" sideOffset={4} collisionPadding={8}
-    initialFocus={false} finalFocus={() => false} className={clsx(css.linkBar, !editing && css.linkOperator)}>
+    initialFocus={false} finalFocus={() => false} className={clsx('z-60 inline-flex items-center w-max p-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-specific-menu)] shadow-[var(--dsw-elevation-prominent)] [&>[data-slot=popover-viewport]]:p-0', !editing && 'p-[2px] text-[12px] font-medium [color:var(--dsw-alias-label-tertiary)]')}>
     {editing ? <>
-      <TextInput unstyled className={css.linkInput} value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
+      <TextInput unstyled className="w-[196px] h-[24px] mr-[2px] p-[4px] border-0 bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-[13px] outline-none aria-invalid:[color:var(--dsw-alias-state-error-primary)]" value={url} autoFocus aria-label={tx('workflows:note.link')} aria-invalid={invalid || undefined} placeholder={tx('workflows:note.enter-url')} title={invalid ? tx('workflows:note.invalid-url') : undefined}
         onChange={event => { setUrl(event.target.value); setInvalid(false); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (url) save(); } }} />
-      <button type="button" className={css.primary} disabled={!url} onClick={save}>{tx('workflows:note.ok')}</button>
+      <button type="button" className="h-[24px] px-[8px] border-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-state-business-primary)] [color:var(--dsw-alias-label-primary-inverted)] [font:inherit] text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" disabled={!url} onClick={save}>{tx('workflows:note.ok')}</button>
     </> : <>
-      <a className={css.open} href={link.url} target="_blank" rel="noopener noreferrer"><IconExternal size={12} />{tx('workflows:note.open-link')}<span title={link.url}>{link.url}</span></a>
-      <span className={css.divider} />
-      <button type="button" className={css.ghost} onClick={() => setEditing(true)}><IconPencil size={12} />{tx('workflows:note.edit-link')}</button>
-      <button type="button" className={css.ghost} onClick={() => { unlink(link.key); setDismissed(true); }}><IconUnlink size={12} />{tx('workflows:note.unlink')}</button>
+      <a className="flex items-center gap-[4px] h-[24px] px-[8px] rounded-[var(--dsw-radius-sm)] [color:inherit] no-underline hover:bg-[var(--dsw-alias-interactive-bg-hover)] [&_span]:max-w-[140px] [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:whitespace-nowrap [&_span]:[color:var(--dsw-alias-state-business-primary)]" href={link.url} target="_blank" rel="noopener noreferrer"><IconExternal size={12} />{tx('workflows:note.open-link')}<span title={link.url}>{link.url}</span></a>
+      <span className="flex-none w-[1px] h-[14px] mx-[4px] bg-[var(--dsw-alias-border-l2)]" />
+      <button type="button" className="flex items-center gap-[4px] h-[24px] px-[8px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:inherit] [font:inherit] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)]" onClick={() => setEditing(true)}><IconPencil size={12} />{tx('workflows:note.edit-link')}</button>
+      <button type="button" className="flex items-center gap-[4px] h-[24px] px-[8px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:inherit] [font:inherit] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)]" onClick={() => { unlink(link.key); setDismissed(true); }}><IconUnlink size={12} />{tx('workflows:note.unlink')}</button>
     </>}
   </PopoverPopup></Popover>;
 }
