@@ -3,7 +3,7 @@ import { useRef, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { DialogSurface } from './DialogSurface'
 import { IconCloseOutline16 } from './icons/index.tsx'
-import css from './Modal.module.css'
+import { modalCss } from './modalCss';
 
 interface ModalBaseProps {
   open: boolean
@@ -41,8 +41,8 @@ export function Modal({
       open
       onClose={onClose}
       title={title}
-      overlayClassName={clsx(css.root, css.scrim, rootClassName)}
-      className={clsx(css.dialog, className)}
+      overlayClassName={clsx(modalCss.root, modalCss.scrim, rootClassName)}
+      className={clsx(modalCss.dialog, className)}
       contentRef={popup}
       finalFocus={finalFocus}
       initialFocus={() => popup.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? true}
@@ -51,19 +51,19 @@ export function Modal({
         ? children
         : (
           <>
-            <div className={clsx(css.content, contentClassName)}>
-              <div className={css.header}>
-                <h2 className={css.title}>{title}</h2>
-                <button type="button" className={css.close} aria-label={closeLabel} onClick={onClose}>
+            <div className={clsx(modalCss.content, contentClassName)}>
+              <div className={modalCss.header}>
+                <h2 className={modalCss.title}>{title}</h2>
+                <button type="button" className={modalCss.close} aria-label={closeLabel} onClick={onClose}>
                   <IconCloseOutline16 size={14} />
                 </button>
               </div>
               {description !== undefined && description !== '' && (
-                <p className={css.description}>{description}</p>
+                <p className={modalCss.description}>{description}</p>
               )}
-              {children !== undefined && <div className={css.body}>{children}</div>}
+              {children !== undefined && <div className={modalCss.body}>{children}</div>}
             </div>
-            {footer !== undefined && <div className={css.footer}>{footer}</div>}
+            {footer !== undefined && <div className={modalCss.footer}>{footer}</div>}
           </>
         )}
     </DialogSurface>

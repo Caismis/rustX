@@ -374,32 +374,6 @@
       "local_sha256": "86de17e4d1a9fa6e92d66ecbd332e8f4333a3f7227fa6ea708702b4c0f415bdf"
     },
     {
-      "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
-      "destination": "web-console/src/app/commands/Commands.module.css",
-      "treatment": "adapted rounded bounded menu and rows Composer add menu: grouped native command discovery and integrated file intake; upstream baseline unchanged.",
-      "upstream_sha256": "5046e2ad9cf28d549f749277accf8d00f5ad9bb53afbd5d113ca3b21d855b87a",
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-input-trigger/src/client/MenuView.module.css",
-          "upstream_sha256": "9622795d8de762b46e2f279c6e544e60fcc92419952b2fc922e7d1019678cd46",
-          "treatment": "adapted composer-anchored discovery menu presentation"
-        }
-      ],
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Host/Remote command execution",
-        "Session Controller and conversation/event authority",
-        "Cordis/plugin runtime",
-        "Harness queue and retry authority"
-      ],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a5643b2ae03cace568d9bc8618b088e623b3b0a97be280d158cd972d4e33e967"
-    },
-    {
       "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
       "destination": "web-console/src/app/commands/matching.ts",
       "treatment": "adapted subsequence ranking with rustX identity and aliases Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
@@ -2206,12 +2180,12 @@
       ],
       "retained_dependencies": [
         "./DialogSurface",
-        "./Modal.module.css",
         "./icons/index.tsx",
+        "./modalCss",
         "clsx",
         "react"
       ],
-      "local_sha256": "0d9d98c9f05d3a908c637a9110309504de1c11fc64dd88aa92355e18ba702c7b",
+      "local_sha256": "52183cef8351c81fba637eb48cc0d00bd6a1eddeffb3ff3a2172679df0174041",
       "classification": "A"
     },
     {
@@ -3091,8 +3065,8 @@
         "../../presentation/primitives/Button",
         "../../presentation/primitives/DialogSurface",
         "../../presentation/primitives/Menu",
-        "../../presentation/primitives/Modal.module.css",
         "../../presentation/primitives/icons",
+        "../../presentation/primitives/modalCss",
         "../../workspaces/WorkspaceFolderDialog",
         "../../workspaces/associations",
         "../../workspaces/authority",
@@ -3116,7 +3090,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "2ee0e650c51b6a3bd3c20a1ef234b444706dfb1cb9bcd9dc3d3ca37eaeaf9713",
+      "local_sha256": "2c87c0fc3abd915f94c88f15bb372434171c69d45f97c0d04560fdee70b57c90",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3176,8 +3150,8 @@
         "../primitives/Button",
         "../primitives/DialogSurface",
         "../primitives/Menu",
-        "../primitives/Modal.module.css",
         "../primitives/icons",
+        "../primitives/modalCss",
         "@/components/ui/checkbox",
         "react"
       ],
@@ -3186,7 +3160,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "4ad70d2c0ce080e9e8f1321516974fc973b71651a4c6a752b0ce69af0ca8de3c",
+      "local_sha256": "726d84c1ad9aa69f5e3bba8159b629791a439c9e53aac9dde3d83900a0bc2860",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",

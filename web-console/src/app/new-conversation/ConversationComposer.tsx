@@ -16,7 +16,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { DialogSurface } from '../../presentation/primitives/DialogSurface';
 import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/primitives/icons';
 import hero from '../../presentation/agent/HeroShell.module.css';
-import modal from '../../presentation/primitives/Modal.module.css';
+import { modalCss } from '../../presentation/primitives/modalCss';
 import { useModelPreference } from '../model-preference';
 import { ComposerDraft } from '../composer/draft';
 import { useAttachmentIntake } from '../composer/use-attachment-intake';
@@ -146,8 +146,8 @@ export function ConversationComposer({ visible = true, client, host, authority, 
     {flow && ['failed', 'uncertain'].includes(flow.phase) && <Button onClick={() => { if (submissions.discard(flow)) { intake.clear(); const state = editor.snapshot(); if (state) editor.replace(state.incarnation); } }}>{tx('common:conversation-composer.discard-first-submission-draft')}</Button>}
     {add?.picker.kind === 'browser' ? <WorkspaceFolderDialog host={host} scope={add.mutation.scope} locations={add.picker.locations}
       busy={adopting} error={error} close={() => setAdd(undefined)} add={(location, selection) => void adopt(add.mutation, location, selection)} />
-      : <DialogSurface open={!!add} onClose={() => { if (!adopting) setAdd(undefined); }} title={tx('common:conversation-composer.add-workspace-2')} overlayClassName={`${modal.root} ${modal.scrim}`} className={modal.dialog}>
-        <div className={modal.content}><div className={modal.header}><h2 className={modal.title}>{tx('common:conversation-composer.add-workspace-2')}</h2></div><div className={modal.body}><p>{tx('common:conversation-composer.choose-a-location-authorized-by-this-product-host')}</p>{error && <p role="alert">{error}</p>}{add?.picker.locations.map(location => <Button key={location.id} disabled={adopting} onClick={() => void adopt(add.mutation, location.id)}>{location.displayName}</Button>)}<Button disabled={adopting} onClick={() => setAdd(undefined)}>{tx('common:conversation-composer.cancel')}</Button></div></div>
+      : <DialogSurface open={!!add} onClose={() => { if (!adopting) setAdd(undefined); }} title={tx('common:conversation-composer.add-workspace-2')} overlayClassName={`${modalCss.root} ${modalCss.scrim}`} className={modalCss.dialog}>
+        <div className={modalCss.content}><div className={modalCss.header}><h2 className={modalCss.title}>{tx('common:conversation-composer.add-workspace-2')}</h2></div><div className={modalCss.body}><p>{tx('common:conversation-composer.choose-a-location-authorized-by-this-product-host')}</p>{error && <p role="alert">{error}</p>}{add?.picker.locations.map(location => <Button key={location.id} disabled={adopting} onClick={() => void adopt(add.mutation, location.id)}>{location.displayName}</Button>)}<Button disabled={adopting} onClick={() => setAdd(undefined)}>{tx('common:conversation-composer.cancel')}</Button></div></div>
       </DialogSurface>}
   </div>;
 }
