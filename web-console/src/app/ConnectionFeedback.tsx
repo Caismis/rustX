@@ -7,7 +7,6 @@ import { useTranslation } from '../locale/react';
 import { ConnectionIndicator } from '../presentation/primitives/ConnectionIndicator';
 import { IconInfoOutline14 } from '../presentation/primitives/icons';
 import { Tooltip } from '../presentation/primitives/Tooltip';
-import css from './ConnectionFeedback.module.css';
 
 /** Display timing never delays native readiness or initiates a reconnect. */
 export function ConnectionFeedback({ client, connection, wide, settings }: {
@@ -47,6 +46,6 @@ export function ConnectionFeedback({ client, connection, wide, settings }: {
     reconnectActionLabel={tx(incompatible ? 'common:session-product.connection-settings' : 'common:connection.reconnect')}
     restartActionLabel={tx('common:connection.restart')}
     onReconnect={incompatible ? settings : () => void connection.reconnect()}/>
-    {phase === 'disconnected' && !incompatible && <Tooltip label={tx('common:app.show-details')} side="top"><button type="button" className={css.details} aria-label={tx('common:app.show-details')} onClick={settings}><IconInfoOutline14/></button></Tooltip>}
+    {phase === 'disconnected' && !incompatible && <Tooltip label={tx('common:app.show-details')} side="top"><button type="button" className="flex-none grid place-items-center w-[24px] h-[28px] p-0 border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-secondary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-2" aria-label={tx('common:app.show-details')} onClick={settings}><IconInfoOutline14/></button></Tooltip>}
   </>;
 }

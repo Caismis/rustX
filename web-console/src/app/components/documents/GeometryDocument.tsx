@@ -4,7 +4,6 @@ import { en, zh } from '../../../locale/dictionaries/geometry';
 import type { GeometryPreviewProps } from './geometry/GeometryPreview';
 import { geometryFormat } from './geometry/format';
 import { GeometryLoading } from './GeometryLoading';
-import css from './GeometryDocument.module.css';
 
 type Viewer = typeof import('./geometry/GeometryPreview').default;
 let loaded: Viewer | undefined;
@@ -31,7 +30,7 @@ export function GeometryDocument(props: GeometryDocumentProps) {
   // Suspense's fallback throttle delayed resolved code by ~300 ms in production.
   // The explicit module state starts the admitted import as soon as code arrives.
   const { bytes: input, ...view } = props, bytes = props.source ? undefined : input;
-  return <div className={css.root}>
+  return <div className="relative flex flex-1 flex-col w-full h-full min-w-0 min-h-0 overflow-hidden">
     {Viewer && (bytes || props.source) ? <Viewer {...view} bytes={bytes}/> : <p role={failed ? 'alert' : 'status'}>{failed ? t.invalid : <GeometryLoading stage="loading"/>}</p>}
   </div>;
 }

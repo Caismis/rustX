@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';
-import css from './SkillDeleteDialog.module.css';
 
 export function SkillDeleteDialog({ name, scope, path, remove, close }: {
   name: string; scope: string; path: string; remove: () => Promise<void>; close: () => void;
@@ -30,7 +29,7 @@ export function SkillDeleteDialog({ name, scope, path, remove, close }: {
     description={tx('resources:skills.delete-body', { p0: name, p1: scope })}
     footer={<>
       <Button variant="outline" disabled={busy} onClick={dismiss}>{tx('resources:cancel')}</Button>
-      <Button variant="primary" className={css.danger} disabled={busy || failed} onClick={() => void submit()}>{tx('resources:skills.delete')}</Button>
+      <Button variant="primary" className="bg-[var(--dsw-alias-state-error-primary)]! text-white!" disabled={busy || failed} onClick={() => void submit()}>{tx('resources:skills.delete')}</Button>
     </>}>
     <code>{path}</code>
     {failed && <p role="alert">{tx('resources:skills.delete-failed')}</p>}

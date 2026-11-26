@@ -4,7 +4,6 @@ import type { CompactionRequestEvidence } from '../../client/contracts';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
 import { CompactionMessage } from '../../presentation/agent/Message';
-import css from './ContextSeat.module.css';
 
 /** Request evidence never substitutes for an authoritative native lifecycle. */
 export function compactionPresentation(context?: RuntimeClientContextView, request?: CompactionRequestEvidence) {
@@ -40,7 +39,7 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
       {(diagnostic || uncertain) && <>
         {diagnostic && <p>{diagnostic}</p>}
         {uncertain && <p>{tx('agent:context.uncertain')} · {tx('agent:context.repair')}</p>}
-        {facts.current && <button className={css.read} type="button" onClick={() => { void client.refresh(sessionId).catch(() => {}); }}>{tx('agent:context.refresh')}</button>}
+        {facts.current && <button className="my-[4px] px-[8px] py-[4px] border border-current rounded-[var(--dsw-radius-sm)] bg-transparent [color:inherit] [font:inherit] cursor-pointer focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" type="button" onClick={() => { void client.refresh(sessionId).catch(() => {}); }}>{tx('agent:context.refresh')}</button>}
       </>}
     </CompactionMessage>
   </div>;
