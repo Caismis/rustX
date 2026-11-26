@@ -10,7 +10,6 @@ import type { ExcelLimits } from './model';
 import type { en } from '../../../../locale/dictionaries/workbench-excel';
 type LoadedExcelBodyProps = {content: {kind:'bytes';data:Uint8Array<ArrayBuffer>};format:ExcelFormat;limits:ExcelLimits;loading:ReactNode;t:(key:keyof typeof en,params?:Record<string,string|number>)=>string; signal?:AbortSignal; activeSheet?:number; onActiveSheetChange?:(index:number)=>void};
 import { parseExcel } from './parse.ts'
-import css from './ExcelBody.module.css'
 
 type State = { data: Uint8Array<ArrayBuffer>; format: ExcelFormat } & ({ value: ExcelPreview } | { error: string })
 const scopedStyles = `@scope ([data-excel-preview]) { ${fortuneCss} }`
@@ -56,22 +55,22 @@ export function ExcelBody({ content, format, limits, t, loading, signal, activeS
     observer.observe(element)
     return () => { observer.disconnect() }
   }, [state])
-  if (data === undefined) return <p className={css.status} role="alert">{t('invalid')}</p>
+  if (data === undefined) return <p className="flex gap-[8px] items-center justify-center h-full p-[16px] [color:var(--dsw-alias-label-secondary)]" role="alert">{t('invalid')}</p>
   if (state?.data !== data || state.format !== format) return loading
-  if ('error' in state) return <div className={css.status} role="alert">
+  if ('error' in state) return <div className="flex gap-[8px] items-center justify-center h-full p-[16px] [color:var(--dsw-alias-label-secondary)]" role="alert">
     <span>{t(state.error === 'tooLarge' || state.error === 'timeout' || state.error === 'encoding' ? state.error : 'invalid')}</span>
     <Button size="sm" onClick={() => { setAttempt(value => value + 1) }}>{t('retry')}</Button>
   </div>
   const hasFormulas = state.value.sheets.some(sheet => sheet.celldata?.some(cell => cell.v?.f !== undefined))
-  return <section className={css.body} data-excel-preview aria-label={t('title')}>
+  return <section className="flex flex-col h-full min-h-0 overflow-hidden whitespace-normal [font-family:var(--dsw-font,sans-serif)]" data-excel-preview aria-label={t('title')}>
     <style>{scopedStyles}</style>
-    {state.value.unsupportedFeatures.length > 0 && <div className={css.notice} role="note" data-excel-unsupported-notice>
+    {state.value.unsupportedFeatures.length > 0 && <div className="flex flex-none items-start gap-[8px] px-[12px] py-[8px] [color:var(--dsw-alias-state-warn-label)] bg-[var(--dsw-alias-state-warn-tertiary)] text-[var(--dsh-content-font-size-secondary,13px)] leading-[1.5] wrap-anywhere [&>svg]:flex-none [&>svg]:mt-[2px]" role="note" data-excel-unsupported-notice>
       <IconWarningTriangleOutlineRegular size={16} />
       <span>{t('unsupportedNotice', { features: state.value.unsupportedFeatures.map(feature => t(feature)).join(t('featureSeparator')) })}</span>
     </div>}
-    <div ref={workbookRef} className={`${css.workbook} ${hasFormulas ? css.withFormulaWarning : ''}`}>
+    <div ref={workbookRef} className={`relative flex-1 min-h-0 min-w-0 [color-scheme:light] [color:CanvasText] [&_.fortune-stat-area]:hidden [&_.luckysheet-sheets-item-function]:hidden [&_.fortune-cols-freeze-handle]:hidden [&_.fortune-rows-freeze-handle]:hidden [&_.luckysheet-sheet-area_div.luckysheet-sheets-item]:pr-[5px] [&_.luckysheet-sheet-area]:p-0 [&_#luckysheet-sheet-content]:flex-1 [&_#luckysheet-sheet-content]:min-w-0 [&_.fortune-sheettab-container]:flex-1 [&_.fortune-sheettab-container]:min-w-0 [&_.fortune-sheettab-container]:max-w-full [&_.fortune-sheettab-container_.fortune-sheettab-container-c]:overflow-x-auto [&_.fortune-sheettab-container_.fortune-sheettab-container-c]:overflow-y-hidden [&_.fortune-sheettab-container_.fortune-sheettab-container-c]:overscroll-x-contain [&_.fortune-sheettab-container_.fortune-sheettab-container-c]:[scrollbar-width:none] [&_.fortune-sheettab-scroll]:flex-none [&_.fortune-sheet-area-right]:flex-none [&_.fortune-fx-input-container]:min-w-0 [&_.fortune-fx-input]:min-w-0 [&_.fortune-fx-input]:overflow-x-auto [&_.fortune-fx-input]:overflow-y-hidden [&_.fortune-fx-input]:whitespace-nowrap [&_.fortune-fx-input]:[scrollbar-width:none] ${hasFormulas ? '[&_.fortune-fx-input]:pl-[24px]' : ''}`}>
       {hasFormulas && <Tooltip label={t('formulaWarning')} side="bottom" delayMs={500}>
-        <button type="button" className={css.formulaWarning} aria-label={t('formulaWarning')} data-excel-formula-warning>
+        <button type="button" className="absolute top-[4px] left-[142px] z-[3] flex w-[20px] h-[20px] p-[3px] [color:var(--dsw-alias-state-warn-label)] bg-transparent border-0 rounded-[var(--dsw-radius-sm)] focus-visible:bg-[var(--dsw-alias-state-warn-tertiary)] focus-visible:outline-none hover:bg-[var(--dsw-alias-state-warn-tertiary)]" aria-label={t('formulaWarning')} data-excel-formula-warning>
           <IconWarningTriangleOutlineRegular size={14} />
         </button>
       </Tooltip>}

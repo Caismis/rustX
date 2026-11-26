@@ -10,7 +10,6 @@ import { IconCloseFill14, IconFolderOpenOutline16, IconPanelLeftOutline16, IconQ
 import { FullscreenGlyph, ExitFullscreenGlyph } from './WorkbenchIcons';
 import dockCss from '../../presentation/dockkit/components/dockkit.module.css';
 import { SplitGlyph } from '../../presentation/dockkit/components/TabPanel';
-import css from '../../presentation/right-panel/PreviewWorkspace.module.css';
 import { Button } from '../../presentation/primitives/Button';
 
 export function PreviewWorkspaceNotice({ snapshot, dismiss }: { snapshot: Pick<PreviewWorkspaceSnapshot, 'problem' | 'downloadError'>; dismiss: () => void }) {
@@ -69,20 +68,20 @@ export function PreviewWorkspace({ owner, snapshot, active = true, focusRequest,
     if (workspace?.fullscreen) owner.toggleFullscreen(flushSync);
     else { owner.collapse(); returnFocus(); }
   };
-  return <div ref={root} className={css.workspace} data-preview-workspace hidden={!visible} onKeyDown={escape}>
+  return <div ref={root} className="min-w-0 min-h-0 h-full flex flex-col overflow-hidden [&[hidden]]:hidden" data-preview-workspace hidden={!visible} onKeyDown={escape}>
     {workspace && <>
-      {reason && <span id={separatorId} className={css.reason}>{reason}</span>}
-      <div className={css.panes} data-preview-split={split || undefined}>
+      {reason && <span id={separatorId} className="absolute w-[1px] h-[1px] p-0 overflow-hidden [clip-path:inset(50%)] whitespace-nowrap">{reason}</span>}
+      <div className="flex min-w-0 min-h-0 flex-1 overflow-hidden" data-preview-split={split || undefined}>
         {workspace.panes.map((pane, index) => {
           const shown = split || pane.id === workspace.activePane, chrome = split ? index === 1 : shown;
-          return <div key={pane.id} className={css.paneGroup} style={split ? { flex: `${index === 0 ? clampSplit(workspace.ratio, width) : 1 - clampSplit(workspace.ratio, width)} 1 0` } : undefined} hidden={!shown}>
+          return <div key={pane.id} className={"relative min-w-0 min-h-0 flex flex-1 [&[hidden]]:hidden" + (split && index === 1 ? " ml-[8px]" : "")} style={split ? { flex: `${index === 0 ? clampSplit(workspace.ratio, width) : 1 - clampSplit(workspace.ratio, width)} 1 0` } : undefined} hidden={!shown}>
             {index === 1 && split && visible && <Divider width={width} ratio={workspace.ratio} commit={ratio => owner.setRatio(ratio)} retireFocus={() => {
               const current = owner.getSnapshot();
               if (current.mode === 'preview') pendingFocus.current = current.workspace?.panes.find(pane => pane.id === current.workspace?.activePane)?.selected;
             }} />}
-            <section className={css.pane} data-preview-pane={pane.id} data-preview-active={pane.id === workspace.activePane || undefined} aria-label={tx('artifacts:workspace.pane', { p0: index + 1 })} onPointerDown={event => { if (!(event.target as HTMLElement).closest('[data-preview-download]')) owner.activatePane(pane.id); }} onFocus={event => { if (!(event.target as HTMLElement).closest('[data-preview-download]')) owner.activatePane(pane.id); }}>
+            <section className="flex flex-col min-w-0 min-h-0 flex-1 overflow-hidden" data-preview-pane={pane.id} data-preview-active={pane.id === workspace.activePane || undefined} aria-label={tx('artifacts:workspace.pane', { p0: index + 1 })} onPointerDown={event => { if (!(event.target as HTMLElement).closest('[data-preview-download]')) owner.activatePane(pane.id); }} onFocus={event => { if (!(event.target as HTMLElement).closest('[data-preview-download]')) owner.activatePane(pane.id); }}>
               <div className={dockCss.tabStrip} data-preview-strip>
-                <div className={`${dockCss.stripTabs} ${css.tabs}`} role="tablist" aria-label={tx('artifacts:workspace.tabs', { p0: index + 1 })} onKeyDown={event => {
+                <div className={`${dockCss.stripTabs} flex-auto pe-[1px] touch-pan-x [container-type:inline-size]`} role="tablist" aria-label={tx('artifacts:workspace.tabs', { p0: index + 1 })} onKeyDown={event => {
                   if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
                   const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
                   const active = tabs.indexOf(document.activeElement as HTMLElement); let next: number;
@@ -94,26 +93,26 @@ export function PreviewWorkspace({ owner, snapshot, active = true, focusRequest,
                   else return;
                   event.preventDefault(); focusTab(tabs[next]);
                 }}>
-                  {workspace.tabs.filter(tab => tab.pane === pane.id).map(tab => <div className={`${dockCss.tab} ${css.tabItem} ${tab.id === pane.selected ? dockCss.tabActive : ''}`} key={tab.id} data-preview-occurrence={tab.id}>
-                    <button type="button" className={`${dockCss.tabTitle} ${css.tab}`} id={`preview-tab-${tab.id}`} data-preview-tab={tab.id} role="tab" aria-selected={tab.id === pane.selected} aria-controls={`preview-body-${tab.id}`} tabIndex={tab.id === pane.selected ? 0 : -1} title={tab.artifact.name} onClick={() => owner.selectTab(tab.id)}><FileTypeIcon path={tab.artifact.name} size={16}/><span>{tab.artifact.name}</span></button>
+                  {workspace.tabs.filter(tab => tab.pane === pane.id).map(tab => <div className={`${dockCss.tab} flex-none p-0 min-w-[min(80px,100cqi)] max-w-[min(170px,100cqi)] ${tab.id === pane.selected ? dockCss.tabActive : ''}`} key={tab.id} data-preview-occurrence={tab.id}>
+                    <button type="button" className={`${dockCss.tabTitle} h-full px-[10px] py-0 border-0 bg-transparent [color:inherit] [font:inherit] cursor-pointer text-left [&_svg]:flex-none [&_span]:overflow-hidden [&_span]:whitespace-nowrap focus-visible:[outline:2px_solid_var(--dsw-alias-label-primary)] focus-visible:-outline-offset-2`} id={`preview-tab-${tab.id}`} data-preview-tab={tab.id} role="tab" aria-selected={tab.id === pane.selected} aria-controls={`preview-body-${tab.id}`} tabIndex={tab.id === pane.selected ? 0 : -1} title={tab.artifact.name} onClick={() => owner.selectTab(tab.id)}><FileTypeIcon path={tab.artifact.name} size={16}/><span>{tab.artifact.name}</span></button>
                     <button type="button" className={dockCss.tabClose} aria-label={tx('artifacts:workspace.close-tab', { p0: tab.artifact.name })} title={tx('artifacts:workspace.close-tab', { p0: tab.artifact.name })} onClick={() => close(tab.id)}><span aria-hidden="true"><IconCloseFill14/></span></button>
                   </div>)}
                 </div>
                 <div className={dockCss.stripChrome}>
-                  {pane.id === workspace.activePane && <Tooltip label={reason ?? tx('artifacts:workspace.split')} side="bottom"><button type="button" className={`${dockCss.iconButton} ${css.split}`} aria-label={tx('artifacts:workspace.split')} aria-disabled={!!reason} aria-describedby={reason ? separatorId : undefined} onClick={() => { if (!reason) { owner.split(); pendingFocus.current = owner.getSnapshot().workspace?.panes.find(p => p.id === owner.getSnapshot().workspace?.activePane)?.selected; } }}><SplitGlyph/></button></Tooltip>}
+                  {pane.id === workspace.activePane && <Tooltip label={reason ?? tx('artifacts:workspace.split')} side="bottom"><button type="button" className={`${dockCss.iconButton} aria-disabled:opacity-40 aria-disabled:cursor-default`} aria-label={tx('artifacts:workspace.split')} aria-disabled={!!reason} aria-describedby={reason ? separatorId : undefined} onClick={() => { if (!reason) { owner.split(); pendingFocus.current = owner.getSnapshot().workspace?.panes.find(p => p.id === owner.getSnapshot().workspace?.activePane)?.selected; } }}><SplitGlyph/></button></Tooltip>}
                   {workspace.panes.length === 2 && <Tooltip label={tx('artifacts:workspace.move')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workspace.move')} onClick={() => { pendingFocus.current = pane.selected; owner.move(pane.selected); }}>⇄</button></Tooltip>}
                   {chrome && <>
                     {openSideQuestion && <Tooltip label={tx('agent:btw.title')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></button></Tooltip>}
                     {workspace.panes.length === 2 && !split && <Tooltip label={tx('artifacts:workspace.switch-pane')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workspace.switch-pane')} onClick={() => focusPane(workspace.panes.find(other => other.id !== workspace.activePane)!)}>⇄</button></Tooltip>}
                     {openWorkbench && <Tooltip label={tx('artifacts:workbench.start')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workbench.start')} onClick={openWorkbench}><span aria-hidden="true"><IconFolderOpenOutline16/></span></button></Tooltip>}
                     <Tooltip label={tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')} onClick={() => owner.toggleFullscreen(flushSync)}>{workspace.fullscreen ? <ExitFullscreenGlyph/> : <FullscreenGlyph/>}</button></Tooltip>
-                    <Tooltip label={tx('artifacts:workspace.collapse')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workspace.collapse')} onClick={() => { owner.collapse(); returnFocus(); }}><span className={css.collapse} aria-hidden="true"><IconPanelLeftOutline16/></span></button></Tooltip>
+                    <Tooltip label={tx('artifacts:workspace.collapse')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workspace.collapse')} onClick={() => { owner.collapse(); returnFocus(); }}><span className="flex -scale-x-100" aria-hidden="true"><IconPanelLeftOutline16/></span></button></Tooltip>
                   </>}
                 </div>
               </div>
               {workspace.tabs.filter(tab => tab.pane === pane.id && snapshot.leases.has(tab.id)).map(tab => {
                 const bodyVisible = visible && shown && tab.id === pane.selected;
-                return <div key={tab.id} className={css.body} id={`preview-body-${tab.id}`} role="tabpanel" aria-labelledby={`preview-tab-${tab.id}`} hidden={!bodyVisible} inert={!bodyVisible}>
+                return <div key={tab.id} className="flex-1 min-w-0 min-h-0 overflow-auto [&[hidden]]:hidden" id={`preview-body-${tab.id}`} role="tabpanel" aria-labelledby={`preview-tab-${tab.id}`} hidden={!bodyVisible} inert={!bodyVisible}>
                   <ArtifactPreview visible={bodyVisible} artifact={tab.artifact} resources={snapshot.leases.get(tab.id)!} viewState={tab.view} onViewStateChange={patch => owner.updateView(tab.id, patch)} onDownload={() => void owner.download(tab.artifact)} />
                 </div>;
               })}
@@ -153,7 +152,7 @@ function Divider({ width, ratio, commit, retireFocus }: { width: number; ratio: 
   // A changed coordinate system cancels the gesture rather than reinterpreting
   // its old pointer origin; teardown explicitly releases capture and RAF too.
   useLayoutEffect(() => { setDraft(undefined); return () => { retire(); }; }, [width]);
-  return <div ref={element} className={css.divider} role="separator" tabIndex={0} aria-label={tx('artifacts:workspace.resize')} aria-orientation="vertical" aria-valuemin={Math.round(bounds.min * 100)} aria-valuemax={Math.round(bounds.max * 100)} aria-valuenow={Math.round((draft ?? effective) * 100)}
+  return <div ref={element} className="absolute top-0 bottom-0 -left-[8px] w-[8px] cursor-col-resize touch-none bg-[var(--dsw-alias-border-l4)] z-[1] focus-visible:[outline:2px_solid_var(--dsw-alias-label-primary)] focus-visible:-outline-offset-2" role="separator" tabIndex={0} aria-label={tx('artifacts:workspace.resize')} aria-orientation="vertical" aria-valuemin={Math.round(bounds.min * 100)} aria-valuemax={Math.round(bounds.max * 100)} aria-valuenow={Math.round((draft ?? effective) * 100)}
     onPointerDown={event => { if (event.button !== 0 || gesture.current) return; event.preventDefault(); event.currentTarget.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId); gesture.current = { pointer: event.pointerId, x: event.clientX, base: effective, latest: effective, target: event.currentTarget, group: event.currentTarget.parentElement!, previous: event.currentTarget.parentElement!.previousElementSibling as HTMLElement }; }}
     onPointerMove={event => { const active = gesture.current; if (!active || active.pointer !== event.pointerId) return; active.latest = clampSplit(active.base + (event.clientX - active.x) / (width - PREVIEW_POLICY.dividerWidth), width); active.frame ??= requestAnimationFrame(() => { active.frame = undefined; if (gesture.current === active) paint(active.latest); }); }}
     onPointerUp={event => { const active = gesture.current; if (!active || active.pointer !== event.pointerId) return; active.latest = clampSplit(active.base + (event.clientX - active.x) / (width - PREVIEW_POLICY.dividerWidth), width); finish(true); }}
