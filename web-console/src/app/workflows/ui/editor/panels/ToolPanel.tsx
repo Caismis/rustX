@@ -204,7 +204,7 @@ function ConstantInput({ kind, name, value, invalid, address, wrapped }: {
   }}>
     {kind === 'json'
       ? <JsonCodeEditor label={tx('workflows:tool.json')} value={field.text} minHeight={96} onChange={field.change} error={error} />
-      : <TextInput className={editorCss.input} data-workflow-field={encodeField(location)} inputMode={kind === 'integer' ? 'numeric' : 'decimal'} aria-label={name} aria-invalid={!!field.error || invalid || undefined} value={field.text}
+      : <TextInput unstyled className={editorCss.input} data-workflow-field={encodeField(location)} inputMode={kind === 'integer' ? 'numeric' : 'decimal'} aria-label={name} aria-invalid={!!field.error || invalid || undefined} value={field.text}
         onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} />}
     {error && <small className={editorCss.hintError} role="alert">{error}</small>}
     <ConflictActions field={field} />

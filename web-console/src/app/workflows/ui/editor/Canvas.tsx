@@ -441,7 +441,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         </div>;
       })()}
       {search !== undefined && <div className={editorCss.nodeSearch} role="dialog" aria-label={tx('workflows:canvas.find')} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setSearch(undefined); container.current?.focus(); } }}>
-        <TextInput autoFocus className={editorCss.input} aria-label={tx('workflows:canvas.find')} placeholder={tx('workflows:canvas.find')} value={search} onChange={event => setSearch(event.target.value)} />
+        <TextInput unstyled autoFocus className={editorCss.input} aria-label={tx('workflows:canvas.find')} placeholder={tx('workflows:canvas.find')} value={search} onChange={event => setSearch(event.target.value)} />
         {found.map(node => <button type="button" key={node.id} onClick={() => { choose(node); setSearch(undefined); }}>{node.data.view === 'start' ? node.data.title || tx(node.data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : node.data.title}<small>{keyOfBlock(node.data.path)}</small></button>)}
         {!found.length && <p className={editorCss.note}>{tx('workflows:palette.none')}</p>}
       </div>}

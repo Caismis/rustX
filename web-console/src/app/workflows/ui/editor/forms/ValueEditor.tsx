@@ -95,11 +95,11 @@ export function PathEditor({ address, path, edit }: { address: FieldAddress; pat
   }), coalesce);
   return <div className={editorCss.path} aria-label={tx('workflows:value.path')} role="group">
     {path.map((component, index) => <span key={index} className={editorCss.pathComponent}>
-      <TextInput className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
+      <TextInput unstyled className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
         size={Math.max(4, component.length)} onChange={event => { const text = event.target.value; set(current => current.map((value, at) => at === index ? text : value), encodeField(within(address, [index]))); }} />
       <button type="button" className={editorCss.pathRemove} aria-label={tx('workflows:inspector.remove', { p0: component })} onClick={() => set(current => current.filter((_, at) => at !== index))}>×</button>
     </span>)}
-    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
+    <TextInput unstyled data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
       onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } else if (event.key === 'Escape') adding.reset(); }} />
     <small className={editorCss.hint}>{tx('workflows:value.path-hint')}</small>
   </div>;
@@ -114,7 +114,7 @@ export function AddKey({ existing, address, add, label, action }: { existing: re
   } });
   const valid = field.text !== '' && !existing.includes(field.text);
   return <div className={editorCss.inline}>
-    <TextInput data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
+    <TextInput unstyled data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono)} value={field.text} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false} aria-invalid={!!field.error || undefined}
       onChange={event => field.change(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); field.apply(); } }} />
     <button type="button" className={editorCss.smallButton} disabled={!valid} onClick={field.apply}>{action ?? tx('workflows:inspector.add-field')}</button>
   </div>;

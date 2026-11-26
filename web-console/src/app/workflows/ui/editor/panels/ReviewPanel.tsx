@@ -102,7 +102,7 @@ function ReviewTimeout(props: PanelProps) {
   };
   return <section className={clsx(editorCss.group, editorCss.reviewTimeout)}>
     <h3 className={editorCss.groupHeading}><span className={editorCss.headingText}>{tx('workflows:review.timeout')}</span></h3>
-    <TextInput className={editorCss.input} type="number" min={1} max={MAX_TIMEOUT / unit} aria-label={tx('workflows:review.timeout')} value={value}
+    <TextInput unstyled className={editorCss.input} type="number" min={1} max={MAX_TIMEOUT / unit} aria-label={tx('workflows:review.timeout')} value={value}
       onChange={event => { if (event.target.value !== '') commit(Number(event.target.value), unit); }} />
     <div className={editorCss.typeSwitch} role="radiogroup" aria-label={tx('workflows:review.timeout')}>
       {([HOUR, MINUTE] as const).map(per => <button key={per} type="button" role="radio" aria-checked={unit === per} className={clsx(unit === per && editorCss.typeSwitchActive)}

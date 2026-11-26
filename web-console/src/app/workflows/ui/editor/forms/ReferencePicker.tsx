@@ -72,7 +72,7 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentNode = document && producerBlock ? nodeAt(blockAt(document, producerBlock)!, producer) : undefined;
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const panelBody = <>
-      <TextInput ref={searchInput} className={editorCss.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
+      <TextInput unstyled ref={searchInput} className={editorCss.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
       {!result && <p role="status" className={editorCss.note}>{tx('workflows:value.analyzing')}</p>}
       {result?.failed && <p role="alert" className={editorCss.note}>{tx('workflows:value.analysis-failed')}</p>}
       {report?.diagnostic && <p className={editorCss.note}>{report.diagnostic}</p>}
