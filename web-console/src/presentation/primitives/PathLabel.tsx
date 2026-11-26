@@ -3,7 +3,6 @@
 import { useLayoutEffect, useRef, type HTMLAttributes } from 'react'
 import clsx from 'clsx'
 const pathPartsOf = (path: string) => { const i = path.lastIndexOf('/'); return { directory: path.slice(0, i + 1), name: path.slice(i + 1) }; }
-import css from './PathLabel.module.css'
 
 /**
  * Render subdued directories and a primary filename, with the complete path on hover.
@@ -32,10 +31,10 @@ export function PathLabel({ path, className, ...attributes }: {
     return () => { observer?.disconnect() }
   }, [path])
   return (
-    <span {...attributes} ref={boxRef} className={clsx(css.path, className)} title={path} data-path-label>
-      <span ref={textRef} className={css.text}>
-        {directory !== '' && <span className={css.directory}>{directory}</span>}
-        <span className={css.name}>{name}</span>
+    <span {...attributes} ref={boxRef} className={clsx('flex flex-1 justify-end min-w-0 overflow-hidden text-[12px] whitespace-nowrap [&[data-path-clipped]]:[mask-image:linear-gradient(to_right,transparent,black_28px)]', className)} title={path} data-path-label>
+      <span ref={textRef} className="flex-none mr-auto">
+        {directory !== '' && <span className="[color:var(--dsw-alias-label-tertiary)]">{directory}</span>}
+        <span className="[color:var(--dsw-alias-label-primary)]">{name}</span>
       </span>
     </span>
   )
