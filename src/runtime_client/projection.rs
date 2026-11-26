@@ -367,8 +367,6 @@ pub(crate) struct RuntimeClientProjection {
         ),
     >,
     bootstrap_transcript_through: u64,
-    #[cfg(test)]
-    pending_transcript: std::collections::BTreeMap<MessageId, crate::durable::TranscriptCursor>,
     publication_start: Option<crate::publication::PublicationStreamStart>,
     content_metadata: ContentMetadata,
     prepared_publication_content: Vec<super::checkpoint::PreparedPublicationContent>,
@@ -391,6 +389,7 @@ pub(crate) struct RuntimeClientProjection {
     live_tool_ordinal: Option<u64>,
     pending_epoch_wait: Option<u64>,
     pending_mutation_revision: u64,
+    pending_observed_through: u64,
     source_state: ObservationSourceState,
     prepared_outcomes: std::collections::BTreeMap<
         u64,

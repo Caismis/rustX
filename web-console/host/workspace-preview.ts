@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, read, type BigIntStats } from 'node:fs';
 import { openWorkspacePath } from './workbench.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, PreviewCancelled, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 const version = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 const descriptorVersion = (fd: number) => version(fstatSync(fd, { bigint: true }));
 function openPreviewPath(root: string, path: string) {
@@ -135,7 +135,10 @@ export function openWorkspaceBytePreview(root: string, path: string, signal: Abo
     close() {
       return closing ??= (async () => {
         await Promise.allSettled([...pending]);
-        try { verify(true); } finally { closeSync(fd); }
+        try {
+          if (signal.aborted) throw new PreviewCancelled();
+          verify(true);
+        } finally { closeSync(fd); }
       })();
     },
   };

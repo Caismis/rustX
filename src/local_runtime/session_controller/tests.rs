@@ -12,7 +12,7 @@ use super::*;
 async fn session_create_publishes_while_another_session_provider_is_blocked() {
     use crate::model::{ModelEvent, ModelFinishReason};
     use crate::runtime::conversation_runtime::{
-        ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
+        ConversationContextConfig, ConversationRole, ConversationRuntime, RuntimeConversationConfig,
     };
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep, model_release};
 
@@ -67,7 +67,7 @@ async fn session_create_publishes_while_another_session_provider_is_blocked() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect("runtime");
     let controller = crate::local_runtime::session_controller::SessionController::new(catalog);
@@ -109,6 +109,197 @@ async fn session_create_publishes_while_another_session_provider_is_blocked() {
 fn settings(path: &std::path::Path) -> SessionPersistentState {
     SessionPersistentState::from_input(&SessionConfigInput::new(path.to_path_buf()))
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Exercise a retry family across real durable copies and reopen.
+async fn message_versions_follow_inherited_prompts_and_survive_reopen() {
+    use crate::local_runtime::session::LineageSide;
+    use crate::local_runtime::session::observation::{
+        SessionMessageVersion, SessionMessageVersionFamily,
+    };
+    use crate::message::types::{MessageBlock, UserSource};
+    use crate::observation::content::CanonicalContentLocator;
+
+    async fn append(
+        controller: &SessionController,
+        session: &SessionSnapshot,
+        message: MessageBlock,
+    ) {
+        let path = controller
+            .catalog
+            .lock()
+            .await
+            .database_path(&session.id, &session.active_conversation_id);
+        crate::durable::SqliteConversationStore::open(
+            session.active_conversation_id.clone(),
+            &path,
+        )
+        .unwrap()
+        .append_canonical(&message)
+        .unwrap();
+    }
+    async fn branch(
+        controller: &SessionController,
+        session: &SessionId,
+        version: &SessionMessageVersion,
+    ) -> SessionSnapshot {
+        let message = controller
+            .resolve_boundary(
+                session,
+                Some(&version.node_id),
+                version.surface_revision,
+                &version.boundary,
+                LineageSide::Before,
+            )
+            .await
+            .unwrap();
+        if let Some(expected) = &version.message_id {
+            assert_eq!(&message, expected);
+        }
+        controller
+            .branch_session_node(
+                session,
+                &version.node_id,
+                version.surface_revision,
+                &message,
+            )
+            .await
+            .unwrap()
+            .session
+    }
+    async fn boundary(
+        controller: &SessionController,
+        session: &SessionSnapshot,
+        position: u64,
+    ) -> SessionMessageVersion {
+        controller
+            .message_boundary(
+                &session.id,
+                session.active_node.clone(),
+                CanonicalContentLocator::ByLedgerPosition { position },
+            )
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let original = controller
+        .create_session(settings(root.path()))
+        .await
+        .unwrap()
+        .session;
+    let oversized_id = "long native identity ".repeat(32);
+    append(&controller, &original, user(&oversized_id)).await;
+    assert!(
+        boundary(&controller, &original, 1)
+            .await
+            .message_id
+            .is_none()
+    );
+    append(&controller, &original, user("original prompt")).await;
+    append(&controller, &original, user("original suffix")).await;
+    let original_prompt = boundary(&controller, &original, 2).await;
+
+    let blank = branch(&controller, &original.id, &original_prompt).await;
+    let retry = branch(&controller, &original.id, &original_prompt).await;
+    let query = |node: &SessionSnapshot, offset| {
+        controller.message_versions(node.id.clone(), node.active_node.clone(), offset, 1)
+    };
+    assert_eq!(
+        query(&original, 0).await.unwrap().versions,
+        Vec::<SessionMessageVersionFamily>::new()
+    );
+    assert_eq!(
+        query(&blank, 0).await.unwrap().versions,
+        Vec::<SessionMessageVersionFamily>::new()
+    );
+    let MessageBlock::User(mut fleet_input) = user("fleet input") else {
+        unreachable!()
+    };
+    fleet_input.source = UserSource::Fleet;
+    append(&controller, &retry, MessageBlock::User(fleet_input)).await;
+    assert_eq!(
+        query(&original, 0).await.unwrap().versions,
+        Vec::<SessionMessageVersionFamily>::new()
+    );
+    assert!(
+        controller
+            .message_boundary(
+                &retry.id,
+                retry.active_node.clone(),
+                original_prompt.boundary.clone()
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // The first real prompt continues the cut, including recovery after an
+    // empty editor or an unsuccessful submit.
+    append(&controller, &retry, user("replacement prompt")).await;
+    append(&controller, &retry, user("later prompt")).await;
+    let replacement = boundary(&controller, &retry, 3).await;
+    let later = boundary(&controller, &retry, 4).await;
+
+    let later_retry = branch(&controller, &retry.id, &later).await;
+    append(&controller, &later_retry, user("later replacement")).await;
+    let inherited = boundary(&controller, &later_retry, 3).await;
+    assert_ne!(inherited.message_id, replacement.message_id);
+    let second_retry = branch(&controller, &later_retry.id, &inherited).await;
+    append(&controller, &second_retry, user("second replacement")).await;
+    let second_replacement = boundary(&controller, &second_retry, 3).await;
+
+    let earlier = query(&later_retry, 0).await.unwrap();
+    assert_eq!(earlier.next_offset, Some(1));
+    assert_eq!(earlier.versions[0].current, inherited);
+    assert_eq!(earlier.versions[0].current_index, 1);
+    assert_eq!(earlier.versions[0].total, 3);
+    assert_eq!(
+        earlier.versions[0].previous.as_ref(),
+        Some(&original_prompt)
+    );
+    assert_eq!(earlier.versions[0].next.as_ref(), Some(&second_replacement));
+    let later_page = query(&later_retry, 1).await.unwrap();
+    assert_eq!(later_page.next_offset, None);
+    assert_eq!(later_page.versions[0].current_index, 1);
+    assert_eq!(later_page.versions[0].total, 2);
+    assert_eq!(later_page.versions[0].previous.as_ref(), Some(&later));
+
+    let independent = controller
+        .fork_session(
+            &retry.id,
+            Some(&retry.active_node),
+            later.surface_revision,
+            None,
+        )
+        .await
+        .unwrap()
+        .session;
+    assert_eq!(
+        query(&independent, 0).await.unwrap().versions,
+        Vec::<SessionMessageVersionFamily>::new()
+    );
+    assert!(matches!(
+        controller
+            .message_versions(independent.id, retry.active_node, 0, 1)
+            .await,
+        Err(SessionError::UnknownNode { .. })
+    ));
+    drop(controller);
+
+    let controller = SessionController::open(root.path()).unwrap();
+    let page = controller
+        .message_versions(original.id.clone(), original.active_node, 0, 32)
+        .await
+        .unwrap();
+    assert_eq!(page.versions.len(), 1);
+    assert_eq!(page.versions[0].current, original_prompt);
+    assert_eq!(page.versions[0].current_index, 0);
+    assert_eq!(page.versions[0].next.as_ref(), Some(&replacement));
+    assert_eq!(page.versions[0].total, 3);
+}
+
 #[tokio::test]
 async fn committed_delete_rejects_load_while_cleanup_releases_catalog_mutex() {
     let root = tempfile::tempdir().unwrap();

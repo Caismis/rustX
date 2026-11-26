@@ -49,8 +49,19 @@ test('native child live cuts, independent title, active and file-only resume upl
     await fixture.release(`child-second-${childGate}`);
     await expect(child).toHaveAttribute('data-agent-state', 'inactive');
     await expect(child.getByText('Canonical child final report.', { exact: true })).toBeVisible();
-    // The in-flight message becomes its single canonical message at settlement.
-    await expect(child.getByText('Live child first chunk. Second live chunk.', { exact: true })).toHaveCount(1);
+    // The retained checkpoint can place the committed streaming message before
+    // the loaded tail. Read its older page through the same control as a user.
+    const retained = () => wire.responses.find(row => row.method === 'agent/observe'
+      && row.result?.observation?.type === 'checkpoint' && row.result.observation.source === 'durable_only'
+      && row.result.observation.agent_id === id)?.result.observation;
+    await expect.poll(() => !!retained()).toBe(true);
+    const committed = child.getByText('Live child first chunk. Second live chunk.', { exact: true });
+    if (retained()!.checkpoint.snapshot.transcript.next_cursor != null) {
+      const earlier = child.getByRole('button', { name: 'Load earlier', exact: true });
+      await expect(earlier.or(committed).first()).toBeAttached();
+      if (await earlier.isVisible()) await earlier.click();
+    }
+    await expect(committed).toHaveCount(1);
     const card = child.locator('[data-delivery-card]').filter({ has: page.locator('[data-presented-name]', { hasText: 'child-report.md' }) }).first();
     await card.getByRole('button', { name: 'Preview child-report.md in sidebar', exact: true }).click();
     const preview = page.getByRole('complementary', { name: 'Previews', exact: true });
@@ -160,6 +171,30 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toHaveCount(0);
     expect(errors).toEqual([]); passed = true;
-  } catch (error) { await page.screenshot({ path: '/tmp/rustx-native-child-failure.png' }).catch(() => {}); console.error(await page.locator('body').innerText().catch(() => 'Page closed')); console.error(fixture.diagnostics()); throw error; }
+  } catch (error) { await page.screenshot({ path: '/tmp/rustx-native-child-failure.png' }).catch(() => {}); console.error(await page.locator('body').innerText().catch(() => 'Page closed')); console.error(fixture.diagnostics());
+    // Live-cut settlement evidence: whether the first response committed, and
+    // what every observe checkpoint/event actually carried. Read-only dump.
+    const summarizeEntry = (entry: any) => ({ cursor: entry.cursor, pending: entry.response_pending,
+      type: entry.item?.type, id: entry.item?.message?.id, role: entry.item?.message?.role,
+      text: entry.item?.message?.content?.map?.((block: any) => block.text ?? block.type)?.join('|')?.slice(0, 80) });
+    const summarizePage = (page: any) => page ? { total: page.transcript_total, entries: (page.entries ?? []).map(summarizeEntry),
+      deferred: (page.deferred_entries ?? []).map((row: any) => ({ cursor: row.cursor, key: row.key?.slice(0, 40) })) } : undefined;
+    console.error('observe-responses', JSON.stringify(wire.responses.filter(row => row.method === 'agent/observe').map(row => ({
+      type: row.result?.type, cursor: row.result?.cursor, source: row.result?.source,
+      transcript: summarizePage(row.result?.checkpoint?.snapshot?.transcript),
+      events: (row.result?.events ?? []).map((record: any) => ({ cursor: record.cursor, type: record.event?.type })), resync: row.result?.reason,
+    }))));
+    const notificationTypes = wire.notifications.reduce((counts: Record<string, number>, note) => {
+      counts[note.method] = (counts[note.method] ?? 0) + 1; return counts; }, {});
+    console.error('notifications', JSON.stringify(notificationTypes));
+    console.error('child-events', JSON.stringify(wire.notifications.filter(note => note.method !== 'session/event').map(note => ({
+      method: note.method, cursor: note.params?.cursor,
+      types: (note.params?.events ?? []).map((record: any) => ({ cursor: record.cursor, type: record.event?.type })),
+    }))));
+    console.error('transcript-reads', JSON.stringify(wire.responses.filter(row => row.method === 'agent/transcript').map(row => ({
+      target_cursor: row.result?.window?.target_cursor, entries: (row.result?.window?.page?.entries ?? []).map(summarizeEntry),
+    }))));
+    console.error('observe-requests', JSON.stringify(wire.requests.filter(request => request.method === 'agent/observe' || request.method === 'agent/observeCancel').map(request => ({ method: request.method, agent: request.params?.agent_id, after: request.params?.after }))));
+    throw error; }
   finally { await page.close(); await fixture.stop(passed); }
 });

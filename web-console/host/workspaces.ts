@@ -11,7 +11,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
-import { WorkspaceHostError } from '../src/workspaces/host.ts';
+import { settlementFailureKind, WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, WorkspaceFolderSelection, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
 import { AppServerClient, AppServerRequestError } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
@@ -22,7 +22,7 @@ import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench
 import { NativeFileReadError, readNativeDelivery, readNativeSource, openNativeDeliveryPreview, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
 
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
-import { FILE_PREVIEW_LIMITS, validateFileRead, type FilePreviewOperation } from '../shared/file-preview.ts';
+import { FILE_PREVIEW_LIMITS, PreviewCancelled, validateFileRead, type FilePreviewOperation } from '../shared/file-preview.ts';
 import { observeFile } from './file-observation.ts';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
 import { readWorkspacePreview, openWorkspaceBytePreview } from './workspace-preview.ts';
@@ -197,7 +197,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return { ...operation,
           read: async (range, signal) => { await check(); const value = await operation.read(range, signal); await check(); return value; },
           close: async () => {
-            try { if (!active.aborted) await check(); } finally { await operation.close(); }
+            try { if (!active.aborted) await check(); }
+            catch (error) {
+              try { await operation.close(); }
+              catch (retirementError) { if (!(retirementError instanceof PreviewCancelled)) throw retirementError; }
+              throw error;
+            }
+            await operation.close();
             if (!active.aborted) await check();
           },
         };
@@ -240,7 +246,12 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
             let validating = false;
             try { await this.physicalPreview(scope, owner.signal, () => { validating = true; return operation!.close(); }); }
             catch (error) {
-              if (!validating) { owner.abort(); await operation.close().catch(() => {}); }
+              if (!validating) {
+                owner.abort();
+                try { await operation.close(); }
+                catch (retirementError) { if (settlementFailureKind(retirementError)) throw retirementError; }
+              }
+              if (owner.signal.aborted && error === owner.signal.reason) throw new PreviewCancelled();
               throw error;
             }
           }

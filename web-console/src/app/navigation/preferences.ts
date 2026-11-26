@@ -24,7 +24,7 @@ export function readNavigationPreferences(): NavigationPreferences {
     const route = readRoute(value?.route);
     if (typeof value?.endpoint === 'string' && Array.isArray(value.openViews) && route) return {
       endpoint: value.endpoint,
-      openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32),
+      openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))],
       route,
     };
   } catch { /* Storage is optional presentation, never recovery evidence. */ }

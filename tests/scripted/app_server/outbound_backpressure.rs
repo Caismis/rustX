@@ -60,7 +60,7 @@ async fn settle_second_conversation(
     send_request(input, 98, turn(target, "request-B")).await;
     fixture.gates[1].wait_entered().await;
     fixture.gates[1].release();
-    let settlement = runtime.child_attempt_settlement(after).await;
+    let settlement = runtime.attempt_settlement(after).await;
     assert_eq!(settlement.ordinal, after + 1);
     assert!(matches!(
         settlement.outcome,
@@ -132,7 +132,7 @@ async fn transient_full_queue_preserves_admitted_control_and_other_conversation_
         assert!(!connection.closed_for_test());
         settle_second_conversation(&fixture, &input, second).await;
         send_request(&input, 99, Method::TurnCancel { turn_id: runtime.configuration_cut().admitted_attempt.unwrap().attempt, target }).await;
-        let settled = runtime.child_attempt_settlement(after).await;
+        let settled = runtime.attempt_settlement(after).await;
         assert_eq!(settled.ordinal, after + 1);
         assert!(matches!(settled.outcome, NativeAttemptOutcome::Cancelled));
         assert!(replies.try_recv().is_err(), "no output accepted before recovery");

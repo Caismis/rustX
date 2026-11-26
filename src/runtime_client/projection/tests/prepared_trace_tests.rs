@@ -1,5 +1,6 @@
 use super::*;
 use crate::durable::JournalStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 
 use crate::durable::ConversationStore;
 
@@ -59,7 +60,7 @@ fn prepared_trace_owner_reuses_exact_rows_and_retires_after_native_terminal_inst
         ))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(terminal.observation.as_deref().unwrap());
+        projection.apply_native_batch(terminal.observation.native_batch().unwrap());
     });
     install_trace(&mut projection, &store);
     let current = projection.checkpoint_candidate().unwrap();

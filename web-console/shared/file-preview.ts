@@ -39,6 +39,15 @@ export function validateFileRead(read: FileReadOptions): void {
   } else throw new Error('Invalid file read kind');
 }
 
+/** An aborted preview cannot validate a copy. Close rejects with this error
+ * only after its physical work settles. */
+export class PreviewCancelled extends Error {
+  constructor() {
+    super('Preview operation cancelled');
+    this.name = 'AbortError';
+  }
+}
+
 /** A bounded source owner. Idle owners hold no physical read permit. */
 export interface FilePreviewOperation {
   readonly version: string;

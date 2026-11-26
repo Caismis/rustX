@@ -45,7 +45,7 @@ impl ClientInner {
             };
             match delivery {
                 EventDelivery::Event(event) => {
-                    let weight = crate::observation::bounded::bounded_bytes(
+                    let weight = rustx_types::observation::bounded::bounded_bytes(
                         &event,
                         crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
                     )
@@ -146,7 +146,8 @@ impl ClientInner {
                     auxiliary: self
                         .runtime
                         .as_ref()
-                        .and_then(crate::runtime::conversation_runtime::ConversationRuntime::auxiliary_subscribe),
+                        .map(crate::runtime::conversation_runtime::ConversationRuntime::external_auxiliary)
+                        .and_then(|service| service.auxiliary_subscribe()),
                     host: Arc::downgrade(self),
                     subscriber_id,
                     notify,

@@ -6,7 +6,7 @@ use super::InteractionRequest;
 #[cfg(test)]
 use crate::runtime::identity::InteractionId;
 #[cfg(test)]
-use crate::runtime::read_layout::READ_WORK;
+use rustx_durable::read_layout::READ_WORK;
 #[cfg(test)]
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 pub(crate) struct PendingInteractionSource {
     request: Arc<InteractionRequest>,
     header: crate::observation::interaction::RuntimeClientInteractionHeader,
-    layout: OnceLock<Result<crate::runtime::read_layout::SeekableObservationSource, &'static str>>,
+    layout: OnceLock<Result<rustx_durable::read_layout::SeekableObservationSource, &'static str>>,
 }
 impl PendingInteractionSource {
     pub(crate) fn new(request: InteractionRequest) -> Arc<Self> {
@@ -31,10 +31,10 @@ impl PendingInteractionSource {
     }
     fn build_layout(
         request: &InteractionRequest,
-    ) -> Result<crate::runtime::read_layout::SeekableObservationSource, &'static str> {
+    ) -> Result<rustx_durable::read_layout::SeekableObservationSource, &'static str> {
         // Stream the borrowed native request through its typed structural codec;
         // opaque arguments keep their original JSON semantics without a second Value tree.
-        crate::runtime::read_layout::SeekableObservationSource::new(request)
+        rustx_durable::read_layout::SeekableObservationSource::new(request)
     }
     pub(crate) fn header(
         &self,
@@ -65,8 +65,8 @@ impl PendingInteractionSource {
         offset: u64,
         limit: usize,
     ) -> Result<
-        crate::runtime::read_layout::ObservationPage,
-        crate::runtime::read_layout::ObservationReadError,
+        rustx_durable::read_layout::ObservationPage,
+        rustx_durable::read_layout::ObservationReadError,
     > {
         self.layout
             .get_or_init(|| Self::build_layout(&self.request))
@@ -80,8 +80,8 @@ impl PendingInteractionSource {
         offset: u64,
         max_bytes: u32,
     ) -> Result<
-        crate::runtime::read_layout::ObservationChunk,
-        crate::runtime::read_layout::ObservationReadError,
+        rustx_durable::read_layout::ObservationChunk,
+        rustx_durable::read_layout::ObservationReadError,
     > {
         self.layout
             .get_or_init(|| Self::build_layout(&self.request))
@@ -245,7 +245,7 @@ mod tests {
         let header = source.header();
         assert!(header.workflow_node.is_none());
         assert!(header.workflow_node_deferred);
-        assert!(crate::observation::bounded::bounded_bytes(header, 16_384).is_some());
+        assert!(rustx_types::observation::bounded::bounded_bytes(header, 16_384).is_some());
         let path = header.workflow_node_path.as_ref().unwrap();
         let mut offset = 0;
         let mut reconstructed = Vec::new();

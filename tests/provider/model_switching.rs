@@ -152,7 +152,7 @@ async fn active_continuation_cannot_borrow_another_binding_or_model() {
                 })],
             });
             request.continuation_source = Some(rustx::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
-                rustx::runtime::identity::RequestId::new("source"), &rustx::runtime::identity::ConversationId::generate(), &rustx::model::SelectedModelInput::default(), &output,
+                rustx::runtime::identity::RequestId::new("source"), &rustx::runtime::identity::ConversationId::generate(), rustx::model::SelectedModelInput::default().semantic_fingerprint(), &output,
             ).unwrap());
             request.messages.insert(0, output.into());
             request.continuation = Some(state);

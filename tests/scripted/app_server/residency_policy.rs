@@ -5,7 +5,7 @@ use crate::runtime::monotonic::ManualMonotonicClock;
 async fn policy(count: usize, limit: usize) -> (Fixture, Arc<ManualMonotonicClock>) {
     let clock = Arc::new(ManualMonotonicClock::new());
     let policy = crate::local_runtime::app_server_policy::AppServerPolicy {
-        max_resident_runtimes: limit,
+        max_resident_runtimes: Some(limit),
         idle_grace_ms: 100,
         ..Default::default()
     };
@@ -875,5 +875,87 @@ async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
         f.host.finish_drain().unwrap();
         f.close().await;
     })
+    .await;
+}
+
+#[tokio::test]
+async fn default_policy_admits_more_than_eight_resident_sessions() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 10).await;
+        assert_eq!(fixture.manager.policy().max_resident_runtimes, None);
+        for index in 0..10 {
+            fixture.load(index).await.unwrap().unwrap();
+        }
+        assert_eq!(fixture.manager.diagnostics().loaded, 10);
+        fixture.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn explicit_operator_limit_can_hot_toggle_between_uncapped_and_bounded() {
+    use crate::local_runtime::app_server_policy::AppServerPolicy;
+    use crate::local_runtime::configuration::settings::{
+        ConfigMutation, SourceMutation, SourceTarget,
+    };
+    Box::pin(bounded(async {
+        let f = Fixture::with_session_count(None, 3).await;
+        assert_eq!(f.manager.policy().max_resident_runtimes, None);
+        f.load(0).await.unwrap().unwrap();
+        f.load(1).await.unwrap().unwrap();
+
+        let mut changes = f.manager.configuration_changes();
+        let source = f
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap();
+        f.manager
+            .write_source_settings(
+                &SourceTarget::User,
+                source.user.revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::AppServer {
+                        authored: Some(AppServerPolicy {
+                            max_resident_runtimes: Some(2),
+                            ..Default::default()
+                        }),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        while f.manager.policy().max_resident_runtimes != Some(2) {
+            changes.changed().await.unwrap();
+        }
+        assert_eq!(
+            f.load(2).await.unwrap().unwrap_err(),
+            RuntimeManagerError::ResidencyCapacity
+        );
+
+        let updated = f
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap();
+        f.manager
+            .write_source_settings(
+                &SourceTarget::User,
+                updated.user.revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::AppServer {
+                        authored: Some(AppServerPolicy::default()),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        while f.manager.policy().max_resident_runtimes.is_some() {
+            changes.changed().await.unwrap();
+        }
+        f.load(2).await.unwrap().unwrap();
+        assert_eq!(f.manager.diagnostics().loaded, 3);
+        f.close().await;
+    }))
     .await;
 }

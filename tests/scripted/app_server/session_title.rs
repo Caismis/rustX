@@ -59,7 +59,7 @@ async fn title_publishes_independently_then_reopen_and_primary_changes_never_reg
         managed
             .inspect_runtime()
             .unwrap()
-            .child_attempt_settlement(0)
+            .attempt_settlement(0)
             .await;
         let request_count = f.provider.request_bodies().len();
         assert_eq!(request_count, 2);
@@ -77,7 +77,7 @@ async fn title_publishes_independently_then_reopen_and_primary_changes_never_reg
         reopened
             .inspect_runtime()
             .unwrap()
-            .child_attempt_settlement(ordinal)
+            .attempt_settlement(ordinal)
             .await;
         assert_eq!(f.provider.request_bodies().len(), request_count + 1);
         assert_eq!(
@@ -116,7 +116,7 @@ async fn manual_rename_during_title_inference_prevents_publication_without_erasi
         managed
             .inspect_runtime()
             .unwrap()
-            .child_attempt_settlement(0)
+            .attempt_settlement(0)
             .await;
         managed
             .inspect_runtime()
@@ -190,7 +190,12 @@ async fn anthropic_title_preserves_follow_and_explicit_thinking_budgets_and_text
                 assert_eq!(title.text, text);
                 assert!(title.text.chars().count() <= 120 && title.text.len() <= 480);
             }
-            assert!(!runtime.first_title_source().unwrap().unwrap().eligible);
+            assert!(
+                !crate::local_runtime::session_title::first_title_source(&runtime)
+                    .unwrap()
+                    .unwrap()
+                    .eligible
+            );
             assert_eq!(
                 f.provider.request_bodies().len(),
                 1,
@@ -243,10 +248,10 @@ async fn title_lifecycle_busy_waits_for_commit_release_without_capacity_feedback
             f.sessions[0].id.clone(),
             &runtime,
             runtime.title_metadata_changes_for_test(),
-            runtime.title_capacity_changes(),
+            runtime.external_auxiliary().capacity_changes(),
         ));
         let reads = runtime.count_title_reads_for_test();
-        let capacity = runtime.title_capacity_changes();
+        let capacity = runtime.external_auxiliary().capacity_changes();
         std::future::poll_fn(|context| {
             assert!(owner.as_mut().poll(context).is_pending());
             match reads.load(Ordering::SeqCst) {

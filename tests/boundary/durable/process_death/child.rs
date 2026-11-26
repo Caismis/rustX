@@ -307,7 +307,7 @@ impl Log {
             .clone()
             .expect("bound fixture runtime");
         runtime
-            .child_attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
+            .attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
             .await;
     }
 }
@@ -582,6 +582,7 @@ impl Child {
             LocalConversationCore::compose_with_access(
                 &launch,
                 &dependencies,
+                Arc::new(crate::runtime::types::SystemClock),
                 registry,
                 runtime_config.clone(),
                 state,
@@ -783,7 +784,7 @@ async fn compose_session_child(
                     source,
                 ));
             }
-            crate::local_runtime::session_title::arm(catalog, title_session, runtime);
+            crate::local_runtime::session_title::arm(catalog, &title_session, runtime);
             if scenario == SESSION_TITLE_RECOVER_INERT {
                 rendezvous("title-reopen:recovered-before-activation");
             }

@@ -283,14 +283,15 @@ impl RuntimeInner {
         // shutdown projection seed is necessarily false.
         let shutting_down = false;
         let model = state
+            .config
             .model
             .read_source()
-            .at_binding_revision(state.binding_revision);
+            .at_binding_revision(state.config.binding_revision);
         // The resource generation is part of the same freeze as every other
         // seeded fact: a client attaching before the first configuration application still sees
         // exactly which project instruction files the runtime loaded.
-        let resources = Arc::clone(&state.resources);
-        let approval_mode = state.effective_approval_mode;
+        let resources = Arc::clone(&state.config.resources);
+        let approval_mode = state.config.effective_approval_mode;
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // Interaction pending state is an ephemeral runtime observation, but
         // it still participates in the same bootstrap cut as every other
@@ -402,15 +403,19 @@ impl RuntimeInner {
             let pending = page.map_or_else(Vec::new, |page| {
                 page.headers
                     .into_iter()
-                    .filter_map(|header| match header.message.display {
-                        Some(MessageBlock::User(message)) => {
-                            Some(InboundItem::from_observation_header(
-                                header.revision,
-                                header.sequence,
-                                message,
-                            ))
+                    .filter_map(|header| {
+                        let input_id = header.input_id;
+                        match header.message.display {
+                            Some(MessageBlock::User(message)) => {
+                                Some(InboundItem::from_observation_header(
+                                    header.revision,
+                                    header.sequence,
+                                    message,
+                                    input_id,
+                                ))
+                            }
+                            _ => None,
                         }
-                        _ => None,
                     })
                     .collect()
             });
@@ -667,6 +672,21 @@ impl ConversationRuntime {
                     && active_plane.goal == required.goal
                     && !configured_plane.invalid_goal
                     && !active_plane.invalid_goal,
+            });
+        }
+        // A headless `WorkflowAgentRun` runtime never owns a subagent
+        // registry: delegation is a conversation authority, so a registry
+        // on that role is a misconfiguration, rejected here before any
+        // claim exactly as `docs/invariants.md` declares (Issue #606).
+        // `SubagentChild` legitimately keeps its registry — a middle
+        // runtime is simultaneously a child of its parent and the parent
+        // of deeper children (nested delegation).
+        if matches!(config.role, ConversationRole::WorkflowAgentRun { .. })
+            && let Some(subagents) = &config.subagents
+        {
+            return Err(ConversationRuntimeError::SubagentOwnershipMismatch {
+                registry_conversation: subagents.conversation_id().clone(),
+                runtime_conversation: conversation_id,
             });
         }
         // The subagent registry is a conversation-owned logical plane: the
@@ -949,11 +969,95 @@ impl ConversationRuntime {
         )
         .map_err(|error| ConversationRuntimeError::Storage(error.message))?;
         let catalog_revision = config.capability.catalog_revision();
+        let state = Arc::new(Mutex::new(CoordinatorState {
+            foreground: super::ForegroundState {
+                slot: super::foreground::ForegroundSlot::Idle(
+                    super::foreground::IdleConversation::Durable,
+                ),
+                manual_tail: super::foreground::ManualTailState::None,
+                next_attempt_seq,
+                recovered_continuation,
+                recovered_permission_task_message,
+                // Durability health after a successful recovery is an
+                // explicit transition, not a silent reset (Issue #12,
+                // M9a): recovery either established a coherent durable
+                // state — in which case the runtime starts a fresh
+                // admission cycle — or it failed, in which case
+                // construction already returned and no runtime exists to
+                // be healthy. A previous process's crash never poisons a
+                // runtime whose classification and reconciliation
+                // succeeded. The absorbing DurabilityFailed fact itself
+                // lives only in the DurabilityGate.
+                admission_durability_cycle: AdmissionDurabilityCycle {
+                    budget: AdmissionRetryBudget::default(),
+                    pending_retry: None,
+                },
+                admitted_attempts: 0,
+                latest_settlement: None,
+                one_shot_cancel: None,
+            },
+            config: super::ConfigurationState {
+                binding_revision: 1,
+                catalog_revision,
+                pending_runtime_catalog: None,
+                catalog_commit_blocked: false,
+                catalog_admission_deferred: false,
+                staged_configuration: None,
+                configuration_commit_waiting: false,
+                configuration_admission_deferred: false,
+                runtime_refresh_sequence: 0,
+                runtime_catalog_failure: None,
+                explicit_model: config.explicit_model,
+                model: config.model,
+                resources: config.resources,
+                effective_approval_mode: config.approval_mode,
+                last_permission_reminder_mode,
+                permission_task_message,
+            },
+            child: config.role.is_child().then(ChildControlState::default),
+            health: super::HealthState {
+                mcp_settlement_failure: None,
+            },
+        }));
+        let settlement = Arc::new(tokio::sync::Notify::new());
+        let activity = super::activity::TaskActivity::default();
+        #[cfg(test)]
+        let probe = Arc::new(Mutex::new(None));
+        let scheduled_executor = Arc::new(
+            crate::runtime::workflow::scheduled::executor::ScheduledExecutor::new(
+                crate::runtime::workflow::scheduled::executor::ScheduledExecutorParts {
+                    lifecycle: lifecycle.clone(),
+                    store: store.clone(),
+                    mailbox: mailbox.clone(),
+                    interaction: interaction.clone(),
+                    subagents: config.subagents.clone(),
+                    capability: config.capability.clone(),
+                    tool_runtime: config.tool_runtime.clone(),
+                    auxiliary_executor: auxiliary.clone(),
+                    monotonic_clock: monotonic_clock.clone(),
+                    clock: clock.clone(),
+                    activity: activity.clone(),
+                    spawner: executor.clone(),
+                    #[cfg(test)]
+                    probe: probe.clone(),
+                },
+            ),
+        );
+        let external_auxiliary = crate::runtime::auxiliary::external::ExternalAuxiliary::new(
+            crate::runtime::auxiliary::external::ExternalAuxiliaryParts {
+                conversation_id: conversation_id.clone(),
+                store: store.clone(),
+                policy: config.context.policy,
+                estimator: config.context.estimator.clone(),
+                tool_runtime: config.tool_runtime.clone(),
+                executor: auxiliary.clone(),
+            },
+        );
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
             unrecorded_configuration: Arc::default(),
             initialization_cancellation: std::sync::OnceLock::new(),
-            activity: super::activity::TaskActivity::default(),
+            activity,
             runtime_catalog_preparer: std::sync::OnceLock::new(),
             runtime_catalog_publication: tokio::sync::watch::channel(0).0,
             #[cfg(test)]
@@ -972,7 +1076,7 @@ impl ConversationRuntime {
             capability: config.capability,
             capability_publication,
             subagents: config.subagents,
-            workflow_output: config.workflow_output,
+            role: config.role,
             interaction,
             lifecycle,
             clock,
@@ -980,68 +1084,29 @@ impl ConversationRuntime {
             tool_deadline_policy: config.tool_deadline_policy,
             monotonic_clock,
             durability_gate: durability_gate.clone(),
-            auxiliary,
-            external_auxiliary: super::auxiliary::ExternalAuxiliary::new(),
-            manual_tail: Mutex::new(None),
-            session_title_task: Mutex::new(None),
+            external_auxiliary,
+            auxiliary_executor: auxiliary,
+            scheduled_executor,
+            host_task: Mutex::new(None),
             recovery,
             executor,
-            state: Mutex::new(CoordinatorState {
-                binding_revision: 1,
-                catalog_revision,
-                pending_runtime_catalog: None,
-                catalog_commit_blocked: false,
-                catalog_admission_deferred: false,
-                staged_configuration: None,
-                configuration_commit_waiting: false,
-                configuration_admission_deferred: false,
-                runtime_refresh_sequence: 0,
-                runtime_catalog_failure: None,
-                explicit_model: config.explicit_model,
-                model: config.model,
-                resources: config.resources,
-                mcp_settlement_failure: None,
-                effective_approval_mode: config.approval_mode,
-                last_permission_reminder_mode,
-                permission_task_message,
-                recovered_permission_task_message,
-                conversation: super::conversation_slot::ConversationSlot::Durable,
-                current_attempt: None,
-                scheduled: None,
-                scheduled_retries: std::collections::BTreeMap::default(),
-                manual_compaction: None,
-                next_attempt_seq,
-                admitted_attempts: 0,
-                latest_settlement: None,
-                parent_turn_permits: None,
-                parent_guidance_sealed: false,
-                one_shot_cancel: None,
-                recovered_continuation,
-                // Durability health after a successful recovery is an
-                // explicit transition, not a silent reset (Issue #12, M9a):
-                // recovery either established a coherent durable state — in
-                // which case the runtime starts a fresh admission cycle — or
-                // it failed, in which case construction already returned and
-                // no runtime exists to be healthy. A previous process's crash
-                // never poisons a runtime whose classification and
-                // reconciliation succeeded. The absorbing DurabilityFailed
-                // fact itself lives only in the DurabilityGate.
-                admission_durability_cycle: AdmissionDurabilityCycle {
-                    budget: AdmissionRetryBudget::default(),
-                    pending_retry: None,
-                },
-            }),
+            state,
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
             drain: std::sync::OnceLock::new(),
             drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
-            settlement: tokio::sync::Notify::new(),
+            settlement: settlement.clone(),
             #[cfg(test)]
-            probe: Mutex::new(None),
+            probe: probe.clone(),
             #[cfg(test)]
             test_pre_tool_policy: Mutex::new(None),
         });
+        // The extracted owners reach coordinator state only through the
+        // runtime's narrow interfaces (Issue #606): bind the weak runtime
+        // handle now that `RuntimeInner` exists — it never pins the runtime.
+        inner.scheduled_executor.bind_runtime(&inner);
+        inner.external_auxiliary.bind_runtime(&inner);
         // Recovery has already durably terminalized every orphaned child.
         // Restore only durable Agent and activation records; no child
         // process, policy, or frozen resource is reconstructed from current
@@ -1317,7 +1382,7 @@ impl ConversationRuntime {
             // The lock serializes the lifecycle transition against the
             // host-binding handshake; the CAS is the transition itself.
             let state = self.inner.lock_state();
-            if state.mcp_settlement_failure.is_some() {
+            if state.health.mcp_settlement_failure.is_some() {
                 // An authoritative physical-settlement failure may have been
                 // replayed while the runtime was inactive. The callback has
                 // either already moved the lifecycle to Draining or is
@@ -1346,7 +1411,7 @@ impl ConversationRuntime {
         // Any inbound published before activation (there can be none: the
         // mailbox refused it) and any inbound racing this activation is
         // admitted here rather than depending on a wake permit.
-        if !self.inner.admit_next_scheduled() {
+        if !self.inner.scheduled_executor.admit_next() {
             self.inner.admit_next_attempt();
         }
     }

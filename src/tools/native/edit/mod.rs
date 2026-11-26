@@ -23,7 +23,6 @@ use input::{EditInput, EditReplacement};
 
 // Compaction file-operation metadata decodes the path of a historical
 // canonical Edit call through this tool-owned boundary (Issue #140).
-pub(super) use input::operation_path;
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "edit";

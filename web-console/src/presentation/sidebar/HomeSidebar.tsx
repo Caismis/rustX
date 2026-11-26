@@ -20,7 +20,7 @@ export function HomeSidebar({ width, toggleSidebar, startSession, browser, foote
     onPointerEnter={() => { cancelLinger(); setPointerInside(true); }}
     onPointerLeave={() => { cancelLinger(); linger.current = setTimeout(() => setPointerInside(false), 2000); }}>
     <div className={css.logoRow} data-window-drag>
-      <span className={css.brand}><span className={css.brandMark} aria-hidden>rX</span>rustX</span>
+      <img className={css.brand} src="/rustx-logo.png" width={414} height={240} alt="rustX" />
       <Tooltip label={tx('sidebar:toggle.collapse')} delayMs={500}>
         <button type="button" data-sidebar-toggle className={css.iconButton} aria-label={tx('sidebar:toggle.collapse')} onClick={toggleSidebar}><IconPanelLeftOutline16 /></button>
       </Tooltip>

@@ -15,21 +15,23 @@
 //! [`ModelRequest`]: crate::model::types::ModelRequest
 
 pub mod anthropic;
-pub mod block_index;
+pub use rustx_types::model::adapter::block_index;
 pub(crate) mod cache;
 pub(crate) mod correlation;
 pub mod openai;
 #[cfg(feature = "issue-387-profile")]
-pub(crate) mod profile;
+#[cfg(feature = "issue-387-profile")]
+pub(crate) use rustx_types::model::adapter::profile;
 pub(crate) mod proposal;
-pub(crate) mod retry;
-pub(crate) mod structured;
+pub(crate) use rustx_types::model::adapter::retry;
+pub mod structured;
 pub mod traits;
-mod transport;
+pub(crate) use rustx_types::model::adapter::transport;
 pub mod validation;
 
-pub use traits::{
-    ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
+pub use rustx_types::model::adapter::{
+    ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
+pub use traits::ModelAdapter;
 
-pub(crate) mod response_budget;
+pub(crate) use rustx_types::model::adapter::response_budget;

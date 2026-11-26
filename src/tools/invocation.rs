@@ -160,43 +160,14 @@ pub(crate) fn terminal(status: ToolExecutionStatus) -> ToolExecutionResult {
     }
 }
 
-/// Facts selected by the invocation owner, independently of caller framing.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum InvocationFact {
-    Deadline { kind: ToolDeadlineKind },
-    CancellationRequested { cause: ToolCancellationCause },
-    SettlementObserved { certainty: ToolSettlementCertainty },
-    SettlementControlFailed { reason: String },
-}
-
-/// Native execution facts for callers without canonical `ToolCall` framing.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum NativeInvocationFact {
-    Prepared {
-        tool_name: String,
-        arguments_digest: String,
-    },
-    Started,
-    Progress {
-        progress: ToolProgress,
-    },
-    Lifecycle {
-        fact: InvocationFact,
-    },
-    Completed {
-        status: ToolExecutionStatus,
-    },
-}
+pub use rustx_types::tools::invocation::{InvocationFact, NativeInvocationFact};
 
 /// Frozen policy and clock authority for one foreground invocation.
 pub(crate) struct ForegroundInvocation<'a> {
     pub clock: &'a dyn MonotonicClock,
     pub policy: ToolExecutionDeadlinePolicy,
     pub registration: crate::tools::deadline::ForegroundPolicy,
+    pub handoff: Option<&'a ForegroundHandoff>,
     #[cfg(test)]
     pub deadline_armed: Option<&'a (dyn Fn(u64) + Send + Sync)>,
     #[cfg(test)]
@@ -205,11 +176,36 @@ pub(crate) struct ForegroundInvocation<'a> {
     pub completion_won: Option<&'a (dyn Fn() + Send + Sync)>,
 }
 
+/// A foreground budget and its durable ownership-transfer proof. The
+/// transferred operation has no foreground physical settlement yet.
+pub(crate) struct ForegroundHandoff {
+    pub budget: std::time::Duration,
+    transferred: std::sync::atomic::AtomicBool,
+}
+
+impl ForegroundHandoff {
+    pub(crate) fn new(budget: std::time::Duration) -> Self {
+        Self {
+            budget,
+            transferred: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn record_transfer(&self) {
+        self.transferred
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn transferred(&self) -> bool {
+        self.transferred.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
 /// Execution status and physical certainty are independent owner-produced facts.
 pub(crate) struct InvocationOutcome {
     pub result: ToolExecutionResult,
     pub facts: Vec<InvocationFact>,
-    pub physical_settlement: ToolSettlementCertainty,
+    pub physical_settlement: Option<ToolSettlementCertainty>,
 }
 
 enum Winner {
@@ -252,9 +248,13 @@ impl ForegroundInvocation<'_> {
             .map(|services| services.descendants.clone());
         let started = self.clock.now_millis();
         let policy = self.registration.resolve(self.policy);
-        let hard_deadline = policy.hard_deadline_millis(started);
+        // At equal budgets the handoff owns the boundary. A later hard
+        // deadline can still settle a foreground operation awaiting transfer.
+        let hard_deadline = (self.handoff.map(|handoff| handoff.budget)
+            != Some(policy.hard_deadline))
+        .then(|| policy.hard_deadline_millis(started));
         #[cfg(test)]
-        if let Some(armed) = self.deadline_armed {
+        if let (Some(armed), Some(hard_deadline)) = (self.deadline_armed, hard_deadline) {
             armed(hard_deadline);
         }
         let idle = policy.effective_idle_liveness(progress_capability);
@@ -272,6 +272,12 @@ impl ForegroundInvocation<'_> {
         let settlement = handle.settlement;
         tokio::pin!(completion);
         tokio::pin!(settlement);
+        let hard_wait = async {
+            match hard_deadline {
+                Some(deadline) => self.clock.wait_until_millis(deadline).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         let idle_wait = async {
             let Some(idle) = idle else {
                 return std::future::pending::<()>().await;
@@ -302,12 +308,12 @@ impl ForegroundInvocation<'_> {
                 if let Some(hook) = self.cancellation_won { hook(); }
                 Winner::Cancellation(reason)
             },
-            () = self.clock.wait_until_millis(hard_deadline) => Winner::Deadline(ToolDeadlineKind::Hard),
+            () = hard_wait => Winner::Deadline(ToolDeadlineKind::Hard),
             () = idle_wait => {
                 // Biased polling is not an atomic clock cut: time can advance
                 // after the hard future returned Pending, before idle is polled.
                 // Commit deadline priority from one current logical-clock read.
-                let kind = if self.clock.now_millis() >= hard_deadline {
+                let kind = if hard_deadline.is_some_and(|deadline| self.clock.now_millis() >= deadline) {
                     ToolDeadlineKind::Hard
                 } else {
                     ToolDeadlineKind::Idle
@@ -327,11 +333,13 @@ impl ForegroundInvocation<'_> {
                     *phase = ToolCancellationPhase::DuringExecution;
                 }
                 let physical_settlement =
-                    if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }) {
-                        ToolSettlementCertainty::Unconfirmed
-                    } else {
-                        ToolSettlementCertainty::Confirmed
-                    };
+                    (!self.handoff.is_some_and(ForegroundHandoff::transferred)).then_some({
+                        if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }) {
+                            ToolSettlementCertainty::Unconfirmed
+                        } else {
+                            ToolSettlementCertainty::Confirmed
+                        }
+                    });
                 return InvocationOutcome {
                     result,
                     facts,
@@ -373,6 +381,18 @@ impl ForegroundInvocation<'_> {
             () = guard_wait => None,
         };
         let (result, physical_settlement) = match evidence {
+            Some(ToolSettlement::Confirmed(result))
+                if self.handoff.is_some_and(ForegroundHandoff::transferred) =>
+            {
+                // Transfer won before the foreground requested cancellation.
+                // The job owns the process, so there is no foreground stop or
+                // physical settlement to record.
+                return InvocationOutcome {
+                    result,
+                    facts: Vec::new(),
+                    physical_settlement: None,
+                };
+            }
             Some(ToolSettlement::Confirmed(mut result)) => {
                 facts.push(InvocationFact::SettlementObserved {
                     certainty: ToolSettlementCertainty::Confirmed,
@@ -405,7 +425,7 @@ impl ForegroundInvocation<'_> {
         InvocationOutcome {
             result,
             facts,
-            physical_settlement,
+            physical_settlement: Some(physical_settlement),
         }
     }
 }

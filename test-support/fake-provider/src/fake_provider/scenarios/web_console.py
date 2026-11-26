@@ -87,6 +87,28 @@ def web_response_retry() -> Scenario:
 SCENARIOS["web_response_retry"] = web_response_retry
 
 
+def web_user_message_versions() -> Scenario:
+    """The three sends carry the selected input's native attachment projection."""
+    def expected(prompt: str, *excludes: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                      body_contains=(prompt, "user_uploaded_files", "selected-input.txt"),
+                      body_excludes=excludes)
+
+    return Scenario(
+        "web_user_message_versions",
+        Step(expected("Draft a harbor summary."),
+             Stream(Text("The harbor version is complete."), Finish())),
+        Step(expected("Draft an orchard summary.", "Draft a harbor summary.", "The harbor version is complete."),
+             Stream(Text("The orchard version is complete."), Finish())),
+        Step(expected("Draft an orchard summary.", "Draft a harbor summary.", "The harbor version is complete.",
+                      "The orchard version is complete."),
+             Stream(Text("The regenerated orchard version is complete."), Finish())),
+    )
+
+
+SCENARIOS["web_user_message_versions"] = web_user_message_versions
+
+
 def web_fork_feedback() -> Scenario:
     """One completed native turn, followed by browser-owned lineage navigation."""
     return Scenario("web_fork_feedback",
@@ -717,3 +739,46 @@ def auxiliary_classification_transport() -> Scenario:
 
 
 SCENARIOS["auxiliary_classification_transport"] = auxiliary_classification_transport
+
+
+def web_queue_steering() -> Scenario:
+    """Hold a live generation while the browser promotes three queued messages."""
+    return Scenario(
+        "web_queue_steering",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("Begin queue review",)),
+             Stream(Text("Review started."), Gate("queue-review"), Text(" Finished the original request."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("First revision", "Second revision", "Third revision", "Direct steer")),
+             Stream(Gate("queue-revisions-received"), Text("Reviewed all three revisions."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("Separate follow-up",)),
+             Stream(Text("Answered the separate follow-up."), Finish())),
+    )
+
+
+SCENARIOS["web_queue_steering"] = web_queue_steering
+
+
+def web_bash_promotion() -> Scenario:
+    def expected(text: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(text,))
+
+    # Append on every launch so a foreground-to-background restart is observable.
+    # The browser releases the second line only after it sees the first in the panel.
+    command = (
+        "printf '%s\\n' \"$$\" >> promotion.pids; "
+        "printf 'before pid=%s\\n' \"$$\"; "
+        "while [ ! -f promotion.release ] && [ \"$SECONDS\" -lt 180 ]; do sleep 1; done; "
+        "printf 'after pid=%s\\n' \"$$\"; "
+        "while [ ! -f promotion.cleanup ] && [ \"$SECONDS\" -lt 200 ]; do sleep 1; done"
+    )
+    return Scenario("web_bash_promotion",
+        Step(expected("Run the foreground promotion probe"), Stream(ToolCall("promotion-bash", "bash", json.dumps({
+            "command": command,
+            "execution_mode": "foreground",
+            "elevation_reason": "Record the shell PID in the test workspace",
+        })), Finish("tool_calls"))),
+        Step(expected("job_id"), Stream(Text("The shell is continuing in the background."), Finish())),
+        Step(expected("Continue while the shell runs"), Stream(Text("Chat continued while the shell ran."), Finish())),
+        Step(expected("settled: cancelled"), Stream(Text("The shell has stopped."), Finish())))
+
+
+SCENARIOS["web_bash_promotion"] = web_bash_promotion

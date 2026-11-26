@@ -134,8 +134,16 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
     if (source) {
       dispatched = true;
       const streaming = source;
+      const sourceFailed = (error: unknown) => {
+        if (finished) return;
+        finish(); reject(error);
+      };
       try { void streaming.consume({
-        start: metadata => { if (finished) throw new GeometryError('invalid'); worker!.postMessage({ kind: 'stream-start', ...metadata, deadline: performance.timeOrigin + deadline }); },
+        start: metadata => {
+          if (finished) throw new GeometryError('invalid');
+          try { worker!.postMessage({ kind: 'stream-start', ...metadata, deadline: performance.timeOrigin + deadline }); }
+          catch { throw new GeometryError('worker'); }
+        },
         chunk: (data, offset) => new Promise<void>((resolve, reject) => {
           if (finished || acknowledgement || data.byteLength > 2 * 1024 * 1024) { reject(new GeometryError('invalid')); return; }
           acknowledgement = { offset, resolve, reject };
@@ -145,13 +153,13 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
             const owned = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength ? data : data.slice();
             worker!.postMessage({ kind: 'stream-chunk', data: owned, offset }, [owned.buffer]);
           }
-          catch (error) { acknowledgement = undefined; reject(error); }
+          catch { acknowledgement = undefined; reject(new GeometryError('worker')); }
         }),
       }, streamController.signal).then(() => {
         if (finished) return;
         sourceComplete = true;
         try { worker!.postMessage({ kind: 'stream-end' }); } catch { fail('worker'); }
-      }, error => { if (!finished) fail(error instanceof GeometryError ? error.code : 'invalid'); }); } catch { fail('worker'); }
+      }, sourceFailed); } catch (error) { sourceFailed(error); }
     } else if (format === 'stl') start();
     else {
       try {

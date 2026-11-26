@@ -53,22 +53,96 @@ async fn scheduled(f: &Fixture) -> ScheduleCommandReceipt {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attempt() {
     bounded(async {
-        let mut f=Fixture::with_session_count(None,1).await;f.install_scheduled_workflow("Native execution");
-        let clock=Clock::new();f.manager.schedule_clock=clock.clone();
-        let resident=f.load(0).await.unwrap().unwrap();let runtime=resident.inspect_runtime().unwrap();let created=scheduled(&f).await;
+        let mut f = Fixture::with_session_count(None, 1).await;
+        f.install_scheduled_workflow("Native execution");
+        // A fallback to wall time would make this freshly admitted Schedule
+        // older than the 30-day retention window when its Workflow settles.
+        let clock = Arc::new(Clock(Mutex::new(DateTime::UNIX_EPOCH)));
+        f.manager.schedule_clock = clock.clone();
+        let resident = f.load(0).await.unwrap().unwrap();
+        let runtime = resident.inspect_runtime().unwrap();
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        runtime.install_scheduled_settlement_gate(gate.clone());
+        let created = scheduled(&f).await;
         clock.add(60);
-        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted{start,..})=f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id.clone(),expected_revision:created.revision}).await.unwrap() else {panic!("native target admission")};
-        let view=finished(&f,&runtime,&start.id).await;
-        assert!(matches!(view.start.state,ScheduledWorkflowState::Settled{outcome:ScheduledWorkflowOutcome::Completed,..}));
-        assert_eq!(view.result,Some(serde_json::json!({"answer":"native durable return"})));
+        let session = &f.sessions[0];
+        let admit = || {
+            f.manager.schedule_operation(
+                &session.id,
+                &session.active_node,
+                ScheduleOperation::Admit {
+                    id: created.id.clone(),
+                    expected_revision: created.revision,
+                },
+            )
+        };
+        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+            snapshot,
+            start,
+        }) = admit().await.unwrap()
+        else {
+            panic!("native target admission")
+        };
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        let before_settlement = admit().await.unwrap();
+        assert!(matches!(
+            before_settlement,
+            ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current })
+                if current.revision == snapshot.revision
+        ));
+
+        clock.add(1);
+        drop(release);
+        let view = finished(&f, &runtime, &start.id).await;
+        let after_settlement = admit().await.unwrap();
+        assert!(
+            matches!(
+                &after_settlement,
+                ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced { current })
+                    if current.revision == snapshot.revision
+            ),
+            "stale admission after settlement returned {after_settlement:?}"
+        );
+        assert!(matches!(
+            view.start.state,
+            ScheduledWorkflowState::Settled {
+                outcome: ScheduledWorkflowOutcome::Completed,
+                settled_at,
+            } if settled_at == clock.now()
+        ));
+        assert_eq!(
+            view.result,
+            Some(serde_json::json!({"answer":"native durable return"}))
+        );
         assert!(!view.capacity_blocked && !view.deletion_blocked);
-        let store=runtime.tool_runtime().durable_store();let events=store.read_events(None,256).unwrap().events;
-        assert_eq!(events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowStarted{run_id,tool_call_id:None,..} if run_id==&start.run_id)).count(),1);
-        assert!(events.iter().all(|event|!matches!(event.event,RuntimeEvent::AttemptStarted{..})));
-        assert_eq!(store.load_pending().unwrap(), [] as [crate::durable::inbox::PendingInboundItem; 0]);
-        assert!(matches!(f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap(),ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced{..})));
+        let store = runtime.tool_runtime().durable_store();
+        let events = store.read_events(None, 256).unwrap().events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    &event.event,
+                    RuntimeEvent::WorkflowStarted { run_id, tool_call_id: None, .. }
+                        if run_id == &start.run_id
+                ))
+                .count(),
+            1
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event.event, RuntimeEvent::AttemptStarted { .. }))
+        );
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [rustx_durable::PendingInboundItem; 0]
+        );
         f.close().await;
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -401,7 +475,13 @@ async fn reopened_workflow(claim_before_reopen: bool) {
             let store = crate::durable::SqliteConversationStore::recover_existing(
                 conversation.clone(),
                 &access.database_path,
-                &controller,
+                std::sync::Arc::new(
+                    crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                        controller.clone(),
+                        access.database_path.parent().unwrap(),
+                    )
+                    .unwrap(),
+                ),
             )
             .unwrap();
             let accepted = store.scheduled_workflow_get(&start.id).unwrap().unwrap();
@@ -770,6 +850,80 @@ async fn a_scheduler_cold_start_recovers_the_configuration_application() {
         let view = f.manager.configuration_application(&id).unwrap();
         assert!(*changed.borrow_and_update() >= view.version, "{view:?}");
         driver.abort();
+        f.close().await;
+    })
+    .await;
+}
+
+/// Issue #606 (P2 evidence): the scheduled command preparation — frozen
+/// model/resources/approval inputs, capability lease and the durable Claimed
+/// intent — provably completes **before** the `claim_scheduled_start`
+/// critical section: a barrier parked after prep still observes the durable
+/// start unclaimed while the slot owner is live.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduler85_prep_completes_before_the_claim_critical_section() {
+    bounded(async {
+        let mut f = Fixture::with_session_count(None, 1).await;
+        f.install_scheduled_workflow("Prep-before-Claim");
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+        let resident = f.load(0).await.unwrap().unwrap();
+        let runtime = resident.inspect_runtime().unwrap();
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        runtime.install_scheduled_prep_gate(gate.clone());
+        let created = scheduled(&f).await;
+        clock.add(60);
+        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+            start, ..
+        }) = f
+            .manager
+            .schedule_operation(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: created.revision,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("native admission")
+        };
+        // Parked after preparation, before the Claim critical section.
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        let before = f
+            .manager
+            .scheduled_workflow_recovery(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                start.id.clone(),
+                0,
+                100,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !matches!(
+                before.start.state,
+                ScheduledWorkflowState::Claimed { .. } | ScheduledWorkflowState::Settled { .. }
+            ),
+            "prep finished but no durable Claim exists yet: {:?}",
+            before.start.state
+        );
+        drop(release);
+        let result = finished(&f, &runtime, &start.id).await;
+        assert!(matches!(
+            result.start.state,
+            ScheduledWorkflowState::Settled {
+                outcome: ScheduledWorkflowOutcome::Completed,
+                ..
+            }
+        ));
         f.close().await;
     })
     .await;

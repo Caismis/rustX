@@ -13,6 +13,7 @@ use super::{
     MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN, MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP,
 };
 use crate::context::AcceptedContext;
+use crate::durable::observation::NativeObservationBatch;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, ToolCallOccurrenceRef};
@@ -793,7 +794,7 @@ impl<'a> AgentExecution<'a> {
                 .expect("accepted Assistant is committed");
             Some(crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
                 input.snapshot.request_id.clone(), &self.request.conversation_id,
-                &input.request.input().messages, output,
+                input.request.input().messages.semantic_fingerprint(), output,
             ).expect("canonical accepted output is Assistant"))
         } else {
             None
@@ -936,7 +937,10 @@ impl<'a> AgentExecution<'a> {
                 &adoption.event,
                 adoption.sequence,
                 adoption.tool_occurrence.as_ref(),
-                adoption.observation.as_deref(),
+                adoption
+                    .observation
+                    .as_ref()
+                    .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>()),
             );
         }
         self.pending_fresh_inbound = Some(fresh);
@@ -960,12 +964,11 @@ impl<'a> AgentExecution<'a> {
     /// durably pending, and the attempt settles cancelled. Otherwise one
     /// finite watermark is selected and atomically adopted into the durable
     /// canonical ledger, then the complete batch is appended synchronously
-    /// as distinct canonical `UserMessageBlock` values in inbound sequence
+    /// as distinct canonical `UserMessageBlock` values in model delivery
     /// order — the batch is never partially consumed and never requeued. The
-    /// whole adopted batch becomes one new [`FreshInboundTurn`] in sequence
+    /// whole adopted batch becomes one new [`FreshInboundTurn`] in delivery
     /// order, so the next model request receives exactly one Agent Status
-    /// snapshot targeting the final adopted message (the highest-sequence
-    /// item).
+    /// snapshot targeting the final adopted message in that order.
     ///
     /// Returns `Ok(true)` when one complete batch was adopted, `Ok(false)`
     /// when the snapshot observed an empty inbox, and the attempt terminal

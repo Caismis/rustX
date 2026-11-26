@@ -3,6 +3,7 @@ import { PreviewFrame } from '../../presentation/right-panel/PreviewFrame';
 import { TextLines } from '../../presentation/right-panel/TextLines';
 import { LoadingIndicator } from '../../presentation/primitives/LoadingIndicator';
 import type { ReactNode } from 'react';
+import { ViewerMenu } from './workbench-documents/ViewerMenu';
 import { DocumentBody } from './workbench-documents/DocumentBody';
 import { preloadGeometry } from './documents/GeometryDocument';
 import { GeometryLoading } from './documents/GeometryLoading';
@@ -81,7 +82,7 @@ function Directory({ path, call, view, revision, onOpen, loaded, current }: { pa
 export function WorkspaceFile({ path, call, view, onOpen, visible = true, navigator, tools }: { navigator?: ReactNode; tools?: ReactNode; visible?: boolean; path: string; call: WorkbenchCall; view: FileTabView; onOpen:(path:string)=>void }) {
   const tx = useTranslation();
   const [wrap, setWrap] = useState(view.wrap);
-  const [mode, setMode] = useState<Viewer>(view.mode ?? viewersForPath(path)[0]), [menu, setMenu] = useState(false);
+  const [mode, setMode] = useState<Viewer>(view.mode ?? viewersForPath(path)[0]);
   if (!view.preview || view.preview.path !== path) {
     view.preview?.dispose();
     const lifetime = new AbortController();
@@ -144,7 +145,7 @@ export function WorkspaceFile({ path, call, view, onOpen, visible = true, naviga
   const bytes = value.data ?? new Uint8Array();
   const fullPath = view.cwd ? `${view.cwd.replace(/\/$/, '')}/${path}` : path;
   const more = value.page && !value.page.eof && <Button disabled={value.loading} onClick={() => owner.more()}>{tx(value.loading ? 'artifacts:document.loading' : 'artifacts:artifact-preview.load-more')}</Button>;
-  return <PreviewFrame path={fullPath} data-workbench-file={path} navigator={navigator} tools={<>{viewersForPath(path).length > 1 && <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus selectedId={mode} items={viewersForPath(path).map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { view.mode = id as Viewer; setMode(view.mode); setMenu(false); }} anchor={<button type="button" className={`${css.tool} ${css.viewer}`} aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}<button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/>{tools}</>}>
+  return <PreviewFrame path={fullPath} data-workbench-file={path} navigator={navigator} tools={<><ViewerMenu choices={viewersForPath(path)} mode={mode} select={next => { view.mode = next; setMode(next); }}/><button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/>{tools}</>}>
     {failure !== undefined && <div className={css.note} role="alert"><p>{tx(`artifacts:document.${failure}`)}</p>{!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure) && !(failure === 'too_large' && value.text === undefined) && <Button onClick={() => owner.retry()}>{tx('artifacts:artifact-preview.retry-preview')}</Button>}</div>}
     {mode !== 'geometry' && !owner.automaticRefresh && <p className={css.note} role="note">{tx('artifacts:document.manual-refresh')}</p>}
     {value.text === '' && value.page?.eof && <p className={css.note}>{tx('artifacts:document.empty')}</p>}

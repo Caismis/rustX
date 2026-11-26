@@ -80,6 +80,7 @@ impl From<ContextError> for CompactionExecutionError {
 }
 
 /// Standalone Context fixtures own the same operation lifetime explicitly.
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_compaction(

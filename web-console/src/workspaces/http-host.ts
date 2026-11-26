@@ -118,15 +118,20 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     if (!/^[a-f0-9-]{36}$/.test(bound.identity) || !bound.version || !Number.isSafeInteger(bound.bytes) || bound.bytes < 0) throw new Error('Invalid preview operation');
     let closing: Promise<void> | undefined, cancellation: Promise<void> | undefined;
     const abort = () => {
-      cancellation ??= this.call<void>('preview-abort', { scope, identity: bound.identity }, AbortSignal.timeout(10_000));
+      cancellation ??= this.call<void>('preview-abort', { scope, identity: bound.identity }, AbortSignal.timeout(10_000))
+        .catch(error => {
+          if (error instanceof WorkspaceHostError) throw error;
+          throw new WorkspaceHostError('Preview cancellation settlement unavailable', 'file_settlement_unknown');
+        });
       void cancellation.catch(() => {}); return cancellation;
     };
-    signal.addEventListener('abort', abort, { once: true });
+    const canceled = () => { void abort(); };
+    signal.addEventListener('abort', canceled, { once: true });
     if (signal.aborted) {
       // Open's physical success is already acknowledged. Abort retires this idle
       // owner without starting an unadmitted final validation read.
-      try { await abort(); } catch { /* The bounded idle owner also has a Host deadline. */ }
-      finally { signal.removeEventListener('abort', abort); }
+      try { await abort(); }
+      finally { signal.removeEventListener('abort', canceled); }
       signal.throwIfAborted();
     }
     return { ...bound,
@@ -134,7 +139,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
         if (closing) return Promise.reject(new Error('Obsolete preview operation'));
         return this.settledFileCall<import('../../shared/file-preview.ts').FileBytes>('file', scope, { identity: bound.identity, range }, AbortSignal.any([signal, active]), 'preview-read');
       },
-      close: () => closing ??= (signal.aborted ? abort() : this.settledFileCall<void>('file', scope, { identity: bound.identity }, undefined, 'preview-close')).finally(() => signal.removeEventListener('abort', abort)),
+      close: () => closing ??= (signal.aborted ? abort() : this.settledFileCall<void>('file', scope, { identity: bound.identity }, undefined, 'preview-close')).finally(() => signal.removeEventListener('abort', canceled)),
     };
   }
   configureWorkspace = async (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => {

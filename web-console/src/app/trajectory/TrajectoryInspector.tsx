@@ -1,4 +1,5 @@
 import { modelToolCall } from '../../../../protocol/app-server/model-tool-call';
+import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import {traceInspectionHead} from '../../client/trace';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import type { TraceDisplayBlock } from '../../client/trace-content';
@@ -38,6 +39,8 @@ import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis,
 import css from './Trajectory.module.css';
 import { useWorkflowNodeContent } from './useWorkflowNodeContent';
 import { workflowStatus } from '../agent/workflow-state';
+import { MessageVersionPager } from '../agent/UserMessageVersions';
+import type { TrajectoryRowActions } from './TrajectoryRow';
 
 type RecordState = 'complete' | 'running' | 'error';
 
@@ -575,6 +578,7 @@ export interface TrajectoryInspectorProps {
   detail?: TraceDetail | undefined;
   detailPage?:import('../../../../protocol/app-server/v80').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
+  messageHistory?: TrajectoryRowActions['messageHistory'];
   loading?: boolean | undefined;
   stale?: boolean;
   error?: string | undefined;
@@ -602,7 +606,7 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas, messageHistory }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
@@ -629,6 +633,16 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const previousDomain=previousSequence?`trace.records.${previousSequence}.detail.request.effective_system_prompt`:undefined;
   const native = useTraceContent(detailPage, detailReader, inspection, item, active, previousDomain);
   const resolved = native?.content;
+  // An adoption can represent several inputs. Only the ledger row's own ID has a pager there.
+  const adoptedVersions = messageHistory && item.type === 'RecordRow' && record.kind === 'user'
+    ? (resolved?.messages ?? messagesHead?.items ?? []).flatMap(message => {
+      const key = canonicalLocatorKey(message.locator);
+      const family = messageHistory.versions.get(key);
+      if (!family || (family.current.message_id && family.current.message_id === record.message_id)) return [];
+      const label = message.preview?.text || message.attachments.find(file => file.name)?.name || tx('trajectory:request.no-content');
+      return [<li key={key}><span className={css.contentText} title={label}>{label}</span><MessageVersionPager compact family={family}
+        disabled={messageHistory.disabled} onSwitch={messageHistory.switchVersion}/></li>];
+    }) : [];
   // An Assistant record's own request is the one that accepted its message.
   const ownRequest = record.kind === 'assistant' ? records.find(candidate => traceRequestAccepts(candidate,record)) : undefined;
   const assistantOf = (id: string) => [...executions].find(([, tools]) => tools.some(tool => tool.id === id))?.[0];
@@ -840,6 +854,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     </div>
     <div id="trajectory-detail-panel" className={panelClass} role="tabpanel" aria-labelledby={`trajectory-detail-${active}`}>
       {detailError && !pending && <DetailPending error={detailError}/>}
+      {adoptedVersions.length > 0 && <ul className={css.adoptedVersions}>{adoptedVersions}</ul>}
       {body()}
     </div>
   </>;

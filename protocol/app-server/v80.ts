@@ -325,7 +325,7 @@ export type Request1 =
       method: 'session/projections';
       params: {
         target: AttachmentTarget;
-        after: ProjectionActivationId;
+        after: string;
         limit: number;
       };
     }
@@ -508,6 +508,13 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         control: GoalControl;
+      };
+    }
+  | {
+      method: 'job/output';
+      params: {
+        target: AttachmentTarget;
+        job_id: ToolExecutionId;
       };
     }
   | {
@@ -919,12 +926,29 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/messageBoundary';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        boundary: CanonicalContentLocator;
+      };
+    }
+  | {
+      method: 'session/messageVersions';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/forkProjection';
       params: {
         session_id: SessionId;
         node_id?: SessionNodeId | null;
         ledger: LedgerFrontier;
-        activation: ProjectionActivationId;
+        activation: string;
       };
     }
   | {
@@ -1178,6 +1202,14 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         expected: PendingInboundRef;
+      };
+    }
+  | {
+      method: 'inbound/steer';
+      params: {
+        target: AttachmentTarget;
+        expectedTurnId: AttemptId;
+        scope: PendingSteerScope;
       };
     }
   | {
@@ -1547,13 +1579,6 @@ export type CanonicalContentLocator =
  * via the `definition` "SessionNodeId".
  */
 export type SessionNodeId = string;
-/**
- * Checkpoint activation order, independent of the Ledger and Journal domains.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ProjectionActivationId".
- */
-export type ProjectionActivationId = string;
 /**
  * Immutable historical context content, independent of canonical message identity.
  *
@@ -2016,6 +2041,38 @@ export type UserInputBlock =
       type: 'upload';
     };
 /**
+ * One running-turn promotion of queued rows into steering.
+ *
+ * `Row` is compare-and-set on one occurrence. `All` reclassifies every
+ * eligible queued row through the observed sequence. Neither mints an identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "PendingSteerScope".
+ */
+export type PendingSteerScope =
+  | {
+      expected: PendingInboundRef;
+      kind: 'row';
+    }
+  | {
+      through: InboundSequence;
+      kind: 'all';
+    };
+/**
+ * A conversation-scoped inbound sequence number.
+ *
+ * The sequence identifies one item of the conversation's inbound ordering
+ * domain. It is **not**
+ * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
+ * and is never allocated from the Event Journal sequence; the durable
+ * Pending Inbound Inbox owns allocation, and the first successful
+ * acceptance of a conversation receives `1`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundSequence".
+ */
+export type InboundSequence = string;
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EffectiveFieldName".
  */
@@ -2039,7 +2096,7 @@ export type EffectiveFieldName =
   | 'effective_model'
   | 'admitted_attempt';
 /**
- * An authored Model identity. Its spelling has no provider or wire semantics.
+ * A fully qualified `provider/model` catalog reference.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelRef".
@@ -2872,6 +2929,11 @@ export type MethodResult =
       type: 'goal_mutation';
     }
   | {
+      text: string;
+      truncated: boolean;
+      type: 'job_output';
+    }
+  | {
       job_id: ToolExecutionId;
       type: 'job_cancellation_accepted';
     }
@@ -2977,6 +3039,14 @@ export type MethodResult =
       boundaries: SessionUserMessageBoundaryObservation[];
       next_offset?: number | null;
       type: 'boundaries';
+    }
+  | {
+      boundary?: SessionMessageVersion | null;
+      type: 'session_message_boundary';
+    }
+  | {
+      page: SessionMessageVersionsPage;
+      type: 'session_message_versions';
     }
   | {
       result: RuntimeClientSessionDeletionResult;
@@ -3306,20 +3376,6 @@ export type ThreadStatus =
  * via the `definition` "ThreadActiveFlag".
  */
 export type ThreadActiveFlag = 'waitingOnApproval' | 'waitingOnUserInput';
-/**
- * A conversation-scoped inbound sequence number.
- *
- * The sequence identifies one item of the conversation's inbound ordering
- * domain. It is **not**
- * [`RuntimeEventEnvelope`]`::sequence`
- * and is never allocated from the Event Journal sequence; the durable
- * Pending Inbound Inbox owns allocation, and the first successful
- * acceptance of a conversation receives `1`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundSequence".
- */
-export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TurnInputDisposition".
@@ -4051,7 +4107,7 @@ export type TurnProcessOutcome =
 /**
  * The normalized client-visible failure of one attempt.
  *
- * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+ * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
  * (such as the raw provider error code) never appear here.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -4648,7 +4704,7 @@ export type ToolDeadlineKind = 'hard' | 'idle';
  * `TimedOut` is a proven deadline settlement, and
  * `OutcomeUnknown` means the executor could not prove the external outcome
  * at all. A terminal lifecycle never claims a stronger external outcome
- * than the canonical [`ToolExecutionStatus`] of the stored result proves —
+ * than the canonical `ToolExecutionStatus` of the stored result proves —
  * in particular an unknown outcome is never labelled `Failed`, and a
  * cancellation request that could not be confirmed physically never
  * becomes `Cancelled`.
@@ -4751,6 +4807,8 @@ export type WorkflowState =
       type: 'settled';
     };
 /**
+ * What a node is currently waiting for.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowWait".
  */
@@ -4765,6 +4823,8 @@ export type WorkflowWait =
 export type WorkflowExecutionOutcome =
   'completed' | 'failed' | 'cancelled' | 'denied' | 'timed_out' | 'outcome_unknown';
 /**
+ * The fixed Workflow node kinds.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNodeKind".
  */
@@ -5526,7 +5586,7 @@ export type RuntimeClientEvent =
             /**
              * The normalized client-visible failure of one attempt.
              *
-             * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+             * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
              * (such as the raw provider error code) never appear here.
              */
             error:
@@ -6065,7 +6125,7 @@ export type RuntimeClientEvent =
        *
        * The sequence identifies one item of the conversation's inbound ordering
        * domain. It is **not**
-       * [`RuntimeEventEnvelope`]`::sequence`
+       * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
        * and is never allocated from the Event Journal sequence; the durable
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
@@ -6073,8 +6133,7 @@ export type RuntimeClientEvent =
       sequence: string;
       message: UserMessageBlock2;
       /**
-       * The durable transcript position allocated at acceptance, absent
-       * for hidden Context-kind inbound.
+       * Pending messages have no transcript position.
        */
       transcript_cursor?: RuntimeClientTranscriptCursor | null;
       type: 'inbound_enqueued';
@@ -6085,7 +6144,7 @@ export type RuntimeClientEvent =
        *
        * The sequence identifies one item of the conversation's inbound ordering
        * domain. It is **not**
-       * [`RuntimeEventEnvelope`]`::sequence`
+       * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
        * and is never allocated from the Event Journal sequence; the durable
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
@@ -6876,6 +6935,9 @@ export type ErrorData =
       kind: 'stale_runtime';
     }
   | {
+      kind: 'steer_unavailable';
+    }
+  | {
       kind: 'invalid_state';
     }
   | {
@@ -7446,6 +7508,8 @@ export type WorkflowModelPolicy =
       mode: 'explicit';
     };
 /**
+ * Typed Python/JavaScript main functions over the admitted workspace Bash tool.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowCodeLanguage".
  */
@@ -8611,7 +8675,7 @@ export type RuntimeClientAttemptPhase =
             /**
              * The normalized client-visible failure of one attempt.
              *
-             * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+             * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
              * (such as the raw provider error code) never appear here.
              */
             error:
@@ -8828,7 +8892,7 @@ export type RuntimeClientOutcome =
       /**
        * The normalized client-visible failure of one attempt.
        *
-       * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+       * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
        * (such as the raw provider error code) never appear here.
        */
       error:
@@ -10449,7 +10513,12 @@ export interface AppServerPolicy {
    * @maxItems 32
    */
   environment_roots?: string[];
-  max_resident_runtimes?: number;
+  /**
+   * Optional explicit cap on concurrently resident runtimes (`Loading`,
+   * `Loaded`, `Unloading`, and reserved creations). `None` leaves residency
+   * uncapped while idle reaping and host/transport limits continue to apply.
+   */
+  max_resident_runtimes?: number | null;
   max_connections?: number;
   max_external_attachments?: number;
   idle_grace_ms?: number;
@@ -11011,6 +11080,10 @@ export interface SessionSummary {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
 }
 /**
  * Saved automatic display metadata, independent of a user's chosen name.
@@ -11375,7 +11448,7 @@ export interface RuntimeClientCompactionView {
    */
   checkpoint_id: string;
   /**
-   * Checkpoint activation order, independent of the Ledger and Journal domains.
+   * The activation coordinate, independent of canonical and Journal order.
    */
   activation_id: string;
   tokens_before: TokenMeasurement;
@@ -11403,7 +11476,7 @@ export interface TokenMeasurement {
  */
 export interface ProjectionPage {
   records: RuntimeClientProjectionHeadView[];
-  next_activation?: ProjectionActivationId | null;
+  next_activation?: string | null;
 }
 /**
  * Projection ownership is independent of the local execution trajectory.
@@ -11413,7 +11486,7 @@ export interface ProjectionPage {
  */
 export interface RuntimeClientProjectionHeadView {
   checkpoint_id: CheckpointId;
-  activation_id: ProjectionActivationId;
+  activation_id: string;
   /**
    * Insert the historical marker after this native transcript position.
    * Captured at activation; independent of Ledger and Journal coordinates.
@@ -11435,7 +11508,7 @@ export interface RuntimeClientProjectionHeadView {
  */
 export interface OriginActivation {
   conversation_id: ConversationId;
-  activation: ProjectionActivationId;
+  activation: string;
   completed_journal: JournalFrontier;
 }
 /**
@@ -11500,6 +11573,8 @@ export interface TraceRequestMessage {
   truncated: boolean;
 }
 /**
+ * Checkpoint activation order, independent of the Ledger and Journal domains.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "RequestMessageOccurrence".
  */
@@ -11664,8 +11739,6 @@ export interface TraceRequestOutcome {
   generation?: TraceGeneration | null;
 }
 /**
- * Normalized token accounting for one generation.
- *
  * Providers do not expose identical token metrics; this is the stable
  * common core. Provider SDK usage objects never appear here.
  * Missing provider metrics remain absent; a reported zero is `Some(0)`.
@@ -13083,7 +13156,7 @@ export interface GoalSnapshot {
  * order.
  *
  * ```compile_fail
- * use rustx::message::types::AgentStatusGenerationMetadata;
+ * use rustx_types::message::types::AgentStatusGenerationMetadata;
  *
  * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
  *     metadata.modules = Vec::new();
@@ -13092,7 +13165,7 @@ export interface GoalSnapshot {
  *
  * ```rust
  * use chrono::Utc;
- * use rustx::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+ * use rustx_types::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
  *
  * let metadata = AgentStatusGenerationMetadata::new(
  *     Utc::now(),
@@ -14555,7 +14628,7 @@ export interface RuntimeClientAttempt {
               /**
                * The normalized client-visible failure of one attempt.
                *
-               * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+               * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
                * (such as the raw provider error code) never appear here.
                */
               error:
@@ -14779,7 +14852,7 @@ export interface AttemptModelView {
  */
 export interface ModelInvocationView {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -14853,7 +14926,7 @@ export interface ModelCapabilities1 {
  */
 export interface ModelInvocationView1 {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -14890,7 +14963,7 @@ export interface ModelInvocationView1 {
  */
 export interface ModelInvocationView2 {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -14968,7 +15041,7 @@ export interface InboundItemView {
    *
    * The sequence identifies one item of the conversation's inbound ordering
    * domain. It is **not**
-   * [`RuntimeEventEnvelope`]`::sequence`
+   * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
    * and is never allocated from the Event Journal sequence; the durable
    * Pending Inbound Inbox owns allocation, and the first successful
    * acceptance of a conversation receives `1`.
@@ -14978,6 +15051,11 @@ export interface InboundItemView {
    * The bounded native header defers part of its authoritative message.
    */
   deferred?: boolean;
+  /**
+   * Original public app-server input id, projected only from durable
+   * correlation `app-server:<id>`. Absent for every other producer.
+   */
+  input_id?: string | null;
   message: UserMessageBlock1;
 }
 /**
@@ -15067,7 +15145,7 @@ export interface InboundDrainView {
    *
    * The sequence identifies one item of the conversation's inbound ordering
    * domain. It is **not**
-   * [`RuntimeEventEnvelope`]`::sequence`
+   * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
    * and is never allocated from the Event Journal sequence; the durable
    * Pending Inbound Inbox owns allocation, and the first successful
    * acceptance of a conversation receives `1`.
@@ -15335,7 +15413,7 @@ export interface RuntimeClientJob {
    * `TimedOut` is a proven deadline settlement, and
    * `OutcomeUnknown` means the executor could not prove the external outcome
    * at all. A terminal lifecycle never claims a stronger external outcome
-   * than the canonical [`ToolExecutionStatus`] of the stored result proves —
+   * than the canonical `ToolExecutionStatus` of the stored result proves —
    * in particular an unknown outcome is never labelled `Failed`, and a
    * cancellation request that could not be confirmed physically never
    * becomes `Cancelled`.
@@ -16300,7 +16378,7 @@ export interface SessionModelConfig1 {
  */
 export interface ModelInvocationView3 {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -16643,7 +16721,7 @@ export interface RuntimeClientProtocolEvent {
               /**
                * The normalized client-visible failure of one attempt.
                *
-               * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
+               * This is the external projection of the internal [`AttemptFailure`](rustx_types::events::types::AttemptFailure): provider-specific fields
                * (such as the raw provider error code) never appear here.
                */
               error:
@@ -17182,7 +17260,7 @@ export interface RuntimeClientProtocolEvent {
          *
          * The sequence identifies one item of the conversation's inbound ordering
          * domain. It is **not**
-         * [`RuntimeEventEnvelope`]`::sequence`
+         * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
          * and is never allocated from the Event Journal sequence; the durable
          * Pending Inbound Inbox owns allocation, and the first successful
          * acceptance of a conversation receives `1`.
@@ -17190,8 +17268,7 @@ export interface RuntimeClientProtocolEvent {
         sequence: string;
         message: UserMessageBlock2;
         /**
-         * The durable transcript position allocated at acceptance, absent
-         * for hidden Context-kind inbound.
+         * Pending messages have no transcript position.
          */
         transcript_cursor?: RuntimeClientTranscriptCursor | null;
         type: 'inbound_enqueued';
@@ -17202,7 +17279,7 @@ export interface RuntimeClientProtocolEvent {
          *
          * The sequence identifies one item of the conversation's inbound ordering
          * domain. It is **not**
-         * [`RuntimeEventEnvelope`]`::sequence`
+         * [`RuntimeEventEnvelope`](rustx_types::events::types::RuntimeEventEnvelope)`::sequence`
          * and is never allocated from the Event Journal sequence; the durable
          * Pending Inbound Inbox owns allocation, and the first successful
          * acceptance of a conversation receives `1`.
@@ -18124,8 +18201,6 @@ export interface ListDelta13 {
   patches?: ListItemDelta3[];
 }
 /**
- * Normalized token accounting for one generation.
- *
  * Providers do not expose identical token metrics; this is the stable
  * common core. Provider SDK usage objects never appear here.
  * Missing provider metrics remain absent; a reported zero is `Some(0)`.
@@ -19016,7 +19091,7 @@ export interface RuntimeClientJob1 {
    * `TimedOut` is a proven deadline settlement, and
    * `OutcomeUnknown` means the executor could not prove the external outcome
    * at all. A terminal lifecycle never claims a stronger external outcome
-   * than the canonical [`ToolExecutionStatus`] of the stored result proves —
+   * than the canonical `ToolExecutionStatus` of the stored result proves —
    * in particular an unknown outcome is never labelled `Failed`, and a
    * cancellation request that could not be confirmed physically never
    * becomes `Cancelled`.
@@ -19458,6 +19533,10 @@ export interface SessionSummary2 {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
   thread_id: ConversationId;
   thread_status?: ThreadStatusEntry | null;
 }
@@ -19496,6 +19575,43 @@ export interface SessionUserMessageBoundaryObservation {
   block_count: string;
   content: ContentBinding[];
   collections: CollectionFrontier[];
+}
+/**
+ * Exact coordinates of a human message in a particular Session node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersion".
+ */
+export interface SessionMessageVersion {
+  node_id: SessionNodeId;
+  conversation_id: ConversationId;
+  /**
+   * Inline identity when it fits the native 256-byte locator budget.
+   */
+  message_id?: MessageId | null;
+  surface_revision: SurfaceRevision;
+  boundary: CanonicalContentLocator;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersionsPage".
+ */
+export interface SessionMessageVersionsPage {
+  versions: SessionMessageVersionFamily[];
+  next_offset?: number | null;
+}
+/**
+ * A version pager for a prompt present in the requested lineage.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersionFamily".
+ */
+export interface SessionMessageVersionFamily {
+  current: SessionMessageVersion;
+  current_index: number;
+  total: number;
+  previous?: SessionMessageVersion | null;
+  next?: SessionMessageVersion | null;
 }
 /**
  * Confirmation metadata; counts include the complete native ownership graph.
@@ -20261,7 +20377,7 @@ export interface ModelCatalogView {
  */
 export interface CatalogModelView {
   /**
-   * An authored Model identity. Its spelling has no provider or wire semantics.
+   * A fully qualified `provider/model` catalog reference.
    */
   model: string;
   /**
@@ -21820,7 +21936,7 @@ export interface QuestionnaireSpecification3 {
  * ```
  *
  * It is deliberately orthogonal to
- * [`InteractionSource`](crate::runtime::interaction::InteractionSource):
+ * `InteractionSource` (`rustx::runtime::interaction::InteractionSource`):
  * *where* an interaction came from (primary or subagent) and *who* requested
  * it (native tool or MCP server) are two independent facts and are never
  * collapsed into one field.
@@ -21914,6 +22030,10 @@ export interface SessionSummary1 {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
 }
 /**
  * The original native filesystem root, independent of the viewing lineage.

@@ -936,6 +936,10 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
             answer_script("nested result"),
         ],
         SubagentId::for_conversation(root.runtime.conversation_id(), 1),
+        // The middle plane is served by `serve_child_delegation` below: it
+        // must declare a child role for `child_control` (Issue #606), while
+        // keeping its own registry as the leaf's parent.
+        crate::runtime::conversation_runtime::ConversationRole::SubagentChild,
     )
     .await;
     let middle_child = ChildFixture {

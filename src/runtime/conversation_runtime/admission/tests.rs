@@ -1,6 +1,7 @@
 use crate::durable::CanonicalStore;
 use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
+use crate::runtime::conversation_runtime::ConversationRole;
 use crate::runtime::conversation_runtime::test_support::*;
 
 /// The headless full turn: a conversation runtime with zero Runtime
@@ -232,7 +233,7 @@ async fn headless_tool_cycle_with_zero_attachments() {
     // Deterministic settlement handoff: the settlement signal fires
     // once when the authoritative ConversationState returns to the
     // runtime.
-    runtime.child_attempt_settlement(0).await;
+    runtime.attempt_settlement(0).await;
     let ledger = runtime.coordinator_ledger().expect("settled");
 
     // The real tool executed exactly once under the canonical ToolCall
@@ -342,7 +343,7 @@ async fn idle_async_inbound_wakes_the_runtime_without_a_client_request() {
 
     // No client command: the runtime wake gate admits exactly one
     // attempt.
-    fixture.runtime.child_attempt_settlement(0).await;
+    fixture.runtime.attempt_settlement(0).await;
     assert_eq!(
         fixture.model.requests().len(),
         1,
@@ -796,7 +797,7 @@ async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = ConversationRuntime::with_test_monotonic_clock(
         config,

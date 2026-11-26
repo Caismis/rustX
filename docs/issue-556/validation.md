@@ -2,9 +2,9 @@
 
 Repository log copies normalize trailing whitespace, including extra blank lines at end of file; original diagnostics and measurement data are retained unchanged.
 
-This record describes local acceptance of the completed implementation. Final
-remote-head and pinned-browser CI results belong to PR #556; the earlier green
-run on `bbf96a76` does not cover these changes.
+This record retains local acceptance for the original performance work and the
+later review fixes. The PR description identifies the tested head and its
+matching remote verification run.
 
 ## Cross-format scope
 
@@ -49,7 +49,7 @@ The complete Web/Host command was
 The temporary config imports the repository config, permits the isolated clone's
 existing dependency paths, and uses an owned cache keyed to the exact native
 glue/WASM hashes. It changes no test assertions, deadlines or iteration counts.
-The run took 658.62 seconds; its [raw result](web-host-final.log) is retained.
+The run took 658.62 seconds; its [raw result](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/web-host-final.log) is retained.
 Required Rust all-target/default/all-feature and platform coverage is delegated
 to final-head FULL CI; local library checks are not described as that full lane.
 
@@ -65,8 +65,8 @@ All 16 selected functional cases passed across the final run and one isolated
 unchanged-case rerun. They cover actual Session and Workbench operations for all
 five formats, final-close mutation, two pending-page cancellation/reopen, the
 original Worker deadlines, fixed-copy/camera restoration and renderer cleanup.
-The [final 15-pass/one-failure run](browser-final-run.log) and
-[passing isolated format-matrix rerun](browser-format-rerun.log) are retained.
+The [final 15-pass/one-failure run](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/browser-final-run.log) and
+[passing isolated format-matrix rerun](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/browser-format-rerun.log) are retained.
 
 This uses installed Chrome 157/Playwright 1.63 on the available Linux machine,
 with SwiftShader. It is supplementary functional evidence, not pinned-container
@@ -75,7 +75,7 @@ were not updated.
 
 The final shared coarse/final selection also passed all four
 `geometry-progressive.spec.ts` cases on the final revision in 19.7 seconds;
-the [log](browser-progressive-final.log) is retained. Three controlled-delivery
+the [log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/browser-progressive-final.log) is retained. Three controlled-delivery
 cases now require exactly one complete coarse tier and compare its complete
 hierarchy/names directly with the held real final model. They retain the original
 orbit/pan iterations, input-sample bound, final quality, focus, canvas/context and
@@ -89,7 +89,7 @@ rather than forcing an obsolete tier into product imports.
 - An initial full Web run was stopped after detecting missing native executable
   prerequisites while compilers were active. The required binaries were built
   before subsequent complete acceptance.
-- The [next full run](web-host-earlier-failure.log) passed 5,035 cases and failed
+- The [next full run](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/web-host-earlier-failure.log) passed 5,035 cases and failed
   three: two unchanged five-second UI deadlines and one assertion that observed
   a lookup spy before React committed selection. Only the last test changed,
   waiting for its original selection assertion inside `waitFor`. The two
@@ -134,7 +134,7 @@ shards 1/2. Shard 3 failed the natural 96-part coarse-before-final assertion;
 browser coverage and merge verification consequently failed closed. This is not
 a green final-head run.
 
-Its [raw observation](progressive-follow-up/ci-ce828-natural.json) contains a
+Its [raw observation](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/progressive-follow-up/ci-ce828-natural.json) contains a
 complete native coarse model, followed about 146 ms later by final output, but
 no coarse triangle submission. Product refinement may skip an unpainted tier
 when the final model supersedes it. The test now checks the complete native
@@ -152,21 +152,21 @@ recorded separately and do not prove original final tessellation; their
 correctness remains covered by the dedicated display-quality tests.
 
 The first new 200-sphere workload exceeded the unchanged five-second readiness
-assertion; [that failure](progressive-follow-up/local-200-timeout.json) is retained.
+assertion; [that failure](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/progressive-follow-up/local-200-timeout.json) is retained.
 The 100-sphere attempt then exposed the overly broad all-full-frame count check:
 an existing interactive-quality frame had fewer triangles while first/settled
-original frames were exact. [That failure](progressive-follow-up/local-100-quality-assertion.json)
+original frames were exact. [That failure](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/progressive-follow-up/local-100-quality-assertion.json)
 is retained too. Passive frame telemetry now includes quality so the assertion
 matches the existing rendering contract. No readiness/test deadline, renderer,
 held-message behavior or controlled-test assertion was relaxed.
 
-The [final five-case local run](progressive-follow-up/local-five-passed.json)
+The [final five-case local run](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/progressive-follow-up/local-five-passed.json)
 passed all five cases in 26.19 seconds, with no skip/retry; TypeScript and the
 four test/fixture files' whitespace check passed. The three controlled-delivery
-test bodies are byte-identical. The [natural high-output observation](progressive-follow-up/local-100-natural.json)
+test bodies are byte-identical. The [natural high-output observation](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/progressive-follow-up/local-100-natural.json)
 records coarse GPU/frame opportunity at 1312.6/1340.2 ms, before final at
 3486.5/3492.6 ms; the original complete-quality settled frame is at 4020.3 ms.
-[Retirement](progressive-follow-up/local-100-retirement.json) is all zero. These
+[Retirement](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-556/progressive-follow-up/local-100-retirement.json) is all zero. These
 installed-Chrome/SwiftShader measurements are supplementary functional evidence;
 new-head pinned CI remains required.
 
@@ -175,4 +175,51 @@ record 90 profiles-off ordinary timing rows and 136 targeted semantic reads.
 The generated valid 200 MB B-spline benchmark benefits from bulk lexer input;
 per-record tails address an independently measured quadratic wide-list cost.
 CPU/allocator diagnostics, memory costs and scope limitations are retained.
-Those experimental parser changes are not present in the shipped JS/WASM.
+The browser runtime ships the bulk lexer in `0.0.23-rustx.4`
+(`72997c789` and `0f916f108`). The tail-list candidate remains an experiment.
+The benchmark results above retain their original build identities.
+
+## Follow-up to the November 23 review
+
+The earlier integrated head `efef9f0441de1a31752187ed9287217ec53816fb`
+passed [FULL CI #2249](https://github.com/Caismis/rustX/actions/runs/44699398145),
+including all three browser shards and [Merge verification](https://github.com/Caismis/rustX/actions/runs/44699398145/job/136181776506).
+GitHub also recorded a separate failing Devin Review status for that head.
+
+The cancellation follow-up exercises real Host HTTP operations with a
+controllable native socket. The explicit cancellation error retains the
+standard `AbortError` name. The regressions cover retirement before
+acknowledgement, repeat cancellation, unexpected native errors, and unknown
+settlement. The streaming STL checks use the actual source scheduler and
+content owner with a disposable Worker test double. They verify size rejection
+before any page read, capacity, replacement and refresh, and unknown settlement.
+
+The local checkout regression runs the real rebuild recipe and Git archive
+against small repositories, with a sentinel at compiler configuration. It
+rejects staged and unstaged edits and excludes untracked and ignored C++ files.
+It also moves both local HEADs after validation and checks the exact archived
+commit arguments and materialized files against both pinned fixture trees.
+The preparation-only run compared 16 importer-tree files and 35,508 OCCT files
+against the pinned Git blobs and reviewed overrides. The recipe hash was refreshed.
+The bundled JS/WASM were verified by checksum and were not rebuilt for this
+follow-up.
+
+See the [evidence archive](evidence.md) for the immutable research inputs,
+raw outputs, failures, and extraction checksums. The PR description links
+final-head verification for the review follow-up.
+
+## Scheduler CI follow-up
+
+[CI #2414](https://github.com/Caismis/rustX/actions/runs/45124148618) passed
+Web, Host and all three browser shards. The [Linux Scheduler contract](https://github.com/Caismis/rustX/actions/runs/45124148618/job/137524616205)
+failed at duplicate admission and reproduced locally on `9858ee0ef`. Its
+historical test clock aged past the 30-day retention cutoff applied at native
+Workflow settlement on the system UTC clock. The revised fixture advances its
+clock to a current due instant and verifies that replay returns the original
+admission snapshot and emits one Workflow start with no Agent attempt.
+
+The all-features Scheduler contract harness passed all 42 cases locally. The
+isolated test directory used the CI-built child binaries from the same Rust
+product sources. The eight real-Git archive regression cases also passed again.
+The empty-queue check keeps the existing strict assertion style. Formatting and
+both default-feature and all-feature Clippy passed with warnings denied.

@@ -566,12 +566,14 @@ mod tests {
             "../../../tests/fixtures/ask_user/schema-before.json"
         ))
         .unwrap();
-        let baseline =
-            crate::tools::schema::compile_model_definition(&crate::tools::types::ToolDefinition {
+        let baseline = crate::tools::schema::compile_model_definition(
+            &crate::tools::types::ToolDefinition {
                 input_schema: before.clone().into(),
                 ..definition()
-            })
-            .unwrap();
+            },
+            true,
+        )
+        .unwrap();
         assert!(baseline.input_schema["properties"]["arguments"].is_object());
         let mut after = (*registry().definitions().remove(0).input_schema).clone();
         let captured_after: serde_json::Value = serde_json::from_str(include_str!(

@@ -8,13 +8,13 @@ use crate::context::{
     PostToolBatchOpportunity,
 };
 use crate::conversation::ConversationState;
-use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::InboxStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
 use crate::durable::PublicationStore;
 use crate::durable::RequestStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::content::TextBlock;
@@ -233,7 +233,7 @@ fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
         "history pressure must not erase the current Goal or its CAS controls"
     );
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             &checkpoint,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -640,7 +640,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             ))
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(attempt_started.observation.as_deref().unwrap());
+            projection.apply_native_batch(attempt_started.observation.native_batch().unwrap());
         });
 
         let snapshot = raw_publication_snapshot(crate::context::resources::LedgerFrontier(
@@ -649,7 +649,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         let started = store
             .commit_model_turn_start(&[], &snapshot, chrono::Utc::now())
             .unwrap();
-        let started_native = started.started.observation.as_deref().unwrap();
+        let started_native = started.started.observation.native_batch().unwrap();
         let NativeObservationTransition::RequestStart {
             started: started_witness,
             ..
@@ -697,7 +697,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
                 },
             ))
             .unwrap();
-        let terminal_native = terminal.observation.as_deref().unwrap();
+        let terminal_native = terminal.observation.native_batch().unwrap();
         let NativeObservationTransition::Single(terminal_witness) = &terminal_native.transition
         else {
             panic!("primary request terminal has one native witness");
@@ -775,7 +775,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             )
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(call_started.event.observation.as_deref().unwrap());
+            projection.apply_native_batch(call_started.event.observation.native_batch().unwrap());
         });
         let request_started = store
             .commit_auxiliary_request_start(
@@ -789,7 +789,8 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             )
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(request_started.event.observation.as_deref().unwrap());
+            projection
+                .apply_native_batch(request_started.event.observation.native_batch().unwrap());
         });
         let auxiliary_terminal = crate::durable::auxiliary::auxiliary_settlement_envelope(
             store.conversation_id().clone(),
@@ -834,7 +835,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             .as_ref()
             .unwrap()
             .observation
-            .as_deref()
+            .native_batch()
             .unwrap();
         let NativeObservationTransition::Single(auxiliary_witness) = &auxiliary_native.transition
         else {
@@ -847,7 +848,8 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         let before_auxiliary = projection.cursor;
         publish_source_fact(&mut projection, |projection| {
             projection.apply_native_batch(auxiliary_native);
-            projection.apply_native_batch(auxiliary.call_settled.observation.as_deref().unwrap());
+            projection
+                .apply_native_batch(auxiliary.call_settled.observation.native_batch().unwrap());
         });
         let auxiliary_events = collect(&mut projection, before_auxiliary);
         assert!(auxiliary_events.iter().flat_map(|event| event.event.facts()).any(|fact|
@@ -1335,8 +1337,8 @@ fn replaying_a_composition_evicts_nothing_from_a_full_window() {
 //
 // Inbound acceptance is an independent durable boundary and may commit
 // anywhere in that window. The test below parks the loop at
-// `observe_status`, durably accepts an unrelated inbound message while it
-// is parked, folds that acceptance into the Runtime Client projection, and
+// `observe_status`, durably adopts an unrelated inbound message while it
+// is parked, folds that commit into the Runtime Client projection, and
 // only then releases the status. Anything that derived placement at the
 // fold would produce the inbound's cursor; the frozen fact does not.
 // -----------------------------------------------------------------------
@@ -1499,7 +1501,7 @@ impl AgentExecutionObserver for StatusParkObserver {
 /// blocked in `observe_status`, between the composition and its
 /// publication, for the whole body of this function. Returns the tool
 /// batch's own durable position and the later position the unrelated
-/// inbound was accepted at.
+/// inbound was adopted at.
 async fn drive_anchor_race(
     observer: Arc<StatusParkObserver>,
     projection: Arc<Mutex<RuntimeClientProjection>>,
@@ -1516,7 +1518,7 @@ async fn drive_anchor_race(
         .expect("the status park stays open");
     let batch_cursor = observer.tool_batch_cursor();
 
-    // An independent durable boundary: a new inbound message is accepted,
+    // An independent durable boundary: a new inbound message is adopted,
     // and the durable transcript advances past the batch.
     mailbox
         .enqueue(UserMessageBlock {
@@ -1533,25 +1535,22 @@ async fn drive_anchor_race(
         .select_pending_batch()
         .expect("select pending")
         .expect("the accepted inbound is pending");
-    let item = batch
-        .items()
-        .iter()
-        .find(|item| item.message().id == MessageId::new("unrelated-inbound"))
-        .expect("the accepted inbound is in the pending batch")
-        .clone();
-    let inbound_cursor = item
-        .transcript_cursor()
-        .expect("a visible inbound message is a durable transcript item");
-    assert!(
-        inbound_cursor > batch_cursor,
-        "the unrelated inbound is durably later than the tool batch"
+    let adopted = mailbox
+        .adopt_pending_batch(&batch, None)
+        .expect("canonical adoption");
+    let [receipt] = adopted.canonical_receipts.as_slice() else {
+        panic!("expected one adopted user");
+    };
+    let inbound_cursor = receipt
+        .transcript_cursor
+        .expect("canonical user transcript cursor");
+    assert!(inbound_cursor > batch_cursor);
+    projection.lock().expect("projection lock").apply(
+        ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: receipt.clone(),
+        },
     );
-
-    // Fold the acceptance into the Runtime Client *before* the status.
-    projection
-        .lock()
-        .expect("projection lock")
-        .apply(ConversationObservation::InboundEnqueued(item));
     let (mid_flight, _) = projection
         .lock()
         .expect("projection lock")
@@ -1561,16 +1560,11 @@ async fn drive_anchor_race(
         mid_flight.statuses.is_empty(),
         "the parked composition has not been published yet"
     );
-    assert_eq!(
+    assert!(
         mid_flight
-            .inbound
-            .pending
-            .last()
-            .expect("the unrelated inbound is folded")
-            .message
-            .id,
-        MessageId::new("unrelated-inbound"),
-        "the projection has already folded the later durable position"
+            .messages
+            .iter()
+            .any(|message| message.id() == &MessageId::new("unrelated-inbound"))
     );
 
     release.send(()).expect("release the parked status");
@@ -1589,8 +1583,8 @@ async fn drive_anchor_race(
 /// 1. canonical ToolResult batch commits at cursor N
 /// 2. the PostToolBatch opportunity freezes N
 /// 3. the loop PARKS in observe_status, before the projection sees it
-/// 4. an unrelated inbound is durably accepted at cursor N+1
-/// 5. its InboundEnqueued observation is folded
+/// 4. an unrelated inbound is durably adopted at cursor N+1
+/// 5. its CanonicalCommitted observation is folded
 /// 6. the park is RELEASED and the status is folded
 /// 7. the published anchor is still N
 /// ```
@@ -1769,7 +1763,7 @@ async fn a_later_inbound_cannot_relocate_a_prepared_post_tool_batch_status() {
     assert_ne!(
         published_anchor(status),
         Some(RuntimeClientTranscriptCursor::from(inbound_cursor)),
-        "an unrelated inbound accepted before the fold cannot relocate the status"
+        "an unrelated inbound adopted before the fold cannot relocate the status"
     );
 }
 
@@ -2603,7 +2597,7 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
         ))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(first.observation.as_deref().unwrap());
+        projection.apply_native_batch(first.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(first.sequence, first.sequence)
@@ -2644,7 +2638,7 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
     second_event.turn_id = Some(TurnId::new("2"));
     let second = store.append_event(second_event).unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(second.observation.as_deref().unwrap());
+        projection.apply_native_batch(second.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(second.sequence, second.sequence)
@@ -3854,7 +3848,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
             attempt_id: attempt(),
         }))
         .unwrap();
-    projection.apply_native_batch(started.observation.as_ref().unwrap());
+    projection.apply_native_batch(started.observation.native_batch().unwrap());
     let call = ToolCall {
         id: ToolCallId::new("call_before_start"),
         tool_id: ToolId::new("tool-before-start"),
@@ -3874,7 +3868,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
         )
         .unwrap();
     projection.bootstrap_durable_message(&attempt(), &assistant);
-    projection.apply_native_batch(assistant_event.observation.as_ref().unwrap());
+    projection.apply_native_batch(assistant_event.observation.native_batch().unwrap());
     let result = cancelled_result(
         CancellationReason::RuntimeShutdown,
         ToolCancellationPhase::BeforeStart,
@@ -3899,7 +3893,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
             })],
         )
         .unwrap();
-    projection.apply_native_batch(events[0].observation.as_ref().unwrap());
+    projection.apply_native_batch(events[0].observation.native_batch().unwrap());
     let events = collect(&mut projection, before_commit);
     let facts: Vec<_> = events
         .iter()
@@ -5120,7 +5114,7 @@ fn t20_replay_byte_budget_covers_every_event_and_evicts_in_cursor_order() {
     );
     assert!(projection.replay_bytes <= RUNTIME_CLIENT_REPLAY_BYTES);
     assert!(projection.replay.iter().all(|(_, event)| {
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             event,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
         )
@@ -5233,7 +5227,7 @@ fn t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges() {
         "complete replacement preserves all cut, domain, identity, frontier, and settlement fields"
     );
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             event,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -5517,7 +5511,7 @@ fn native_running_tool_fixture() -> (
     let (mut projection, store) = initialized_source_projection();
     let started = append_source_attempt_start(&store, "progress-attempt-start");
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(started.sequence, started.sequence)
@@ -5545,7 +5539,7 @@ fn native_running_tool_fixture() -> (
         )
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(committed.observation.as_deref().unwrap());
+        projection.apply_native_batch(committed.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(committed.sequence, committed.sequence)
@@ -5575,7 +5569,7 @@ fn native_running_tool_fixture() -> (
     assert!(!prepared.native_direct);
     assert!(prepared.tool_occurrence.is_some());
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(started.sequence, started.sequence)
@@ -5649,7 +5643,7 @@ fn t14_t19_prepared_started_witness_preserves_exact_live_progress_and_terminal_f
         ))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(terminal.observation.as_deref().unwrap());
+        projection.apply_native_batch(terminal.observation.native_batch().unwrap());
     });
     let settled = projection.checkpoint_candidate().unwrap();
     assert!(settled.cursor > before.cursor);
@@ -5760,7 +5754,7 @@ fn t14_t20_native_direct_receipts_wait_for_the_exact_earlier_source_prefix() {
         "native goal 72"
     );
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(earlier.observation.as_ref().unwrap());
+        projection.apply_native_batch(earlier.observation.native_batch().unwrap());
     });
     assert_eq!(
         projection.source_cut.as_ref().unwrap(),
@@ -5825,6 +5819,45 @@ fn assert_released_goal_prefix(projection: &RuntimeClientProjection, goal: &crat
 }
 
 #[test]
+fn canonical_cut_waits_for_its_pending_head_even_when_enqueue_has_no_transcript_cursor() {
+    let (mut projection, store) = initialized_source_projection();
+    let pending = store
+        .accept_inbound(crate::durable::InboundDraft {
+            message_id: None,
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "pending".into(),
+            })],
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            correlation: None,
+        })
+        .unwrap();
+    let canonical = store
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("later-canonical"),
+            content: Vec::new(),
+        }))
+        .unwrap();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply(ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: canonical,
+        });
+    });
+    assert!(projection.native_source_pending());
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_pending_receipt(pending.pending_observation.as_deref());
+    });
+    projection.validate_source_prefix().unwrap();
+    assert_eq!(
+        projection.checkpoint_read_cut().source_cut.unwrap(),
+        store.observation_read_cut().unwrap()
+    );
+    assert_eq!(projection.snapshot_ref().inbound.pending.len(), 1);
+}
+
+#[test]
 fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner() {
     let (mut projection, store) = initialized_source_projection();
     let published = projection.checkpoint_read_cut();
@@ -5862,7 +5895,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
     assert_eq!(projection.checkpoint_read_cut(), published);
     assert!(projection.working_read_cut().source_cut.is_none());
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(earlier.observation.as_ref().unwrap());
+        projection.apply_native_batch(earlier.observation.native_batch().unwrap());
     });
     assert_eq!(projection.source_cut.as_ref().unwrap(), &latest);
     assert_eq!(
@@ -5884,9 +5917,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
         .mark_observation_direct(earlier.sequence, earlier.sequence)
         .unwrap();
     store.mark_canonical_transcript_ready(1, 1).unwrap();
-    store
-        .mark_observation_transcript_ready(pending.read_cut.transcript)
-        .unwrap();
+
     publish_source_fact(&mut projection, |projection| {
         projection.apply(ConversationObservation::TranscriptSourceReady(
             store.transcript_source_ready().unwrap(),
@@ -5900,7 +5931,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
         pending.read_cut.mutation_revision
     );
     assert_eq!(source.ledger_through, 1);
-    assert_eq!(source.read.transcript, 2);
+    assert_eq!(source.read.transcript, 1);
     assert_eq!(projection.snapshot_ref().inbound.pending.len(), 1);
     assert_eq!(projection.snapshot_ref().message_descriptors.len(), 1);
     assert_eq!(
@@ -6390,7 +6421,7 @@ fn t19_unobserved_transcript_position_fences_a_later_transition_until_its_owner_
     let (mut projection, store) = initialized_source_projection();
     let started = append_source_attempt_start(&store, "t-prefix-start");
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(started.sequence, started.sequence)
@@ -6440,7 +6471,7 @@ fn t19_unobserved_transcript_position_fences_a_later_transition_until_its_owner_
         Err(crate::runtime_client::RuntimeClientError::ReadCutExpired)
     ));
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(earlier.observation.as_deref().unwrap());
+        projection.apply_native_batch(earlier.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(earlier.sequence, earlier.sequence)
@@ -6535,7 +6566,7 @@ fn t16_pending_adoption_receipt_releases_only_its_matching_mutation_fence() {
         .as_ref()
         .unwrap()
         .observation
-        .as_deref()
+        .native_batch()
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
         projection.apply_native_batch(native);
@@ -6566,7 +6597,7 @@ fn t15_many_small_message_pages_advance_under_both_native_budgets() {
     let checkpoint = projection.checkpoint_candidate().unwrap();
     assert!(checkpoint.snapshot.messages.len() <= 32);
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             &checkpoint,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -6580,7 +6611,7 @@ fn t15_many_small_message_pages_advance_under_both_native_budgets() {
             .unwrap();
         assert!(page.items.len() <= 32);
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &page,
                 crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
@@ -6963,4 +6994,56 @@ fn replay_direct_index_handles_last_cursor_without_wrapping() {
         projection.poll_subscriber(subscriber),
         SubscriberPoll::Exhausted
     ));
+}
+
+#[test]
+fn app_server_input_id_projects_onto_pending_rows_from_durable_correlation_only() {
+    use crate::durable::SqliteConversationStore;
+    let mut projection = projection();
+    let store =
+        SqliteConversationStore::in_memory(projection.snapshot.conversation_id.clone()).unwrap();
+    projection
+        .initialize_descriptor_heads(&store, store.observation_read_cut().unwrap())
+        .unwrap();
+    let accept = |correlation: Option<&str>, text: &str, kind: InboundKind| {
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: text.to_owned(),
+                })],
+                timestamp: chrono::DateTime::UNIX_EPOCH,
+                correlation: correlation.map(str::to_owned),
+            })
+            .unwrap()
+    };
+    accept(
+        Some("app-server:send-1"),
+        "queued",
+        InboundKind::QueuedMessage,
+    );
+    accept(Some("background:send-1"), "foreign", InboundKind::Message);
+    accept(Some("app-server:bad/id"), "malformed", InboundKind::Message);
+    let last = accept(None, "plain", InboundKind::Message);
+    projection.apply_pending_receipt(last.pending_observation.as_deref());
+    assert_eq!(
+        projection
+            .snapshot_ref()
+            .inbound
+            .pending
+            .iter()
+            .map(|item| item.input_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("send-1"), None, None, None]
+    );
+    let page = store.pending_header_page(&last.read_cut, None, 32).unwrap();
+    assert_eq!(
+        page.headers
+            .iter()
+            .map(|header| header.input_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("send-1"), None, None, None]
+    );
 }

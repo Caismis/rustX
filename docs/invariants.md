@@ -247,13 +247,19 @@ Externally derived names, paths, descriptions and errors never reach the termina
 unsanitized, and a delivered name becomes an editable destination only when it
 renders as itself.
 
-Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
-MessageId)` identifies one occurrence, and its native revision is a compare-and-set
-precondition. Mutation and canonical claim are ordered by the durable transaction.
-Claim constructs its own answer obligation and returns the exact committed rows;
-execution and observers never consume a selected payload after commit. Removal
-retires only a pending transcript reference and never cancels execution or edits
-canonical history. Lost responses are uncertain: clients reread and never replay.
+Pending Inbound owns accepted queue mutation (edit, remove, and queued-to-steer
+promotion). `(ConversationId, InboundSequence, MessageId)` identifies one
+occurrence, and its native revision is a compare-and-set precondition. Mutation
+and canonical claim are ordered by the durable transaction. Pending items
+remain in Pending Inbound without allocating a canonical transcript cursor
+until adoption; queued-to-steer promotion reclassifies the pending row in place
+without losing identity or revision authority, and derived display-header
+failures cannot abort that native commit. Claim constructs its own answer
+obligation and returns the exact committed rows in adoption order; execution
+and observers never consume a selected payload after commit. Removal deletes
+only the pending row (and any temporary display carrier) and never cancels
+execution or edits canonical history. Lost responses are uncertain: clients
+reread and never replay.
 See [exact pending controls](app-server-protocol.md#exact-pending-inbound-controls-web-06).
 
 `RuntimeClientProjection` exclusively owns externally visible Goal snapshot state
@@ -732,11 +738,14 @@ Runtime Client/TUI   bounded projection and presentation
 ```
 
 Every transcript reference is appended in the same SQLite transaction as its
-owning fact. Page reads resolve the referenced body on demand. A pending User
-delivery becomes transcript-visible only after durable acceptance; adopting it
-into the Ledger keeps its identity and ordering reference. Therefore a client
-cannot show semantic user input that may still be lost, and a client detach
-cannot lose accepted history.
+owning fact. Page reads resolve the referenced body on demand. Durable
+acceptance commits a User delivery into Pending Inbound without allocating a
+positive transcript cursor; adopting it into the Message Ledger preserves its
+identity and appends its transcript reference in adoption order (with steering
+and promoted inputs ordered ahead of queued follow-ups). Therefore a client
+never shows unaccepted semantic user input, pending queue rows stay distinct
+from canonical transcript history until adopted for model input, and a client
+detach cannot lose accepted or adopted history.
 
 Historical projections select model context independently of the canonical
 transcript. Normal transcript pages contain real User, Assistant and Tool facts;
@@ -3983,8 +3992,8 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   retain their own synchronization. Ownership and permission are never combined
   into one axis.
 - Every ordinary model Tool call uses a strict envelope with required
-  `arguments` business input, optional `elevation_reason`, and required
-  `execution_mode` only for `ModelSelectable`. Flat calls, unknown outer fields,
+  `arguments` business input. Tools that can require approval expose optional
+  `elevation_reason`. Only `ModelSelectable` requires `execution_mode`. Flat calls, unknown outer fields,
   reserved `__rustx_*` envelope fields and invalid metadata fail preflight.
   Executors and business normalizers receive only `arguments`.
 - Business schema semantics are independent of runtime metadata. Business
@@ -6278,11 +6287,13 @@ semantic normalization boundary. The frozen invariants:
   merges live and older pages by durable transcript cursor (identity only
   rejects the same fact twice) and shows a transient failure if a page read
   fails.
-- **Durable acceptance is the user-input visibility frontier.** The TUI never
-  adds an optimistic semantic user row. It sends input through the Runtime
-  Client and shows the row only after the runtime publishes durable
-  acceptance. Context-kind User messages, including Agent Status and runtime
-  resource observations, are not normal transcript items.
+- **Durable acceptance and canonical adoption separate pending visibility from
+  transcript order.** The TUI never adds an optimistic semantic user row. It
+  sends input through the Runtime Client, shows accepted pending work only
+  after durable acceptance, and places the user message in canonical transcript
+  order only once adopted into the Message Ledger. Context-kind User messages,
+  including Agent Status and runtime resource observations, are not normal
+  transcript items.
 - **Historical audit rows are never actionable.** Incomplete and Unaccepted
   publication audits are distinct typed non-canonical Assistant output. Tool
   proposals inside them render as proposed/unaccepted/unexecuted and can
@@ -8538,3 +8549,77 @@ read repair never loads a cold runtime or repeats semantic work. See the
   replacement retire callbacks and fence held successes, held errors and lazy reads.
   Status/paging updates preserve camera and focus;
   explicit current-owner closure alone may restore the opener.
+
+## ConversationRuntime boundary ownership (Issue #606)
+
+- **One foreground source of truth.** The coordinator owns a single typed
+  `ForegroundSlot` (`Idle`, `Attempt`, `ManualCompaction`, `Scheduled`,
+  `Poisoned`) inside `CoordinatorState.foreground`. Every ownership question —
+  who holds the lent `ConversationState`, whether an idle claim may proceed,
+  whether the slot is fenced — reads that one variant; there is no second
+  foreground fact, no implicit inference from task liveness, and no
+  `ConversationState` ownership outside the slot. `ManualTailState`
+  (`None`/`Pending`/`Joining`) lives in the same `foreground` group under the
+  same coordinator lock, so a claimed-but-unjoined manual compaction can never
+  be misread as reaped, and reclamation is installed before the lock releases.
+- **Panic is an absorbing failure, never a silent re-admission.** A lending
+  task that dies without returning `ConversationState` leaves the slot
+  `Poisoned` via `AttemptTaskPoisonGuard`; every subsequent foreground
+  admission, idle claim and staged commit fails against the recorded evidence
+  while drain still completes. No path recreates a slot out of thin air.
+- **Coordinator-lock recovery preserves the live owner.** When a panic
+  inside a critical section poisons the coordinator state lock, `lock_state`
+  recovers the guard, commits an explicit `DurabilityFailed` fact and clears
+  the poison mark so readers converge on the same recorded failure — but it
+  never poisons the foreground slot: a poisoned mutex proves only that the
+  critical section panicked, not that the task holding the slot exited. The
+  task's own cancellation and settlement ownership stays intact until it can
+  be proven the task exited or was joined; generic lock recovery commits the
+  irreversible health-failure fact and nothing more.
+- **The admitted scheduled task owns the runtime until settlement.** The
+  long-lived `ScheduledExecutor` keeps only a `Weak` link for admission
+  decisions, but every admitted scheduled task moves a strong
+  `RuntimeInner` reference into its spawn and holds it until execution, the
+  physical proof, the durable settlement, the exact slot release and the
+  admission release are all complete — so a settlement owner cannot lose its
+  runtime while a Claim it started is still open.
+- **Auxiliary admission is one atomic bundle.** `RuntimeInner::admit_auxiliary_work`
+  — not the extracted `ExternalAuxiliary` — is the authority that runs the
+  bundle inside a single coordinator critical section: it freezes the model
+  invocation, resource snapshot, timeout policy and revision, reserves
+  executor capacity (which itself acquires the Call's
+  `LifecycleAdmission`), and optionally takes the business admission that
+  outlives Call settlement. `ExternalAuxiliary` — the extracted owner of
+  classification, BTW and title auxiliary work — only invokes that
+  interface. The returned `AdmittedAuxiliaryWork` is the only way auxiliary
+  execution obtains these facts; no snapshot can be newer or older than the
+  capacity it was acquired with, and failure paths release everything
+  together.
+- **Scheduled claim is one atomic bundle.** `ScheduledExecutor` owns scheduled
+  workflow execution outside `RuntimeInner`. `claim_scheduled_start` validates
+  configuration freshness (resources Arc identity, model config, approval
+  mode) and freezes the permission-reviewer invocation inside the same
+  coordinator critical section as the durable Claim, so a concurrent
+  configuration commit cannot slide between preparation and claim. A stale
+  start is deferred through `scheduled_retries` backoff and a durable wait
+  receipt, never silently claimed. `finish_scheduled` requires
+  `ForegroundSlot::Scheduled` with the matching start identity — nothing else
+  may release the foreground right or retire the durable run.
+- **Roles are explicit.** `ConversationRole` (`Root` vs `SubagentChild`) is
+  chosen at construction, never inferred from configuration contents. Child
+  physical settlement moves behind `ChildControl`, reachable only through
+  `runtime.child_control()` on a child-role runtime; a `subagents` registry
+  configured on a `WorkflowAgentRun` role fails validation instead of
+  silently re-interpreting intent, while a `SubagentChild` keeps its
+  registry as the parent plane of deeper children (nested delegation).
+  Root runtimes observe the same physical drain
+  through `shutdown_outcome`/`rollback_preparation_outcome`.
+- **Session title publication owns its lifecycle boundary.** Title refresh
+  is a local-runtime owner (`SessionTitle`) driving auxiliary invocation
+  through the same `admit_auxiliary_work` path with its business admission
+  held across Call settlement; no title state machine lives inside
+  `ConversationRuntime`.
+- **No second linearization domain.** The regrouped `foreground` state and
+  the extracted owners still synchronize on the one coordinator lock: the
+  refactor narrows ownership surfaces without adding locks, parallel commit
+  paths, compatibility shims or retained duplicates of the moved logic.

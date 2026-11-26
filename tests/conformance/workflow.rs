@@ -114,7 +114,6 @@ const KEY: &str = "RUSTX_ISSUE83_KEY";
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One composed HTTP/canonical/audit contract in all three output strategies.
 async fn direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_result() {
-    use rustx::durable::AuxiliaryStore as _;
     use serde_json::json;
     for mode in ["text", "json", "native"] {
         let Some(emulator) = ProviderEmulator::start(&format!("workflow_model_{mode}")).await

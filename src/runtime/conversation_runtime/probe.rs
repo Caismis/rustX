@@ -71,6 +71,11 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
     pub(crate) scheduled_settlement_gate: Option<Arc<Gate>>,
+    /// Parks the scheduled runner inside the settlement-reconciliation loop
+    /// after it has processed a real `AwaitingNativeProof` — proving the
+    /// runner reached the reconciliation wait while the physical proof is
+    /// still missing (Issue #606).
+    pub(crate) scheduled_awaiting_proof_gate: Option<Arc<Gate>>,
     /// Parks after durable terminal publication, before restoring conversation state.
     pub(crate) before_restore_gate: Option<Arc<Gate>>,
     /// Parks the next activation before the lifecycle transition when
@@ -79,6 +84,32 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next manual compaction immediately before coordinator
     /// settlement restores ownership and publishes completion.
     pub(crate) manual_compaction_settlement_gate: Option<Arc<Gate>>,
+    /// Parks a reaper that just claimed the `JoinHandle` — `Joining` is
+    /// already published — before its join starts, so a concurrent reaper
+    /// provably walks `WaitJoined` against it (Issue #606).
+    pub(crate) manual_tail_joining_gate: Option<Arc<Gate>>,
+    /// Parks a reaper just as it enters `WaitJoined` — proving a second
+    /// reaper is actually parked on the shared completion while the first
+    /// still holds the `JoinHandle` (Issue #606).
+    pub(crate) manual_tail_waitjoined_gate: Option<Arc<Gate>>,
+    /// Parks a scheduled task after its command preparation finished and
+    /// before `claim_scheduled_start` — proving the prep runs outside the
+    /// Claim critical section (Issue #606).
+    pub(crate) scheduled_prep_gate: Option<Arc<Gate>>,
+    /// Parks the session-title host task after its auxiliary Call has
+    /// settled and immediately before the separate catalog visibility
+    /// transaction — the real title-publication tail a drain must wait
+    /// on (Issue #606).
+    pub(crate) title_publication_gate: Option<Arc<Gate>>,
+    /// Parks the drain supervisor after the auxiliary drain has completed
+    /// and immediately before it awaits the host task — proving the drain
+    /// reached the host-task wait boundary while a parked publication tail
+    /// still holds that task open (Issue #606).
+    pub(crate) drain_host_task_gate: Option<Arc<Gate>>,
+    /// Panics the manual-compaction worker task after `run_manual_compaction`
+    /// returns — a real task unwind that resolves the `JoinHandle` with a
+    /// `JoinError`, exercising the reaper's panic path (Issue #606).
+    pub(crate) manual_compaction_worker_panic: bool,
     /// Parks the next `submit_inbound` **after** the coordinator lock is
     /// acquired and the shutdown/activation decision is read, but **before**
     /// the durable acceptance. This is the exact critical-section window the
@@ -253,13 +284,16 @@ impl Drop for GateRelease {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    #[cfg(target_os = "linux")]
     pub(crate) fn hold_auxiliary_resource_release_for_test(
         &self,
     ) -> (
         tokio::sync::oneshot::Receiver<()>,
         std::sync::mpsc::Sender<()>,
     ) {
-        self.inner.auxiliary.hold_resource_release_for_test()
+        self.inner
+            .external_auxiliary
+            .hold_resource_release_for_test()
     }
 
     pub(crate) fn hold_auxiliary_retirement_for_test(
@@ -268,17 +302,17 @@ impl ConversationRuntime {
         tokio::sync::oneshot::Receiver<()>,
         std::sync::mpsc::Sender<()>,
     ) {
-        self.inner.auxiliary.hold_retirement_for_test()
+        self.inner.external_auxiliary.hold_retirement_for_test()
     }
 
     pub(crate) fn hold_auxiliary_settlement_for_test(
         &self,
     ) -> crate::runtime::auxiliary::executor::AuxiliaryWriteTestGates {
-        self.inner.auxiliary.hold_settlement_for_test()
+        self.inner.external_auxiliary.hold_settlement_for_test()
     }
 
     pub(crate) async fn join_auxiliary_for_test(&self) {
-        self.inner.auxiliary.drain().await;
+        self.inner.external_auxiliary.drain().await;
     }
 
     pub(crate) fn install_durability_mutation_probe(
@@ -347,7 +381,8 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .conversation
+            .foreground
+            .slot
             .hydrate(self.inner.store.as_ref())
             .expect("hydrate the coordinator conversation")
             .map(|conversation| conversation.ledger().audit_records())
@@ -366,7 +401,8 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .conversation
+            .foreground
+            .slot
             .hydrate(self.inner.store.as_ref())
             .expect("hydrate the coordinator conversation")
             .map(|conversation| conversation.active_ids())
@@ -379,7 +415,9 @@ impl ConversationRuntime {
             .state
             .lock()
             .expect("runtime lock")
-            .manual_compaction
+            .foreground
+            .slot
+            .as_manual_compaction()
             .is_some()
     }
 
@@ -515,7 +553,7 @@ impl ConversationRuntime {
         self.inner
             .state
             .try_lock()
-            .is_ok_and(|state| state.configuration_admission_deferred)
+            .is_ok_and(|state| state.config.configuration_admission_deferred)
     }
 
     #[cfg(test)]
@@ -610,6 +648,29 @@ impl ConversationRuntime {
     pub(crate) fn fail_residency_settlement(&self) {
         self.inner
             .fence_mcp_settlement_failure("residency test settlement failure".into());
+    }
+
+    #[cfg(test)]
+    /// Installs the test-only manual-compaction worker panic injection.
+    /// Only available under `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn install_manual_compaction_worker_panic(&self) {
+        self.inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .get_or_insert_with(CoordinatorProbe::default)
+            .manual_compaction_worker_panic = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_scheduled_prep_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(CoordinatorProbe::default)
+            .scheduled_prep_gate = Some(gate);
     }
 
     #[cfg(test)]

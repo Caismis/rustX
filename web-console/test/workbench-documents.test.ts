@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {convertXlsx} from '../src/app/components/workbench-documents/excel/xlsx';
 import {convertExcel} from '../src/app/components/workbench-documents/excel/convert';
 import {excelFormat} from '../src/app/components/workbench-documents/excel/format';
-import {viewersForPath} from '../src/app/components/workbench-documents/definitions';
+import {viewersForArtifact, viewersForPath} from '../src/app/components/workbench-documents/definitions';
 import {relativeDocumentPath} from '../src/app/components/workbench-documents/resources';
 import {createBasicHtmlDocument} from '../src/app/components/workbench-documents/basic-document';
 import {splitFrontmatter} from '../src/app/components/workbench-documents/frontmatter';
@@ -21,6 +21,13 @@ describe('Harness document defaults',()=>{
    expect(cells.find(cell=>cell.r===1&&cell.c===0)?.v?.v).toBe('01');
    const formula=cells.find(cell=>cell.r===1&&cell.c===1)?.v;
    expect(formula?.v).toBe('=1+1');expect(formula?.f).toBeUndefined();
+ });
+ it.each([['docs/report.md','markdown'],['public/site.html','html']])('opens delivered %s with the explorer viewer and the same source choices',(path,mode)=>{
+   const choices=viewersForArtifact({source:{kind:'session_file'},name:path,image:false});
+   expect(choices).toEqual(viewersForPath(path));expect(choices[0]).toBe(mode);
+ });
+ it('honors the media type for a managed HTML artifact without a filename',()=>{
+   expect(viewersForArtifact({source:{kind:'artifact'},name:'opaque-id',image:false,mimeType:'text/html; charset=UTF-8'})).toEqual(['html','code','text']);
  });
  it('offers source only for text documents',()=>{
    expect(viewersForPath('image.svg')).toContain('text');

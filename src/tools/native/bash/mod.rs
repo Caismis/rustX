@@ -155,8 +155,9 @@
 
 mod capture;
 mod executor;
+pub(crate) mod handoff;
 mod input;
-mod text;
+pub(crate) use rustx_types::tools::native::bash::text;
 // The supervisor is not a separate tool: it is an implementation detail of
 // Bash execution ownership, owned by this module.
 #[cfg(unix)]
@@ -223,7 +224,9 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
         NAME,
         "Run one non-interactive /bin/bash command inside the workspace. Provide description \
              before command: a concise explanation of why you are running it, shown in the UI. No shell state \
-             survives between calls. The optional timeout is in seconds. A background execution \
+             survives between calls. A foreground command still running after 120 seconds, or after its \
+             timeout if set, moves to a background job instead of being killed. The optional timeout is in \
+             seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution \
              immediately returns its live output file's absolute path; use Read or Grep on it to \
              inspect the output while the command runs.",
         policy,

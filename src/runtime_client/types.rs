@@ -1160,6 +1160,8 @@ pub enum RuntimeClientError {
     ReadCutExpired,
     /// The runtime is shutting down and no longer admits inbound work.
     RuntimeShutdown,
+    /// Direct `turn/steer` was not admitted because the expected Turn is stale or not steerable.
+    SteerUnavailable,
     /// The operation is impossible in the current authoritative runtime
     /// state.
     InvalidState {
@@ -1211,15 +1213,15 @@ impl RuntimeClientError {
         }
     }
     pub(crate) fn observation_read_error(
-        error: crate::runtime::read_layout::ObservationReadError,
+        error: rustx_durable::read_layout::ObservationReadError,
     ) -> Self {
         match error {
-            crate::runtime::read_layout::ObservationReadError::InvalidRequest(message) => {
+            rustx_durable::read_layout::ObservationReadError::InvalidRequest(message) => {
                 Self::InvalidRequest {
                     message: message.into(),
                 }
             }
-            crate::runtime::read_layout::ObservationReadError::Unavailable(message) => {
+            rustx_durable::read_layout::ObservationReadError::Unavailable(message) => {
                 Self::ObservationUnavailable {
                     message: message.into(),
                 }
@@ -1289,7 +1291,7 @@ mod tests {
     #[test]
     fn t14_t18_native_observation_errors_keep_cut_source_and_range_distinct() {
         use crate::durable::ConversationStoreError;
-        use crate::runtime::read_layout::ObservationReadError;
+        use rustx_durable::read_layout::ObservationReadError;
         assert_eq!(
             RuntimeClientError::observation_store_error(
                 ConversationStoreError::ObservationCutExpired

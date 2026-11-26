@@ -7,6 +7,7 @@ use super::{
     InboundObserver, InteractionObserver, InteractionOutcome, InteractionRef, MessageBlock,
     PublicationAudit, PublicationFrame, PublicationStreamStart, RuntimeEvent, RuntimeInner, Weak,
 };
+use crate::durable::observation::NativeObservationBatch;
 
 /// The observation seam implementation bridging the authoritative runtime
 /// owners into the shared leaf observation queue.
@@ -93,7 +94,10 @@ impl RuntimeObserver {
         let Some(fanout) = inner.pending.get() else {
             return;
         };
-        let batch = committed.observation.as_deref();
+        let batch = committed
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>());
         if !fanout.native_owner(observation, batch).is_installed() {
             fanout.source_failed();
             return;
@@ -161,19 +165,6 @@ impl crate::goal::GoalObserver for RuntimeObserver {
             fanout.source_failed();
             return;
         };
-        if let Some(header) = receipt
-            .pending
-            .as_ref()
-            .and_then(|pending| pending.selected.as_ref())
-            && let Some(cursor) = header.message.transcript_cursor
-            && inner
-                .store
-                .mark_observation_transcript_ready(cursor.get())
-                .is_err()
-        {
-            fanout.source_failed();
-            return;
-        }
         if let Some((first, last)) = native.journal_range {
             if inner.store.mark_observation_direct(first, last).is_ok() {
                 fanout.source_ready(last);
@@ -353,21 +344,6 @@ impl InboundObserver for RuntimeObserver {
             && let Some(fanout) = inner.pending.get()
         {
             fanout.native_pending(receipt, cut);
-            // Removal owns the retired T position too. Marking that exact
-            // position wakes source preparation even though its row is gone.
-            if let Some(receipt) = receipt
-                && let Some(cursor) = receipt
-                    .selected
-                    .as_ref()
-                    .and_then(|header| header.message.transcript_cursor)
-                    .or(receipt.removed_transcript)
-                && inner
-                    .store
-                    .mark_observation_transcript_ready(cursor.get())
-                    .is_err()
-            {
-                fanout.source_failed();
-            }
         }
     }
 }

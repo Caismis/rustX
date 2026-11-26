@@ -1,6 +1,6 @@
 # STEP internal parse experiments
 
-Diagnostic-only work under `/tmp`; no repository, source-offer, shipped JS/WASM or frozen build input changed. Original O3/no-LTO controls and isolated candidates use Emscripten 3.1.69 and the pinned importer/OCCT revisions recorded in [compact summary](summary.compact.json). No lexer/tail/allocator change was applied to shipped code.
+Diagnostic-only work under `/tmp`; no repository, source-offer, shipped JS/WASM or frozen build input changed. Original O3/no-LTO controls and isolated candidates use Emscripten 3.1.69 and the pinned importer/OCCT revisions recorded in [compact summary](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/step-parser-experiments/summary.compact.json). The historical run preceded the shipped bulk lexer in `0.0.23-rustx.4`. The tail and allocator candidates remain experimental.
 
 ## Where the wait goes
 
@@ -39,7 +39,7 @@ The dense model has 1,541,068,357 derived append-link hops; 1467 lists of length
 
 Native malloc/calloc/realloc/free wrappers delegate once, preserve arguments/result/errno and suppress nested libc wrapper double counting. Synthetic positive allocation/zero-fill/reallocation-content and overflow/null/errno checks pass with expected entrypoint counts. The original allocator is retained.
 
-Dense ReadStream sees 61,272,345 outer entry/free calls and 1,964,178,892 requested-byte traffic. This is allocation attempt/reallocation traffic, not unique/live/peak bytes; phase attribution is exclusive. Top traffic: record conversion 883.2 MB, scanner 361.3 MB, graph construction 210.8 MB, entity load 160.4 MB, entity setup 160.2 MB. [Allocation detail](allocation-traffic.json) maps every phase index to its name and entrypoint counts. The wrapper diagnostic reads 30.484 s versus the preceding unwrapped phase diagnostic 27.697 s (~10% extra); neither is primary optimization timing.
+Dense ReadStream sees 61,272,345 outer entry/free calls and 1,964,178,892 requested-byte traffic. This is allocation attempt/reallocation traffic, not unique/live/peak bytes; phase attribution is exclusive. Top traffic: record conversion 883.2 MB, scanner 361.3 MB, graph construction 210.8 MB, entity load 160.4 MB, entity setup 160.2 MB. [Allocation detail](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/step-parser-experiments/allocation-traffic.json) maps every phase index to its name and entrypoint counts. The wrapper diagnostic reads 30.484 s versus the preceding unwrapped phase diagnostic 27.697 s (~10% extra); neither is primary optimization timing.
 
 ## Correctness and scope
 
@@ -58,4 +58,4 @@ Rebuild the unchanged pinned baseline with the repository vendor recipe; retain 
 The clearest established optimization is replacing the byte-at-a-time scanner refill path with its existing noninteractive bulk-read path. Tail pointers address a separate quadratic long-list cost and matter more on the fixed-wide-list case, with an observed dense memory tradeoff. Parser allocator changes remain untested and must not be conflated with either result. Production integration requires separate review, source-generation consistency and memory-budget acceptance. No quality, tolerance, model-completeness, format/size classifier or browser deadline was changed. No weak-device or physical first-image budget is certified.
 
 
-The 200 MB input is a generator-produced valid referenced surface benchmark, not a user production CAD assembly. The 96-part bracket array is a test assembly. No real production-assembly CPU profile or weak-device/browser first-image validation was collected, and the observed ~52% reduction must not be generalized to all STEP files. Main review keeps this round diagnostic-only; source-generation consistency and memory-budget acceptance remain prerequisites for any production integration.
+The 200 MB input is a generator-produced valid referenced surface benchmark, not a user production CAD assembly. The 96-part bracket array is a test assembly. No real production-assembly CPU profile or weak-device/browser first-image validation was collected, and the observed ~52% reduction must not be generalized to all STEP files. The production bulk lexer has separate browser validation. Tail and allocator changes still require memory-budget and representative workload validation.

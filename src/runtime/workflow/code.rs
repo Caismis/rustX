@@ -4,14 +4,7 @@ use super::{
     WorkflowVarType,
 };
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, super::Serialize, super::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum WorkflowCodeLanguage {
-    Python3,
-    JavaScript,
-}
+pub use rustx_workflow::code_language::WorkflowCodeLanguage;
 
 const PYTHON_RUNNER: &str = include_str!("code/python_runner.py");
 const JAVASCRIPT_RUNNER: &str = include_str!("code/javascript_runner.cjs");

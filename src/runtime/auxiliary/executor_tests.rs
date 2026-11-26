@@ -5,7 +5,7 @@ mod optional_writes;
 mod retries;
 #[path = "executor_tests/structured.rs"]
 mod structured;
-use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore};
+use crate::durable::{CanonicalStore, JournalStore};
 use futures_util::StreamExt as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 

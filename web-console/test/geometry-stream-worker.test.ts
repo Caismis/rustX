@@ -2,6 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { parseGeometryStream } from '../src/app/components/documents/geometry/parse';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
 import type { GeometrySource } from '../shared/geometry-source';
+import { FILE_PREVIEW_LIMITS } from '../shared/file-preview';
+import { readGeometrySource } from '../src/client/geometry-source';
+import { WorkspaceHostError } from '../src/workspaces/host';
 class StreamWorker {
   static instances: StreamWorker[] = [];
   onmessage: ((event: { data: unknown }) => void) | null = null;
@@ -61,9 +64,36 @@ it('immediately retires a failed EOF send and aborts its source lifetime', async
   await expect(parseGeometryStream(source,new AbortController().signal)).rejects.toMatchObject({code:'worker'});
   expect(sourceSignal.aborted).toBe(true);expect(StreamWorker.instances[0].terminated).toBe(1);
 });
-it('turns a synchronous source-consume throw into an immediate Worker failure', async () => {
+it('preserves an immediate source setup failure and retires the Worker', async () => {
   vi.stubGlobal('Worker',StreamWorker);let sourceSignal!:AbortSignal;
-  const source:GeometrySource={consume:(_sink,signal)=>{sourceSignal=signal;throw new Error('source setup failed');}};
-  await expect(parseGeometryStream(source,new AbortController().signal)).rejects.toMatchObject({code:'worker'});
+  const failure = new Error('source setup failed');
+  const source:GeometrySource={consume:(_sink,signal)=>{sourceSignal=signal;throw failure;}};
+  await expect(parseGeometryStream(source,new AbortController().signal)).rejects.toBe(failure);
   expect(sourceSignal.aborted).toBe(true);expect(StreamWorker.instances[0].terminated).toBe(1);
+});
+
+it('preserves the size limit across real source admission without reading a page', async () => {
+  vi.stubGlobal('Worker', StreamWorker);
+  const read = vi.fn(), close = vi.fn(async () => {});
+  const source: GeometrySource = { consume: (sink, signal) => readGeometrySource(
+    async () => ({ bytes: FILE_PREVIEW_LIMITS.geometryBytes + 1, version: 'one', read, close }), signal, sink) };
+  await expect(parseGeometryStream(source, new AbortController().signal)).rejects.toMatchObject({ kind: 'too_large' });
+  expect(read).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
+  expect(StreamWorker.instances[0].terminated).toBe(1);
+});
+
+it.each(['capacity', 'source_changed', 'file_settlement_unknown'])('preserves %s from the real streaming source and releases admission', async kind => {
+  vi.stubGlobal('Worker', StreamWorker);
+  const failure = new WorkspaceHostError(kind, kind);
+  const source: GeometrySource = { consume: (sink, signal) => readGeometrySource(async () => ({
+    bytes: 1, version: 'one',
+    read: async () => { throw kind === 'file_settlement_unknown' ? new Error('read failed') : failure; },
+    close: async () => { if (kind === 'file_settlement_unknown') throw failure; },
+  }), signal, sink) };
+  for (let index = 0; index <= L.owners; index++) {
+    await expect(parseGeometryStream(source, new AbortController().signal)).rejects.toBe(failure);
+  }
+  expect(StreamWorker.instances).toHaveLength(L.owners + 1);
+  expect(StreamWorker.instances.every(worker => worker.terminated === 1 && !worker.messages.some(message => message.kind === 'stream-end'))).toBe(true);
 });

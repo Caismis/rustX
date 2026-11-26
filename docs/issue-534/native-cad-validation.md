@@ -89,15 +89,15 @@ null live bytes. Inclusive ancestor clocks include nested probe overhead.
 
 ## Compiler matrix result
 
-[All sixty raw samples](native-cad-compiler-samples.json) and the
-[original failed-run log](native-cad-compiler-run.log) are retained. The
+[All sixty raw samples](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-compiler-samples.json) and the
+[original failed-run log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-compiler-run.log) are retained. The
 four-candidate equivalence assertion correctly failed for LTO on curved IGES.
 Oz, O2 and O3 match canonical JSON, raw numeric bits and metadata on all five
 workloads, consistently across the three repetitions. LTO deterministically
 changes the IGES numeric/index streams in all three repetitions and is rejected;
 no equality check, format or fixture was removed.
 
-The [focused LTO diff](native-cad-iges-lto-diff.json) found 649 changed position
+The [focused LTO diff](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-iges-lto-diff.json) found 649 changed position
 components, 1,195 changed normal components and 9,879 changed indices. Metadata,
 7,600 vertices, 15,050 triangles and bounds agree; every value is finite and
 indices remain integral/in-range. Differences are not limited to negative zero.
@@ -139,8 +139,8 @@ not a universal claim or a measurement on an unavailable device.
 
 ## LOD policy and baseline comparison
 
-[All 75 ordinary samples](native-cad-lod-samples.json) and their
-[run log](native-cad-lod-run.log) compare the selected O3 build against the
+[All 75 ordinary samples](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-lod-samples.json) and their
+[run log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-lod-run.log) compare the selected O3 build against the
 preserved `.3` boxed-output runtime. Every final result matches canonical JSON,
 raw numeric bits and metadata across versions and supported policies on all
 five workloads. The historical runtime supports final-only or two optional
@@ -189,8 +189,8 @@ versus 1,256.0 MiB final-only. The memory improvement is workload dependent.
 
 ## Inclusive phase diagnostics
 
-The [fifteen separate profiling-enabled samples](native-cad-profile-samples.json)
-and [diagnostic log](native-cad-profile-run.log) are not primary timing samples.
+The [fifteen separate profiling-enabled samples](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-profile-samples.json)
+and [diagnostic log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-profile-run.log) are not primary timing samples.
 One diagnostic read per workload/policy illustrates where time is spent;
 profiling includes its own boundary-sampling overhead.
 
@@ -248,21 +248,21 @@ original final behavior.
 The staged runtime passed 68 native-adapter/LOD tests, including typed ownership,
 phase bounds, cache reuse, unit/placement/hierarchy/color preservation,
 embedded BREP, complete-model refinement and adversarial raw doubles/indices.
-The [five-workload product-adapter acceptance harness](native-cad-production-default-smoke.test.ts.txt)
+The [five-workload product-adapter acceptance harness](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-production-default-smoke.test.ts.txt)
 uses the actual `importCad` call rather than a native-only substitute. Its
-[successful result](native-cad-production-default-smoke.json) and
-[log](native-cad-production-default-smoke.log) confirm exactly one complete
+[successful result](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-production-default-smoke.json) and
+[log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-production-default-smoke.log) confirm exactly one complete
 coarse callback, unchanged final triangle counts/hierarchy and owned-input
 release for all five measured workloads. The
-[initial acceptance log](native-cad-production-default-smoke-initial.log) is
+[initial acceptance log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-production-default-smoke-initial.log) is
 also preserved: two assertions had an incorrect harness expectation of 12,946
 triangles instead of the established 6,136 for the small STEP/BREP fixtures.
 No runtime or quality setting changed to resolve that harness mistake; the
 corrected complete five-case run passed. These acceptance runs and their clocks
 are not additional performance comparisons.
 
-[Fourteen additional baseline/new imports](native-cad-additional-equivalence.json)
-and their [log](native-cad-additional-equivalence.log) match all three strict
+[Fourteen additional baseline/new imports](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-additional-equivalence.json)
+and their [log](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-additional-equivalence.log) match all three strict
 digests on cube STEP, inch STEP, IGES, BREP, the placed bracket fixture, the
 96-part assembly and embedded-mesh BREP. These are correctness-only runs; their
 clocks are not used as uncontended performance evidence. Final focused tests
@@ -295,14 +295,14 @@ actual source copying/configuration, while dirty cases cannot create a target.
 
 The identical test against the original recipe fails exactly the staged
 importer and staged OCCT cases; the corrected recipe passes all five. The
-[proof manifest](native-cad-rebuild-proof.json),
-[original-recipe failure](native-cad-rebuild-guard-red.log) and
-[corrected-recipe result](native-cad-rebuild-guard-green.log) are retained.
+[proof manifest](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-rebuild-proof.json),
+[original-recipe failure](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-rebuild-guard-red.log) and
+[corrected-recipe result](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-rebuild-guard-green.log) are retained.
 The combined native/regression selection passes 73 cases, TypeScript passes,
 and the runtime/source-offer audit passes. The recipe hash is updated together;
 native C++ and the distributed JS/WASM hashes are unchanged.
 
-An [independent current-input audit](native-cad-upstream-input-audit.json) checks
+An [independent current-input audit](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/native-cad-upstream-input-audit.json) checks
 all 125 tracked importer files and 35,508 tracked OCCT files and both indexes
 against their pins. The 136 raw checkout differences are exclusively files with
 declared `eol=crlf`; applying that declared normalization exactly reproduces
@@ -316,4 +316,4 @@ that the review finding changed the committed binary.
 
 ## STEP parser experiments
 
-The archived STEP parser experiments are diagnostic only and did not enter the production runtime. The bulk lexer path measured a 51.8% reduction; the tail-list change measured 4.8% with an RSS cost. The combined-over-lexer 15.85% result comes from one generated valid B-spline benchmark and does not generalize. All profiles-off ordinary timing results are reported separately from diagnostic runs. See the [full report](step-parser-experiments/report.md), [compact summary](step-parser-experiments/summary.compact.json), and [reproduction notes](step-parser-experiments/REPRODUCE.md); the full original conclusions are in the native report.
+The archived STEP parser experiments describe historical benchmark builds. The browser runtime now ships the bulk lexer in `0.0.23-rustx.4`. The tail-list candidate remains experimental. The bulk lexer path measured a 51.8% reduction; the tail-list change measured 4.8% with an RSS cost. The combined-over-lexer 15.85% result comes from one generated valid B-spline benchmark and does not generalize. All profiles-off ordinary timing results are reported separately from diagnostic runs. See the [full report](step-parser-experiments/report.md), [compact summary](https://github.com/MiNisterPaX/rustX/blob/efef9f0441de1a31752187ed9287217ec53816fb/docs/issue-534/step-parser-experiments/summary.compact.json), and [reproduction notes](step-parser-experiments/REPRODUCE.md); the full original conclusions are in the native report.

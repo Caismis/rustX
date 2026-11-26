@@ -566,7 +566,7 @@ fn unchanged_source_copy_failure_stays_io_and_removes_the_stage() {
         &revision,
     );
     assert!(
-        matches!(io_error, Err(SettingsError::Io)),
+        matches!(io_error, Err(SettingsError::Io(_))),
         "unchanged source must stay an I/O failure: {}",
         io_error.as_ref().err().map_or("ok", settings_error_name)
     );
@@ -646,7 +646,7 @@ fn settings_error_name(error: &SettingsError) -> &'static str {
     match error {
         SettingsError::Conflict { .. } => "conflict",
         SettingsError::Invalid => "invalid",
-        SettingsError::Io => "io",
+        SettingsError::Io(_) => "io",
         SettingsError::Committed => "committed",
         SettingsError::TransferRejected(_) => "rejected",
         SettingsError::InvalidWorkflow(_) => "workflow",
@@ -659,4 +659,69 @@ fn workspace_skill(
     name: &str,
 ) -> std::path::PathBuf {
     manager.skill_collection(workspace).join(name)
+}
+
+#[cfg(unix)]
+#[test]
+fn published_directory_mode_is_synced_and_its_failure_is_committed() {
+    use crate::local_runtime::settings::durability;
+    let (_temporary, manager, workspace) = fixture();
+    let source = &SourceTarget::User;
+    let destination = &workspace;
+    let collection = manager.skill_collection(source);
+    for name in ["first", "second"] {
+        let root = collection.join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Skill {name}\n---\nInstructions\n"),
+        )
+        .unwrap();
+    }
+    let revision_of = |name: &str| {
+        let package = manager
+            .discover_skill_scope(source, &collection)
+            .packages
+            .into_iter()
+            .find(|package| package.name() == name)
+            .unwrap();
+        operation_revision(&package, &collection).unwrap()
+    };
+
+    // The published directory inode itself is synced after the mode chmod:
+    // it is the last durability step of a successful transfer.
+    durability::record(None);
+    manager
+        .transfer_skill(
+            source,
+            destination,
+            TransferOperation::Copy,
+            "first",
+            "first-copy",
+            &revision_of("first"),
+        )
+        .unwrap();
+    let installed = manager.skill_collection(destination).join("first-copy");
+    let steps = durability::take();
+    assert_eq!(
+        steps.last(),
+        Some(&durability::Step::Synced(installed.clone())),
+        "the published directory inode is synced last: {steps:?}"
+    );
+
+    // Losing that inode sync is a committed failure, not a staging io error.
+    let failed = manager.skill_collection(destination).join("second-copy");
+    durability::record(Some(&failed));
+    let error = manager
+        .transfer_skill(
+            source,
+            destination,
+            TransferOperation::Copy,
+            "second",
+            "second-copy",
+            &revision_of("second"),
+        )
+        .unwrap_err();
+    assert_eq!(settings_error_name(&error), "committed", "{error:?}");
+    durability::take();
 }

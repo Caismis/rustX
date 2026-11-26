@@ -20,6 +20,10 @@ export const HISTORY_PAGE_MAX_BYTES = 8 * 1024 * 1024;
 export interface TranscriptCache {
   page: RuntimeClientTranscriptPage;
   epoch: number;
+  /** Disjoint head transitions (replace or a forward slide past held rows):
+   * hydration should re-check coverage of the new head. Ordinary overlap
+   * merges keep the generation. */
+  generation?: number;
   window?: ConversationWindow;
   loading?: boolean;
   /** Passive initial hydration must preserve tail following, unlike a reader's prepend. */
@@ -33,7 +37,8 @@ export function entryIdentity(entry: RuntimeClientTranscriptEntry): string {
     : item.type === 'publication_audit' ? `publication:${entry.cursor}` : `interaction:${item.event_id}`;
 }
 function merge(older: RuntimeClientTranscriptEntry[], newer: RuntimeClientTranscriptEntry[]) {
-  const entries = new Map(older.map(entry => [entry.cursor, entry]));
+  const freshMessages = new Set(newer.flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []));
+  const entries = new Map(older.filter(entry => entry.item.type !== 'message' || !freshMessages.has(entry.item.message.id)).map(entry => [entry.cursor, entry]));
   for (const entry of newer) entries.set(entry.cursor, entry);
   // Transcript positions are specified numeric durable order, never opaque IDs.
   return [...entries.values()].sort((a, b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1);
@@ -48,8 +53,10 @@ function pageRows(page: RuntimeClientTranscriptPage) {
 }
 function mergePages(older: RuntimeClientTranscriptPage, newer: RuntimeClientTranscriptPage): RuntimeClientTranscriptPage {
   const fresh = pageRows(newer);
-  const entries = merge((older.entries ?? []).filter(entry => !fresh.has(entry.cursor)), newer.entries ?? []);
-  const deferred = new Map((older.deferred_entries ?? []).filter(item => !fresh.has(item.offset)).map(item => [item.offset, item]));
+  const freshIdentities = new Set(fresh.values());
+  const entries = merge((older.entries ?? []).filter(entry => !fresh.has(entry.cursor) && !freshIdentities.has(entryIdentity(entry))), newer.entries ?? []);
+  const oldRows = pageRows(older);
+  const deferred = new Map((older.deferred_entries ?? []).filter(item => !fresh.has(item.offset) && !freshIdentities.has(oldRows.get(item.offset)!)).map(item => [item.offset, item]));
   for (const item of newer.deferred_entries ?? []) deferred.set(item.offset, item);
   for (const entry of entries) deferred.delete(entry.cursor);
   const collections = new Map((older.collections ?? []).map(frontier => [frontier.domain, frontier]));
@@ -83,14 +90,35 @@ export function transcriptContent(history: TranscriptCache|undefined, current: C
   const result=[...bindings.values()];byHistory.set(historical,result);return result;
 }
 export function replaceTranscript(page: RuntimeClientTranscriptPage, previous?: TranscriptCache): TranscriptCache {
-  return { page, epoch: (previous?.epoch ?? 0) + 1 };
+  return { page, epoch: (previous?.epoch ?? 0) + 1, generation: (previous?.generation ?? 0) + 1 };
 }
 export function refreshTranscript(previous: TranscriptCache | undefined, page: RuntimeClientTranscriptPage): TranscriptCache {
   if (!previous) return replaceTranscript(page);
   if (previous.window) return previous;
   const fresh = pageRows(page);
-  const overlap = [...pageRows(previous.page)].some(([cursor, identity]) => fresh.get(cursor) === identity);
-  if (!overlap) return replaceTranscript(page, previous);
+  const held = pageRows(previous.page);
+  const overlap = [...held].some(([cursor, identity]) => fresh.get(cursor) === identity);
+  if (!overlap) {
+    // A bounded native head delivers only its newest rows. One atomic
+    // transition may slide that window past every loaded row: all held
+    // positions are then strictly older history to retain, never a rewritten
+    // lineage. Only interleaved or backward moves replace the cache.
+    if (held.size && fresh.size) {
+      const positions = (rows: Map<number | string, string>) => [...rows.keys()].map(key => BigInt(key));
+      const newest = positions(held).reduce((a, b) => a > b ? a : b);
+      const oldest = positions(fresh).reduce((a, b) => a < b ? a : b);
+      if (newest < oldest) {
+        // Keep the held page's deeper cursor: it is the only surviving proof
+        // that rows below the held minimum are still unread. The skipped
+        // region between the blocks is re-found by gap detection in
+        // acceptOlderTranscriptPage, so pagination still reaches it. The
+        // lineage (epoch) is unchanged, but hydration must re-check coverage
+        // of the slid head.
+        return { ...previous, generation: (previous.generation ?? 0) + 1, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor ?? page.next_cursor } };
+      }
+    }
+    return replaceTranscript(page, previous);
+  }
   // Keep the reader's rows in place. Mutable projections outside this head are
   // reread by identity in the background, never by discarding loaded history.
   return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor } };
@@ -112,8 +140,56 @@ export function repairTranscript(cache: TranscriptCache, window: ConversationWin
 }
 export const turnKey = attemptOwnerKey;
 export const turnAnchor = (id: Parameters<typeof attemptOwnerKey>[0]) => `turn:${turnKey(id)}`;
+/** Positions the page already holds: loaded rows plus deferred rows, whose
+ * content is unloaded but whose position is cached. */
+const coveragePositions = (page: RuntimeClientTranscriptPage): bigint[] =>
+  [...pageRows(page).keys(), ...(page.deferred_entries ?? []).map(item => item.offset)]
+    .map(key => BigInt(String(key))).sort((a, b) => a < b ? -1 : 1);
+/** The first unfetched position between cached rows, if any. A head slide
+ * leaves exactly such a hole above the held minimum. */
+export function transcriptCoverageGap(page: RuntimeClientTranscriptPage): string | null {
+  const positions = coveragePositions(page);
+  for (let i = 0; i + 1 < positions.length; i++) if (positions[i + 1] > positions[i] + 1n) return String(positions[i + 1]);
+  return null;
+}
+export const transcriptCoverageComplete = (page: RuntimeClientTranscriptPage): boolean => transcriptCoverageGap(page) == null;
+/** Where an initial coverage walk continues: the first hole above the held
+ * rows, else below the merged minimum while the bottom stays unproven. The
+ * fetched page's own next_cursor can land inside already-covered rows, so the
+ * boundary is the merged minimum, not that cursor. */
+export function transcriptCoverageTarget(page: RuntimeClientTranscriptPage): string | null {
+  const gap = transcriptCoverageGap(page);
+  if (gap) return gap;
+  if (page.next_cursor == null) return null;
+  const min = coveragePositions(page)[0];
+  return min !== undefined && min > 1n ? String(min) : null;
+}
+
 export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTranscriptPage): TranscriptCache {
   return { ...cache, loading: false, error: undefined, page: { ...mergePages(page, cache.page), next_cursor: page.next_cursor } };
+}
+
+/** Accept one completed 'older' page chain into the cache live at commit time.
+ * This is the linearization point for ordinary live pagination: the fetched
+ * rows merge into the cache the moment the read resolves, so rows the live
+ * head admitted while the request was in flight are retained — never
+ * overwritten by the cache captured when the read started. The continuation
+ * picks the deepest unfetched boundary: a mid-page gap is always recomputed
+ * from the merged rows, while stored cursors only continue below the merged
+ * minimum, so every unfetched gap stays reachable and the walk converges. */
+export function acceptOlderTranscriptPage(latest: TranscriptCache, fetchedPages: RuntimeClientTranscriptPage[]): TranscriptCache {
+  const fetched = fetchedPages.reduce((acc, page) => mergePages(acc, page));
+  const merged = mergePages(fetched, latest.page);
+  const positions = coveragePositions(merged);
+  const mergedMin = positions[0];
+  let gap: bigint | undefined;
+  for (let i = 0; i + 1 < positions.length; i++) if (positions[i + 1] > positions[i] + 1n) { gap = positions[i + 1]; break; }
+  const below = (cursor: unknown) => cursor == null || mergedMin === undefined || BigInt(String(cursor)) > mergedMin ? null : BigInt(String(cursor));
+  // Every fetched page's boundary counts: the merged page keeps only the
+  // last fetch's cursor, but an earlier page may have proven a deeper edge.
+  const candidates = [gap, ...fetchedPages.map(page => below(page.next_cursor)), below(latest.page.next_cursor)].filter((cursor): cursor is bigint => cursor != null);
+  const next_cursor = candidates.length ? String(candidates.reduce((a, b) => a < b ? a : b)) : null;
+  return { ...latest, loading: false, initialLoading: false, error: undefined, page: { ...merged, next_cursor } };
 }
 
 export function installTranscriptWindow(window: ConversationWindow, previous?: TranscriptCache): TranscriptCache {

@@ -42,7 +42,13 @@ async fn compiled_kimi_tools_inline_single_use_business_objects() {
         "Read a file",
     );
     let tool = rustx::tools::native::todo_tool_definition();
-    request.tools = vec![rustx::tools::schema::compile_model_definition(&tool).unwrap()];
+    request.tools = vec![
+        rustx::tools::schema::compile_model_definition(
+            &tool,
+            rustx::runtime::permission::supports_elevation(&tool),
+        )
+        .unwrap(),
+    ];
     let events = collect_events(&adapter(&server), request).await;
     assert_normal_completion(&events);
     let bodies = server.request_bodies();

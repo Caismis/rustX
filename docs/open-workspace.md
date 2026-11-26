@@ -96,13 +96,13 @@ is introduced.
 Deterministic tests gate native reads, catalog responses and launch responses;
 they assert zero launch before admission, exact target/path/argv, authority
 replacement, missing paths/apps, errors, filtered environment and no replay.
-The `Desktop adapter and Host (macOS Node)` CI job on `macos-latest` executes
-`test/desktop-host.test.ts` using Node 24 and the pinned dependencies. These exercise actual macOS filesystem,
-canonicalization, HTTP and harmless Node child-process launch boundaries, plus the
-native console/bootstrap eligibility check. Deterministic fakes cover GUI argv,
-missing apps and session evidence. The full Linux Web job runs the same tests and
-browser acceptance. Neither lane opens Finder/Terminal or proves GUI completion;
-real interactive GUI smoke remains a separate, unexecuted check.
+The Web client CI job runs `test/desktop-host.test.ts` on Linux using the
+pinned dependencies. Running it on macOS exercises the actual macOS
+filesystem, canonicalization, HTTP and harmless Node child-process launch
+boundaries, plus the native console/bootstrap eligibility check.
+Deterministic fakes cover GUI argv, missing apps and session evidence.
+Neither run opens Finder/Terminal or proves
+GUI completion; real interactive GUI smoke remains a separate, unexecuted check.
 
 ### External file-opening identity
 

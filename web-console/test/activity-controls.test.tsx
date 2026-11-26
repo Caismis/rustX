@@ -52,7 +52,7 @@ it('intent receipts leave Agent and Job execution unchanged until their complete
   expect(row?.getAttribute('data-agent-state')).toBe('inactive');
   expect(within(document.getElementById('subagent-header-actions')!).getByRole('status').textContent).toBe('cancelled');
   expect(ui.queryByRole('button', { name: /^Stop task / })).toBeNull();
-  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Show output of Build' })));
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Show live output of Build' })));
   expect(ui.getByText('Process settled')).toBeTruthy();
   expect(server.requests.filter(({ request }) => request.method === 'agent/interrupt')).toHaveLength(1);
   expect(server.requests.filter(({ request }) => request.method === 'job/cancel')).toHaveLength(1);
@@ -372,7 +372,9 @@ it('older child transcript retains its original observation proof through native
   expect(ui.queryByText('current child page')).toBeNull();
   const fresh = await server.waitFor('agent/observe', 2);
   await act(async () => { server.socket.success(fresh, childConversation(page('fresh child page', '20'))); });
-  expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
+  // The committed row at cursor 10 is durable history the reattached head
+  // window already moved past; it stays retained beside the fresh row.
+  expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.getByText('current child page')).toBeTruthy();
   expect(server.requests.filter(row => row.request.method === 'agent/transcript' && row.request.params.target.attachment_id === originalTarget.attachment_id)).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);

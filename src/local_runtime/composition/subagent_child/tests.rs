@@ -180,8 +180,10 @@ fn spec_with_extensions(
                 ..Default::default()
             },
             agent: SubagentName::parse("explore").expect("canonical name"),
-            definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
-                .expect("digest"),
+            definition_digest: serde_json::from_value::<
+                crate::runtime::subagent::NamedAgentDefinitionDigest,
+            >(serde_json::json!("sha256:frozen"))
+            .expect("digest"),
             execution_deadline: None,
             instructions: "frozen child instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
@@ -940,6 +942,21 @@ async fn the_final_report_rule_is_runtime_owned_and_terminal_mode_aware() {
             Some(crate::runtime::workflow::WorkflowChildTerminal::Text)
         ),
         "without a schema no workflow_output terminal is installed"
+    );
+    let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        text.runtime()
+            .child_control()
+            .expect("child runtime")
+            .submit_parent_guidance(
+                crate::message::types::UserSource::Agent {
+                    agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
+                },
+                Vec::new(),
+            )
+    }));
+    assert!(
+        refusal.is_err(),
+        "a schema-free Workflow AgentRun is WorkflowAgentRun, never SubagentChild"
     );
 }
 

@@ -17,6 +17,11 @@ class UbuntuPackages(unittest.TestCase):
             "https://archive.ubuntu.com/ubuntu/\tpriority:2\n"
             "https://security.ubuntu.com/ubuntu/\tpriority:3\n"
         )
+        self.sources_dir = pathlib.Path(temporary.name) / "sources.list.d"
+        self.sources_dir.mkdir()
+        self.sources_patch = mock.patch.object(installer, "SOURCES_DIR", self.sources_dir)
+        self.sources_patch.start()
+        self.addCleanup(self.sources_patch.stop)
         self.patch = mock.patch.object(installer, "MIRROR_LIST", self.mirrors)
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -37,6 +42,18 @@ class UbuntuPackages(unittest.TestCase):
             self.assertIn("Acquire::Retries=2", command)
             self.assertIn("APT::Update::Error-Mode=any", command)
             self.assertEqual(call.kwargs, {"check": True})
+
+    @mock.patch.object(installer.subprocess, "run")
+    def test_microsoft_source_is_disabled_before_refresh(self, run):
+        microsoft = self.sources_dir / "microsoft-prod.sources"
+        microsoft.write_text("URIs: https://packages.microsoft.com/ubuntu/26.04/prod\n")
+        archive = self.sources_dir / "ubuntu.sources"
+        archive.write_text("URIs: https://archive.ubuntu.com/ubuntu/\n")
+        installer.install(["libclang-dev"])
+        self.assertFalse(microsoft.exists())
+        self.assertTrue((self.sources_dir / "microsoft-prod.sources.disabled").exists())
+        self.assertTrue(archive.exists())
+        self.assertEqual(run.call_count, 2)
 
     @mock.patch.object(installer.subprocess, "run")
     def test_index_failure_stops_before_installation(self, run):

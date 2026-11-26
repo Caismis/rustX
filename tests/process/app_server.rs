@@ -2440,9 +2440,9 @@ async fn app_server_reserves_writer_names_before_any_startup_side_effects() {
     .await;
 }
 
-/// This is an executing test in both macOS external-boundary lanes. Its
-/// fixture verifies case insensitivity and creates an APFS image when the
-/// runner's temporary volume is case sensitive; it never silently skips.
+/// This test executes natively on macOS. Its fixture verifies case
+/// insensitivity and creates an APFS image when the temporary volume is case
+/// sensitive; it never silently skips.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn app_server_refuses_actual_reserved_aliases_on_case_insensitive_macos() {
@@ -2484,11 +2484,11 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
     }
     bounded(Box::pin(async {
         use rustx::app_server::protocol::*;
+        use rustx::runtime::auxiliary::external::AuxiliarySubmissionLookup;
         use rustx::runtime::auxiliary::{
             delivery::ConsumerResult,
             submission::{ClassificationInput, ClassificationSubmission, CorrelationId},
         };
-        use rustx::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup;
         for socket in [false, true] {
             eprintln!("auxiliary transport socket={socket}: setup");
             let Some(provider) =

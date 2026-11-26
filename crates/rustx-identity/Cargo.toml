@@ -1,0 +1,21 @@
+[package]
+name = "rustx-identity"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+uuid = { version = "1.24", features = ["v7"] }
+schemars = { version = "1", features = ["chrono04"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+
+[features]
+# Monolith cfg(test) code reaches the test-only composed identities
+# (TestAlpha/TestBeta) through the workspace dependency.
+test-fixtures = []
+
+[lints]
+workspace = true

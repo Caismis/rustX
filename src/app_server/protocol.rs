@@ -503,6 +503,11 @@ pub enum Method {
         target: AttachmentTarget,
         control: crate::goal::GoalControl,
     },
+    #[serde(rename = "job/output")]
+    JobOutput {
+        target: AttachmentTarget,
+        job_id: crate::runtime::identity::ToolExecutionId,
+    },
     #[serde(rename = "job/status")]
     JobStatus {
         target: AttachmentTarget,
@@ -805,6 +810,23 @@ pub enum Method {
         offset: usize,
         limit: usize,
     },
+    /// Resolve an ordinary human message at its original Surface append.
+    #[serde(rename = "session/messageBoundary")]
+    SessionMessageBoundary {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        boundary: crate::observation::content::CanonicalContentLocator,
+    },
+    /// Page the retry families visible in the selected native node.
+    #[serde(rename = "session/messageVersions")]
+    SessionMessageVersions {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: usize,
+        #[schemars(range(min = 1, max = 32))]
+        limit: usize,
+    },
     #[serde(rename = "session/forkProjection")]
     SessionForkProjection {
         session_id: SessionId,
@@ -1000,6 +1022,14 @@ pub enum Method {
     InboundRemove {
         target: AttachmentTarget,
         expected: crate::durable::PendingInboundRef,
+    },
+    /// Promote one expected queued row, or every currently queued row, into the running attempt.
+    #[serde(rename = "inbound/steer")]
+    InboundSteer {
+        target: AttachmentTarget,
+        #[serde(rename = "expectedTurnId")]
+        expected_turn_id: crate::runtime::identity::AttemptId,
+        scope: crate::durable::PendingSteerScope,
     },
     #[serde(rename = "turn/interrupt")]
     TurnCancel {
@@ -1244,6 +1274,7 @@ impl Method {
             | Self::ModelGet { .. }
             | Self::ModelCatalog { .. }
             | Self::Capability { .. }
+            | Self::JobOutput { .. }
             | Self::JobStatus { .. }
             | Self::JobList { .. }
             | Self::JobWait { .. }
@@ -1277,6 +1308,8 @@ impl Method {
             | Self::SessionHistoryValueRead { .. }
             | Self::SessionTree { .. }
             | Self::SessionBoundaries { .. }
+            | Self::SessionMessageBoundary { .. }
+            | Self::SessionMessageVersions { .. }
             | Self::SessionDeletePreview { .. }
             | Self::SessionCheckpoint { .. }
             | Self::ConversationContentRead { .. }
@@ -1369,6 +1402,7 @@ impl Method {
             | Self::InboundQueue { .. }
             | Self::InboundEdit { .. }
             | Self::InboundRemove { .. }
+            | Self::InboundSteer { .. }
             | Self::TurnCancel { .. }
             | Self::SourcesWrite { .. }
             | Self::ConfigurationReconcile { .. } => true,
@@ -1490,6 +1524,8 @@ pub enum ErrorData {
     SubscriptionSuperseded,
     StaleAttachment,
     StaleRuntime,
+    /// Direct `turn/steer` was not admitted because the expected Turn is stale or not steerable.
+    SteerUnavailable,
     InvalidState,
     InvalidParams,
     ResyncRequired,
@@ -1675,10 +1711,10 @@ pub enum MethodResult {
     WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
     WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
     McpDraftAccepted {},
-    AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
-    AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
+    AuxiliarySubmitted { receipt: crate::runtime::auxiliary::external::AuxiliarySubmissionReceipt },
+    AuxiliaryStatus { status: crate::runtime::auxiliary::external::AuxiliaryStatus },
     AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },
-    AuxiliarySubmissionLookup { lookup: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup },
+    AuxiliarySubmissionLookup { lookup: crate::runtime::auxiliary::external::AuxiliarySubmissionLookup },
     AuxiliaryCancelled { accepted: bool },
     AuxiliaryDiscarded { discarded: bool },
 
@@ -1763,6 +1799,7 @@ pub enum MethodResult {
     GoalMutation {
         reference: Option<crate::goal::GoalRef>,
     },
+    JobOutput { text: String, truncated: bool },
     JobCancellationAccepted { job_id: crate::runtime::identity::ToolExecutionId },
     AgentInterruptionAccepted { agent_id: crate::runtime::identity::AgentId, activation_id: Option<crate::runtime::identity::SubagentId> },
     JobOutcome {
@@ -1829,6 +1866,12 @@ pub enum MethodResult {
         surface_revision: crate::conversation::SurfaceRevision,
         boundaries: Vec<crate::local_runtime::session::observation::SessionUserMessageBoundaryObservation>,
         next_offset: Option<usize>,
+    },
+    SessionMessageBoundary {
+        boundary: Option<crate::local_runtime::session::observation::SessionMessageVersion>,
+    },
+    SessionMessageVersions {
+        page: crate::local_runtime::session::observation::SessionMessageVersionsPage,
     },
     Deletion {
         result: crate::app_server::session_deletion::SessionDeletionResult,

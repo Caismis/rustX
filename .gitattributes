@@ -1,0 +1,13 @@
+# Machine-generated artifacts: excluded from review diff sizing and collapsed in
+# the GitHub diff UI. Regenerate; never hand-edit.
+Cargo.lock linguist-generated
+Cargo.toml -linguist-generated
+
+# Generated app-server protocol artifacts (codegen output committed to the repo).
+protocol/**/*.schema.json linguist-generated
+protocol/**/*.ts linguist-generated
+schemas/*.schema.json linguist-generated
+
+# Checked-in generated test fixtures.
+tests/fixtures/**/*.json linguist-generated
+crates/*/tests/fixtures/**/*.json linguist-generated

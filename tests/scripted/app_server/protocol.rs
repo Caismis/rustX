@@ -686,20 +686,21 @@ pub(super) async fn initialize(connection: &AppServerConnection) {
 }
 
 async fn rejected(connection: &AppServerConnection, method: Method) -> ErrorData {
-    let Response::Failure(Failure {
-        error: RpcError {
-            data: Some(data), ..
-        },
-        ..
-    }) = connection
+    let response = connection
         .handle_request(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(999),
             call: method,
         })
-        .await
+        .await;
+    let Response::Failure(Failure {
+        error: RpcError {
+            data: Some(data), ..
+        },
+        ..
+    }) = response
     else {
-        panic!("expected typed rejection")
+        panic!("expected typed rejection, got {response:?}")
     };
     data
 }
@@ -924,7 +925,7 @@ impl AttemptCompletion {
             expected.runtime_incarnation,
             self.target.runtime_incarnation
         );
-        let receipt = self.runtime.child_attempt_settlement(self.after).await;
+        let receipt = self.runtime.attempt_settlement(self.after).await;
         diagnostic.receipt_ordinal = Some(receipt.ordinal);
         diagnostic.stage = "display publication";
         assert_eq!(receipt.ordinal, self.after + 1, "exact next native handoff");

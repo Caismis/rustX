@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { FilePreviewOperation } from '../shared/file-preview.ts';
+import { PreviewCancelled, type FilePreviewOperation } from '../shared/file-preview.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
+import { settlementFailureKind, WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host.ts';
 import { AppServerRequestError, UncertainOutcomeError } from '../../tui/src/app-server/client.ts';
 import { NativeFileReadError } from './file-read.ts';
 import { acknowledgeFile, finishFile } from './file-response.ts';
@@ -17,7 +17,12 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
   const observations = new FileObservationHttp(host);
   type PreviewOwner = { scope: FileOperation['scope']; abort: AbortController; operation: FilePreviewOperation; deadline?: ReturnType<typeof setTimeout>; closing?: Promise<void> };
   const previews = new Map<string, PreviewOwner>();
-  const retirePreview = (identity: string, owner: PreviewOwner) => owner.closing ??= owner.operation.close().finally(() => { clearTimeout(owner.deadline); previews.delete(identity); });
+  const retirePreview = (identity: string, owner: PreviewOwner) => owner.closing ??= (async () => {
+    let settled = true;
+    try { await owner.operation.close(); }
+    catch (error) { settled = !settlementFailureKind(error); throw error; }
+    finally { clearTimeout(owner.deadline); if (settled) previews.delete(identity); }
+  })();
   return async (request: IncomingMessage, response: ServerResponse, next: () => void = () => { response.writeHead(404).end(); }) => {
     if (!request.url?.startsWith('/product-host/')) return next();
     try {
@@ -97,7 +102,9 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           if (Object.keys(body).some(key => !['scope', 'identity'].includes(key))) throw new Error('Invalid preview cancellation');
           const identity = string('identity'), owner = previews.get(identity), captured = scope();
           if (owner && owner.scope.authorityId === captured.authorityId && owner.scope.endpoint === captured.endpoint) {
-            owner.abort.abort(); await retirePreview(identity, owner);
+            owner.abort.abort();
+            try { await retirePreview(identity, owner); }
+            catch (error) { if (!(error instanceof PreviewCancelled)) throw error; }
           }
           break;
         }

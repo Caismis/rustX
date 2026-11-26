@@ -356,7 +356,13 @@ impl ChildPhysicalLifetime {
 
     async fn settle(self, parent_lost: bool) -> Result<(), Vec<String>> {
         match self.runtime {
-            Some(runtime) => runtime.settle_child_physical_lifetime(parent_lost).await,
+            Some(runtime) => {
+                runtime
+                    .child_control()
+                    .expect("child runtime")
+                    .settle_child_physical_lifetime(parent_lost)
+                    .await
+            }
             None => self.preparation.settle().await,
         }
     }
@@ -549,7 +555,10 @@ pub(crate) async fn serve_child_delegation(
     };
     runtime.set_interaction_provider_available(delegate.interaction_provider_available);
 
-    runtime.gate_child_turns();
+    runtime
+        .child_control()
+        .expect("child runtime")
+        .gate_child_turns();
 
     // The delegated task enters through the child's ordinary durable
     // inbound path. IPC transports the envelope; it never appends.
@@ -594,7 +603,10 @@ pub(crate) async fn serve_child_delegation(
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
     #[cfg(test)]
     native_terminal_fixture_stage("before releasing child turn permit");
-    runtime.release_child_turn();
+    runtime
+        .child_control()
+        .expect("child runtime")
+        .release_child_turn();
     #[cfg(test)]
     native_terminal_fixture_stage("child turn permit released; entering terminal control");
 
@@ -684,7 +696,12 @@ pub(crate) async fn serve_child_delegation(
         if !matches!(terminal, AttemptTerminal::Completed(_)) {
             break terminal;
         }
-        match runtime.seal_parent_guidance(observed_terminals).await {
+        match runtime
+            .child_control()
+            .expect("child runtime")
+            .seal_parent_guidance(observed_terminals)
+            .await
+        {
             ParentGuidanceSeal::Sealed => break terminal,
             ParentGuidanceSeal::Open => {
                 handle
@@ -703,7 +720,10 @@ pub(crate) async fn serve_child_delegation(
                 {
                     break AttemptTerminal::Cancelled;
                 }
-                runtime.release_child_turn();
+                runtime
+                    .child_control()
+                    .expect("child runtime")
+                    .release_child_turn();
             }
             // Fail closed: an unverifiable pending inbox is not an empty
             // one. The runtime already committed its absorbing
@@ -994,14 +1014,17 @@ async fn apply_parent_guidance(
     message: String,
     attachments: Vec<crate::message::content::UploadedFileRef>,
 ) -> Result<(), ChildExit> {
-    let outcome = match runtime.submit_parent_guidance(
-        UserSource::Agent {
-            agent_id: parent_agent_id.clone(),
-        },
-        std::iter::once(UserContentBlock::Text(TextBlock { text: message }))
-            .chain(attachments.into_iter().map(UserContentBlock::UploadedFile))
-            .collect(),
-    ) {
+    let outcome = match runtime
+        .child_control()
+        .expect("child runtime")
+        .submit_parent_guidance(
+            UserSource::Agent {
+                agent_id: parent_agent_id.clone(),
+            },
+            std::iter::once(UserContentBlock::Text(TextBlock { text: message }))
+                .chain(attachments.into_iter().map(UserContentBlock::UploadedFile))
+                .collect(),
+        ) {
         Ok(_) => ChildGuidanceOutcome::Accepted,
         Err(InboundAdmissionError::GuidanceSealed) => {
             ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Settled)
@@ -1171,7 +1194,10 @@ where
     // SQL and Client projection recovery never execute on this select path.
     #[cfg(test)]
     native_terminal_fixture_stage("await_terminal_inner entered; subscribe native activity");
-    let mut activity = runtime.child_activity();
+    let mut activity = runtime
+        .child_control()
+        .expect("child runtime")
+        .child_activity();
     #[cfg(test)]
     native_terminal_fixture_stage("native activity subscribed; poll control and terminal receipt");
     loop {
@@ -1280,7 +1306,11 @@ async fn native_terminal_receipt(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observed: u64,
 ) -> crate::runtime::conversation_runtime::NativeAttemptSettlement {
-    let receipt = runtime.child_attempt_settlement(observed).await;
+    let receipt = runtime
+        .child_control()
+        .expect("child runtime")
+        .child_attempt_settlement(observed)
+        .await;
     #[cfg(test)]
     if let Ok(gate) = NATIVE_TERMINAL_GATE.try_with(Arc::clone) {
         gate.entered.notify_one();
@@ -1576,9 +1606,15 @@ pub(crate) mod tests {
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
-                workflow_output: workflow_output.clone().map(
-                    |latch| -> Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> { latch },
-                ),
+                role: match &workflow_output {
+                    Some(latch) => {
+                        crate::runtime::conversation_runtime::ConversationRole::WorkflowAgentRun {
+                            output: Some(latch.clone()
+                                as Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>),
+                        }
+                    }
+                    None => crate::runtime::conversation_runtime::ConversationRole::SubagentChild,
+                },
             },
             CoordinatorProbe {
                 start_boundary_pause: start_pause,
@@ -2033,7 +2069,9 @@ pub(crate) mod tests {
                 selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                 agent: crate::runtime::subagent::SubagentName::parse("explore")
                     .expect("canonical name"),
-                definition_digest: serde_json::from_value(serde_json::json!(
+                definition_digest: serde_json::from_value::<
+                    crate::runtime::subagent::NamedAgentDefinitionDigest,
+                >(serde_json::json!(
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 ))
                 .expect("digest"),
@@ -2435,7 +2473,10 @@ pub(crate) mod tests {
             .expect("observation bridge");
         // Match production composition: historical pending guidance cannot
         // admit a turn between activation and the Delegate handshake.
-        runtime.gate_child_turns();
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
         let child_runtime = runtime.clone();
         let serve = tokio::spawn(async move {
@@ -2573,12 +2614,16 @@ pub(crate) mod tests {
     }
 
     /// Native handoff classifications cannot be mistaken for successful completion.
+    /// `RuntimeFailed` is included for both child roles: a panicking parent
+    /// attempt task publishes it through the shared `from_native` driver
+    /// (Issue #606).
     #[test]
     fn time_and_turn_limit_native_handoffs_map_to_failed_activation() {
         use crate::runtime::conversation_runtime::{NativeAttemptOutcome, NativeAttemptSettlement};
         for outcome in [
             NativeAttemptOutcome::TimedOut,
             NativeAttemptOutcome::LimitExceeded,
+            NativeAttemptOutcome::RuntimeFailed,
         ] {
             let receipt = NativeAttemptSettlement {
                 ordinal: 1,
@@ -2661,7 +2706,10 @@ pub(crate) mod tests {
             runtime
                 .install_observation_bridge(observations.clone())
                 .unwrap();
-            runtime.gate_child_turns();
+            runtime
+                .child_control()
+                .expect("child runtime")
+                .gate_child_turns();
             runtime.activate();
             let serving_runtime = runtime.clone();
             let serve = tokio::spawn(async move {
@@ -2720,7 +2768,7 @@ pub(crate) mod tests {
                 Some("the child model request failed; native diagnostics are deferred")
             );
             assert!(matches!(
-                runtime.child_attempt_settlement(0).await.outcome,
+                runtime.attempt_settlement(0).await.outcome,
                 crate::runtime::conversation_runtime::NativeAttemptOutcome::ModelFailed
             ));
             assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
@@ -2731,7 +2779,10 @@ pub(crate) mod tests {
                 "failure cannot spend another turn"
             );
             assert_eq!(
-                runtime.seal_probe_calls(),
+                runtime
+                    .child_control()
+                    .expect("child runtime")
+                    .seal_probe_calls(),
                 0,
                 "failed attempts never inspect a reopen seal"
             );
@@ -2821,7 +2872,10 @@ pub(crate) mod tests {
                 &runtime.tool_runtime().durable_store(),
                 &committed,
             );
-        runtime.gate_child_turns();
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
         let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
         let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
@@ -2887,7 +2941,13 @@ pub(crate) mod tests {
         assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
         serve.await.unwrap().unwrap();
         assert_eq!(model.requests().len(), 1);
-        assert_eq!(runtime.seal_probe_calls(), 0);
+        assert_eq!(
+            runtime
+                .child_control()
+                .expect("child runtime")
+                .seal_probe_calls(),
+            0
+        );
         assert_eq!(store.load_pending().unwrap(), pending);
         let next_model = Arc::new(FakeModel::new(vec![answer("explicit continuation")]));
         let resumed = child_test_runtime_full(
@@ -2962,7 +3022,10 @@ pub(crate) mod tests {
         runtime
             .install_observation_bridge(observations.clone())
             .unwrap();
-        runtime.gate_child_turns();
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
         let serving_runtime = runtime.clone();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -3037,7 +3100,10 @@ pub(crate) mod tests {
         serve.await.unwrap().unwrap();
         assert_eq!(model.requests().len(), 1);
         assert_eq!(
-            runtime.seal_probe_calls(),
+            runtime
+                .child_control()
+                .expect("child runtime")
+                .seal_probe_calls(),
             0,
             "cancel cannot reach the reopen probe"
         );
@@ -3135,6 +3201,8 @@ pub(crate) mod tests {
 
         // The durable acceptance wins the race against the seal.
         runtime
+            .child_control()
+            .expect("child runtime")
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -3246,6 +3314,8 @@ pub(crate) mod tests {
         assert_eq!(result.content.as_deref(), Some("only answer"));
 
         let refused = runtime
+            .child_control()
+            .expect("child runtime")
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -3333,6 +3403,8 @@ pub(crate) mod tests {
         // Pending Inbound Inbox with no attempt admitted for it.
         admission_gate.arm();
         runtime
+            .child_control()
+            .expect("child runtime")
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -3355,7 +3427,10 @@ pub(crate) mod tests {
         );
 
         // (3)+(4): the only probe the seal makes fails.
-        runtime.arm_seal_probe_failures(1);
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .arm_seal_probe_failures(1);
         seal_gate.release();
 
         // (5)+(6): no sealed terminal, and no earlier answer published.
@@ -3463,6 +3538,8 @@ pub(crate) mod tests {
 
         // Guidance is legal while the attempt is live and uncancelled.
         runtime
+            .child_control()
+            .expect("child runtime")
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -3477,6 +3554,8 @@ pub(crate) mod tests {
         runtime.cancel_current_or_next_attempt(CancellationReason::UserRequested);
 
         runtime
+            .child_control()
+            .expect("child runtime")
             .submit_parent_guidance(
                 UserSource::Agent {
                     agent_id: AgentId::new("agent-parent"),
@@ -3599,6 +3678,8 @@ pub(crate) mod tests {
             .await
             .unwrap();
             runtime
+                .child_control()
+                .expect("child runtime")
                 .submit_parent_guidance(
                     UserSource::Agent {
                         agent_id: AgentId::new("agent-parent"),
@@ -3756,9 +3837,15 @@ pub(crate) mod tests {
                 &runtime.tool_runtime().durable_store(),
                 &committed,
             );
-        runtime.gate_child_turns();
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
-        runtime.arm_seal_probe_failures(1);
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .arm_seal_probe_failures(1);
         let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
         let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
         let cancelled = Arc::new(tokio::sync::Notify::new());
@@ -3857,7 +3944,13 @@ pub(crate) mod tests {
         stage("serve joined");
         assert_eq!(latch.committed_value(), late.then_some(value));
         assert_eq!(model.requests().len(), usize::from(late));
-        assert_eq!(runtime.seal_probe_calls(), 0);
+        assert_eq!(
+            runtime
+                .child_control()
+                .expect("child runtime")
+                .seal_probe_calls(),
+            0
+        );
         result
     }
 
@@ -3923,7 +4016,10 @@ pub(crate) mod tests {
         // natural Workflow completion, this armed durable-probe fault would
         // make it fail closed and convert the valid Workflow success into a
         // `Failed` terminal. The fix must keep the probe at zero invocations.
-        runtime.arm_seal_probe_failures(1);
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .arm_seal_probe_failures(1);
 
         delegate(&mut fixture.parent, "produce the node output").await;
 
@@ -3957,7 +4053,10 @@ pub(crate) mod tests {
         // (2): the steering-specific seal probe was never semantically
         // consulted — proven directly by the invocation counter.
         assert_eq!(
-            runtime.seal_probe_calls(),
+            runtime
+                .child_control()
+                .expect("child runtime")
+                .seal_probe_calls(),
             0,
             "a Workflow-owned child never enters the parent-guidance seal \
              protocol, so its durable probe is never consulted"

@@ -2243,7 +2243,13 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
             let store = crate::durable::SqliteConversationStore::recover_existing(
                 session.active_conversation_id.clone(),
                 &access.database_path,
-                &controller,
+                std::sync::Arc::new(
+                    crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                        controller.clone(),
+                        access.database_path.parent().unwrap(),
+                    )
+                    .unwrap(),
+                ),
             )
             .unwrap();
             let id = &start.as_ref().unwrap().id;

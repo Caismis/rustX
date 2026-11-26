@@ -54,7 +54,7 @@ jobs:
       steps: ${{ steps.plan.outputs.steps }}
       browser: ${{ steps.plan.outputs.browser }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Classify the change and select the profile's jobs
         id: plan
         env:
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test notification filters, signing, and secret isolation
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
@@ -81,7 +81,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -98,19 +98,22 @@ jobs:
       #    of the cache identity. The key the action builds already covers the
       #    runner OS and architecture, the rustc version and host triple,
       #    `rust-toolchain.toml`, the Cargo manifests and lockfile, and the
-      #    build-relevant CARGO/CC/CFLAGS/CXX/CMAKE/RUST* environment. Linux
-      #    and macOS artifacts therefore can never share a lineage.
+      #    build-relevant CARGO/CC/CFLAGS/CXX/CMAKE/RUST* environment.
       #
       # 2. `shared-key` names one stable lineage per semantic lane, replacing
       #    the action's automatic job-id component with a readable name. Lanes
-      #    deliberately do NOT share a key with each other: GitHub cache
-      #    entries are immutable and these jobs start concurrently, so a single
-      #    shared key would let whichever lane finishes first freeze its own
+      #    that can start concurrently deliberately do NOT share a key with
+      #    each other: GitHub cache entries are immutable, so a single shared
+      #    key would let whichever lane finishes first freeze its own
       #    (smallest) `target/` as the entry every other lane then restores and
       #    can never correct. Per-lane lineages mean each lane stops rebuilding
       #    its own unchanged dependency graph on every run, which is the actual
       #    optimization; cross-populating siblings within one cold run is not a
-      #    goal.
+      #    goal. The one sanctioned exception is `rust-platform-macos`, shared
+      #    by `rust-platform-core` (FAST-only) and `rust-platform-boundaries`
+      #    (FULL-only): the two never run in the same profile, compile the same
+      #    dependency graph under identical settings, and the sharing halves
+      #    the macOS cache budget.
       #
       # 3. Only the dependency graph is cached. The action excludes workspace
       #    crates by default and that default is kept, so no rustX artifact is
@@ -122,15 +125,23 @@ jobs:
       #    selected or what they prove; it only changes how much dependency
       #    compilation is repeated. A completely cold runner remains valid.
       #
-      # 5. Every lane may *restore* a compatible cache, but only a trusted push
-      #    to `main` *publishes* one — that is what `save-if` encodes. Pull
-      #    requests are cache consumers, never cache publishers: a PR cannot
-      #    spend the repository's shared cache budget (the seven lineages are
-      #    ~7.1 GB of a 10 GB LRU pool) and untrusted fork execution can never
-      #    become a writer of the state trusted runs later restore. The reuse
-      #    path is `main` cache -> future run with a compatible key. This
-      #    workflow's `push` trigger is already `main`-only; the condition
-      #    stays explicit so the ownership contract is locally obvious.
+      # 5. Publishing has two scopes. A `main` push publishes the shared
+      #    lineage every run may restore (this workflow's `push` trigger is
+      #    `main`-only). A pull_request run may additionally publish into the
+      #    PR's own cache scope — writes on the merge ref are visible only to
+      #    later runs of that same PR and can never reach `main`, so PR saves
+      #    add entries without polluting the trusted lineage. They do still
+      #    draw on the repository's shared ~10 GB cache pool, so scope
+      #    isolation ≠ capacity isolation: each PR adds ~1 GB per lane entry.
+      #    Fork execution keeps its own scope and can never become a writer
+      #    of what `main` runs restore. The macOS lineages
+      #    (`rust-platform-macos`, `desktop-host`) are published by `main`'s
+      #    FULL runs once this lands; `rust-platform-core` is a FAST-only lane
+      #    and `main` only runs FULL, so it restores the same unified
+      #    `rust-platform-macos` entry that `rust-platform-boundaries`
+      #    publishes. Until then PR-scope saves keep those lanes self-warming.
+      #    A PR's first run stays cold unless a compatible main/base cache
+      #    exists — its own saves warm only that PR's later runs.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -144,7 +155,7 @@ jobs:
         run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
 
       - name: Install pinned Node for benchmark contract tests
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -182,7 +193,7 @@ jobs:
       VERIFICATION_PROFILE: fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -200,12 +211,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -220,11 +231,7 @@ jobs:
       - name: Run the FAST unit and contract core
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
-
-      - name: Run the SQLite store contracts (durable changes)
-        if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- --skip boundary_suites:: --skip ::scale:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
@@ -240,6 +247,16 @@ jobs:
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-features --locked --test process
+
+
+      # Unit tests of the extracted workspace crates (rustx-*), including
+      # rustx-durable's SQLite store contracts, run here unconditionally so a
+      # crates/** change cannot slip past FAST; only the `::scale::` capacity
+      # module is excluded. check_test_lanes enumerates each member's lib
+      # tests and fails closed when a new member is left unselected, when the
+      # skip matches nothing, or when a member `::scale::` test is selected.
+      - name: Run extracted workspace crate tests
+        run: 'cargo test --workspace --exclude rustx --lib --all-features --locked -- --skip ::scale::'
 
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
@@ -259,7 +276,7 @@ jobs:
       VERIFICATION_PROFILE: fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -305,12 +322,13 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Bound compiler parallelism on this heavy all-feature lane.
-      # libtest concurrency, targets, assertions, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "1"
+      # Phase-2 experiment: the hosted runner has 4 vCPU; compile-phase
+      # parallelism previously serialized at 1. libtest concurrency,
+      # targets, assertions, and the 90-minute ceiling stay unchanged.
+      CARGO_BUILD_JOBS: "4"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -336,8 +354,53 @@ jobs:
           nproc
           awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the contracts harnesses and stage the real executables
+        env:
+          RUSTX_PREPARED_JSON_OUT: ${{ runner.temp }}/contracts-artifacts.json
         run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
+      # Build-once/test-many: the compiled harnesses plus the staged real
+      # executables are packed with their repo-relative layout (the tests'
+      # compile-time CARGO_BIN_EXE_* paths still resolve on a shard runner),
+      # inventoried by libtest discovery under this lane's own filters, and
+      # split across the shard jobs by duration weight. rust-contracts-shard
+      # executes the assigned tests; rust-contracts-report proves every
+      # inventoried test ran exactly once.
+      - name: Bind the prepared artifacts to this checkout
+        run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/contracts-manifest/manifest.json"
+      - name: Pack the harnesses and staged executables
+        run: python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/contracts-artifacts.json" --out "$RUNNER_TEMP/contracts-prepared"
+      - name: Discover the contracts inventory and assign the shards
+        run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/contracts-manifest/manifest.json" --prepared "$RUNNER_TEMP/contracts-prepared" --spec test-support/rust-lanes/contracts.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/contracts-inventory"
+      - name: Package the prepared artifacts
+        run: tar -C "$RUNNER_TEMP/contracts-prepared" -cf - . | zstd -T0 -1 -o "$RUNNER_TEMP/contracts-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-prepared
+          path: ${{ runner.temp }}/contracts-prepared.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-inventory
+          path: |
+            ${{ runner.temp }}/contracts-inventory/
+            ${{ runner.temp }}/contracts-manifest/
+          retention-days: 14
+          if-no-files-found: error
+
+      # Cargo/libtest discovery of this lane's targets against every Linux
+      # step that selects them: an unassigned target, a stale filter or
+      # --skip, or a Linux test no lane executes fails here. The checker is
+      # an `--examples` target, so it is already compiled by the prepare
+      # step above and this run completes in seconds. It scans ci.yml
+      # statically; its own placement in this job is irrelevant.
+      - name: Check test lane coverage
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts --job rust-contracts-shard --job rust-contracts-post
+
+      # The tests these steps used to run in this job now execute on the
+      # rust-contracts-shard runners against the packed artifact above; the
+      # shard reports prove the same coverage this lane asserted before.
       # Source-module unit tests + the scripted contract suites
       # (`scripted_suites::`) + the App Server scripted contracts compiled
       # under the session runtime manager's private test module
@@ -351,30 +414,55 @@ jobs:
       # discovery, so a test added to a bin or an example is picked up here
       # automatically — which is simpler than a second repository policy
       # saying those targets must stay test-free forever.
-      - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
       # normalization over the in-process FixtureServer. The provider
       # target also carries the #[ignore]d opt-in live smoke tests, which
       # never run here.
-      - name: Run the pure contract targets
-        run: cargo test --test contracts --test provider --all-features --locked
+
+  # The contracts lane's non-artifact tail — doctests, extracted member
+  # unit tests, and the lane coverage check — runs in parallel with the
+  # shards instead of delaying their start. It rebuilds on its own runner;
+  # the shards are the critical path.
+  rust-contracts-post:
+    name: Deterministic contracts (doctests + members)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts-post']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.100.0"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-contracts
+          # This job runs in parallel with rust-contracts, which owns the
+          # lineage's publication; saving here too would race the same key.
+          save-if: false
 
       # Doctests (both positive API counterparts and `compile_fail` encapsulation
       # proofs) are not executed by `--all-targets`; execute them explicitly
       # here against the compiled `--all-features` library.
       - name: Run doctests
-        run: cargo test --doc --all-features --locked
+        # --workspace so doctests that moved into the extracted rustx-*
+        # crates keep executing; the lane checker forwards it the same way.
+        run: cargo test --doc --workspace --all-features --locked
 
-      # Cargo/libtest discovery of this lane's targets against every Linux
-      # step that selects them: an unassigned target, a stale filter or
-      # --skip, or a Linux test no lane executes fails here. The checker's own
-      # deterministic tests ran above as part of `--examples`.
-      # Reuse the all-feature library already compiled by the tested targets.
-      - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      - name: Run extracted workspace crate tests
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -383,6 +471,75 @@ jobs:
   # step that runs a uv-dependent boundary (the emulator and the managed
   # FastMCP children): RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing
   # toolchain into a hard failure instead of a silent skip.
+  # Three shard runners, each executing its assigned slice of the packed
+  # contracts inventory by exact test name. All shards always finish so one
+  # failure never hides the others; rust-contracts-report owns the verdict.
+  rust-contracts-shard:
+    name: Deterministic contracts (shard ${{ matrix.shard }}/3)
+    needs: [plan, rust-contracts]
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts-shard']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the provider emulator used by contract tests
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-prepared
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-inventory
+          path: ${{ runner.temp }}/inventory
+      - name: Restore the packed artifacts at their compile-time paths
+        run: tar -C . -xf "$RUNNER_TEMP/contracts-prepared.tar.zst"
+      - name: Execute shard ${{ matrix.shard }}
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/contracts-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --spec test-support/rust-lanes/contracts.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+      - name: Shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-shard-${{ matrix.shard }}
+          path: shard-report/
+          if-no-files-found: ignore
+
+  # The one contracts verdict: every inventoried test ran exactly once and
+  # every selected shard succeeded.
+  rust-contracts-report:
+    name: Deterministic contracts coverage
+    needs: [plan, rust-contracts, rust-contracts-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['rust-contracts-report'] }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-contracts-inventory
+          path: ${{ runner.temp }}/inventory
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rust-contracts-shard-*
+          path: ${{ runner.temp }}/runs
+      - name: Verify complete coverage across shards
+        run: python3 test-support/rust_test_shards.py verify --inventory "$RUNNER_TEMP/inventory/contracts-inventory/inventory.json" --runs "$RUNNER_TEMP/runs"
+      - name: All selected shards succeeded
+        run: test "${{ needs.rust-contracts-shard.result }}" = success
+
   rust-boundaries:
     name: Boundary suites (Linux)
     needs: plan
@@ -395,12 +552,16 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
-      # Same compiler serialization as rust-contracts. Targets, assertions,
-      # libtest concurrency, and the 90-minute ceiling stay.
-      CARGO_BUILD_JOBS: "1"
+      # jobs=4 crashed this lane's runner mid-compile with no uploaded logs on
+      # the first attempt of three out of four fresh FULL runs (runs
+      # 45569412532, 45618765361, 45651033891); every rerun — warm-cache,
+      # lower memory pressure — passed. Same OOM signature as the macOS
+      # jobs=3 experiment. jobs=2 halves peak compile memory; libtest
+      # concurrency, targets, assertions and the 90-minute ceiling stay.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -417,12 +578,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -442,6 +603,8 @@ jobs:
           nproc
           awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the boundary harnesses and stage the real executables
+        env:
+          RUSTX_PREPARED_JSON_OUT: ${{ runner.temp }}/boundaries-artifacts.json
         run: >-
           python3 test-support/prepare_native_tests.py --
           cargo test --all-features --locked --no-run
@@ -454,31 +617,116 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
-      - name: Run the external boundary targets
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: >-
-          cargo test --all-features --locked
-          --test durable
-          --test process
-          --test subagent
-          --test tools
-          --test conformance
-          --test cfg3_catalog
-          --test cfg3_managed_output
+      # Build-once/test-many, mirroring rust-contracts: pack the compiled
+      # harnesses plus the staged real executables, inventory them under
+      # this lane's own filters, split across shard runners by duration
+      # weight, and prove in rust-boundaries-report that every inventoried
+      # test ran exactly once. The two executing steps this lane used to
+      # carry now run on the rust-boundaries-shard runners.
+      - name: Bind the prepared artifacts to this checkout
+        run: python3 test-support/rust_test_shards.py manifest --features all-features --profile test --out "$RUNNER_TEMP/boundaries-manifest/manifest.json"
+      - name: Pack the harnesses and staged executables
+        run: python3 test-support/rust_test_shards.py pack --target-dir target/debug --cargo-json "$RUNNER_TEMP/boundaries-artifacts.json" --out "$RUNNER_TEMP/boundaries-prepared"
+      - name: Discover the boundaries inventory and assign the shards
+        run: python3 test-support/rust_test_shards.py inventory --manifest "$RUNNER_TEMP/boundaries-manifest/manifest.json" --prepared "$RUNNER_TEMP/boundaries-prepared" --spec test-support/rust-lanes/boundaries.json --shards 3 --weights test-support/rust-shard-weights.json --out "$RUNNER_TEMP/boundaries-inventory"
+      - name: Package the prepared artifacts
+        run: tar -C "$RUNNER_TEMP/boundaries-prepared" -cf - . | zstd -T0 -1 -o "$RUNNER_TEMP/boundaries-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-boundaries-prepared
+          path: ${{ runner.temp }}/boundaries-prepared.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-boundaries-inventory
+          path: |
+            ${{ runner.temp }}/boundaries-inventory/
+            ${{ runner.temp }}/boundaries-manifest/
+          retention-days: 14
+          if-no-files-found: error
 
-      - name: Run the in-crate boundary suites
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- boundary_suites::'
-
+      # Extracted workspace crate unit tests run once, in rust-contracts:
+      # executing them here too was a measured six-to-seven-minute duplicate
+      # with no additional coverage.
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
       # --all-features the checker links the library unit the external
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries --job rust-boundaries-shard
+
+  # Three shard runners, each executing its assigned slice of the packed
+  # boundaries inventory by exact test name. All shards always finish so
+  # one failure never hides the others; rust-boundaries-report owns the
+  # verdict.
+  rust-boundaries-shard:
+    name: Boundary suites (shard ${{ matrix.shard }}/3)
+    needs: [plan, rust-boundaries]
+    if: fromJSON(needs.plan.outputs.run)['rust-boundaries-shard']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Prepare the provider emulator used by boundary tests
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-boundaries-prepared
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-boundaries-inventory
+          path: ${{ runner.temp }}/inventory
+      - name: Restore the packed artifacts at their compile-time paths
+        run: tar -C . -xf "$RUNNER_TEMP/boundaries-prepared.tar.zst"
+      - name: Execute shard ${{ matrix.shard }}
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: python3 test-support/rust_test_shards.py run --manifest "$RUNNER_TEMP/inventory/boundaries-manifest/manifest.json" --prepared . --inventory "$RUNNER_TEMP/inventory/boundaries-inventory/inventory.json" --spec test-support/rust-lanes/boundaries.json --features all-features --profile test --root . --shard ${{ matrix.shard }} --report shard-report/report.json
+      - name: Shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-boundaries-shard-${{ matrix.shard }}
+          path: shard-report/
+          if-no-files-found: ignore
+
+  # The one boundaries verdict: every inventoried test ran exactly once and
+  # every selected shard succeeded.
+  rust-boundaries-report:
+    name: Boundary suites coverage
+    needs: [plan, rust-boundaries, rust-boundaries-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['rust-boundaries-report'] }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rust-boundaries-inventory
+          path: ${{ runner.temp }}/inventory
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rust-boundaries-shard-*
+          path: ${{ runner.temp }}/runs
+      - name: Verify complete coverage across shards
+        run: python3 test-support/rust_test_shards.py verify --inventory "$RUNNER_TEMP/inventory/boundaries-inventory/inventory.json" --runs "$RUNNER_TEMP/runs"
+      - name: All selected shards succeeded
+        run: test "${{ needs.rust-boundaries-shard.result }}" = success
 
   # Rust platform coverage is intentional, not duplicated by habit. macOS
   # runs only platform-sensitive classes, natively; desktop-macos separately
@@ -502,10 +750,10 @@ jobs:
   #   39035924891) it shortened FULL by about one minute (39.0 vs 40.1 min)
   #   for about 17 more macOS runner-minutes, because that runner compiles
   #   the dependencies and the ordinary library again. The deterministic scripted contract
-  #   suites are selected OUT by their `scripted_suites::` prefix: they are
-  #   pure state-machine/planning/manual-clock contracts whose invariants
-  #   carry no OS semantics, so rerunning them on macOS would be duplication
-  #   without platform value.
+  #   suites are `cfg(target_os = "linux")`: they are pure state-machine/
+  #   planning/manual-clock contracts whose invariants carry no OS semantics,
+  #   so compiling and rerunning them on macOS would be duplication without
+  #   platform value.
   #
   # The contracts and provider targets assert deterministic JSON/SSE
   # translation with no process or filesystem semantics, so they are
@@ -514,7 +762,7 @@ jobs:
     name: Platform-sensitive external boundaries (macOS core)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-core']
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       VERIFICATION_PROFILE: fast
@@ -524,13 +772,19 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
       # One rustX compilation peaks near 3.5 GB RSS on this runner
-      # (/usr/bin/time -l), so compiler processes stay serialized; libtest
-      # keeps its existing concurrency, assertions, selectors and deadlines.
-      CARGO_BUILD_JOBS: "1"
+      # (/usr/bin/time -l). -j2 lets rustc run two codegen workers inside the
+      # monolithic lib and lib-test units and overlaps one smaller unit
+      # alongside; the two all-feature library variants still never overlap
+      # because the compile steps keep them in separate cargo invocations, so
+      # the worst pairing stays under the 7 GB runner. The per-step
+      # /usr/bin/time RSS output and the cargo-timings artifact validate it.
+      # libtest keeps its existing concurrency, assertions, selectors and
+      # deadlines.
+      CARGO_BUILD_JOBS: "2"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -539,15 +793,32 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
-      # One lineage per lane; see the policy note in the `quality` job. The
-      # macOS lineages share nothing with any Linux lane: the action's key
-      # carries the runner OS, architecture and host triple.
+      # The cache key's environment hash covers every rustup toolchain the
+      # image happens to preinstall, so image revisions silently change the
+      # key. Keep only the pinned toolchain; idempotent and empty-set safe.
+      - name: Normalize preinstalled rustup toolchains
+        shell: bash
+        run: |
+          while read -r line; do
+            tc="${line%% *}"
+            case "$tc" in
+              1.100.0-*) ;;
+              *) rustup toolchain uninstall "$tc" || true ;;
+            esac
+          done < <(rustup toolchain list)
+          rustc --version --verbose
+      # rust-platform-core and rust-platform-boundaries compile the same
+      # dependency graph under identical toolchain, features and profile
+      # settings, so both lanes share the single `rust-platform-macos`
+      # lineage; see the policy note in the `quality` job. The macOS lineage
+      # shares nothing with any Linux lane: the action's key carries the
+      # runner OS, architecture and host triple.
       - name: Cache Rust dependencies
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-platform-core
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          shared-key: rust-platform-macos
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Record native build environment
         shell: bash
@@ -570,12 +841,12 @@ jobs:
       # The conformance target and the in-crate boundary suites launch the
       # provider emulator with `uv run`.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -611,12 +882,19 @@ jobs:
 
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      - name: Run extracted workspace crate tests
+        run: 'cargo test --workspace --exclude rustx --lib --all-features --locked -- --skip ::scale::'
+
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-core
 
       - name: Native Cargo timing reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-core-cargo-timings
           path: target/cargo-timings/*.html
@@ -627,7 +905,7 @@ jobs:
     name: Platform-sensitive boundaries (macOS full)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
-    runs-on: macos-latest
+    runs-on: macos-15
     # Run 43460497372 spent 80m building; 100m cut off the test/coverage tail.
     # Allow the full execution/coverage tail plus runner variance; see
     # docs/issue-480/ci-budget.md. Individual test deadlines stay unchanged.
@@ -640,13 +918,19 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
       # One rustX compilation peaks near 3.5 GB RSS on this runner
-      # (/usr/bin/time -l), so compiler processes stay serialized; libtest
-      # keeps its existing concurrency, assertions, selectors and deadlines.
-      CARGO_BUILD_JOBS: "1"
+      # (/usr/bin/time -l). -j2 lets rustc run two codegen workers inside the
+      # monolithic lib and lib-test units and overlaps one smaller unit
+      # alongside; the two all-feature library variants still never overlap
+      # because the compile steps keep them in separate cargo invocations, so
+      # the worst pairing stays under the 7 GB runner. The per-step
+      # /usr/bin/time RSS output and the cargo-timings artifact validate it.
+      # libtest keeps its existing concurrency, assertions, selectors and
+      # deadlines.
+      CARGO_BUILD_JOBS: "2"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -655,15 +939,32 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
-      # One lineage per lane; see the policy note in the `quality` job. The
-      # macOS lineages share nothing with any Linux lane: the action's key
-      # carries the runner OS, architecture and host triple.
+      # Same key-stability normalization as rust-platform-core: drop every
+      # preinstalled rustup toolchain except the pinned one so the runner
+      # image's toolchain set cannot perturb the cache key's env hash.
+      - name: Normalize preinstalled rustup toolchains
+        shell: bash
+        run: |
+          while read -r line; do
+            tc="${line%% *}"
+            case "$tc" in
+              1.100.0-*) ;;
+              *) rustup toolchain uninstall "$tc" || true ;;
+            esac
+          done < <(rustup toolchain list)
+          rustc --version --verbose
+      # rust-platform-core and rust-platform-boundaries compile the same
+      # dependency graph under identical toolchain, features and profile
+      # settings, so both lanes share the single `rust-platform-macos`
+      # lineage; see the policy note in the `quality` job. The macOS lineage
+      # shares nothing with any Linux lane: the action's key carries the
+      # runner OS, architecture and host triple.
       - name: Cache Rust dependencies
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-platform-boundaries
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          shared-key: rust-platform-macos
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
       - name: Record native build environment
         shell: bash
@@ -686,12 +987,12 @@ jobs:
       # The conformance target and the in-crate boundary suites launch the
       # provider emulator with `uv run`.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -724,10 +1025,26 @@ jobs:
       - name: Compile unit and in-crate boundary test harnesses and stage the real executables
         run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
 
+      # macOS runners start with a 256-descriptor soft limit while the lib
+      # test binary drives ~4400 unit tests concurrently, each holding
+      # tempdirs, watchers and collection locks; the exhaustion surfaces as
+      # transient `Io` failures. `ulimit` must run inside the step's shell, so
+      # export BASH_ENV via GITHUB_ENV: the runner does not set BASH_ENV
+      # itself, but every later bash step sources the file it names, which
+      # also keeps the cargo test steps single-line as the lane checker
+      # requires.
+      - name: Raise the file-descriptor ceiling for test steps
+        run: |
+          printf 'ulimit -n 10240 || ulimit -n 4096 || true\n' > "$RUNNER_TEMP/raise-fd-limit.sh"
+          echo "BASH_ENV=$RUNNER_TEMP/raise-fd-limit.sh" >> "$GITHUB_ENV"
+
       - name: Run unit tests and the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+        # The scripted contract suites are `cfg(target_os = "linux")` and are
+        # not compiled on macOS, so no `scripted_suites::` skip belongs here:
+        # a skip that excludes nothing fails the lane checker.
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
@@ -742,6 +1059,16 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
+      # Kept in this job on purpose: macos-15 concurrency is limited to two
+      # slots on the free tier, and a separate member job was measured to
+      # delay this lane's start by ~40 minutes (run 45555289930).
+      - name: Run extracted workspace crate tests
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+
+
       # Native macOS discovery: both --skip selectors must still exclude
       # tests, and `boundary_suites::` and every external target (see
       # REQUIREMENTS in the checker) must execute here entirely.
@@ -750,7 +1077,7 @@ jobs:
 
       - name: Native Cargo timing reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-cargo-timings
           path: target/cargo-timings/*.html
@@ -765,10 +1092,11 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['tui']
     runs-on: ubuntu-26.04
     timeout-minutes: 25
-
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -780,12 +1108,12 @@ jobs:
       # The real-child integration suite drives the shared provider emulator,
       # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -861,7 +1189,7 @@ jobs:
     # prior 15m budget for the native generator and both protocol checks.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
@@ -875,7 +1203,7 @@ jobs:
         with:
           shared-key: app-server-protocol
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned protocol toolchain
@@ -895,24 +1223,44 @@ jobs:
     name: Desktop adapter and Host (macOS Node)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['desktop-macos']
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 35
+    env:
+      # Dependency debuginfo is off workspace-wide; strip it for the
+      # workspace crates here too — this job links test-free binaries whose
+      # DWARF is never consumed.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
+      # Same key-stability normalization as rust-platform-core: drop every
+      # preinstalled rustup toolchain except the pinned one so the runner
+      # image's toolchain set cannot perturb the cache key's env hash.
+      - name: Normalize preinstalled rustup toolchains
+        shell: bash
+        run: |
+          while read -r line; do
+            tc="${line%% *}"
+            case "$tc" in
+              1.100.0-*) ;;
+              *) rustup toolchain uninstall "$tc" || true ;;
+            esac
+          done < <(rustup toolchain list)
+          rustc --version --verbose
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
         run: cargo build --bins --locked
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Node dependencies
@@ -921,10 +1269,10 @@ jobs:
           (cd web-console && corepack install && pnpm install --frozen-lockfile)
           (cd tui && pnpm install --frozen-lockfile)
       # The TUI Save integration suite drives the shared provider emulator.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -956,20 +1304,6 @@ jobs:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: node --test test/deliveries.test.ts test/delivery-integration.test.ts
 
-  # Browser acceptance builds once and runs in the selected shards:
-  #
-  #   browser-prepare -> web-client
-  #                   -> browser-shard (FULL: 1/3, 2/3, 3/3) -> browser-report
-  #
-  # browser-prepare compiles the real App Server, native Tool supervisors and
-  # Artifact fixture and runs the one production Web build (Vite plus the
-  # artifact provenance check) from the checked-out source, then records them
-  # with their identity (commit, runner platform, Rust pin, Cargo command,
-  # Node ABI, pnpm, Playwright, dependency sources) and per-file checksums
-  # (web-console/scripts/browser-artifact.ts). Every consumer installs those
-  # exact files only after verifying that identity against its own checkout
-  # and runner; a mismatch fails, and nothing is rebuilt in its place. The
-  # archive is a run-scoped workflow artifact, never a cache entry.
   browser-prepare:
     name: Browser inputs (build once)
     needs: plan
@@ -977,8 +1311,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
@@ -1022,15 +1356,15 @@ jobs:
           mkdir "$RUNNER_TEMP/browser-inventory"
           node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory"
       - name: Package the prepared inputs
-        run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
-      - uses: actions/upload-artifact@v4
+        run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -1 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
+      - uses: actions/upload-artifact@v7
         with:
           name: browser-prepared
           path: ${{ runner.temp }}/browser-prepared.tar.zst
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/browser-inventory/
@@ -1044,8 +1378,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Web dependencies
@@ -1064,10 +1398,10 @@ jobs:
           pnpm typecheck
           pnpm test
       - uses: ./.github/actions/document-runtime
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -1107,8 +1441,8 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.browser).shards }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
@@ -1124,15 +1458,15 @@ jobs:
           (cd tui && pnpm install --frozen-lockfile)
           (cd dev && pnpm install --frozen-lockfile)
       - uses: ./.github/actions/document-runtime
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
       - uses: ./.github/actions/browser-inputs
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/inventory
@@ -1152,7 +1486,7 @@ jobs:
         run: bash scripts/browser-tests.sh --test-list "$RUNNER_TEMP/inventory/shard-${{ matrix.shard }}.txt"
       - name: Shard report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-shard-${{ matrix.shard }}
           path: |
@@ -1161,7 +1495,7 @@ jobs:
           if-no-files-found: ignore
       - name: Browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-evidence-shard-${{ matrix.shard }}
           path: web-console/test-results/
@@ -1177,8 +1511,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       # Report aggregation uses locked development tools and existing artifacts.
@@ -1189,14 +1523,27 @@ jobs:
           corepack enable
           corepack install
           pnpm install --frozen-lockfile --dev --ignore-scripts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/inventory
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: browser-shard-*
           path: ${{ runner.temp }}/shards
+      # v8 flattens the download into `path` when the pattern matches exactly
+      # one artifact (a one-shard FAST run); wrap it back under its shard dir
+      # so the coverage loop sees one layout either way.
+      - name: Normalize a single-shard artifact layout
+        run: |
+          if [ -f "$RUNNER_TEMP/shards/shard-report/identity.json" ]; then
+            shard=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/shards/shard-report/identity.json','utf8')).shard)")
+            dest="$RUNNER_TEMP/shards/browser-shard-$shard"
+            mkdir -p "$dest"
+            for entry in shard-report blob-report; do
+              [ -d "$RUNNER_TEMP/shards/$entry" ] && mv "$RUNNER_TEMP/shards/$entry" "$dest/$entry"
+            done
+          fi
       - name: Merge the shard reports
         working-directory: web-console
         env:
@@ -1220,7 +1567,7 @@ jobs:
         run: test "${{ needs.browser-shard.result }}" = success
       - name: Merged browser report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-console-browser-report
           path: ${{ runner.temp }}/merged/
@@ -1237,7 +1584,12 @@ jobs:
       - rust-fast
       - documentation-contracts
       - rust-contracts
+      - rust-contracts-shard
+      - rust-contracts-report
+      - rust-contracts-post
       - rust-boundaries
+      - rust-boundaries-shard
+      - rust-boundaries-report
       - rust-platform-core
       - rust-platform-boundaries
       - tui
@@ -1258,7 +1610,7 @@ jobs:
       # second parent is still head, and the PR base is an ancestor of the
       # first parent (an intermediate stack merge) rather than the parent
       # itself. Ordinary PRs still match parents `[base, head]` exactly.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Every selected job succeeded, at the right profile, for the current head

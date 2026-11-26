@@ -21,10 +21,10 @@ pub(super) struct BashInput {
     /// Presentation only, never execution or approval authority.
     #[schemars(length(min = 1, max = 160))]
     pub description: Option<String>,
-    /// The invocation deadline in seconds. When omitted, no executor-local
-    /// deadline applies: a foreground invocation is bounded by the generic
-    /// Agent Loop execution-liveness hard deadline (Issue #204), and a
-    /// background execution is conversation-owned and unbounded.
+    /// Foreground wait in seconds before the command moves to a background job
+    /// instead of being killed. Omitted uses the 120 second default. An explicit
+    /// value overrides that budget and is capped at 600 seconds. A background
+    /// execution has no foreground budget. Cancellation still stops the command.
     #[schemars(range(min = 1))]
     pub timeout: Option<u64>,
 }

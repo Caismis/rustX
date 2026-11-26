@@ -1,7 +1,7 @@
-use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::scripted_suites::support::audit::assert_permission_reminder;
 mod compaction_head_tests;
 mod delivery_tests;
@@ -59,8 +59,8 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::conversation_runtime::{
-    ConversationContextConfig, ConversationRuntime, ConversationRuntimeError, CoordinatorProbe,
-    InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
+    ConversationContextConfig, ConversationRole, ConversationRuntime, ConversationRuntimeError,
+    CoordinatorProbe, InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
 };
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
@@ -567,7 +567,7 @@ async fn host_fixture_before_activation(
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match monotonic_clock {
         Some(clock) => ConversationRuntime::with_test_monotonic_clock(config, clock),
@@ -665,7 +665,7 @@ async fn host_fixture_with_runtime_probe(
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
-            workflow_output: None,
+            role: ConversationRole::Root,
         },
         probe,
     )
@@ -1868,7 +1868,7 @@ fn many_live_block_steps(
             .unwrap();
         }
         assert!(
-            crate::observation::bounded::bounded_bytes(
+            rustx_types::observation::bounded::bounded_bytes(
                 &super::super::snapshot::InFlightBlock::Text {
                     block_index: ContentBlockIndex::new(block),
                     text: text.clone()
@@ -2011,7 +2011,7 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
     );
     assert!(event_ref.readable_end > last.readable_end);
     assert!(
-        crate::observation::bounded::bounded_bytes(
+        rustx_types::observation::bounded::bounded_bytes(
             &after,
             crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
@@ -2769,6 +2769,7 @@ async fn incremental_projection_independent_snapshot_capture() {
 /// is accepted, not finished; the attempt settles and the canonical
 /// history is committed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // Compare admission, canonical publication, and reconstruction for the same request.
 async fn submit_when_idle_admits_and_runs_the_attempt() {
     let (adapter, fixture) =
         host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
@@ -2825,6 +2826,23 @@ async fn submit_when_idle_admits_and_runs_the_attempt() {
         .collect();
     assert_eq!(settled_events.len(), 1);
     assert_eq!(settled, 1);
+
+    let commits: Vec<_> = events
+        .iter()
+        .flat_map(|event| complete_transition(&event.event).facts())
+        .filter_map(|fact| match fact {
+            RuntimeClientEvent::MessageCommitted {
+                message,
+                transcript_cursor,
+                ..
+            } if message.id() == &message_id => Some(transcript_cursor),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(commits.as_slice(), [Some(_)]),
+        "expected one positioned commit for the adopted user, got {commits:?}"
+    );
 
     // The first model request observed the admitted Runtime Agent Status
     // fact through canonical history.
@@ -3388,18 +3406,6 @@ fn publish_pending_mutation(
         pending_observation.as_deref(),
         &read_cut,
     );
-    if let Some(cursor) = pending_observation.as_ref().and_then(|receipt| {
-        receipt
-            .selected
-            .as_ref()
-            .and_then(|header| header.message.transcript_cursor)
-            .or(receipt.removed_transcript)
-    }) {
-        inner
-            .store
-            .mark_observation_transcript_ready(cursor.get())
-            .unwrap();
-    }
 }
 
 fn pending_terminal_diagnostic(store: &dyn ConversationStore, attempt: &AttemptId) -> Vec<String> {
@@ -3486,7 +3492,11 @@ async fn assert_native_pending_removal_wakes_worker(fixture: &HostFixture, attem
         panic!("actual native removal receipt");
     };
     assert!(receipt.selected.is_none());
-    assert!(receipt.removed_transcript.is_some());
+    assert_eq!(receipt.removed_sequence, Some(sequence.get()));
+    assert_eq!(
+        read_cut.transcript,
+        before.read_cut.source_cut.as_ref().unwrap().read.transcript
+    );
     await_pending_fixture_publication(&fixture.host).await;
     let after = fixture.host.checkpoint().unwrap();
     assert!(after.cursor > before.cursor);
@@ -3549,7 +3559,7 @@ async fn finish_pending_fixture(
             pending_terminal_diagnostic(store.as_ref(), held_attempt)
         )
     });
-    let settled = fixture.runtime.child_attempt_settlement(0).await;
+    let settled = fixture.runtime.attempt_settlement(0).await;
     assert_eq!(&settled.attempt_id, held_attempt);
     assert!(matches!(
         settled.outcome,
@@ -4482,7 +4492,7 @@ async fn a_background_transition_and_checkpoint_capture_have_one_lock_order() {
     .await;
     // The terminal notice has its own root attempt; settle that finite
     // transition before asking for the final authoritative cut.
-    fixture.runtime.child_attempt_settlement(0).await;
+    fixture.runtime.attempt_settlement(0).await;
     let (snapshot, _) = fixture
         .host
         .checkpoint()
@@ -4655,7 +4665,7 @@ async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
     assert!(
         crate::runtime::observation::PublicationProjectionCommit::native_batch(
             &sink,
-            committed.observation.as_deref().unwrap(),
+            committed.observation.native_batch().unwrap(),
         )
         .is_installed()
     );
@@ -5717,7 +5727,7 @@ async fn captured_pending_body_survives_later_edit_removal_and_commit() {
         inbound_text("x", "captured body").content
     );
     let transcript = format!("{:?}", candidate.snapshot.transcript);
-    assert!(transcript.contains("captured body"));
+    assert!(!transcript.contains("captured body"));
     assert!(!transcript.contains("later edit"));
     assert!(!transcript.contains("future-commit"));
     release.send(true).unwrap();
@@ -7546,7 +7556,7 @@ async fn host_fixture_probe_with_native_tools(
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     })
     .expect("conversation runtime");
     let host = RuntimeClientHost::with_probe(
@@ -7645,7 +7655,7 @@ async fn host_fixture_probe_with_runtime_gate(
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
-            workflow_output: None,
+            role: ConversationRole::Root,
         },
         runtime_probe,
     )
@@ -7766,7 +7776,7 @@ async fn runtime_only_fixture(
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     };
     let runtime = match probe {
         Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -8183,7 +8193,7 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         clock: Some(Arc::new(FixedRuntimeClock)),
         initial_messages: Vec::new(),
         subagents: None,
-        workflow_output: None,
+        role: ConversationRole::Root,
     }
 }
 

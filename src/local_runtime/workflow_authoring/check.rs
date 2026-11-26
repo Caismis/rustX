@@ -105,7 +105,8 @@ impl UserConfigManager {
             .validate()?;
         }
         let path = file_path(self, target, id);
-        let presentation = document.presentation_diagnostics();
+        let presentation = document
+            .presentation_diagnostics(&crate::runtime::workflow::authoring::declared_output);
         let invalid = |revision, diagnostic| WorkflowCheckReport {
             revision,
             structure: WorkflowStructure::Invalid { diagnostic },

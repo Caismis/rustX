@@ -1,4 +1,4 @@
-//! CFG-01 filesystem and real native composition regressions (Linux and macOS CI).
+//! CFG-01 filesystem and real native composition regressions (Linux CI, macOS locally).
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
 use super::configuration::capture::workspace_identity;
 use super::configuration::*;
@@ -36,6 +36,7 @@ async fn compose_admitted_with_controller(
     super::LocalConversationCore::compose_with_access(
         launch,
         &dependencies,
+        std::sync::Arc::new(crate::runtime::types::SystemClock),
         registry,
         launch.config().clone(),
         SessionPersistentState::from_input(&launch.input),

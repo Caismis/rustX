@@ -329,6 +329,7 @@ fn transfer_hooks() -> &'static std::sync::Mutex<std::collections::BTreeMap<Stri
     > = std::sync::OnceLock::new();
     HOOKS.get_or_init(std::sync::Mutex::default)
 }
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn install_transfer_hook(correlation: String, hook: TransferHook) {
     assert!(

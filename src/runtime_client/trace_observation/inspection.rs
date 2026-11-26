@@ -77,7 +77,7 @@ pub(super) fn value<T: serde::Serialize + schemars::JsonSchema>(
         schema: &schema,
         root: &schema,
     };
-    let bytes = crate::observation::bounded::bounded_bytes(
+    let bytes = rustx_types::observation::bounded::bounded_bytes(
         &encoded,
         crate::observation::trace::TRACE_DETAIL_BYTES,
     )

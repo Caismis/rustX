@@ -881,7 +881,10 @@ impl ToolRegistration {
         {
             return;
         }
-        let Ok((model, validator)) = compile_tool_contract(&self.definition) else {
+        let Ok((model, validator)) = compile_tool_contract(
+            &self.definition,
+            crate::runtime::permission::supports_elevation(&self.definition),
+        ) else {
             self.contract = None;
             return;
         };
@@ -966,9 +969,10 @@ pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 /// The model-facing name reserved for Workflow Agent terminalization.
 ///
 /// This is a runtime protocol identity, not an ordinary Tool capability. It
-/// lives with the canonical Tool identity constants so every capability origin
-/// shares one collision rule before a definition can enter a catalog.
-pub const WORKFLOW_OUTPUT_TOOL_NAME: &str = "workflow_output";
+/// lives with the workflow identity contracts in `rustx-types` and is
+/// re-exported here so every capability origin shares one collision rule
+/// before a definition can enter a catalog.
+pub use rustx_types::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME;
 
 pub(crate) fn validate_model_facing_name(name: &str) -> Result<(), ToolRegistryError> {
     if name == WORKFLOW_OUTPUT_TOOL_NAME {
@@ -1123,11 +1127,13 @@ impl ToolRegistry {
             if let Some(contract) = cached.filter(|contract| contract.definition == definition) {
                 contract
             } else {
-                let (model, validator) = compile_tool_contract(&definition).map_err(|reason| {
-                    ToolRegistryError::ModelSchema {
-                        name: definition.name.clone(),
-                        reason,
-                    }
+                let (model, validator) = compile_tool_contract(
+                    &definition,
+                    crate::runtime::permission::supports_elevation(&definition),
+                )
+                .map_err(|reason| ToolRegistryError::ModelSchema {
+                    name: definition.name.clone(),
+                    reason,
                 })?;
                 Arc::new(CompiledToolContract {
                     definition: definition.clone(),
@@ -1332,17 +1338,20 @@ impl ToolRegistry {
     /// executor.
     pub fn preflight(&self, call: &ToolCall) -> Result<PreflightOutcome, ToolPreflightError> {
         let entry = self.resolve_entry(call)?;
-        let (mode, elevation_reason, stripped) =
-            match resolve_invocation_metadata(entry.definition.execution_policy, &call.arguments) {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(PreflightOutcome::Rejected {
-                        tool_id: entry.definition.id.clone(),
-                        origin: entry.definition.origin.clone(),
-                        error: error.to_string(),
-                    });
-                }
-            };
+        let (mode, elevation_reason, stripped) = match resolve_invocation_metadata(
+            &entry.definition,
+            &call.arguments,
+            crate::runtime::permission::supports_elevation(&entry.definition),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(PreflightOutcome::Rejected {
+                    tool_id: entry.definition.id.clone(),
+                    origin: entry.definition.origin.clone(),
+                    error: error.to_string(),
+                });
+            }
+        };
         Ok(Self::prepare_arguments(
             entry,
             crate::tools::types::ToolInvocationId::Agent {

@@ -115,7 +115,7 @@ use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
 use crate::runtime::RuntimeResourceRevision;
 use crate::runtime::conversation_runtime::{
-    ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
+    ConversationContextConfig, ConversationRole, ConversationRuntime, ConversationRuntimeError,
     RuntimeConversationConfig,
 };
 use crate::runtime::identity::ConversationId;
@@ -561,6 +561,7 @@ impl LocalConversationCore {
         Self::compose_with_access(
             paths,
             dependencies,
+            Arc::new(crate::runtime::types::SystemClock),
             registry,
             runtime_config,
             session_state,
@@ -580,6 +581,7 @@ impl LocalConversationCore {
     pub(crate) async fn compose_with_access(
         paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
+        clock: Arc<dyn crate::runtime::types::RuntimeClock>,
         registry: ModelBindingRegistry,
         runtime_config: CurrentRuntimeConfig,
         session_state: SessionPersistentState,
@@ -644,6 +646,7 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
+            tool_runtime_config.clock = Some(clock.clone());
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
@@ -929,10 +932,10 @@ impl LocalConversationCore {
                     tool_runtime: tool_runtime.clone(),
                     capability: capability.clone(),
                     resources,
-                    clock: None,
+                    clock: Some(clock),
                     initial_messages,
                     subagents: Some(subagents),
-                    workflow_output: None,
+                    role: ConversationRole::Root,
                 })?;
                 runtime.install_initialization_cancellation(cancellation.clone());
                 let catalog_loader = resource_loader.clone();

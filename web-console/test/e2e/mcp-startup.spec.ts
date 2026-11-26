@@ -140,15 +140,21 @@ for (const destination of ['existing', 'new'] as const) test(`first Send to ${de
       sessions.push(created.session);
     }
     expect(gate.calls).toBe(0);
-    const ids = sessions.map(session => session.id);
-    await page.addInitScript(({ endpoint, ids }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ids, route: ids[0] ? { kind: 'session', sessionId: ids[0] } : { kind: 'new-conversation' } })), { endpoint: new URL(fixture.endpoint).href, ids });
+    const selectedId = sessions[0].id;
+    await page.addInitScript(({ endpoint, selectedId }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({
+      endpoint, openViews: [selectedId], route: { kind: 'session', sessionId: selectedId },
+    })), { endpoint: new URL(fixture.endpoint).href, selectedId });
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    // All six real peers have entered tools/list. No submission has armed any
-    // clock, and no response has freed an ordinary client/native request slot.
-    await expect.poll(() => gate.calls).toBe(6);
+    // Startup restores the selected Session. Open each remaining Session
+    // explicitly and leave its tools/list gate holding an attachment slot.
+    await expect.poll(() => gate.calls).toBe(1);
+    for (const [index, session] of sessions.slice(1).entries()) {
+      await page.locator(`button[data-session-id="${session.id}"]`).click();
+      await expect.poll(() => gate.calls).toBe(index + 2);
+    }
     expect(wire.requests.filter(row => row.method === 'thread/resume')).toHaveLength(6);
     expect(wire.responses.filter(row => row.method === 'thread/resume')).toHaveLength(0);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
@@ -161,7 +167,8 @@ for (const destination of ['existing', 'new'] as const) test(`first Send to ${de
     }
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('mcp startup under saturated attachments');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    let selected = { id: sessions[0].id, node: sessions[0].active_node };
+    const lastOpened = sessions[sessions.length - 1];
+    let selected = { id: lastOpened.id, node: lastOpened.active_node };
     if (destination === 'new') {
       await expect.poll(() => wire.held()).toBe(1);
       const created = wire.responses.find(row => row.method === 'thread/start')!.result.session;

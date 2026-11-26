@@ -238,7 +238,7 @@ fn shared_measurement_at_100_300_1000_never_reserializes_the_old_prefix() {
         let next = user(index + 1, "new tail 水 \\\n");
         let mut extended = input.clone();
         extended.push(next.clone());
-        let height = usize::from(extended.0.root.as_ref().unwrap().height);
+        let height = usize::from(extended.manifest().root.as_ref().unwrap().height);
         let anchored =
             engine.build_projection_input(revision.next(), extended, &[], Some(&observed), "");
         let new_bytes = take_accounted_bytes();

@@ -613,7 +613,10 @@ async fn active_guidance_uses_real_child_durable_acceptance_and_ack_evidence() {
             &runtime.tool_runtime().durable_store(),
             &observations,
         );
-        runtime.gate_child_turns();
+        runtime
+            .child_control()
+            .expect("child runtime")
+            .gate_child_turns();
         runtime.activate();
         let stop = Arc::new(tokio::sync::Notify::new());
         let serve = tokio::spawn(GUIDANCE_ACK_LOSS.scope(lose_ack, {

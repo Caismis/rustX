@@ -4,22 +4,22 @@ use super::{ConversationRuntime, RuntimeInner};
 use tokio::sync::watch;
 
 #[derive(Debug, Clone)]
-pub(super) struct TaskActivity(watch::Sender<usize>);
+pub(crate) struct TaskActivity(watch::Sender<usize>);
 impl Default for TaskActivity {
     fn default() -> Self {
         Self(watch::channel(0).0)
     }
 }
 impl TaskActivity {
-    pub(super) fn pulse(&self) {
+    pub(crate) fn pulse(&self) {
         self.0.send_modify(|_| {});
     }
-    pub(super) fn lease(&self) -> TaskActivityLease {
+    pub(crate) fn lease(&self) -> TaskActivityLease {
         self.0.send_modify(|count| *count += 1);
         TaskActivityLease(self.0.clone())
     }
 }
-pub(super) struct TaskActivityLease(watch::Sender<usize>);
+pub(crate) struct TaskActivityLease(watch::Sender<usize>);
 impl Drop for TaskActivityLease {
     fn drop(&mut self) {
         self.0.send_modify(|count| *count -= 1);
@@ -63,10 +63,9 @@ impl RuntimeInner {
         let state = self.state.try_lock().ok()?;
         let (foreground, system_error) = {
             (
-                state.current_attempt.is_some()
-                    || state.scheduled.is_some()
-                    || state.manual_compaction.is_some(),
-                self.durability_gate.try_is_failed()? || state.mcp_settlement_failure.is_some(),
+                state.foreground.slot.is_foreground_active(),
+                self.durability_gate.try_is_failed()?
+                    || state.health.mcp_settlement_failure.is_some(),
             )
         };
         #[cfg(test)]
@@ -82,20 +81,21 @@ impl RuntimeInner {
                     .background()
                     .with_activity(|background| {
                         let read_children = |children, child_fault, approval, user_input| {
-                            self.auxiliary.with_activity(|auxiliary| RuntimeActivity {
-                                active: foreground
-                                    || tasks != 0
-                                    || background
-                                    || children
-                                    || auxiliary
-                                    || waits.0
-                                    || waits.1
-                                    || approval
-                                    || user_input,
-                                waiting_on_approval: waits.0 || approval,
-                                waiting_on_user_input: waits.1 || user_input,
-                                system_error: system_error || child_fault,
-                            })
+                            self.external_auxiliary
+                                .with_activity(|auxiliary| RuntimeActivity {
+                                    active: foreground
+                                        || tasks != 0
+                                        || background
+                                        || children
+                                        || auxiliary
+                                        || waits.0
+                                        || waits.1
+                                        || approval
+                                        || user_input,
+                                    waiting_on_approval: waits.0 || approval,
+                                    waiting_on_user_input: waits.1 || user_input,
+                                    system_error: system_error || child_fault,
+                                })
                         };
                         match &self.subagents {
                             Some(children) => children.with_activity(read_children).flatten(),
@@ -135,7 +135,7 @@ impl ConversationRuntime {
         if let Some(children) = &self.inner.subagents {
             children.wait_activity_ready();
         }
-        self.inner.auxiliary.wait_activity_ready();
+        self.inner.external_auxiliary.wait_activity_ready();
     }
     pub(crate) fn activity_changes(&self) -> ActivityChanges {
         ActivityChanges {
@@ -152,7 +152,7 @@ impl ConversationRuntime {
                 .subagents
                 .as_ref()
                 .map(crate::runtime::subagent::SubagentRegistry::activity_changes),
-            auxiliary: self.inner.auxiliary.activity_changes(),
+            auxiliary: self.inner.external_auxiliary.activity_changes(),
             child_recovery: self
                 .inner
                 .subagents

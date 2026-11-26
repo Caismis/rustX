@@ -330,6 +330,41 @@ impl RuntimeResourceSnapshot {
         self
     }
 
+    /// Test-only resolved Root profile carrying an explicit Workflow
+    /// authority list — the headless fixture has no `rustx.toml` authoring
+    /// layer, so scheduled-workflow preparation needs the list injected.
+    #[cfg(test)]
+    pub(crate) fn with_test_root_workflows(
+        mut self,
+        workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
+    ) -> Self {
+        use crate::runtime::agent_profile::{
+            AgentProfileAuthority, AgentScope, resolve_agent_profile,
+        };
+        let mut profile = crate::local_runtime::config::builtin_root_profile()
+            .lower()
+            .unwrap();
+        profile.workflows = workflows;
+        let resolved = resolve_agent_profile(
+            &profile,
+            &AgentProfileAuthority {
+                tools: self.capability.available_tools(),
+                availability: &self.capability_availability,
+                skills: self.capability.skills(),
+                workflows: &self.workflows.enabled_ids(),
+                scope: AgentScope::Root,
+            },
+        );
+        self.capability = Arc::new(
+            self.capability
+                .as_ref()
+                .clone()
+                .with_resolved_profile(Some(Arc::new(resolved))),
+        );
+        self.refresh_inspection();
+        self
+    }
+
     /// Preserve configuration identity while resolving newly admitted demand.
     pub(crate) fn with_admitted_capability(
         mut self,
@@ -997,7 +1032,7 @@ pub(crate) fn validate_project_resource_path(
     }
     // A capture depends on the path it authorizes even when authorization
     // fails, so that repairing the path recaptures it.
-    crate::bounded_file::record_read(path);
+    rustx_bounded_file::record_read(path);
     // The owner supplies the canonical workspace captured at launch. Do not
     // recanonicalize that authority: replacing the workspace itself with a
     // symlink must not transfer its trust to the new target.
@@ -1025,7 +1060,7 @@ fn load_context_file_from_directory(
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            crate::bounded_file::record_read(&path);
+            rustx_bounded_file::record_read(&path);
             return Err(RuntimeResourceLoadError::new(format!(
                 "cannot inspect project context file {}: {error}",
                 path.display()
@@ -1037,7 +1072,7 @@ fn load_context_file_from_directory(
     }
     validate_project_resource_path(directory, &path)
         .map_err(|error| error.at(&path, "projectInstructions"))?;
-    let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
+    let bytes = rustx_bounded_file::read_bounded(&path).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
             "cannot read project context file {}: {error}",
             path.display()

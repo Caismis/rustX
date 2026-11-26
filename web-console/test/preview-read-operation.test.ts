@@ -8,6 +8,7 @@ import { openNativeDeliveryPreview } from '../host/file-read';
 import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import { workspaceHandler } from '../host/http';
 import { createServer } from 'node:http';
+import { PreviewCancelled } from '../shared/file-preview';
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const identity = '00000000-0000-4000-8000-000000000001';
@@ -57,7 +58,7 @@ it.each([true, false])('cancellation retains both native reads until physical cl
   const failures = await Promise.allSettled([a, b, closing]);
   expect(failures.every(value => value.status === 'rejected')).toBe(true);
   if (!clean) failures.forEach(value => { if (value.status === 'rejected') expect(value.reason.kind).toBe('file_settlement_unknown'); });
-  else failures.forEach(value => { if (value.status === 'rejected') expect(value.reason.kind).not.toBe('file_settlement_unknown'); });
+  else failures.forEach(value => { if (value.status === 'rejected') expect(value.reason).toBeInstanceOf(PreviewCancelled); });
 });
 async function workspace() {
   const root = mkdtempSync(join(tmpdir(), 'rustx-preview-operation-')); roots.push(root); writeFileSync(join(root, 'part.stl'), '0123456789');
@@ -66,6 +67,94 @@ async function workspace() {
   const call = { target, request: { kind: 'preview' as const, path: 'part.stl', read: { kind: 'bytes' as const } } };
   return { root, host, scope, call };
 }
+async function previewHttp(host: LocalWorkspaceHost) {
+  const server = createServer(workspaceHandler(host));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No server address');
+  const base = `http://127.0.0.1:${address.port}/product-host`;
+  vi.stubGlobal('location', new URL(base));
+  return {
+    adapter: new HttpWorkspaceHost(base),
+    abort: (scope: unknown, identity: string) => fetch(`${base}/preview-abort`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, identity }),
+    }),
+    stop: () => {
+      server.closeAllConnections();
+      return new Promise<void>(resolve => server.close(() => resolve()));
+    },
+  };
+}
+it('acknowledges settled Workbench cancellation and repeated abort over HTTP', async () => {
+  const { host, scope, call } = await workspace(), http = await previewHttp(host), abort = new AbortController();
+  try {
+    const operation = await http.adapter.openWorkspacePreview(scope, call, abort.signal);
+    abort.abort();
+    await operation.close();
+    const repeat = await http.abort(scope, (operation as typeof operation & { identity: string }).identity);
+    expect(repeat.status).toBe(200);
+    await repeat.json();
+    const next = await http.adapter.openWorkspacePreview(scope, call, new AbortController().signal);
+    await next.close();
+  } finally { await host.close(); await http.stop(); }
+});
+
+it('reports unknown settlement when the abort acknowledgement carrier is lost', async () => {
+  const { host, scope, call } = await workspace(), http = await previewHttp(host), abort = new AbortController();
+  const fetcher = globalThis.fetch;
+  try {
+    const operation = await http.adapter.openWorkspacePreview(scope, call, abort.signal);
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/preview-abort')) return Promise.reject(new TypeError('Connection lost'));
+      return fetcher(input, init);
+    });
+    abort.abort();
+    await expect(operation.close()).rejects.toMatchObject({ kind: 'file_settlement_unknown' });
+  } finally { await host.close(); await http.stop(); }
+});
+
+it.each(['clean', 'unknown', 'failure'] as const)('acknowledges native cancellation only after physical settlement (%s)', async outcome => {
+  const { host, root, scope } = await workspace();
+  const nativeHost = new LocalWorkspaceHost({ endpoint: scope.endpoint, productHostToken: 'private', metadataFile: join(root, 'native-registry.json'), picker: false, roots: [{ id: 'root', cwd: root, displayName: 'Root' }] });
+  const nativeScope = await nativeHost.listWorkspaces(), http = await previewHttp(nativeHost), abort = new AbortController();
+  const previous = Socket.current;
+  vi.stubGlobal('WebSocket', Socket);
+  let socket: Socket | undefined;
+  try {
+    const opening = http.adapter.openDeliveryPreview(nativeScope, read, abort.signal);
+    await vi.waitFor(() => expect(Socket.current).not.toBe(previous));
+    socket = Socket.current;
+    socket.opened(); socket.json(0, { identity, version: 'v1', bytes: 6, file: reference });
+    const operation = await opening;
+    const page = operation.read({ offset: 0, length: 3 }).catch(error => error);
+    await vi.waitFor(() => expect(socket!.sent.at(-1)?.operation).toBe('read'));
+    abort.abort();
+    let settled = false;
+    const cancellation = operation.close().then(() => undefined, error => error).finally(() => { settled = true; });
+    await vi.waitFor(() => expect(socket!.closed).toBe(true));
+    expect(settled).toBe(false);
+    if (outcome === 'failure') socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+      jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Read failed', data: { kind: 'session_file_read', reason: 'replaced' } },
+    }) }));
+    socket.terminal(outcome !== 'unknown');
+    if (outcome === 'unknown') {
+      expect(await cancellation).toMatchObject({ kind: 'file_settlement_unknown' });
+      expect(await page).toMatchObject({ kind: 'file_settlement_unknown' });
+      const repeat = await http.abort(nativeScope, (operation as typeof operation & { identity: string }).identity);
+      expect(repeat.status).toBe(400); expect(await repeat.json()).toMatchObject({ kind: 'file_settlement_unknown' });
+    } else {
+      if (outcome === 'clean') expect(await cancellation).toBeUndefined();
+      else expect(await cancellation).toMatchObject({ native: { reason: 'replaced' } });
+      expect(await page).toBeInstanceOf(Error);
+    }
+  } finally {
+    socket?.terminal(outcome !== 'unknown');
+    try {
+      if (outcome === 'unknown') await expect(nativeHost.close()).rejects.toBeInstanceOf(AggregateError);
+      else await nativeHost.close();
+    } finally { await http.stop(); await host.close(); }
+  }
+});
 it('bounds idle owners independently and permits Download while both preview owners are idle', async () => {
   const { host, scope, call } = await workspace();
   const [a, b] = await Promise.all([host.openWorkspacePreview(scope, call, new AbortController().signal), host.openWorkspacePreview(scope, call, new AbortController().signal)]);
@@ -162,7 +251,7 @@ it('an unclean idle cancellation has no unknown physical read to poison', async 
 it('cancellation during final native validation waits for its physical retirement acknowledgement', async () => {
   const abort = new AbortController(), { operation, socket } = await native(abort.signal);
   let settled = false;
-  const closing = operation.close().finally(() => { settled = true; }); const failure = expect(closing).rejects.toThrow('revoked');
+  const closing = operation.close().finally(() => { settled = true; }); const failure = expect(closing).rejects.toBeInstanceOf(PreviewCancelled);
   expect(socket.sent.at(-1)).toEqual({ operation: 'close', identity }); abort.abort(); await Promise.resolve(); expect(settled).toBe(false);
   socket.terminal(); await failure;
 });

@@ -1,6 +1,8 @@
 //! Pure views of native registry snapshots (background, agents, interactions, status window).
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 use super::Arc;
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 use super::CapabilityView;
 #[cfg(test)]
@@ -53,7 +55,7 @@ pub(super) fn accumulate_transition(
         RuntimeClientEvent::ProjectionTransition { events, .. } => events.len(),
         _ => 1,
     };
-    let bytes = crate::observation::bounded::bounded_bytes(
+    let bytes = rustx_types::observation::bounded::bounded_bytes(
         &event,
         crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
     );
@@ -113,6 +115,7 @@ pub(super) fn inbound_item_view(item: &InboundItem) -> InboundItemView {
         revision: item.revision(),
         sequence: item.sequence(),
         deferred,
+        input_id: item.input_id().map(str::to_owned),
         message,
     }
 }
@@ -241,6 +244,7 @@ pub(crate) fn agent_source_view(
 /// package order); the source list preserves the deterministic
 /// source-identity order of the authoritative availability map. No
 /// executors, environment paths, or dependency internals ever appear.
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn capability_view(
     snapshot: &crate::capabilities::CapabilitySnapshot,
@@ -305,7 +309,7 @@ pub(crate) fn activation_view(
                 fields.push(vec!["detail".into()]);
             }
             if snapshot.profile.as_deref().is_some_and(|profile| {
-                crate::observation::bounded::bounded_bytes(profile, 2048).is_none()
+                rustx_types::observation::bounded::bounded_bytes(profile, 2048).is_none()
             }) {
                 fields.push(vec!["execution_profile".into()]);
             }

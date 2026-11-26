@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 #[test]
 fn native_canonical_receipts_do_not_stage_retired_headers() {
     let (mut actual, store) = initialized_source_projection();
@@ -7,7 +8,7 @@ fn native_canonical_receipts_do_not_stage_retired_headers() {
         .unwrap();
     expected.initialize_publication_view();
     let started = append_source_attempt_start(&store, "canonical-owner-attempt");
-    let mut native = started.observation.as_deref().unwrap().clone();
+    let mut native = started.observation.native_batch().unwrap().clone();
     let historical = actual.checkpoint_seed();
     let old = historical.checkpoint_candidate().unwrap();
     for count in 1..=512 {

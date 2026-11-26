@@ -278,7 +278,7 @@
       "type": "string"
     },
     "ModelRef": {
-      "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
+      "description": "A fully qualified `provider/model` catalog reference.",
       "type": "string"
     },
     "NativeAgentExtensionsDocument": {

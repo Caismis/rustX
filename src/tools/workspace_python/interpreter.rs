@@ -317,7 +317,7 @@ pub(super) fn read_optional_file(path: &Path) -> Result<Option<String>, ()> {
         return Ok(None);
     }
     // Shared bounded reads open with O_NONBLOCK and validate the opened FD.
-    let bytes = crate::bounded_file::read_bounded(path).map_err(|_| ())?;
+    let bytes = rustx_bounded_file::read_bounded(path).map_err(|_| ())?;
     String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 

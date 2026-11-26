@@ -2,17 +2,7 @@
 //! coordinator, not an Agent Attempt.
 
 use super::*;
-
-/// The runtime-owned manual compaction currently holding the conversation.
-///
-/// Manual compaction is not an attempt: it allocates no `AttemptId`, emits no
-/// attempt lifecycle, and cannot execute tools. The coordinator nevertheless
-/// retains its cancellation trigger so runtime drain can supervise the
-/// provider-backed summary to terminal settlement.
-pub(super) struct CurrentManualCompaction {
-    pub(super) operation_id: crate::runtime::identity::CompactionOperationId,
-    pub(super) cancellation: AgentCancellation,
-}
+use crate::durable::observation::NativeObservationBatch;
 
 pub(super) struct ManualCompactionTaskResult {
     pub(super) committed_failure: Option<ExecutedCompaction>,
@@ -33,18 +23,12 @@ pub(super) struct ManualCompactionSuccess {
 /// spawned independently of the protocol waiter, so dropping an attachment
 /// can never strand the checked-out conversation state.
 #[derive(Debug, Default)]
-pub(super) struct ManualCompactionCompletion {
+pub(crate) struct ManualCompactionCompletion {
     pub(super) completed: AtomicBool,
     pub(super) ready_to_join: AtomicBool,
     pub(super) joined: AtomicBool,
     pub(super) result: Mutex<Option<Result<ManualCompactionOutcome, ManualCompactionError>>>,
     pub(super) notify: tokio::sync::Notify,
-}
-
-pub(super) struct ManualTail {
-    pub(super) _activity: super::activity::TaskActivityLease,
-    pub(super) worker: tokio::task::JoinHandle<()>,
-    pub(super) completion: Arc<ManualCompactionCompletion>,
 }
 
 pub(super) struct ManualTailExit {
@@ -314,7 +298,10 @@ impl RuntimeInner {
         let Some(fanout) = self.pending.get() else {
             return;
         };
-        let batch = persisted.observation.as_deref();
+        let batch = persisted
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>());
         if !fanout
             .native_manual_compaction(request, batch)
             .is_installed()
@@ -360,10 +347,10 @@ impl RuntimeInner {
         let completion_result;
         {
             let mut state = self.lock_state();
-            state.conversation.restore(conversation);
             let maintenance = state
-                .manual_compaction
-                .take()
+                .foreground
+                .slot
+                .finish_manual_compaction(conversation)
                 .expect("manual compaction settlement owns the maintenance slot");
             if let Err(ManualCompactionError::Durable { message }) = &result {
                 self.record_durability_failure(
@@ -395,7 +382,7 @@ impl RuntimeInner {
                     // A successfully activated compaction is a new model
                     // context: the next Attempt must re-emit the permission
                     // reminder even when the mode is unchanged.
-                    state.last_permission_reminder_mode = None;
+                    state.config.last_permission_reminder_mode = None;
                     Ok(success.outcome)
                 }
                 Err(error) if confirmed_commit => Err(error),
@@ -423,7 +410,10 @@ impl RuntimeInner {
             }
         );
         completion.complete(completion_result);
-        self.admit_next_attempt();
+        // No inline `admit_next_attempt`: settlement hands the freed
+        // foreground back to the single admission worker pass order
+        // (reap_manual_tail → catalogs → staged config → scheduled → attempt).
+        self.wake.notify.notify_one();
     }
 }
 
@@ -478,18 +468,12 @@ impl ConversationRuntime {
                     message: failure.diagnostic,
                 });
             }
-            if (state.current_attempt.is_some() || state.scheduled.is_some())
-                || state.manual_compaction.is_some()
-                || self
-                    .inner
-                    .manual_tail
-                    .lock()
-                    .expect("manual tail owner")
-                    .is_some()
+            if state.foreground.slot.is_foreground_active()
+                || state.foreground.manual_tail.is_unreaped()
             {
                 return Err(ManualCompactionError::Busy);
             }
-            if let Err(error) = state.conversation.hydrate(self.inner.store.as_ref()) {
+            if let Err(error) = state.foreground.slot.hydrate(self.inner.store.as_ref()) {
                 return Err(ManualCompactionError::Durable {
                     message: error.to_string(),
                 });
@@ -504,15 +488,15 @@ impl ConversationRuntime {
             );
             let summary_backend = self
                 .inner
-                .auxiliary
+                .auxiliary_executor
                 .pre_admit_summary(budget.clone(), &cancellation.signal())
                 .map_err(ManualCompactionError::Context)?;
-            let model = state.model.snapshot().map_err(|error| {
+            let model = state.config.model.snapshot().map_err(|error| {
                 ManualCompactionError::ModelUnavailable {
                     diagnostic: error.to_string(),
                 }
             })?;
-            let resources = state.resources.clone();
+            let resources = state.config.resources.clone();
             let context_runtime = self
                 .inner
                 .context_runtime_with_assembly(
@@ -552,13 +536,13 @@ impl ConversationRuntime {
                 },
             )?;
             let conversation = state
-                .conversation
-                .lend()
+                .foreground
+                .slot
+                .lend_for_manual_compaction(CurrentManualCompaction {
+                    operation_id: operation_id.clone(),
+                    cancellation: cancellation.clone(),
+                })
                 .expect("the idle coordinator hydrated the conversation state");
-            state.manual_compaction = Some(CurrentManualCompaction {
-                operation_id: operation_id.clone(),
-                cancellation: cancellation.clone(),
-            });
             let admission = self
                 .inner
                 .lifecycle
@@ -567,8 +551,6 @@ impl ConversationRuntime {
             let completion = Arc::new(ManualCompactionCompletion::default());
             let completion_for_task = completion.clone();
             let inner = Arc::clone(&self.inner);
-            let (release, registered) = tokio::sync::oneshot::channel();
-            drop(state);
             // Diagnostics follow the runtime owner, not the requesting socket:
             // disconnecting the requester cannot hide maintenance settlement.
             let _ = writeln!(
@@ -578,9 +560,6 @@ impl ConversationRuntime {
             );
             let task_completion = completion.clone();
             let worker = self.inner.executor.spawn(async move {
-                if registered.await.is_err() {
-                    return;
-                }
                 let _tail = ManualTailExit {
                     completion: task_completion,
                     wake: inner.wake.clone(),
@@ -598,6 +577,23 @@ impl ConversationRuntime {
                     .await;
                 #[cfg(test)]
                 {
+                    let panic_worker = inner
+                        .probe
+                        .lock()
+                        .expect("coordinator probe lock poisoned")
+                        .as_ref()
+                        .is_some_and(|probe| probe.manual_compaction_worker_panic);
+                    // A real unwind through the worker task: the
+                    // `JoinHandle` resolves with a `JoinError` and the
+                    // reaper — not this task — owns the failed
+                    // settlement (Issue #606).
+                    assert!(
+                        !panic_worker,
+                        "test-injected manual compaction worker panic"
+                    );
+                }
+                #[cfg(test)]
+                {
                     let gate = inner
                         .probe
                         .lock()
@@ -610,12 +606,15 @@ impl ConversationRuntime {
                 }
                 inner.finish_manual_compaction(task, &completion_for_task, request_id.as_ref());
             });
-            *self.inner.manual_tail.lock().expect("manual tail owner") = Some(ManualTail {
+            // The tail is published under the same coordinator lock that
+            // lent the conversation, so no observer can see a lent state
+            // with no registered tail (Issue #606).
+            state.foreground.manual_tail = ManualTailState::Pending(ManualTail {
                 _activity: self.inner.activity.lease(),
                 worker,
                 completion: completion.clone(),
             });
-            let _ = release.send(());
+            drop(state);
             completion
         };
         Ok(ManualCompactionHandle(completion))

@@ -34,7 +34,7 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
     if (!visible) setMenu(false);
     if (visible && deferredOutlines.current !== undefined && pendingOutlines.current === undefined) requestOutlines(deferredOutlines.current);
   }, [visible]);
-  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
+  const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; sourceFailed?: boolean; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
   const [partsOpen, setPartsOpen] = useState(false), partsId = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -71,7 +71,8 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
       let object: Object3D, bounds: Box3, displayStart: number, prepared = Promise.resolve(), startPreview: (() => void) | undefined;
       const graphicsLost = () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); };
       if (format === 'glb') stage('importing');
-      const pending = source && format === 'stl' ? parseGeometryStream(source, controller.signal, stage) : format === 'glb' ? importGlb(bytes!, controller.signal)
+      const streaming = source && format === 'stl';
+      const pending = streaming ? parseGeometryStream(source, controller.signal, stage) : format === 'glb' ? importGlb(bytes!, controller.signal)
         : parseGeometry(bytes!, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' ? undefined : lod => {
           if (live() && progressive) progressive.add(lod); else lod.dispose();
         });
@@ -86,7 +87,14 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
           displayed: () => { if (live()) setState(value => ({ ...value, preview: true })); }, failed,
         });
       }
-      const loaded = await pending; object = loaded.scene; bounds = loaded.bounds; release = loaded.dispose;
+      const loaded = await pending.catch(error => {
+        if (!streaming || error instanceof GeometryError) throw error;
+        // The content owner publishes the source error or refreshes the copy.
+        const publish = live(); retire();
+        if (publish) setState({ sourceFailed: true });
+      });
+      if (!loaded) return;
+      object = loaded.scene; bounds = loaded.bounds; release = loaded.dispose;
       if ('scenes' in loaded) { roots = loaded.scenes; displayStart = performance.now(); }
       else {
         roots = [object]; displayStart = loaded.prepareStart; prepared = loaded.ready;
@@ -154,7 +162,7 @@ export default function GeometryPreview({ bytes, source, name, copyId, signal, c
     owner.setNavigationMode(mode);
     setState(value => value.navigationMode === owner.navigationMode ? value : { ...value, navigationMode: owner.navigationMode });
   }
-  return <section className={css.root} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
+  return <section className={css.root} style={state.sourceFailed ? { display: 'none' } : undefined} data-geometry-format={format} aria-label={t.preview} onKeyDown={event => {
     if (!partsOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault(); event.stopPropagation(); closeParts();
   }}>

@@ -34,7 +34,8 @@ export async function readGeometrySource(open: Open, signal: AbortSignal, consum
   try {
     reading.throwIfAborted(); operation = await open(reading); reading.throwIfAborted();
     const { bytes: total, version } = operation;
-    if (!Number.isSafeInteger(total) || total < 0 || total > L.geometryBytes || typeof version !== 'string' || !version) throw new Error(total > L.geometryBytes ? 'too_large' : 'malformed');
+    if (!Number.isSafeInteger(total) || total < 0 || typeof version !== 'string' || !version) throw new Error('malformed');
+    if (total > L.geometryBytes) throw new WorkspaceHostError('too_large', 'too_large');
     let data: Uint8Array<ArrayBuffer> | undefined;
     await consumer?.start({ bytes: total, version });
     let nextOffset = 0, received = 0;

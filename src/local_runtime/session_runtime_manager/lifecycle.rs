@@ -561,6 +561,8 @@ impl SessionRuntimeManager {
         let core = LocalConversationCore::compose_with_access(
             &paths,
             &self.dependencies,
+            // Admission and settlement use the same UTC clock for retention.
+            self.schedule_clock.clone(),
             registry,
             paths.config().clone(),
             super::super::session::SessionPersistentState::from_input(&paths.input),
@@ -646,7 +648,7 @@ impl SessionRuntimeManager {
         if access.node.parent.is_none() {
             super::super::session_title::arm(
                 self.sessions.downgrade_catalog(),
-                session_id.clone(),
+                &session_id,
                 composition.runtime(),
             );
         }

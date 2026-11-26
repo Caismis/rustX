@@ -8,6 +8,23 @@ description = "A standalone Rust execution runtime for durable, tool-using LLM a
 repository = "https://github.com/Caismis/rustX"
 publish = false
 
+[workspace]
+members = [".", "crates/*"]
+
+[workspace.lints.rust]
+# The runtime process-supervision capability and the per-invocation Bash
+# supervisor perform a small bounded set of explicitly allowed OS shims:
+# the runtime layer's one-time prctl(PR_SET_CHILD_SUBREAPER) activation,
+# the supervisor's PR_SET_CHILD_SUBREAPER, the SIGTERM no-op handler
+# installation, prctl(PR_SET_NO_NEW_PRIVS), and
+# seccomp(SECCOMP_SET_MODE_FILTER) with a stack-local sock_fprog. Raw syscall
+# execution otherwise exists only in test-local seccomp regressions.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
 [features]
 mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
 # Issue #387 measurement-only counters (reservation / conflict / legacy-layout
@@ -15,7 +32,7 @@ mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-ht
 # production builds compile the recorders to no-ops and carry no measurement
 # atomic increment. Enable explicitly for the Session-create benchmark:
 #   cargo build --release --features issue-387-profile --example session_create_benchmark
-issue-387-profile = []
+issue-387-profile = ["rustx-types/issue-387-profile", "rustx-durable/issue-387-profile"]
 
 [lib]
 name = "rustx"
@@ -99,6 +116,15 @@ jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc
 similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
+rustx-types = { path = "crates/rustx-types" }
+rustx-conversation = { path = "crates/rustx-conversation" }
+rustx-publication = { path = "crates/rustx-publication" }
+rustx-durable = { path = "crates/rustx-durable" }
+rustx-workflow = { path = "crates/rustx-workflow" }
+# Workspace crates extracted from src/ (bottom-up split).
+rustx-bounded-json = { path = "crates/rustx-bounded-json" }
+rustx-bounded-file = { path = "crates/rustx-bounded-file" }
+rustx-identity = { path = "crates/rustx-identity" }
 # Bounded validation of native managed PNG image outputs.
 png = "0.18.1"
 getrandom = "0.3.4"
@@ -150,24 +176,22 @@ minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machine
 minijinja-contrib = { version = "2", features = ["pycompat"] }
 pep440_rs = "0.7.3"
 
-[lints.rust]
-# The runtime process-supervision capability and the per-invocation Bash
-# supervisor perform a small bounded set of explicitly allowed OS shims:
-# the runtime layer's one-time prctl(PR_SET_CHILD_SUBREAPER) activation,
-# the supervisor's PR_SET_CHILD_SUBREAPER, the SIGTERM no-op handler
-# installation, prctl(PR_SET_NO_NEW_PRIVS), and
-# seccomp(SECCOMP_SET_MODE_FILTER) with a stack-local sock_fprog. Raw syscall
-# execution otherwise exists only in test-local seccomp regressions.
-unsafe_code = "deny"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+[lints]
+workspace = true
 
 [dev-dependencies]
 rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
+rustx-identity = { path = "crates/rustx-identity", features = ["test-fixtures"] }
+rustx-types = { path = "crates/rustx-types", features = ["test-fixtures"] }
+rustx-durable = { path = "crates/rustx-durable", features = ["test-hooks"] }
+
+[profile.dev.build-override]
+# Derive and proc-macro expansion dominates the serial front-end of each rustX
+# unit; hosting proc macros and build scripts optimized shortens every rustc
+# invocation that follows, at a one-time cost inside the dependency build.
+opt-level = 2
 
 [profile.test]
 # Bound non-incremental harness compilation on standard runners while
@@ -178,3 +202,12 @@ codegen-units = 256
 [profile.release.package.rustx]
 # Optimize the shared serde codec instances together to reduce resident code.
 codegen-units = 1
+
+[profile.dev.package."*"]
+# Third-party dependency debuginfo is never consumed in CI: it only inflates
+# the test binaries toward 1 GB and slows link, pack and artifact transfer.
+# Workspace members keep their own line tables via the base profiles.
+debug = false
+
+[profile.test.package."*"]
+debug = false

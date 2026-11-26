@@ -1,5 +1,6 @@
 // Actual Native C/J receipts and finite Host checkpoints share one member owner.
 use super::*;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::{CanonicalStore, JournalStore};
 use crate::observation::content::CanonicalContentLocator;
 use crate::observation::transcript::RuntimeClientMessageDescriptor;
@@ -30,7 +31,7 @@ fn member_event(
 fn install_member_commit(inner: &Arc<super::super::ClientInner>, event: &RuntimeEventEnvelope) {
     let batch = event
         .observation
-        .as_ref()
+        .native_batch()
         .expect("same-commit native receipt");
     let sink = super::super::NativePublicationProjection {
         inner: Arc::downgrade(inner),
@@ -165,7 +166,7 @@ fn assert_completed_member_head(
         call.state,
         crate::observation::tool::ForegroundToolState::Assembled { .. }
     ));
-    assert!(crate::observation::bounded::bounded_bytes(checkpoint, 786_432).is_some());
+    assert!(rustx_types::observation::bounded::bounded_bytes(checkpoint, 786_432).is_some());
 }
 
 fn copied_member_host(

@@ -1,6 +1,6 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject, SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { autoUpdate, flip, hide, offset, shift, size, useFloating } from '@floating-ui/react-dom'
@@ -12,6 +12,75 @@ const VIEWPORT_MARGIN = 8
 const PREVIEW_INSET = 24
 const PREVIEW_MAX_HEIGHT = 420
 
+interface GroupState {
+  isWarm: () => boolean
+  enter: (overCard: boolean) => void
+  leave: () => void
+  containsCard: (target: EventTarget | null) => boolean
+  shown: (owner: symbol, dismiss: () => void, element: HTMLElement) => void
+  release: (owner: symbol) => void
+}
+
+const HoverCardGroupContext = createContext<GroupState | null>(null)
+
+/**
+ * Share first-display dwell across a list and its active portal, including the card's pointer grace.
+ */
+export function HoverCardGroup({ children, className, as: Container = 'div' }: {
+  children: ReactNode
+  className?: string | undefined
+  as?: 'div' | 'span'
+}) {
+  const [group] = useState<GroupState>(() => {
+    let pointer: 'outside' | 'list' | 'card' = 'outside'
+    let warm = false
+    let active: { owner: symbol; dismiss: () => void; element: HTMLElement } | null = null
+    return {
+      isWarm: () => warm,
+      enter: (overCard) => {
+        pointer = overCard ? 'card' : 'list'
+        if (overCard) warm = true
+      },
+      leave: () => {
+        pointer = 'outside'
+        if (active === null) warm = false
+      },
+      containsCard: target => target instanceof Node && active !== null && active.element.contains(target),
+      shown: (owner, dismiss, element) => {
+        if (pointer === 'card') { pointer = 'outside'; warm = false }
+        if (pointer === 'list') warm = true
+        const previous = active
+        active = { owner, dismiss, element }
+        if (previous !== null && previous.owner !== owner) previous.dismiss()
+      },
+      release: (owner) => {
+        if (active?.owner !== owner) return
+        active = null
+        if (pointer !== 'list') { pointer = 'outside'; warm = false }
+      },
+    }
+  })
+  return (
+    <HoverCardGroupContext.Provider value={group}>
+      <Container
+        className={className}
+        onPointerOverCapture={(event) => {
+          const overCard = group.containsCard(event.target)
+          if (event.currentTarget.contains(event.target as Node) || overCard) group.enter(overCard)
+        }}
+        onPointerOutCapture={(event) => {
+          const fromGroup = event.currentTarget.contains(event.target as Node) || group.containsCard(event.target)
+          const intoGroup = (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))
+            || group.containsCard(event.relatedTarget)
+          if (fromGroup && !intoGroup) group.leave()
+        }}
+      >
+        {children}
+      </Container>
+    </HoverCardGroupContext.Provider>
+  )
+}
+
 /**
  * Render an anchor with a hover-triggered preview card.
  * @param props.anchor - the hover target (rendered in place inside a wrapper span).
@@ -19,6 +88,7 @@ const PREVIEW_MAX_HEIGHT = 420
  * readable and selectable, but it carries no dismissal affordance of its own.
  * @param props.openDelayMs - hover dwell before the card shows (default 500).
  * @param props.disabled - suppress opening; turning true closes an open card.
+ * @param props.grouped - share first-display dwell across the surrounding list and active portal.
  * @param props.previewAnchor - use a wide preview above or below the trigger, sized from this element.
  * @param props.copyText - optional primary value copied by activation and
  * included in the card's accessible name.
@@ -27,18 +97,20 @@ const PREVIEW_MAX_HEIGHT = 420
  * @returns anchor wrapper with the conditional portaled card.
  */
 export function HoverCard({
-  anchor, content, openDelayMs = 500, disabled = false,
+  anchor, content, openDelayMs = 500, disabled = false, grouped = false,
   copyText, copyLabel, copiedLabel, previewAnchor,
 }: {
   anchor: ReactNode
   content: ReactNode
   openDelayMs?: number
   disabled?: boolean
-  copyText?: string | undefined
-  copyLabel: string
-  copiedLabel: string
+  grouped?: boolean
   previewAnchor?: RefObject<HTMLElement | null>
-}) {
+} & ({ copyText?: string | undefined; copyLabel: string; copiedLabel: string } | {
+  copyText?: undefined
+  copyLabel?: string
+  copiedLabel?: string
+})) {
   const tx = useTranslation();
   const rootRef = useRef<HTMLSpanElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -50,6 +122,9 @@ export function HoverCard({
   const mountedRef = useRef(true)
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const parentGroup = useContext(HoverCardGroupContext)
+  const group = grouped ? parentGroup : null
+  const [groupOwner] = useState(() => Symbol('hover-card'))
 
   const clearCopied = useCallback(() => {
     if (copyTimerRef.current !== null) {
@@ -68,12 +143,18 @@ export function HoverCard({
 
   const { arm: armClose, cancel: cancelClose } = usePointerGrace(close)
 
-  const clearTimer = () => {
+  const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current)
       timerRef.current = null
     }
-  }
+  }, [])
+
+  const dismissImmediately = useCallback(() => {
+    clearTimer()
+    cancelClose()
+    close()
+  }, [clearTimer, cancelClose, close])
 
   // Owner disabling mid-hover (menu opened, drag started) closes immediately.
   useEffect(() => {
@@ -168,6 +249,13 @@ export function HoverCard({
     if (open && isPositioned && middlewareData.hide?.referenceHidden) close()
   }, [open, isPositioned, middlewareData.hide?.referenceHidden, close])
 
+  const groupVisible = open && isPositioned
+  useLayoutEffect(() => {
+    if (!groupVisible || group === null || cardRef.current === null) return
+    group.shown(groupOwner, dismissImmediately, cardRef.current)
+    return () => { group.release(groupOwner) }
+  }, [group, groupOwner, groupVisible, dismissImmediately])
+
   const copy = async (text: string): Promise<void> => {
     if (copied || copyingRef.current) return
     copyingRef.current = true
@@ -198,7 +286,7 @@ export function HoverCard({
       style={{ position: strategy, left: x ?? 0, top: y ?? 0, visibility: isPositioned ? undefined : 'hidden', minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
       role={copyable ? 'button' : undefined}
       tabIndex={copyable ? 0 : undefined}
-      aria-label={copyable ? tx('common:hover-card.value-value', { p0: copyLabel, p1: copyText }) : undefined}
+      aria-label={copyable ? tx('common:hover-card.value-value', { p0: copyLabel ?? '', p1: copyText }) : undefined}
       onClick={copyable
         ? (e) => {
           const selection = window.getSelection()
@@ -228,12 +316,14 @@ export function HoverCard({
       className={css.root}
       onPointerEnter={event => {
         if (disabled || previewAnchor && event.pointerType === 'touch') return
+        if (event.pointerType === 'mouse' && typeof window.matchMedia === 'function' && !window.matchMedia('(any-hover: hover)').matches) return
         // Coming back inside during the grace (the gap, or the card itself)
         // keeps the current card rather than restarting the dwell.
         cancelClose()
         if (open) return
         clearTimer()
-        timerRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
+        if (group?.isWarm()) setOpen(true)
+        else timerRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
       }}
       onPointerLeave={() => {
         clearTimer()
