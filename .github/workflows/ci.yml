@@ -1330,7 +1330,7 @@ jobs:
       # Real stdio integration also launches MCP through the sibling
       # interactive-supervisor, so build the executable set before testing.
       - name: Build the real integration binaries
-        run: cargo build --bins --locked
+        run: cargo build --workspace --bins --locked
 
       - name: Test
         working-directory: tui
@@ -1417,7 +1417,7 @@ jobs:
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
-        run: cargo build --bins --locked
+        run: cargo build --workspace --bins --locked
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}

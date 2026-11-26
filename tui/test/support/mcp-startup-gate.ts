@@ -13,7 +13,7 @@ export function requireMcpStartupSupervisor(binary: string): void {
     try {
       accessSync(path, constants.X_OK);
     } catch (cause) {
-      throw new Error(`Missing executable ${path}; run \`cargo build --bins\` before the MCP integration test`, { cause });
+      throw new Error(`Missing executable ${path}; run \`cargo build --workspace --bins\` before the MCP integration test`, { cause });
     }
   }
 }
