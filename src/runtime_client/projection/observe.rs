@@ -65,7 +65,7 @@ pub(super) fn invalidates_read_domains(observation: &ConversationObservation) ->
         | ConversationObservation::AttemptAdmitted { .. }
         | ConversationObservation::SessionModelChanged { .. }
         | ConversationObservation::Shutdown
-        | ConversationObservation::DurableFailure { .. }
+        | ConversationObservation::DurableFailure
         | ConversationObservation::DurabilityFailed { .. } => false,
     }
 }

@@ -31,7 +31,7 @@ import { renderRepairInspection, type SourceRepairObservation } from "../present
 
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
-import { capabilitySummary, describeConfiguredAuxiliaryModel, describeConfiguredAuxiliaryProfile, describeProfile, sessionLabel, skills } from "../presentation/selectors.ts";
+import { capabilitySummary, describeConfiguredAuxiliaryModel, describeConfiguredAuxiliaryProfile, describeProfile, sessionLabel } from "../presentation/selectors.ts";
 import { isTodoComposed, selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderTodoInspection, deferredTodoRecords } from "../ui/components/todos.ts";
@@ -287,7 +287,7 @@ export class CommandDispatcher {
         case "/new":
           return await this.newSession();
         case "/resume":
-          return await this.#resume(session, argument);
+          return await this.#resume(argument);
         case "/session":
           return argument ? await this.#configuration(session, argument) : await this.#sessionInfo(session);
         case "/name":
@@ -521,7 +521,6 @@ export class CommandDispatcher {
   }
 
   async #resume(
-    session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
     if (argument.length > 0) return this.selectSession(argument);
@@ -929,8 +928,6 @@ export class CommandDispatcher {
       `cancellation requested for attempt ${attemptId}\nThis is acceptance; the runtime owns the terminal settlement.`,
     );
   }
-
-
 }
 
 function withModelOutcomeNotice(session: AppServerSession, text: string): string {

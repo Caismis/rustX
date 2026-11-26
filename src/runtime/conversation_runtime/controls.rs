@@ -227,33 +227,6 @@ impl ConversationRuntime {
         Ok(view)
     }
 
-    /// Inspects one subagent child through the authoritative registry
-    /// (Issue #60).
-    #[must_use]
-    pub fn subagent_status(
-        &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
-    ) -> Option<crate::runtime::subagent::SubagentSnapshot> {
-        self.inner
-            .subagents
-            .as_ref()
-            .and_then(|subagents| subagents.snapshot(subagent_id))
-    }
-
-    /// Requests cancellation of one subagent child through the
-    /// authoritative registry. Acceptance and eventual settlement remain
-    /// distinct; the snapshot is the state after the intent commit.
-    #[must_use]
-    pub fn subagent_cancel(
-        &self,
-        subagent_id: &crate::runtime::identity::SubagentId,
-    ) -> Option<crate::runtime::subagent::SubagentSnapshot> {
-        self.inner
-            .subagents
-            .as_ref()
-            .and_then(|subagents| subagents.cancel(subagent_id, CancellationReason::UserRequested))
-    }
-
     /// Inspects one background execution through the authoritative
     /// registry.
     #[must_use]

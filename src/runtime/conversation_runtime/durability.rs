@@ -250,9 +250,7 @@ impl RuntimeInner {
             }
         };
         if retry_armed {
-            self.observe(ConversationObservation::DurableFailure {
-                message: diagnostic,
-            });
+            self.observe(ConversationObservation::DurableFailure);
             self.wake.notify.notify_one();
         } else {
             self.commit_failure_and_observe(operation, diagnostic);

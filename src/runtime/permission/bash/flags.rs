@@ -953,24 +953,3 @@ pub static DOCKER_INSPECT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagVal
             ("--type", SafeFlagValue::String),
         ])
     });
-
-/// ZCode `GH_REPO_FLAGS`.
-pub static GH_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-R", SafeFlagValue::String),
-        ("--repo", SafeFlagValue::String),
-    ])
-});
-
-/// ZCode `GH_JSON_REPO_FLAGS`.
-pub static GH_JSON_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
-    LazyLock::new(|| HashMap::from([("--json", SafeFlagValue::String)]));
-
-/// ZCode `GH_LIMIT_REPO_FLAGS`.
-pub static GH_LIMIT_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
-    LazyLock::new(|| {
-        HashMap::from([
-            ("-L", SafeFlagValue::Number),
-            ("--limit", SafeFlagValue::Number),
-        ])
-    });

@@ -658,18 +658,6 @@ impl RuntimeLayer {
             origins,
         );
     }
-    /// Resolve complete model selection and context policy.
-    /// # Errors
-    /// Rejects a missing model or an invalid complete selection.
-    pub fn model_sections(self) -> Result<(SessionModelConfig, ContextPolicyDocument), String> {
-        Ok((
-            self.agent
-                .and_then(|agent| agent.model)
-                .ok_or("missing agent.model")?
-                .resolve()?,
-            self.context.unwrap_or_default().resolve(),
-        ))
-    }
     /// Resolve the winning semantic units with their domain defaults.
     ///
     /// A root model is a composition fact: a partial document may leave it to
@@ -767,23 +755,19 @@ mod tests {
 mode = "limit"
 tokens = 256
 
-
 [tool_deadline_policy]
 [tool_deadline_policy.idle_liveness_ms]
 mode = "window"
 milliseconds = 100
-
 
 [agent]
 [agent.model]
 model = "p/m"
 profile = "custom"
 
-
 [agent.model.max_output_tokens]
 mode = "limit"
 tokens = 512
-
 
 [agent.plugins]
 [agent.plugins.agent_status]
@@ -811,20 +795,16 @@ timezone = "Asia/Shanghai"
 [context.summary_output_cap]
 mode = "model_limit"
 
-
 [tool_deadline_policy]
 [tool_deadline_policy.idle_liveness_ms]
 mode = "disabled"
-
 
 [agent]
 [agent.model]
 model = "p/m"
 
-
 [agent.model.max_output_tokens]
 mode = "catalog_default"
-
 
 [agent.plugins]
 [agent.plugins.agent_status]
@@ -863,18 +843,15 @@ timezone = "UTC"
 mode = "limit"
 tokens = 512
 
-
 [tool_deadline_policy]
 [tool_deadline_policy.idle_liveness_ms]
 mode = "window"
 milliseconds = 200
 
-
 [agent]
 [agent.model]
 model = "p/m"
 profile = "catalog_default"
-
 
 [agent.model.max_output_tokens]
 mode = "limit"

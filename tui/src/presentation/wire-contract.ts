@@ -44,20 +44,6 @@ function isWireTranscriptCursor(
   }
 }
 
-/** Checks the one visible/hidden transcript-cursor contract at the wire boundary. */
-export function hasTranscriptCursorContract(
-  message: unknown,
-  transcriptCursor: unknown,
-): boolean {
-  if (typeof message !== "object" || message === null) {
-    return false;
-  }
-  if (isHiddenContextMessage(message as { role?: unknown; kind?: unknown })) {
-    return transcriptCursor === undefined || transcriptCursor === null;
-  }
-  return isWireTranscriptCursor(transcriptCursor);
-}
-
 /**
  * Validates a transcript-visible message before presentation reduction.
  *

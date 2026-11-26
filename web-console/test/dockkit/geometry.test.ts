@@ -10,7 +10,7 @@ import {
 } from '../../src/presentation/dockkit/engine/geometry.ts'
 import type { PaneMeasure, Rect } from '../../src/presentation/dockkit/engine/geometry.ts'
 import { halvesFit, SPLIT_MINIMUMS } from '../../src/presentation/dockkit/engine/geometry.ts'
-import { FLOAT_DEFAULT_SIZE, FLOAT_MIN_SIZE } from '../../src/presentation/dockkit/index.ts'
+import { FLOAT_DEFAULT_SIZE, FLOAT_MIN_SIZE } from '../../src/presentation/dockkit/engine/constraints.ts'
 
 const PANE: Rect = { x: 100, y: 200, width: 400, height: 300 }
 
