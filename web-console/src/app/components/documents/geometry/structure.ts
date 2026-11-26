@@ -11,15 +11,20 @@ export interface Inspection {
 }
 
 /** Occurrence operations mutate the admitted graph, never its geometry or materials. */
-export function createStructure(root: Object3D, center: Vector3, saved?: Saved) {
+export function createStructure(root: Object3D, center: Vector3, saved?: Saved, materialPrimitives?: ReadonlySet<Object3D>) {
   const objects = new Map<string, Object3D>(), occurrenceIds = new Map<Object3D, string>(), parts: Part[] = [];
   const hidden = new Set<string>();
   let selected: string | undefined, isolation: Saved['isolation'];
   function walk(item: Object3D, id: string, depth: number) {
-    if (item instanceof Mesh || item.name) {
+    if (materialPrimitives?.has(item)) {
+      occurrenceIds.set(item, occurrenceIds.get(item.parent!)!);
+      return;
+    }
+    const isPart = item instanceof Mesh || item.children.some(child => materialPrimitives?.has(child));
+    if (isPart || item.name) {
       const name = typeof item.userData.name === 'string' ? item.userData.name : item.name;
       objects.set(id, item); occurrenceIds.set(item, id);
-      parts.push({ id, name: name.slice(0, 256), depth, kind: item instanceof Mesh ? 'mesh' : 'group' });
+      parts.push({ id, name: name.slice(0, 256), depth, kind: isPart ? 'mesh' : 'group' });
     }
     item.children.forEach((child, index) => walk(child, `${id}.${index}`, depth + 1));
   }

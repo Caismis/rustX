@@ -54,7 +54,7 @@ export function prepareGeometryGraphics(generated: boolean, lost: () => void, op
 }
 
 /** Mounted view owns every graphics resource. Source bytes belong to the content owner. */
-export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void, options?: { generated: boolean; visible?: boolean; pendingPreview?: boolean; provisional?: boolean; lod?: GeometryLodLevel; onInteraction?: (active: boolean) => void; onFirstGpuReady?: () => void; graphics?:ReturnType<typeof prepareGeometryGraphics> }) {
+export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void, options?: { generated: boolean; visible?: boolean; pendingPreview?: boolean; provisional?: boolean; lod?: GeometryLodLevel; onInteraction?: (active: boolean) => void; onFirstGpuReady?: () => void; graphics?:ReturnType<typeof prepareGeometryGraphics>; materialPrimitives?: ReadonlySet<Object3D> }) {
   let visible = options?.visible !== false;
   const graphics = options?.graphics ?? prepareGeometryGraphics(options?.generated === true, lost, { visible }), renderer = graphics.renderer, gl = graphics.gl;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
@@ -90,7 +90,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   canvas.setAttribute('aria-description', labels.axes);
   const navigation = createAxisNavigation(container, labels, view => { options?.onInteraction?.(false); fit(view); });
   const highlight = new BoxHelper(object, new Color(0xffbd45)); highlight.visible = false; scene.add(highlight);
-  const structure = createStructure(object, center, saved);
+  const structure = createStructure(object, center, saved, options?.materialPrimitives);
   const quality = options?.provisional ? undefined : createDisplayQuality(object);
   const batches = options?.provisional ? undefined : createDrawBatches(object, options?.generated === true);
   let frame = 0, disposed = false, initial = true, restoring = true, inputDrawQueued = false;
@@ -379,9 +379,13 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     owner.minDistance = Math.max(minimum, camera.position.distanceTo(owner.target) - travel);
     const release = () => {
       if (releaseZoomLimit !== release) return;
+      clearTimeout(timer);
       owner.minDistance = minimum; releaseZoomLimit = undefined;
     };
-    releaseZoomLimit = release; queueMicrotask(release);
+    // A trusted event can run microtasks between capture and OrbitControls'
+    // listener. Keep the guard for the current event task.
+    const timer = setTimeout(release, 0);
+    releaseZoomLimit = release;
   };
   function turntable() {
     if (camera.up.x === 0 && camera.up.y === 1 && camera.up.z === 0) return;
@@ -398,6 +402,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     turntable,
     select: selectPointer,
     guardZoom,
+    clearZoomGuard: () => releaseZoomLimit?.(),
     shortcut(action) {
       switch (action.kind) {
         case 'view': fit(action.view); break;
@@ -442,7 +447,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   function retire(keepGraphics: boolean) {
     if (disposed) return; flush(); if (disposed) return;
     disposed = true; outlineRequest++; releaseBackground?.(); releaseBackground = undefined; outlines?.dispose(); quality?.dispose(); batches?.dispose(); clearTimeout(refinement); clearTimeout(publication); cancelAnimationFrame(frame); cancelAnimationFrame(presentationFrame); observer.disconnect(); themeObserver.disconnect(); resolution.removeEventListener('change', resolutionChanged);
-    releaseZoomLimit?.(); input.dispose(); canvas.removeEventListener('webglcontextlost', contextLost);
+    input.dispose(); canvas.removeEventListener('webglcontextlost', contextLost);
     canvas.ownerDocument.removeEventListener('pointermove', inputMoved, true); canvas.removeEventListener('keydown', inputFinished, true);
     controls.removeEventListener('change', changed); controls.removeEventListener('start', started); controls.removeEventListener('end', ended); controls.dispose();
     sectionHighlight.clear(); renderer.clippingPlanes = [];

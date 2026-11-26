@@ -78,7 +78,7 @@ export default function GeometryPreview({ bytes, source, name, previewFormat, co
       const graphicsLost = () => { const publish = live(); retire(); if (publish) setState({ error: 'webgl' }); };
       if (format === 'glb') stage('importing');
       const streaming = source && format === 'stl';
-      const pending = streaming ? parseGeometryStream(source, controller.signal, stage) : format === 'glb' ? importGlb(bytes!, controller.signal)
+      const pending = streaming ? parseGeometryStream(source, controller.signal, stage) : format === 'glb' ? importGlb(bytes!, controller.signal, previewFormat === 'glb')
         : parseGeometry(bytes!, format, controller.signal, stage, () => live() ? takeSource?.() : undefined, format === 'stl' || sectioned ? undefined : lod => {
           if (live() && progressive) progressive.add(lod); else lod.dispose();
         });
@@ -125,7 +125,8 @@ export default function GeometryPreview({ bytes, source, name, previewFormat, co
           const inspection = mounted?.inspect();
           setState(value => ({ ...value, ...selection, inspection, section: patch.section }));
         } else if (sectionChanged) setState(value => ({ ...value, section: patch.section }));
-      }, graphicsLost, { visible: latest.current.visible, generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady:()=>{if(live())startPreview?.();}, graphics });
+      }, graphicsLost, { visible: latest.current.visible, generated: format !== 'glb', pendingPreview: !!startPreview, onFirstGpuReady:()=>{if(live())startPreview?.();}, graphics,
+        materialPrimitives: 'scenes' in loaded ? loaded.materialPrimitives : undefined });
       const ownerDocument = container.current!.ownerDocument;
       if (latest.current.visible && lodSeed?.focusedAxis && ownerDocument.activeElement === ownerDocument.body) mounted.focusAxis(lodSeed.focusedAxis);
       progressive?.dispose(); progressive = undefined;
@@ -139,7 +140,7 @@ export default function GeometryPreview({ bytes, source, name, previewFormat, co
       void prepared.then(() => { if (!live() || !mounted) return; mounted.refreshPreview(); });
     })().catch(failed);
     return () => { signal.removeEventListener('abort', retire); retire(); };
-  }, [bytes, source, format, copyId, signal]);
+  }, [bytes, source, format, previewFormat, copyId, signal]);
   // Names/labels do not own the renderer lifetime.
   useEffect(() => { active.current?.relabel(t); }, [t]);
   const views: StandardView[] = ['isometric', 'front', 'back', 'left', 'right', 'top', 'bottom'];

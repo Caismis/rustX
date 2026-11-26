@@ -358,6 +358,53 @@ test('Blender middle-button gestures preserve Pan mode and never pick in either 
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
 });
 
+test('the first trusted middle drag from either pole orbits at the same scale', async ({ page }) => {
+  await load(page);
+  const canvas = page.locator('[data-geometry-format] canvas');
+  const box = (await canvas.boundingBox())!;
+  const x = box.x + box.width * .45, y = box.y + box.height * .45;
+  for (const key of ['Numpad7', 'Control+Numpad7']) {
+    await canvas.press(key);
+    const before = (await pose(page)).camera;
+    expect(before.up[1]).toBe(0);
+    await page.mouse.move(x, y);
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(x + 54, y + (key === 'Numpad7' ? -35 : 35), { steps: 5 });
+    await page.mouse.up({ button: 'middle' });
+    const after = (await pose(page)).camera;
+    expect(after.up).toEqual([0, 1, 0]);
+    expect(after.target).toEqual(before.target);
+    expect(after.verticalSpan).toBeCloseTo(before.verticalSpan, 8);
+    expect(new Vector3().fromArray(after.position).distanceTo(new Vector3().fromArray(before.position))).toBeGreaterThan(1);
+  }
+});
+
+test('trusted perspective wheel and Ctrl-middle dolly stop before the original front surface', async ({ page }) => {
+  await load(page, 'delivery', assemblyGlb([{ name: 'Solid', mesh: 0 }]));
+  const canvas = page.locator('[data-geometry-format] canvas');
+  await canvas.press('Numpad1');
+  await canvas.press('Numpad5');
+  const box = (await canvas.boundingBox())!;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  const eyeZ = async () => ((await pose(page)).camera.position as number[])[2];
+  const front = 5;
+  await page.mouse.move(x, y);
+  await page.mouse.wheel(0, -12_000);
+  await expect.poll(eyeZ).toBeLessThan(front + .02);
+  expect(await eyeZ()).toBeGreaterThan(front);
+
+  await page.keyboard.down('Control');
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.move(x, y - 100, { steps: 4 });
+  await page.mouse.up({ button: 'middle' });
+  await page.keyboard.up('Control');
+  expect(await eyeZ()).toBeGreaterThan(front);
+
+  await page.mouse.move(x, y);
+  await page.mouse.wheel(0, 1200);
+  await expect.poll(eyeZ).toBeGreaterThan(front + .1);
+});
+
 test('tracked pointers clear on cancellation and capture loss, including a drag returning to its origin', async ({ page }) => {
   await load(page, 'delivery', assemblyGlb([
     { name: 'Assembly', children: [1, 2] },

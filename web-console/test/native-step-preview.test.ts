@@ -160,7 +160,7 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-det
         for (const threads of [1, 8] as const) {
           const converter = new NativeStepPreview({ executable: nativeExecutable!, threads });
           const result = await readGeometrySource(active => converter.open(root, name, async () => {}, active), signal());
-          const native = await importGlb(result.data, signal());
+          const native = await importGlb(result.data, signal(), true);
           try {
             expect(native.bounds.min.distanceTo(min), `${name} min, ${threads} threads`).toBeLessThan(tolerance);
             expect(native.bounds.max.distanceTo(max), `${name} max, ${threads} threads`).toBeLessThan(tolerance);

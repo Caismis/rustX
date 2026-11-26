@@ -32,6 +32,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   turntable(): void;
   select(event: PointerEvent): void;
   guardZoom?(x: number, y: number): void;
+  clearZoomGuard?(): void;
   shortcut(action: Shortcut): void;
   cancelNavigation(): void;
 }) {
@@ -43,34 +44,37 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   const down = (event: PointerEvent) => {
     if (!options.visible()) return;
     if (![0, 1, 2].includes(event.button)) return;
+    options.clearZoomGuard?.();
     const controls = options.controls();
     if (event.button === 1) {
       event.preventDefault();
       if (event.altKey || event.metaKey) { event.stopImmediatePropagation(); return; }
-      // Three maps modified ROTATE to PAN. Select DOLLY only for Ctrl;
-      // the chosen action is fixed by OrbitControls at pointerdown.
-      controls.mouseButtons.MIDDLE = event.ctrlKey ? MOUSE.DOLLY : MOUSE.ROTATE;
     }
+    // Three maps modified ROTATE to PAN. Apply the mapping after turntable
+    // restoration, since a pole view can replace the controls during capture.
+    const middle = event.button === 1 ? event.ctrlKey ? MOUSE.DOLLY : MOUSE.ROTATE : undefined;
     const sole = pointers.size === 0;
     pointers.add(event.pointerId);
     if (sole && event.button === 1 && event.ctrlKey && event.pointerType !== 'touch')
       dolly = { id: event.pointerId, x: event.clientX, y: event.clientY, previousY: event.clientY };
     click = sole && event.isPrimary && event.button === 0 ? { id: event.pointerId, x: event.clientX, y: event.clientY } : undefined;
-    const action = event.button === 0 ? controls.mouseButtons.LEFT : event.button === 1 ? controls.mouseButtons.MIDDLE : controls.mouseButtons.RIGHT;
+    const action = middle ?? (event.button === 0 ? controls.mouseButtons.LEFT : controls.mouseButtons.RIGHT);
     const modified = event.ctrlKey || event.shiftKey || event.metaKey;
     const rotates = event.pointerType === 'touch' ? controls.touches.ONE === TOUCH.ROTATE
       : action === MOUSE.ROTATE && !modified || action === MOUSE.PAN && modified;
     if (sole && rotates) options.turntable();
+    if (middle !== undefined) options.controls().mouseButtons.MIDDLE = middle;
   };
   const move = (event: PointerEvent) => {
     if (event.pointerId === dolly?.id && options.visible()) {
+      options.clearZoomGuard?.();
       if (event.clientY < dolly.previousY) options.guardZoom?.(dolly.x, dolly.y);
       dolly.previousY = event.clientY;
     }
     if (click?.id === event.pointerId && exceedsThreshold(event)) click = undefined;
   };
   const up = (event: PointerEvent) => {
-    if (event.pointerId === dolly?.id) dolly = undefined;
+    if (event.pointerId === dolly?.id) { options.clearZoomGuard?.(); dolly = undefined; }
     if (!pointers.delete(event.pointerId) || click?.id !== event.pointerId) return;
     const select = options.visible() && event.button === 0 && event.target === canvas && !exceedsThreshold(event);
     click = undefined;
@@ -79,6 +83,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
     if (event.clientX >= rect.left && event.clientX < rect.right && event.clientY >= rect.top && event.clientY < rect.bottom) options.select(event);
   };
   const cancel = () => {
+    options.clearZoomGuard?.();
     click = dolly = undefined;
     if (!pointers.size) return;
     const captured = [...pointers]; pointers.clear();
@@ -87,7 +92,10 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   };
   const canceled = (event: PointerEvent) => { if (pointers.has(event.pointerId)) cancel(); };
   const aux = (event: MouseEvent) => { if (event.button === 1) { event.preventDefault(); event.stopPropagation(); } };
-  const wheel = (event: WheelEvent) => { if (options.visible() && !pointers.size && event.deltaY < 0) options.guardZoom?.(event.clientX, event.clientY); };
+  const wheel = (event: WheelEvent) => {
+    options.clearZoomGuard?.();
+    if (options.visible() && !pointers.size && event.deltaY < 0) options.guardZoom?.(event.clientX, event.clientY);
+  };
   const keydown = (event: KeyboardEvent) => {
     const focused = document.activeElement;
     if (!options.visible() || event.defaultPrevented || event.target !== focused
@@ -109,6 +117,7 @@ export function bindViewportInput(canvas: HTMLCanvasElement, gizmo: SVGSVGElemen
   return {
     cancel,
     dispose() {
+      options.clearZoomGuard?.();
       canvas.removeEventListener('pointerdown', down, true);
       document.removeEventListener('pointermove', move, true);
       document.removeEventListener('pointerup', up, true);

@@ -51,15 +51,16 @@ function positionBounds(position: BufferAttribute): Box3 {
   }
   return new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
 }
-export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
-  return admitScene(roots, selected);
+export function validateScene(roots: Object3D[], selected?: Object3D, materialPrimitives?: ReadonlySet<Object3D>): Box3 {
+  return admitScene(roots, selected, undefined, materialPrimitives);
 }
 /** Generated geometries include every transferred stream, including unreferenced
  * meshes. Scan them once; the graph walk separately charges occurrences. */
-function admitScene(roots: Object3D[], selected?: Object3D, generated?: BufferGeometry[]): Box3 {
+function admitScene(roots: Object3D[], selected?: Object3D, generated?: BufferGeometry[], materialPrimitives?: ReadonlySet<Object3D>): Box3 {
   const unique = new Set<BufferGeometry>(), mats = materials(roots);
   const backings = new Set<ArrayBuffer>();
-  let vertices = 0, triangles = 0, bytes = 0, backingBytes = 0, nodes = 0, parts = 0, draws = 0, pixels = 0;
+  const parts = new Set<Object3D>();
+  let vertices = 0, triangles = 0, bytes = 0, backingBytes = 0, nodes = 0, draws = 0, pixels = 0;
   const admitBacking = (attribute: BufferAttribute | InterleavedBufferAttribute) => {
     check(attribute instanceof BufferAttribute || attribute instanceof InterleavedBufferAttribute);
     const array = attribute instanceof InterleavedBufferAttribute ? attribute.data.array : attribute.array;
@@ -111,9 +112,12 @@ function admitScene(roots: Object3D[], selected?: Object3D, generated?: BufferGe
   for (const root of roots) {
     root.updateMatrixWorld(true);
     root.traverse(object => {
-      check(++nodes <= L.nodes && object.matrixWorld.elements.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate), 'limit');
+      const primitive = materialPrimitives?.has(object);
+      if (!primitive) check(++nodes <= L.nodes, 'limit');
+      check(object.matrixWorld.elements.every(value => Number.isFinite(value) && Math.abs(value) <= L.coordinate), 'limit');
       if (!(object instanceof Mesh)) return;
-      check(++parts <= L.parts, 'limit');
+      parts.add(primitive ? object.parent! : object);
+      check(parts.size <= L.parts, 'limit');
       const geometry: BufferGeometry = object.geometry, position = geometry.getAttribute('position'); check(position && position.itemSize === 3);
       const count = geometry.index?.count ?? position.count; check(count > 0 && count % 3 === 0, 'empty');
       triangles += count / 3; draws += Math.max(1, geometry.groups.length);
@@ -121,7 +125,7 @@ function admitScene(roots: Object3D[], selected?: Object3D, generated?: BufferGe
       admitGeometry(geometry);
     });
   }
-  check(parts > 0, 'empty');
+  check(parts.size > 0, 'empty');
   check(vertices <= L.vertices && triangles <= L.triangles && bytes <= L.decodedBytes && draws <= L.drawCalls, 'limit');
   const images = textures(mats); check(images.size <= L.textures, 'limit');
   for (const texture of images) {

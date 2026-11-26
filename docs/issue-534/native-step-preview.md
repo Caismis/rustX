@@ -29,7 +29,9 @@ The Host validates the original descriptor, secure path identity, source
 version and current authority before exposing the GLB, while transporting
 bounded ranges, and at final settlement. The browser uses the same geometry
 admission, render and copy lifecycle as other GLBs. OCCT XCAF transfers names,
-occurrences and colors. Root meshing uses the browser CAD importer
+occurrences and colors. The native preview keeps color primitives under their
+owning occurrence for selection and isolation and charges each primitive to
+the draw budget. Root meshing uses the browser CAD importer
 parameters of relative deflection 0.001 of the root's mean axis span and an
 angular deflection of 0.5 radians. The exporter writes meters with the viewer's
 Y-up presentation. Session-file delivery uses the existing browser path.
