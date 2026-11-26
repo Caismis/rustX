@@ -1732,7 +1732,6 @@
         "../primitives/Modal",
         "../primitives/StateDot",
         "../primitives/icons",
-        "./AttachmentCard.module.css",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1755,7 +1754,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "0a87c321ac6bd31fbd9238e25014c0fcaeb3d5ab9cf38e417964b70b8fa55487"
+      "local_sha256": "b5db856fccbea6211a909964b7832db841795246bdac4f931c22b93928ed8ac0"
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
@@ -6061,15 +6060,14 @@
       "treatment": "Ported persistent terminal error row; native normalized failure owns message and code. Long native codes wrap on narrow screens.",
       "upstream_sha256": "c9e3bffd724e93ffe7fcb3566d02d2300ae6ab55678bd094f26e4e58d6c24713",
       "retained_dependencies": [
-        "../primitives/StateDot",
-        "./TurnError.module.css"
+        "../primitives/StateDot"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "4ac27ac12f70a194d5e3b98f0376c49687e590651f9cc473464e650471bade48",
+      "local_sha256": "b79895c844b515e5643fe6e5ec89a5ca68455e6fef79d0c19dbe33ba1f3bd064",
       "classification": "A"
     },
     {
@@ -6631,14 +6629,14 @@
         "../../locale/react",
         "../markdown/CodeBlock",
         "../primitives/icons",
-        "./ToolDetails.module.css"
+        "clsx"
       ],
       "excluded_dependencies": [
         "Cordis slots and locale authority",
         "Harness tool execution models",
         "File navigation and recursive detail grouping"
       ],
-      "local_sha256": "e4b2bbccf574ba6f4ae6a4d6bf347ef7cf5dfcdd47626c33649f57de07e58aec"
+      "local_sha256": "5a4e7da948d5ef3eed332611e851cccb2ae48590a42a69c2be778728909dab4a"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6710,13 +6708,12 @@
       "treatment": "Model selector alignment: shared DSH provider groups, sticky headings and model search ranking. Native rustX catalog and exact model/profile identities remain authoritative; no DSH directory or remote runtime retained.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "./MenuGroup.module.css",
         "react"
       ],
       "excluded_dependencies": [
         "DSH model directory and Remote selection authority"
       ],
-      "local_sha256": "9b8b975ba74c9ac8db88283614bb2c48fedf5372cf8426d07367545f08c8a316"
+      "local_sha256": "a2a7db2fb68b1bbb28c5ec3048166ab2ddc4f2121e2f5f8d6aaf91a4b2372fb2"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -7265,7 +7262,6 @@
         "../../locale/react",
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/icons",
-        "./ConfigurationChangeRow.module.css",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -7273,7 +7269,7 @@
         "Harness context injection history, request diffing and runtime authority"
       ],
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "local_sha256": "d99e9e608f2a22362f375e1ff9cc02d0007d6e37f2dc63cf9a8183688457faf3"
+      "local_sha256": "1b33bb41e7f6c071e9e9cd813e42afe7ac0460df4ca4813d76338fe4bb50cd38"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
@@ -7328,7 +7324,7 @@
       "destination": "web-console/src/presentation/attachments/ChangedFiles.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
-      "local_sha256": "1234691990484299bd9f21ba5bba945db51158d282118aa9a0d93fb2f204669b",
+      "local_sha256": "b17ca07465872f4d040f6796442383df280f5d3ac23c03d0177251ea8152d1b6",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
       "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
@@ -7337,7 +7333,6 @@
         "../primitives/FileTypeIcon",
         "../primitives/HoverCard",
         "../primitives/icons",
-        "./ChangedFiles.module.css",
         "react"
       ],
       "excluded_dependencies": [
