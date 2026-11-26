@@ -23,6 +23,8 @@
 //! model context. Only definition edits publish a later generation at the
 //! existing safe boundary. Bodies and assets remain live Tool inputs.
 
+mod locations;
+
 use std::collections::BTreeMap;
 use std::io;
 
@@ -356,7 +358,7 @@ impl SkillDiscovery {
     /// Panics if the internal native reader returns an uncaught collection error.
     #[must_use]
     pub fn discover(&self) -> SkillDiscoveryOutcome {
-        self.discover_with(None, None)
+        self.discover_with(None)
             .expect("native Skill observation reports collection errors as diagnostics")
     }
 
@@ -374,8 +376,7 @@ impl SkillDiscovery {
         observed: &mut Option<SkillWatchObservation>,
     ) -> io::Result<SkillDiscoveryOutcome> {
         let client = Client::new(endpoint, &self.cancellation);
-        let visible = endpoint.client_user_root()?.join(".agents/skills");
-        let outcome = self.discover_with(Some(&client), Some(&visible));
+        let outcome = self.discover_with(Some(&client));
         let paths = client.into_observations();
         *observed = Some(SkillWatchObservation {
             paths: paths.clone(),
@@ -387,11 +388,7 @@ impl SkillDiscovery {
         })
     }
 
-    fn discover_with(
-        &self,
-        client: Option<&Client<'_>>,
-        visible_user: Option<&Path>,
-    ) -> io::Result<SkillDiscoveryOutcome> {
+    fn discover_with(&self, client: Option<&Client<'_>>) -> io::Result<SkillDiscoveryOutcome> {
         let mut diagnostics = Vec::new();
         let mut candidates = Vec::new();
         let mut roots = Vec::new();
@@ -407,10 +404,9 @@ impl SkillDiscovery {
                 let canonical = tree
                     .canonical(&root.root)
                     .unwrap_or_else(|_| root.root.clone());
-                let published = visible_user.filter(|_| source == SkillSource::User);
                 roots.push(AutomaticSkillRoot {
                     source,
-                    root: published.unwrap_or(&canonical).to_owned(),
+                    root: canonical,
                 });
                 candidates.extend(collect_automatic_source(
                     root,
@@ -418,7 +414,6 @@ impl SkillDiscovery {
                     &self.cancellation,
                     tree,
                     workspace_client.is_some(),
-                    published,
                 )?);
             }
         }
@@ -426,6 +421,10 @@ impl SkillDiscovery {
         roots.sort();
         roots.dedup();
         outcome.roots = roots;
+        if let Some(client) = client {
+            let visible = client.user_skill_collection()?;
+            outcome.publish_user_paths(&visible, |relative| Ok(visible.join(relative)))?;
+        }
         Ok(outcome)
     }
 }
@@ -530,49 +529,39 @@ fn collect_automatic_source(
     cancellation: &crate::runtime::CancellationSignal,
     tree: &dyn SkillTree,
     bound: bool,
-    published: Option<&Path>,
 ) -> io::Result<Vec<Candidate>> {
     let source = root.source;
-    let displayed = AutomaticSkillRoot {
-        source,
-        root: published.unwrap_or(&root.root).to_owned(),
-    };
     tree.observe(&root.root);
     let collection = match tree.entry(&root.root) {
         Ok(Some(entry)) if entry.kind == EntryKind::Directory => tree.canonical(&root.root),
         Ok(None) => {
             diagnostics.push(SkillDiagnostic::SourceRootMissing {
                 source,
-                root: displayed.root.display().to_string(),
+                root: root.root.display().to_string(),
             });
             return Ok(Vec::new());
         }
         Ok(Some(_)) => {
             diagnostics.push(invalid_collection(
-                &displayed,
+                root,
                 "Skill collection is not a directory",
             ));
             return Ok(Vec::new());
         }
         Err(error) => Err(error),
     }
-    .map(|directory| {
-        (
-            super::discovery::collect_from(&directory, cancellation, tree),
-            directory,
-        )
-    });
-    let (files, collection_root) = match collection {
-        Ok((collection, root)) if collection.error.is_none() => (collection.files, root),
+    .map(|directory| super::discovery::collect_from(&directory, cancellation, tree));
+    let files = match collection {
+        Ok(collection) if collection.error.is_none() => collection.files,
         failed => {
             let error = match failed {
-                Ok((collection, _)) => collection.error.expect("matched failed collection"),
+                Ok(collection) => collection.error.expect("matched failed collection"),
                 Err(error) => error,
             };
             if bound {
                 return Err(error);
             }
-            diagnostics.push(invalid_collection(&displayed, error));
+            diagnostics.push(invalid_collection(root, error));
             return Ok(Vec::new());
         }
     };
@@ -593,15 +582,8 @@ fn collect_automatic_source(
             continue;
         };
         let fallback_name = directory.to_string_lossy().into_owned();
-        let offered = match published {
-            Some(root) => root.join(
-                file.strip_prefix(&collection_root)
-                    .map_err(io::Error::other)?,
-            ),
-            None => file.clone(),
-        };
-        let location = offered.display().to_string();
-        let location_for_tools = if bound { &canonical } else { &offered };
+        let location = file.display().to_string();
+        let location_for_tools = if bound { &canonical } else { &file };
         let result = match tree.frontmatter(&canonical, cancellation) {
             Ok(header) => discover_package(
                 location_for_tools,
@@ -1034,12 +1016,14 @@ mod frontmatter_tests {
         write_skill(&host, "shared", "Global version", "");
         let project = workspace.root().join(".agents/skills");
         write_skill(&project, "shared", "Workspace version", "");
-        let outcome = SkillDiscovery::with_config(automatic(&[
+        let mut outcome = SkillDiscovery::with_config(automatic(&[
             (SkillSource::User, host.clone()),
             (SkillSource::Workspace, project),
         ]))
-        .discover_with(None, Some(visible))
-        .unwrap();
+        .discover();
+        outcome
+            .publish_user_paths(visible, |relative| Ok(visible.join(relative)))
+            .unwrap();
         let guide = &outcome.packages[0];
         assert_eq!(Path::new(guide.location()), visible.join("guide/SKILL.md"));
         assert_eq!(guide.instruction_source(), host.join("guide/SKILL.md"));

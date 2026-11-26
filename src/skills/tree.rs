@@ -44,6 +44,10 @@ impl<'a> Client<'a> {
 }
 
 impl Client<'_> {
+    pub(super) fn user_skill_collection(&self) -> io::Result<PathBuf> {
+        Ok(self.endpoint.client_user_root()?.join(".agents/skills"))
+    }
+
     pub(super) fn into_observations(self) -> ObservedSkillDirectories {
         self.observations.into_inner()
     }
