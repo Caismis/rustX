@@ -13,19 +13,20 @@ pub(super) fn bearer_token(value: &str) -> Option<&str> {
 
 pub(super) fn peer_json_matches(
     value: &serde_json::Value,
-    matches: &impl Fn(&str) -> bool,
+    matches_text: &impl Fn(&str) -> bool,
+    matches_scalar: &impl Fn(&str) -> bool,
 ) -> bool {
     match value {
-        serde_json::Value::String(text) => matches(text),
-        serde_json::Value::Object(entries) => entries
-            .iter()
-            .any(|(key, value)| matches(key) || peer_json_matches(value, matches)),
+        serde_json::Value::String(text) => matches_text(text),
+        serde_json::Value::Object(entries) => entries.iter().any(|(key, value)| {
+            matches_text(key) || peer_json_matches(value, matches_text, matches_scalar)
+        }),
         serde_json::Value::Array(entries) => entries
             .iter()
-            .any(|value| peer_json_matches(value, matches)),
-        serde_json::Value::Number(number) => matches(&number.to_string()),
-        serde_json::Value::Bool(value) => matches(if *value { "true" } else { "false" }),
-        serde_json::Value::Null => matches("null"),
+            .any(|value| peer_json_matches(value, matches_text, matches_scalar)),
+        serde_json::Value::Number(number) => matches_scalar(&number.to_string()),
+        serde_json::Value::Bool(value) => matches_scalar(if *value { "true" } else { "false" }),
+        serde_json::Value::Null => matches_scalar("null"),
     }
 }
 
@@ -42,24 +43,24 @@ pub(super) fn check_tool_client_grants(
     if grants.headers.is_empty() && grants.templates.is_empty() {
         return Ok(());
     }
-    let contains_grant = |text: &str| {
+    let matches_grant = |matches: &dyn Fn(&str) -> bool| {
         grants
             .headers
             .values()
             .chain(grants.templates.values())
             .any(|value| {
                 let value = value.expose();
-                text.contains(value)
-                    || bearer_token(value).is_some_and(|token| text.contains(token))
+                matches(value) || bearer_token(value).is_some_and(matches)
             })
     };
+    let contains_grant = |text: &str| matches_grant(&|value| text.contains(value));
+    let equals_grant = |text: &str| matches_grant(&|value| text == value);
+    let schema_echoes_grant =
+        |schema: &serde_json::Value| peer_json_matches(schema, &contains_grant, &equals_grant);
     if contains_grant(&tool.name)
         || contains_grant(&tool.description)
-        || peer_json_matches(&tool.input_schema, &contains_grant)
-        || tool
-            .output_schema
-            .as_ref()
-            .is_some_and(|schema| peer_json_matches(schema, &contains_grant))
+        || schema_echoes_grant(&tool.input_schema)
+        || tool.output_schema.as_ref().is_some_and(schema_echoes_grant)
     {
         return Err(super::McpError::Discovery(
             "MCP tool declaration contains a Client credential".into(),

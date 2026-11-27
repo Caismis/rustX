@@ -863,16 +863,29 @@ impl LocalExecutionEndpoint {
     pub(crate) fn mcp_environment_by(
         &self,
         request: &rustx_execution_protocol::mcp_environment::Request,
-        deadline: Instant,
+        admission_deadline: Instant,
         cancellation: &crate::runtime::CancellationSignal,
     ) -> io::Result<std::collections::BTreeMap<String, String>> {
-        self.with_bounded_data_connection_cancellable(deadline, Some(cancellation), |connection| {
-            connection.mcp_environment(request, deadline, || {
-                cancellation
-                    .with_active(|| ())
-                    .ok_or_else(cancelled_before_dispatch)
-            })
-        })
+        self.with_bounded_data_connection_cancellable(
+            admission_deadline,
+            Some(cancellation),
+            |connection| {
+                // Once sent, this exchange must consume its reply before the
+                // data lane can serve another request.
+                let wire_deadline = Instant::now() + Self::MCP_ENVIRONMENT_BUDGET;
+                connection.mcp_environment(request, wire_deadline, || {
+                    cancellation
+                        .with_active(|| {
+                            if Instant::now() >= admission_deadline {
+                                Err(execution_wait_timeout())
+                            } else {
+                                Ok(())
+                            }
+                        })
+                        .ok_or_else(cancelled_before_dispatch)?
+                })
+            },
+        )
     }
 
     pub(crate) fn managed_python_source(
@@ -5998,6 +6011,72 @@ sensitive_headers = { Authorization = "$DENIED_TOKEN" }
         assert!(binding.credentials.resolve().is_err());
         drop(endpoint);
         drop(registry);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mcp_environment_reply_after_preparation_deadline_keeps_data_lane() {
+        let (registry, session, endpoint, mut client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+            ]));
+        let (sent, dispatched) = tokio::sync::oneshot::channel();
+        let (release, delayed_reply) = std::sync::mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let ClientRequest::McpEnvironment(request) = read_record(&mut client).unwrap() else {
+                panic!("expected grant request");
+            };
+            sent.send(()).unwrap();
+            delayed_reply.recv().unwrap();
+            let values = request
+                .names
+                .into_iter()
+                .map(|name| (name, "fixture-grant".into()))
+                .collect();
+            write_record(
+                &mut client,
+                &ClientReply::McpEnvironment(rustx_execution_protocol::mcp_environment::Reply {
+                    values,
+                }),
+            )
+            .unwrap();
+            answer_range(client, Path::new("after"))
+        });
+        let scope = scope_for(&registry, &session);
+        let hydration = tokio::spawn(async move {
+            let mut binding = client_workspace_http_mcp_binding("LATE_TOKEN");
+            let deadline = Instant::now() + Duration::from_secs(1);
+            assert!(
+                crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                    &crate::runtime::identity::McpServerId::new("late"),
+                    &mut binding,
+                    &scope,
+                    deadline,
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .await
+            );
+            assert!(binding.credentials.resolve().is_err());
+        });
+        tokio::time::timeout(Duration::from_secs(2), dispatched)
+            .await
+            .unwrap()
+            .unwrap();
+        hydration.await.unwrap();
+        release.send(()).unwrap();
+        let after_path = workspace.join("after");
+        tokio::task::spawn_blocking(move || {
+            endpoint.read_workspace_source(
+                &after_path,
+                Instant::now() + Duration::from_secs(2),
+                |lane, relative| lane.read_range(relative, 0, 16, None),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let mut client = peer.join().unwrap();
+        wire_is_quiet(&mut client);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -214,9 +214,12 @@ fn cacheable(
     for tool in &catalog.tools {
         let declaration = serde_json::to_value(tool).ok()?;
         budget = budget.checked_sub(serde_json::to_vec(&declaration).ok()?.len())?;
-        if super::diagnostics::peer_json_matches(&declaration, &|text| {
-            credentials.redact(text) != text
-        }) {
+        let contains_credential = |text: &str| credentials.redact(text) != text;
+        if super::diagnostics::peer_json_matches(
+            &declaration,
+            &contains_credential,
+            &contains_credential,
+        ) {
             return None;
         }
     }

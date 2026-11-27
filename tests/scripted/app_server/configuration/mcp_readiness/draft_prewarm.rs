@@ -1362,7 +1362,7 @@ async fn queued_preparation_rechecks_physical_workspace_after_capacity_and_befor
 async fn credential_rotation_retires_preparation_while_model_only_changes_reuse_it() {
     bounded(async {
         for rotate_credentials in [false, true] {
-            let mcp = McpFixture::start().await;
+            let mcp = McpFixture::host().await;
             let mut fixture = Fixture::with_session_count(None, 0).await;
             configure(&fixture, &[("late", &mcp)]);
             only_mcp(&fixture, 0);

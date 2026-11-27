@@ -108,6 +108,7 @@ pub(crate) async fn hydrate_client_credentials(
 /// [`SessionExecutionScope`] under a shared `deadline` and `cancellation` signal.
 ///
 /// Returns `false` if `cancellation` fired before or during the RPC.
+/// A dispatched exchange still consumes its reply if the caller stops waiting.
 pub(crate) async fn hydrate_client_credentials_with_scope_until(
     server_id: &McpServerId,
     binding: &mut McpServerBinding,
@@ -151,6 +152,11 @@ pub(crate) async fn hydrate_client_credentials_with_scope_until(
         () = cancellation.cancelled() => {
             task.abort();
             return false;
+        }
+        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+            task.abort();
+            binding.credentials.mark_client_hydrated();
+            return true;
         }
         result = &mut task => result,
     };

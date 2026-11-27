@@ -3570,6 +3570,18 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
                         break;
                     };
                     match (&req, &reply) {
+                        // Drive recovery through the coverage clock. Client
+                        // filesystem hints can legitimately start an
+                        // independent capture while the injected read fails.
+                        (
+                            _,
+                            ClientReply::Watch(rustx_execution_protocol::watch::WatchReply::Changed(change)),
+                        ) if fail_configuration_read && !change.retired => {
+                            let mut change = change.clone();
+                            change.changed_paths.clear();
+                            change.resync_required = false;
+                            reply = ClientReply::Watch(rustx_execution_protocol::watch::WatchReply::Changed(change));
+                        }
                         (
                             ClientRequest::PythonSource(
                                 PythonSourceRequest::Capture { key, .. } | PythonSourceRequest::State { key },

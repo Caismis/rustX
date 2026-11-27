@@ -652,12 +652,12 @@ mod tests {
         };
         credentials.capture(CredentialSnapshot::new([
             ("HEADER_TOKEN".into(), "bEaReR protected-marker".into()),
-            ("NUMBER_TOKEN".into(), "841093".into()),
+            ("NUMBER_TOKEN".into(), "10".into()),
         ]));
         let declaration = json!({
             "name": "inventory",
             "description": "List inventory",
-            "inputSchema": {"type": "object"},
+            "inputSchema": {"type": "object", "properties": {"items": {"maxItems": 100}}},
             "outputSchema": {"type": "object"},
         });
         let page = |tool| serde_json::from_value(json!({"tools": [tool]})).unwrap();
@@ -674,7 +674,7 @@ mod tests {
             ),
             (
                 "outputSchema",
-                json!({"type": "object", "properties": {"count": {"const": 841_093}}}),
+                json!({"type": "object", "properties": {"count": {"const": 10}}}),
             ),
         ] {
             let mut declaration = declaration.clone();
