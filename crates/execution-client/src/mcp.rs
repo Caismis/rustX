@@ -482,7 +482,7 @@ fn client_arguments(
 
     for arg in rustx_execution_protocol::mcp::stdio_argument_paths(program, &args) {
         let path = Path::new(arg.value);
-        let kind = existing_argument(root, workspace, path)?;
+        let kind = existing_argument(root, workspace, path).ok()?;
         let admitted = match arg.kind {
             StdioPathKind::Input => kind.is_some(),
             StdioPathKind::Directory => kind == Some(EntryKind::Directory),
@@ -501,11 +501,11 @@ fn existing_argument(
     root: &rustx_confined_fs::PackageDirectory,
     workspace: &Path,
     path: &Path,
-) -> Option<Option<rustx_execution_protocol::EntryKind>> {
+) -> io::Result<Option<rustx_execution_protocol::EntryKind>> {
     use rustx_execution_protocol::EntryKind;
 
     if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
-        return None;
+        return Err(io::ErrorKind::InvalidInput.into());
     }
     let classify = |is_file, is_directory| {
         if is_file {
@@ -517,23 +517,30 @@ fn existing_argument(
         }
     };
     if path == workspace {
-        root.verify().ok()?;
-        return Some(Some(EntryKind::Directory));
+        root.verify()?;
+        return Ok(Some(EntryKind::Directory));
     }
     if let Ok(relative) = path.strip_prefix(workspace) {
-        if let Some(entry) = root.resolve_resource(workspace, relative).ok()?.entry {
-            return Some(Some(classify(
+        if let Some(entry) = root.resolve_resource(workspace, relative)?.entry {
+            return Ok(Some(classify(
                 entry.metadata.is_file,
                 entry.metadata.is_directory,
             )));
         }
-    } else if std::fs::symlink_metadata(path).is_ok() {
-        let metadata = std::fs::metadata(path).ok()?;
-        return Some(Some(classify(metadata.is_file(), metadata.is_dir())));
+        return match std::fs::symlink_metadata(path) {
+            Ok(_) => Err(io::ErrorKind::PermissionDenied.into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
     }
-    std::fs::symlink_metadata(path)
-        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
-        .then_some(None)
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            let metadata = std::fs::metadata(path)?;
+            Ok(Some(classify(metadata.is_file(), metadata.is_dir())))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn commonjs_input_exists(
@@ -552,7 +559,7 @@ fn commonjs_input_exists(
     for extension in [".js", ".json", ".node"] {
         let mut candidate = path.as_os_str().to_owned();
         candidate.push(extension);
-        if existing_argument(root, workspace, Path::new(&candidate))?
+        if existing_argument(root, workspace, Path::new(&candidate)).ok()?
             == Some(EntryKind::RegularFile)
         {
             return Some(true);

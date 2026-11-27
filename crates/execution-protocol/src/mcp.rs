@@ -39,7 +39,7 @@ pub enum StdioPathKind {
     Input,
     /// An existing directory, as required by `env --chdir`.
     Directory,
-    /// A path-qualified Node preload that may use CommonJS extension lookup.
+    /// A path-qualified Node preload that may use `CommonJS` extension lookup.
     CommonJs,
     /// An explicit path that may name a new leaf in a writable directory.
     WritableLeaf,
@@ -131,7 +131,7 @@ fn argument_path<'a>(
 fn split_option(arg: &str) -> (&str, &str, Option<&str>) {
     arg.split_once('=')
         .map_or((arg, "", None), |(flag, value)| {
-            (flag, &arg[..flag.len() + 1], Some(value))
+            (flag, &arg[..=flag.len()], Some(value))
         })
 }
 
@@ -158,7 +158,7 @@ fn env_option(arg: &str) -> (&str, &str, Option<&str>) {
     split_option(arg)
 }
 
-fn env_paths(args: &[String]) -> (usize, Vec<StdioArgumentPath<'_>>) {
+fn env_paths(args: &[String]) -> (usize, Option<&Path>, Vec<StdioArgumentPath<'_>>) {
     let mut args_with_index = args.iter().enumerate();
     let mut paths = Vec::new();
     let mut options = true;
@@ -171,8 +171,20 @@ fn env_paths(args: &[String]) -> (usize, Vec<StdioArgumentPath<'_>>) {
                 "-C" | "--chdir" => Operand::Directory,
                 "--env0-from" => Operand::Input,
                 "-a" | "-u" | "--argv0" | "--unset" | "--quoting-style" => Operand::Opaque,
-                // The wrapper owns the quoting and expansion in split strings.
-                "-S" | "--split-string" => break,
+                // Leave env's expansion opaque and classify the remaining
+                // explicit arguments without guessing the interpreter.
+                "-S" | "--split-string" => {
+                    if attached.is_none() {
+                        args_with_index.next();
+                    }
+                    return (
+                        args_with_index
+                            .next()
+                            .map_or(args.len(), |(index, _)| index),
+                        None,
+                        paths,
+                    );
+                }
                 _ => continue,
             };
             if let Some(value) = attached {
@@ -189,10 +201,10 @@ fn env_paths(args: &[String]) -> (usize, Vec<StdioArgumentPath<'_>>) {
                 Operand::Value
             };
             paths.extend(argument_path(index, "", arg, role));
-            return (index + 1, paths);
+            return (index + 1, Some(Path::new(arg)), paths);
         }
     }
-    (args.len(), paths)
+    (args.len(), None, paths)
 }
 
 /// Walk argv using the same path roles before and after Host resolution.
@@ -201,16 +213,14 @@ pub fn stdio_argument_paths<'a>(
     program: &'a Path,
     args: &'a [String],
 ) -> impl Iterator<Item = StdioArgumentPath<'a>> {
-    let (start, wrapper_paths) = if program.file_name().is_some_and(|name| name == "env") {
-        env_paths(args)
-    } else {
-        (0, Vec::new())
-    };
-    let name = start
-        .checked_sub(1)
-        .and_then(|index| args.get(index))
-        .map_or(program, Path::new)
-        .file_name()
+    let (start, interpreter, wrapper_paths) =
+        if program.file_name().is_some_and(|name| name == "env") {
+            env_paths(args)
+        } else {
+            (0, Some(program), Vec::new())
+        };
+    let name = interpreter
+        .and_then(Path::file_name)
         .and_then(|name| name.to_str())
         .unwrap_or_default();
     let shell = matches!(name, "sh" | "bash" | "dash" | "zsh");
@@ -274,6 +284,8 @@ pub fn stdio_argument_paths<'a>(
 mod stdio_path_tests {
     use super::*;
     use StdioPathKind::{CommonJs, Directory, Input, WritableLeaf};
+
+    const NO_PATHS: [(usize, StdioPathKind); 0] = [];
 
     fn path_values(program: &str, args: &[&str]) -> Vec<(usize, StdioPathKind)> {
         let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
@@ -350,7 +362,7 @@ mod stdio_path_tests {
     #[test]
     fn interpreter_payloads_and_urls_remain_opaque() {
         for flag in ["-c", "-lc", "-ic"] {
-            assert!(path_values("bash", &[flag, "/some/program"]).is_empty());
+            assert_eq!(path_values("bash", &[flag, "/some/program"]), NO_PATHS);
         }
         for flag in ["-O", "+O", "-o"] {
             assert_eq!(
@@ -366,9 +378,30 @@ mod stdio_path_tests {
             path_values("python3", &["-W", "ignore", "server.py"]),
             [(2, Input)]
         );
-        assert!(path_values("/usr/bin/env", &["python3", "-m", "package.server"]).is_empty());
-        assert!(path_values("node", &["--eval=/program/text"]).is_empty());
-        assert!(path_values("server", &["--input=https://example.test/feed"]).is_empty());
+        assert_eq!(
+            path_values("/usr/bin/env", &["python3", "-m", "package.server"]),
+            NO_PATHS
+        );
+        assert_eq!(path_values("node", &["--eval=/program/text"]), NO_PATHS);
+        assert_eq!(
+            path_values("server", &["--input=https://example.test/feed"]),
+            NO_PATHS
+        );
+    }
+
+    #[test]
+    fn env_split_strings_preserve_explicit_paths_in_following_arguments() {
+        assert_eq!(
+            path_values("env", &["-S", "python3 -u ./opaque.py", "./server.py"]),
+            [(2, WritableLeaf)]
+        );
+        assert_eq!(
+            path_values(
+                "env",
+                &["--split-string=python3 -u ./opaque.py", "./server.py"]
+            ),
+            [(1, WritableLeaf)]
+        );
     }
 }
 
