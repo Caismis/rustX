@@ -1,9 +1,25 @@
-//! Context checkpoint vocabulary shared across layers.
+//! Immutable historical context content and its structural compiler.
+//!
+//! A checkpoint decides all eligible history through its base Ledger frontier.
+//! Its occurrence coordinates are separate from physical canonical Tool calls,
+//! actual-request coordinates and provider wire correlation strings.
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::identity::CheckpointId;
+use super::resources::{LedgerFrontier, ResourceReadCut};
+use crate::message::types::{
+    AssistantContentBlock, ContentBlockIndex, MessageBlock, ToolCallOccurrenceRef,
+};
+use crate::model::input::ModelInputMessage;
+use crate::model::projected::{
+    CanonicalMessageRef, DerivedModelMessage, ModelMessageView, ProjectedMessage,
+};
+use crate::runtime::identity::{
+    AuxiliaryCallId, CheckpointId, ConversationId, RequestId, ToolCallId, ToolId,
+};
 
+/// Checkpoint activation order, independent of the Ledger and Journal domains.
 #[derive(
     Debug,
     Default,
@@ -27,20 +43,6 @@ pub struct CheckpointMessageOccurrence {
     pub checkpoint_id: CheckpointId,
     pub item_index: u32,
 }
-
-use crate::context::resources::{LedgerFrontier, ResourceReadCut};
-use crate::message::types::{
-    AssistantContentBlock, ContentBlockIndex, MessageBlock, ToolCallOccurrenceRef,
-};
-use crate::model::input::ModelInputMessage;
-use crate::model::projected::{
-    CanonicalMessageRef, DerivedModelMessage, ModelMessageView, ProjectedMessage,
-};
-use crate::runtime::identity::{AuxiliaryCallId, ConversationId, RequestId, ToolCallId, ToolId};
-use std::collections::{BTreeMap, BTreeSet};
-
-/// Checkpoint activation order, independent of the Ledger and Journal domains.
-
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -90,6 +92,24 @@ pub struct CheckpointItem {
     pub result_call: Option<CheckpointCallCoordinate>,
 }
 
+/// Whether a proposed prefix and the remaining checkpoint items fit the
+/// inline reference budget. Retained references consume a slot per occurrence.
+#[must_use]
+pub fn inline_provenance_fits(mut refs: usize, retained: &[CheckpointItem]) -> bool {
+    for item in retained {
+        refs = refs.saturating_add(item.call_sources.len());
+        if let CheckpointMessage::Derived(derived) = &item.message {
+            refs = refs
+                .saturating_add(derived.sources.len())
+                .saturating_add(derived.checkpoint_sources.len());
+        }
+        if refs > 1024 {
+            return false;
+        }
+    }
+    refs <= 1024
+}
+
 /// Exact auxiliary Summary Call that generated one retained checkpoint.
 ///
 /// This is source execution provenance, not an input-identity inference. The
@@ -114,10 +134,33 @@ pub struct CheckpointCandidate {
     pub read_cut: ResourceReadCut,
     pub base_frontier: LedgerFrontier,
     pub items: Vec<CheckpointItem>,
+    /// Authenticated continuous-prefix coverage, only for native Summary projections.
+    pub prefix_coverage: Option<super::coverage::PrefixCoverage>,
     /// Trusted cumulative file facts, validated from canonical sources and earlier checkpoints.
     pub summary_metadata: Option<crate::message::types::CompactionSummaryMetadata>,
     /// The explicitly named Summary-generation dependency, when one exists.
     pub summary_generation: Option<SummaryGenerationRef>,
+}
+
+/// A candidate may exceed a materialization bound even when its source is healthy.
+#[derive(Debug, thiserror::Error)]
+pub enum CheckpointError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    Capacity(&'static str),
+}
+
+impl From<String> for CheckpointError {
+    fn from(error: String) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+impl From<&str> for CheckpointError {
+    fn from(error: &str) -> Self {
+        Self::Invalid(error.to_owned())
+    }
 }
 
 impl CheckpointCandidate {
@@ -134,27 +177,28 @@ impl CheckpointCandidate {
     /// Validate the complete materialization budget before resolving source bodies.
     /// # Errors
     /// Oversized content, provenance, item count or an invalid base frontier fail explicitly.
-    pub fn validate_budget(&self) -> Result<(), String> {
-        if self.base_frontier > self.read_cut.ledger || self.items.len() > 8192 {
+    pub fn validate_budget(&self) -> Result<(), CheckpointError> {
+        if self.items.len() > 8192 {
+            return Err(CheckpointError::Capacity(
+                "checkpoint item count exceeds budget",
+            ));
+        }
+        if self.base_frontier > self.read_cut.ledger {
             return Err("checkpoint base frontier or item count exceeds authority".into());
         }
-        let mut refs = 0_usize;
-        for item in &self.items {
-            refs = refs
-                .checked_add(item.call_sources.len())
-                .ok_or("checkpoint provenance overflow")?;
-            if let CheckpointMessage::Derived(derived) = &item.message {
-                refs = refs
-                    .checked_add(derived.sources.len())
-                    .and_then(|n| n.checked_add(derived.checkpoint_sources.len()))
-                    .ok_or("checkpoint provenance overflow")?;
-            }
-            if refs > 1024 {
-                return Err("checkpoint inline provenance budget exceeded".into());
+        if let Some(coverage) = &self.prefix_coverage {
+            coverage.validate_shape().map_err(str::to_owned)?;
+            if coverage.capture_cut.conversation_id != self.read_cut.conversation_id {
+                return Err("coverage capture belongs to another conversation".into());
             }
         }
+        if !inline_provenance_fits(0, &self.items) {
+            return Err(CheckpointError::Capacity(
+                "checkpoint inline provenance budget exceeded",
+            ));
+        }
         serde_json::to_writer(ByteBudget(8 * 1024 * 1024), self)
-            .map_err(|_| "checkpoint body byte budget exceeded".to_owned())
+            .map_err(|_| CheckpointError::Capacity("checkpoint body byte budget exceeded"))
     }
 }
 
@@ -207,10 +251,10 @@ pub struct CanonicalDependency {
 /// # Errors
 /// Rejects missing dependencies, forged provenance, changed opaque reasoning,
 /// orphan/ambiguous results, split batches and invalid projected protocol order.
-pub fn compile_checkpoint(
+pub fn compile_checkpoint<E: From<CheckpointError>>(
     candidate: &CheckpointCandidate,
-    mut resolve: impl FnMut(&CanonicalMessageRef, bool) -> Result<CanonicalDependency, String>,
-) -> Result<CompiledCheckpoint, String> {
+    mut resolve: impl FnMut(&CanonicalMessageRef, bool) -> Result<CanonicalDependency, E>,
+) -> Result<CompiledCheckpoint, E> {
     candidate.validate_budget()?;
     let mut originals = BTreeMap::new();
     let mut source_budget = ByteBudget(16 * 1024 * 1024);
@@ -227,13 +271,19 @@ pub fn compile_checkpoint(
             )?),
             CheckpointMessage::Derived(derived) => {
                 if derived.sources.is_empty() && derived.checkpoint_sources.is_empty() {
-                    return Err("historical Derived message requires immutable provenance".into());
+                    return Err(CheckpointError::from(
+                        "historical Derived message requires immutable provenance",
+                    )
+                    .into());
                 }
                 if derived.checkpoint_sources.iter().any(|source| {
                     source.conversation_id != candidate.read_cut.conversation_id
                         || source.checkpoint_id == candidate.checkpoint_id
                 }) {
-                    return Err("foreign or self-referential checkpoint provenance".into());
+                    return Err(CheckpointError::from(
+                        "foreign or self-referential checkpoint provenance",
+                    )
+                    .into());
                 }
                 if let ProjectedMessage::User {
                     kind: crate::model::projected::ProjectedUserKind::CompactionContext,
@@ -245,9 +295,10 @@ pub fn compile_checkpoint(
                             .transformations
                             .contains(&crate::model::projected::SemanticTransformation::Summary))
                 {
-                    return Err(
-                        "compaction context requires Runtime origin and Summary provenance".into(),
-                    );
+                    return Err(CheckpointError::from(
+                        "compaction context requires Runtime origin and Summary provenance",
+                    )
+                    .into());
                 }
                 let needs_native_body = matches!(&derived.message, ProjectedMessage::Assistant { content } if content.iter().any(|b| matches!(b, AssistantContentBlock::Reasoning(r) if r.provider_state.is_some())));
                 for source in &derived.sources {
@@ -261,7 +312,8 @@ pub fn compile_checkpoint(
                         )?;
                     } else {
                         let dependency = resolve(source, false)?;
-                        verify_dependency(candidate, source, &dependency)?;
+                        verify_dependency(candidate, source, &dependency)
+                            .map_err(CheckpointError::from)?;
                     }
                 }
                 ModelInputMessage::Derived(derived.as_ref().clone())
@@ -276,42 +328,46 @@ pub fn compile_checkpoint(
                 &mut source_budget,
             )?;
         }
-        validate_native_reasoning(&message, &originals)?;
-        serde_json::to_writer(&mut output_budget, &message)
-            .map_err(|_| "compiled checkpoint cumulative materialization budget exceeded")?;
+        validate_native_reasoning(&message, &originals).map_err(CheckpointError::from)?;
+        serde_json::to_writer(&mut output_budget, &message).map_err(|_| {
+            CheckpointError::Capacity(
+                "compiled checkpoint cumulative materialization budget exceeded",
+            )
+        })?;
         messages.push(message);
     }
-    let calls = collect_calls(candidate, &messages, &originals)?;
-    let tools = pair_results(candidate, &messages, &calls)?;
+    let calls = collect_calls(candidate, &messages, &originals).map_err(CheckpointError::from)?;
+    let tools = pair_results(candidate, &messages, &calls).map_err(CheckpointError::from)?;
     Ok(CompiledCheckpoint { messages, tools })
 }
 
-fn original(
+fn original<E: From<CheckpointError>>(
     candidate: &CheckpointCandidate,
     source: &CanonicalMessageRef,
-    resolve: &mut impl FnMut(&CanonicalMessageRef, bool) -> Result<CanonicalDependency, String>,
+    resolve: &mut impl FnMut(&CanonicalMessageRef, bool) -> Result<CanonicalDependency, E>,
     cache: &mut BTreeMap<crate::runtime::identity::MessageId, MessageBlock>,
     source_budget: &mut ByteBudget,
-) -> Result<MessageBlock, String> {
+) -> Result<MessageBlock, E> {
     if source.conversation_id != candidate.read_cut.conversation_id {
-        return Err("foreign checkpoint Original source".into());
+        return Err(CheckpointError::from("foreign checkpoint Original source").into());
     }
     if let Some(message) = cache.get(&source.message_id) {
         if !source.matches(message) {
-            return Err("conflicting checkpoint Original integrity".into());
+            return Err(CheckpointError::from("conflicting checkpoint Original integrity").into());
         }
         return Ok(message.clone());
     }
     let dependency = resolve(source, true)?;
-    verify_dependency(candidate, source, &dependency)?;
+    verify_dependency(candidate, source, &dependency).map_err(CheckpointError::from)?;
     let message = dependency
         .body
-        .ok_or("missing required immutable Original body")?;
+        .ok_or_else(|| CheckpointError::from("missing required immutable Original body"))?;
     if !source.matches(&message) {
-        return Err("checkpoint Original body integrity mismatch".into());
+        return Err(CheckpointError::from("checkpoint Original body integrity mismatch").into());
     }
-    serde_json::to_writer(source_budget, &message)
-        .map_err(|_| "checkpoint immutable dependency materialization exceeds budget")?;
+    serde_json::to_writer(source_budget, &message).map_err(|_| {
+        CheckpointError::Capacity("checkpoint immutable dependency materialization exceeds budget")
+    })?;
     cache.insert(source.message_id.clone(), message.clone());
     Ok(message)
 }
@@ -569,7 +625,7 @@ pub fn eligible_tail(
 pub struct OriginActivation {
     pub conversation_id: ConversationId,
     pub activation: ProjectionActivationId,
-    pub completed_journal: crate::context::resources::JournalFrontier,
+    pub completed_journal: super::resources::JournalFrontier,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -605,11 +661,12 @@ mod tests {
                 projection_activation: ProjectionActivationId(0),
                 conversation_id: conversation(),
                 ledger: LedgerFrontier(100),
-                journal: crate::context::resources::JournalFrontier(110),
+                journal: super::super::resources::JournalFrontier(110),
                 transcript: crate::durable::canonical::TranscriptCursor::new(100),
             },
             base_frontier: LedgerFrontier(100),
             items,
+            prefix_coverage: None,
             summary_metadata: None,
             summary_generation: None,
         }
@@ -703,6 +760,7 @@ mod tests {
                 })
                 .ok_or_else(|| "missing immutable source".into())
         })
+        .map_err(|error: CheckpointError| error.to_string())
     }
 
     #[test]

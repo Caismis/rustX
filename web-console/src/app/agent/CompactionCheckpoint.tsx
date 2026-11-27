@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v80';
+import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v82';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { CompactionMessage } from '../../presentation/agent/Message';
@@ -8,10 +8,13 @@ import { useClientSelector } from '../../client/selectors';
 
 /** A native checkpoint supplies summary content, never a second transcript. */
 export function CompactionCheckpoint({ head, client, sessionId, title, readable = true }: { head: RuntimeClientProjectionHeadView; client: AppServerClient; sessionId: string; title?: string; readable?: boolean }) {
-  const tx = useTranslation(), [loaded, setLoaded] = useState<TraceText>();
+  const tx = useTranslation();
+  const owner = useClientSelector(client, state => JSON.stringify([state.authorityId, state.authorityRevision, sessionId, head.checkpoint_id, head.activation_id]));
+  const [cache, setCache] = useState<{ owner: string; summary: TraceText }>();
+  const loaded = cache?.owner === owner ? cache.summary : undefined;
   return <div data-compaction-checkpoint={head.checkpoint_id}>
-    <CompactionMessage title={title ?? tx('agent:context.succeeded')} summary={tx(head.summary_preview ? 'agent:context.expand' : 'agent:context.summary-unavailable')}>
-      {head.summary_preview && (loaded ? <><MarkdownText text={loaded.text}/>{loaded.truncated && <p>{tx('agent:context.summary-truncated')}</p>}</> : <SummaryContent key={`${sessionId}:${head.checkpoint_id}:${head.activation_id}`} head={head} client={client} sessionId={sessionId} readable={readable} onLoaded={setLoaded}/>) }
+    <CompactionMessage committed title={title ?? tx('agent:context.succeeded')} summary={tx(head.summary_preview ? 'agent:context.expand' : 'agent:context.summary-unavailable')}>
+      {head.summary_preview && (loaded ? <><MarkdownText text={loaded.text}/>{loaded.truncated && <p>{tx('agent:context.summary-truncated')}</p>}</> : <SummaryContent key={owner} head={head} client={client} sessionId={sessionId} readable={readable} onLoaded={summary => setCache({ owner, summary })}/>) }
     </CompactionMessage>
   </div>;
 }

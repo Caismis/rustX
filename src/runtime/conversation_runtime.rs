@@ -303,7 +303,7 @@ use crate::context::compaction::{
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusEngine, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    SessionContextPolicy, render_effective_system_prompt,
+    render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
@@ -350,12 +350,14 @@ use crate::tools::types::ModelToolDefinition;
 
 pub(crate) mod activity;
 mod admission;
+mod asynchronous_compaction;
 mod attempt;
 mod bootstrap;
 mod child;
 #[cfg(test)]
 mod cold_attach_work_tests;
 mod compaction;
+mod compaction_observation;
 mod configuration;
 mod controls;
 mod drain;
@@ -639,8 +641,6 @@ pub struct ConversationContextConfig {
     /// Clock for Agent Status engines materialized from accepted configuration.
     /// This is separate from runtime event timestamps and monotonic deadlines.
     pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
-    /// The current runtime context policy captured by this composition.
-    pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
     /// The launch-scoped Agent Status engine template, present exactly when
@@ -1066,6 +1066,7 @@ pub(crate) struct RuntimeInner {
     /// automatic session-title task) supervised by drain, installable once
     /// and only while the runtime is `Inactive` (Issue #606).
     host_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    async_compaction: Mutex<Option<asynchronous_compaction::Registry>>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.
@@ -1316,7 +1317,7 @@ impl ConversationRuntime {
         let configuration = resources.configuration();
         ConversationContextConfig {
             status_clock: Arc::clone(&self.inner.context.status_clock),
-            policy: configuration.map_or(self.inner.context.policy, |g| g.config.context_policy()),
+
             estimator: Arc::clone(&self.inner.context.estimator),
             status_engine: configuration.map_or_else(
                 || {

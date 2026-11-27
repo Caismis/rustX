@@ -164,9 +164,11 @@ pub mod context {
     pub mod checkpoint;
     pub mod compaction_metadata;
     pub mod contribution;
+    pub mod coverage;
     pub mod engine;
     pub mod error;
     pub mod occupancy;
+    pub mod operation;
     pub mod resources;
     pub mod status;
     pub mod system_prompt;

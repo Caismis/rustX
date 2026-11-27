@@ -1,5 +1,5 @@
 /** Independent full-event oracle used by both reference clients' tests. */
-import type {RuntimeClientCheckpoint, RuntimeClientEvent, SnapshotDelta, TranscriptDelta} from '../v80.ts';
+import type {RuntimeClientCheckpoint, RuntimeClientEvent, SnapshotDelta, TranscriptDelta} from '../v82.ts';
 
 export function listDelta<T>(base: readonly T[], next: readonly T[]) {
   const values: T[] = [];

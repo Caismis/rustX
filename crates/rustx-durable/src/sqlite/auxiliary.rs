@@ -72,7 +72,8 @@ use validation::{
     bounded_encoded_len, call_outcome_for_terminal, call_start_matches, call_started_event_id,
     outcome_name, request_start_matches, request_started_event_id, same_terminal_envelope,
     terminal_kind, validate_call_start_input, validate_request_evidence,
-    validate_request_start_input, validate_settlement_pair, validate_terminal_envelope_shape,
+    validate_request_start_coordinates, validate_request_start_input, validate_settlement_pair,
+    validate_terminal_envelope_shape,
 };
 
 #[cfg(any(test, feature = "test-hooks"))]

@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 // detailed verifier so accepted noncanonical-but-valid layouts and precise
 // corruption diagnostics are unchanged.
 pub(super) const CANONICAL_SCHEMA_SHAPE_SHA256: &str =
-    "bcd510d85175490a523f6d465d42a5d9a2f7ebc027c04ccaeaa447fe8466f684";
+    "2a46d71cc7df17397a52ceefb0fa26c4915a3f73082b4f0b84d935df311eca0b";
 
 fn hash_schema_field(hasher: &mut sha2::Sha256, value: Option<String>) {
     use sha2::Digest as _;

@@ -180,35 +180,110 @@ fn read_compaction(
     context: &mut RuntimeClientContextView,
 ) -> Result<(), ConversationStoreError> {
     context.occupancy = store.observation_occupancy(cut.read.journal)?;
-    let facts = latest(
-        store,
-        cut,
-        vec![
-            K::CompactionStarted,
-            K::CompactionCompleted,
-            K::CompactionFailed,
-        ],
-        TraceFactScope::All,
-        1,
-    )?;
-    if let Some(latest) = facts.first() {
-        context.compaction_in_progress = latest.kind == K::CompactionStarted;
-        if let Some(B::CompactionFailed { detail }) = &latest.bootstrap {
-            context.compaction_error = Some(detail.text.clone());
+    let committed = read_latest_compaction(store, cut)?;
+    if let Some(witness) = store.latest_foreground_compaction(cut.read.journal)? {
+        if witness.source_unavailable {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction observation witness unavailable".into(),
+            ));
+        }
+        match witness.event_kind.as_str() {
+            "compaction_started" | "compaction_chunk_accepted" => {
+                context.compaction_progress =
+                    read_compaction_progress(store, witness.sequence, witness.value)?;
+                // This reader has only historical authorities and no execution
+                // owner. An unfinished prefix is not proof that work survived
+                // a process restart; live hosts receive owner publications.
+                context.compaction_in_progress = false;
+            }
+            "compaction_failed"
+                if committed
+                    .as_ref()
+                    .is_none_or(|(sequence, _)| *sequence < witness.sequence) =>
+            {
+                context.compaction_error = witness
+                    .value
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+            }
+            _ => {}
         }
     }
-    if let Some(compaction) = read_latest_compaction(store, cut)? {
+    // A fresh process does not own unfinished historical work.
+    context.compaction_operations = store
+        .latest_compaction_operations(cut.read.journal)?
+        .into_iter()
+        .map(
+            |status| crate::runtime_client::snapshot::RuntimeClientCompactionOperation {
+                status,
+                live: false,
+            },
+        )
+        .collect();
+    if let Some((_, compaction)) = committed {
         context.latest_compaction = Some(compaction);
         context.compaction_count = 1;
     }
     Ok(())
 }
 
+fn read_compaction_progress(
+    store: &dyn ConversationStore,
+    sequence: u64,
+    value: serde_json::Value,
+) -> Result<
+    Option<crate::runtime_client::snapshot::RuntimeClientCompactionProgress>,
+    ConversationStoreError,
+> {
+    use crate::context::operation::CompactionMode;
+    use crate::events::types::RuntimeEvent;
+    use crate::runtime_client::snapshot::RuntimeClientCompactionProgress;
+
+    let event = serde_json::from_value(value).map_err(|_| {
+        ConversationStoreError::InvalidReference("invalid compaction observation witness".into())
+    })?;
+    Ok(match event {
+        RuntimeEvent::CompactionStarted { operation_id, mode }
+            if mode != CompactionMode::Proactive =>
+        {
+            Some(RuntimeClientCompactionProgress {
+                operation_id,
+                mode,
+                accepted_fragments: 0,
+                source_ranges: Vec::new(),
+                generation: None,
+            })
+        }
+        RuntimeEvent::CompactionChunkAccepted {
+            operation_id,
+            accepted_fragments,
+            source_ranges,
+            generation,
+        } => {
+            let mode = store.compaction_start_mode_before(&operation_id, sequence)?;
+            (mode != CompactionMode::Proactive).then_some(RuntimeClientCompactionProgress {
+                operation_id,
+                mode,
+                accepted_fragments,
+                source_ranges,
+                generation,
+            })
+        }
+        RuntimeEvent::CompactionStarted { .. } => None,
+        _ => {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid compaction observation family".into(),
+            ));
+        }
+    })
+}
+
 /// Reads one committed completion at the bootstrap cut without replaying live state.
 pub(super) fn read_latest_compaction(
     store: &dyn ConversationStore,
     cut: &ObservationReadCut,
-) -> Result<Option<RuntimeClientCompactionView>, ConversationStoreError> {
+) -> Result<Option<(u64, RuntimeClientCompactionView)>, ConversationStoreError> {
     Ok(latest(
         store,
         cut,
@@ -218,7 +293,7 @@ pub(super) fn read_latest_compaction(
     )?
     .pop()
     .and_then(|fact| match fact.bootstrap {
-        Some(B::CompactionCompleted { reading }) => Some(reading.compaction),
+        Some(B::CompactionCompleted { reading }) => Some((fact.sequence, reading.compaction)),
         _ => None,
     }))
 }

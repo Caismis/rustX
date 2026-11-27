@@ -5,6 +5,7 @@ import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from
 import type { TraceDisplayBlock } from '../../client/trace-content';
 import { completeTools } from '../../client/request-system';
 import { useTraceContent, type ToolContent } from './useTraceContent';
+import { CompactionInspection } from './CompactionInspection';
 import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
 import type { Translate } from '../../locale/translation';
@@ -26,7 +27,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v80';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v82';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -34,7 +35,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Artifact } from '../components/Artifact';
 import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
-import { isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
+import { isBetweenTurnsItem, isReadyCompaction, recordLabel, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
 import css from './Trajectory.module.css';
 import { useWorkflowNodeContent } from './useWorkflowNodeContent';
@@ -576,7 +577,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v80').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v82').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   messageHistory?: TrajectoryRowActions['messageHistory'];
   loading?: boolean | undefined;
@@ -658,10 +659,12 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const [thinkingExpanded, setThinkingExpanded] = useState(true);
   const messages = item.type === 'ContextRow'
     ? item.context_message_id!=null ? detail?.request?.messages.filter(message => message.message_id === item.context_message_id) : undefined
-    : record.kind === 'compaction' ? detail?.projected_messages : detail?.messages;
+    : record.kind === 'compaction' ? undefined : detail?.messages;
   // A detail with no canonical message leaves the record's own preview as the content.
   const blocks = (resolved?.blocks?.length ? resolved.blocks : undefined) ?? (messages?.length ? messages.flatMap(message => message.blocks) : undefined);
   const fallback = item.type === 'ContextRow' ? item.context.preview?.text : messagesHead?.items.map(message => message.preview?.text ?? '').filter(Boolean).join('\n\n') || record.preview?.text;
+  const acceptedCompactionPreview = inspection?.content.type === 'compaction' ? inspection.content.checkpoint?.summary_preview
+    ?? (record.compaction?.outcome === 'committed' ? record.preview : undefined) : undefined;
   const artifacts = [...(resolved?.attachments ?? []), ...(item.type === 'ContextRow' ? item.context.attachments : record.attachments)];
   const source = item.type === 'ContextRow' ? item.context.source : resolved?.source ?? messagesHead?.items[0]?.source ?? messages?.[0]?.source ?? undefined;
   const kind = cellKind(item);
@@ -747,11 +750,16 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     if (record.kind === 'compaction') {
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-          <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.state} /></div>
+          <div><dt>{tx('trajectory:details.status')}</dt>{record.compaction?.outcome != null || isReadyCompaction(record)
+            ? <dd className={state === 'error' ? css.error : undefined}>{recordLabel(tx, record)}</dd>
+            : <StatusValue state={state} nativeState={record.state} />}</div>
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>
-        {(pending || blocks?.length || fallback) && <div className={`${css.compactedSummary} ${css.summaryScrollRegion}`} data-summary-scroll-region="">{content(true)}</div>}
+        {inspection?.content.type === 'compaction' && detailPage && detailReader
+          ? <CompactionInspection initial={inspection.content.page} checkpoint={inspection.content.checkpoint}
+            cut={detailPage.read_cut} reader={detailReader} accepted={inspection.record.compaction?.status?.accepted_fragments}/>
+          : record.compaction?.outcome === 'committed' && record.preview ? content(true) : <DetailPending error={detailError}/>}
       </>;
     }
     const markdown = record.kind !== 'tool';
@@ -824,7 +832,10 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
           : <DetailPending error={detailError} />;
       }
       case 'rendered': return content(true);
-      case 'raw': return content(false);
+      case 'raw': return record.kind === 'compaction' && inspection?.content.type === 'compaction'
+        ? acceptedCompactionPreview ? <>{acceptedCompactionPreview.truncated && <p>{tx('agent:context.summary-truncated')}</p>}<pre>{acceptedCompactionPreview.text}</pre></>
+          : <Json value={inspection.content} label={tx('trajectory:tab.raw')}/>
+        : content(false);
       case 'source': return <MessageSource source={source} />;
       case 'input':
         if (pending) return <DetailPending error={detailError} />;

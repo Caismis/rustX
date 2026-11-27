@@ -1,7 +1,8 @@
-use crate::runtime_client::projection::{publication::compact_replay_storage, encoded_event_bytes};
-use crate::runtime_client::projection::CheckpointSeed;
-use crate::runtime_client::checkpoint;
+use crate::durable::ConversationStore;
 use crate::observation::preflight;
+use crate::runtime_client::checkpoint;
+use crate::runtime_client::projection::CheckpointSeed;
+use crate::runtime_client::projection::{encoded_event_bytes, publication::compact_replay_storage};
 
 fn compare_original(seed: &CheckpointSeed) {
     let (mut original, eviction) = seed.checkpoint_unfitted().unwrap();
@@ -11,8 +12,10 @@ fn compare_original(seed: &CheckpointSeed) {
     assert_eq!(actual.cursor, original.cursor);
     assert_eq!(actual.read_cut, original.read_cut);
     if let Some(budget) = budget {
-        let direct =
-            preflight::required_safe_integer_budget(&actual, crate::observation::bounded::CHECKPOINT_TARGET_BYTES);
+        let direct = preflight::required_safe_integer_budget(
+            &actual,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
+        );
         assert!(
             direct.is_some_and(|direct| direct <= budget),
             "additive certificate is conservative"
@@ -149,7 +152,9 @@ fn transcript_capture_seed() -> CheckpointSeed {
                 tool_calls: Vec::new(),
             },
         )
-        .map(std::sync::Arc::new).collect::<Vec<_>>().into();
+        .map(std::sync::Arc::new)
+        .collect::<Vec<_>>()
+        .into();
     seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
     seed.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
         &seed.snapshot.conversation_id,
@@ -189,16 +194,18 @@ fn incremental_transcript_cut_changes_reuse_rows_and_keep_current_envelope() {
             seed.read_cut.revision = revision;
             let page = &mut seed.snapshot.transcript;
             page.source_cut.as_mut().unwrap().read.journal = revision;
-            page.next_cursor = Some(crate::observation::transcript::RuntimeClientTranscriptCursor::new(1));
+            page.next_cursor =
+                Some(crate::observation::transcript::RuntimeClientTranscriptCursor::new(1));
             page.inherited_through =
                 Some(crate::observation::transcript::RuntimeClientTranscriptCursor::new(1));
-            page.collections.push(crate::observation::cut::CollectionFrontier {
-                domain: "transcript.native".into(),
-                revision,
-                total: 8,
-                loaded: 8,
-                next_offset: None,
-            });
+            page.collections
+                .push(crate::observation::cut::CollectionFrontier {
+                    domain: "transcript.native".into(),
+                    revision,
+                    total: 8,
+                    loaded: 8,
+                    next_offset: None,
+                });
         });
         crate::observation::capture::take_capture_work();
         let captured = current.capture_checkpoint().unwrap();
@@ -231,10 +238,8 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
         seed.snapshot.transcript.statistics.as_mut().unwrap().turns = 17;
     });
     let deferred = change_transcript_seed(&original, |seed| {
-        seed.snapshot
-            .transcript
-            .deferred_entries
-            .push(crate::observation::cut::CheckpointPageItem {
+        seed.snapshot.transcript.deferred_entries.push(
+            crate::observation::cut::CheckpointPageItem {
                 body_complete: None,
                 key: None,
                 offset: 8,
@@ -242,7 +247,8 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
                 value: None,
                 content: Vec::new(),
                 deferred: true,
-            });
+            },
+        );
     });
     for (seed, changed) in [
         (&statistics, "transcript_statistics"),
@@ -287,7 +293,8 @@ fn incremental_transcript_split_capture_keeps_shared_budget_pressure_exact() {
                     })];
                     message
                 })
-                .collect::<Vec<_>>().into();
+                .collect::<Vec<_>>()
+                .into();
         });
         assert!(seed.transcript_head.same_owners(&original.transcript_head));
         crate::observation::capture::take_capture_work();
@@ -329,15 +336,18 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
         ),
         (serde_json::json!(0), serde_json::json!(u64::MAX)),
     ] {
-        std::sync::Arc::make_mut(&mut original.snapshot.transcript.entries[0]).item = argument(before);
+        std::sync::Arc::make_mut(&mut original.snapshot.transcript.entries[0]).item =
+            argument(before);
         original.prepared = super::super::prepared_capture::PreparedCaptures::default();
-        original.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
-            &original.snapshot.conversation_id,
-            &original.snapshot.transcript.entries,
-        );
+        original.transcript_head =
+            crate::observation::transcript::PreparedTranscriptHead::from_entries(
+                &original.snapshot.conversation_id,
+                &original.snapshot.transcript.entries,
+            );
         original.checkpoint_candidate().unwrap();
         let changed = change_transcript_seed(&original, |seed| {
-            std::sync::Arc::make_mut(&mut seed.snapshot.transcript.entries[0]).item = argument(after);
+            std::sync::Arc::make_mut(&mut seed.snapshot.transcript.entries[0]).item =
+                argument(after);
         });
         assert!(
             !changed
@@ -352,39 +362,171 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
 #[test]
 fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
     let (mut projection, store) = initialized_source_projection();
-    let receipt = store.append_canonical(&compactable_user("shared-checkpoint-row")).unwrap();
+    let receipt = store
+        .append_canonical(&compactable_user("shared-checkpoint-row"))
+        .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply(ConversationObservation::CanonicalCommitted { attempt_id: None, receipt });
+        projection.apply(ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt,
+        });
     });
     let seed = projection.checkpoint_seed();
     let first = seed.checkpoint_prepared().unwrap().0;
     let frozen = serde_json::to_vec(&first).unwrap();
     let mut later = seed.checkpoint_prepared().unwrap().0;
-    assert_ne!(first.snapshot.message_descriptors, [] as [std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>; 0]);
-    assert!(std::sync::Arc::ptr_eq(&first.snapshot.message_descriptors[0], &later.snapshot.message_descriptors[0]));
+    assert_ne!(
+        first.snapshot.message_descriptors,
+        [] as [std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>; 0]
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &first.snapshot.message_descriptors[0],
+        &later.snapshot.message_descriptors[0]
+    ));
     assert_eq!(first.content.len(), later.content.len());
-    assert!(first.content.iter().zip(later.content.iter()).all(|(left,right)| left.same_owner(right)));
-    assert!(first.collections.iter().zip(later.collections.iter()).all(|(left,right)| left.same_owner(right)));
-    if let Some(frontier) = Arc::make_mut(&mut later.collections).first_mut() { frontier.loaded = 0; }
+    assert!(
+        first
+            .content
+            .iter()
+            .zip(later.content.iter())
+            .all(|(left, right)| left.same_owner(right))
+    );
+    assert!(
+        first
+            .collections
+            .iter()
+            .zip(later.collections.iter())
+            .all(|(left, right)| left.same_owner(right))
+    );
+    if let Some(frontier) = Arc::make_mut(&mut later.collections).first_mut() {
+        frontier.loaded = 0;
+    }
     std::sync::Arc::make_mut(&mut later.snapshot.message_descriptors[0]).role = "changed".into();
     assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
 }
 
-
 #[test]
 fn retained_vector_compaction_preserves_exact_event_bytes_and_rows() {
     let (projection, _store) = initialized_source_projection();
-    let mut metadata = projection.checkpoint_seed().capture_checkpoint().unwrap().metadata;
+    let mut metadata = projection
+        .checkpoint_seed()
+        .capture_checkpoint()
+        .unwrap()
+        .metadata;
     Arc::make_mut(&mut metadata.content).reserve(1024);
     Arc::make_mut(&mut metadata.collections).reserve(1024);
     let mut events = Vec::with_capacity(128);
     events.push(RuntimeClientEvent::TraceChanged);
     let mut event = RuntimeClientEvent::ProjectionTransition { events, metadata };
-    let before = encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES).unwrap();
+    let before =
+        encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES).unwrap();
     compact_replay_storage(&mut event);
-    assert_eq!(encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES).unwrap(), before);
-    let RuntimeClientEvent::ProjectionTransition { events, metadata } = &event else { unreachable!() };
-    assert!(events.capacity() <= events.len()*2);
-    assert!(metadata.content.capacity() <= metadata.content.len().max(1)*2);
-    assert!(metadata.collections.capacity() <= metadata.collections.len()*2);
+    assert_eq!(
+        encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES).unwrap(),
+        before
+    );
+    let RuntimeClientEvent::ProjectionTransition { events, metadata } = &event else {
+        unreachable!()
+    };
+    assert!(events.capacity() <= events.len() * 2);
+    assert!(metadata.content.capacity() <= metadata.content.len().max(1) * 2);
+    assert!(metadata.collections.capacity() <= metadata.collections.len() * 2);
+}
+
+#[test]
+fn incremental_checkpoint_publishes_async_compaction_lifecycle_without_mutating_held_cuts() {
+    use crate::context::operation::{
+        CompactionMode, CompactionOperationPhase as Phase, CompactionOperationStatus,
+    };
+    use crate::runtime::identity::CompactionOperationId;
+
+    let (mut projection, store) = initialized_source_projection();
+    let operation_id = CompactionOperationId::new("incremental-native-compaction");
+    let status = |phase| CompactionOperationStatus {
+        operation_id: operation_id.clone(),
+        admission_generation: 1,
+        triggering_attempt_id: Some(attempt()),
+        waiting_attempt_id: None,
+        phase,
+        accepted_fragments: 0,
+        diagnostic: None,
+    };
+    let envelope = |id: &str, event| RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(id),
+        sequence: 0,
+        conversation_id: store.conversation_id().clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: chrono::DateTime::UNIX_EPOCH,
+        tool_occurrence: None,
+        observation: None,
+        event,
+    };
+    let (started, generating) = store
+        .append_compaction_admission(
+            envelope(
+                "incremental-compaction-start",
+                RuntimeEvent::CompactionStarted {
+                    operation_id: operation_id.clone(),
+                    mode: CompactionMode::Proactive,
+                },
+            ),
+            envelope(
+                "incremental-compaction-generating",
+                RuntimeEvent::CompactionOperationUpdated {
+                    status: status(Phase::Generating),
+                },
+            ),
+        )
+        .unwrap();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_native_batch(started.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap());
+        projection.apply_native_batch(generating.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap());
+    });
+    let held = projection.checkpoint_seed();
+    let held_bytes = serde_json::to_vec(&held.checkpoint_candidate().unwrap()).unwrap();
+    let mut prior = held.clone();
+    for (id, phase) in [
+        ("incremental-compaction-ready", Phase::Ready),
+        ("incremental-compaction-superseded", Phase::Superseded),
+    ] {
+        let event = store
+            .append_event(envelope(
+                id,
+                RuntimeEvent::CompactionOperationUpdated {
+                    status: status(phase),
+                },
+            ))
+            .unwrap();
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(event.observation.as_ref().and_then(|receipt| receipt.get::<crate::durable::observation::NativeObservationBatch>()).unwrap());
+        });
+        let current = projection.checkpoint_seed();
+        assert!(!current.prepared.shared(&prior.prepared, "context"));
+        let checkpoint = current.checkpoint_candidate().unwrap();
+        let operations = &checkpoint.snapshot.context.compaction_operations;
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].status, status(phase));
+        assert_eq!(operations[0].live, !phase.is_terminal());
+        assert!(projection.replay.back().unwrap().1.facts().iter().any(
+            |fact| matches!(fact, RuntimeClientEvent::ContextCompactionOperationUpdated { context }
+                if context.compaction_operations[0].status == status(phase))
+        ));
+        compare_original(&current);
+        assert_eq!(
+            serde_json::to_vec(&held.checkpoint_candidate().unwrap()).unwrap(),
+            held_bytes,
+            "a later native status must preserve the held generating checkpoint"
+        );
+        prior = current;
+    }
+    compare_original(&held);
+    assert_eq!(
+        store
+            .latest_compaction_operations(store.observation_read_cut().unwrap().read.journal)
+            .unwrap()[0],
+        status(Phase::Superseded),
+        "prepared native insertion must retain durable operation status authority"
+    );
 }

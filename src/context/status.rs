@@ -1681,7 +1681,7 @@ mod tests {
     fn post_tool_opportunity() -> ContributionOpportunities {
         ContributionOpportunities {
             fresh_inbound: None,
-            post_tool_batch: Some(PostToolBatchOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
         }
     }
 
@@ -1690,7 +1690,7 @@ mod tests {
             fresh_inbound: Some(FreshInboundOpportunity {
                 target_message_id: MessageId::new("inbound"),
             }),
-            post_tool_batch: Some(PostToolBatchOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
         }
     }
 

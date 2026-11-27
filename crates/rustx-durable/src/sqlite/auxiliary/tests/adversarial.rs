@@ -54,6 +54,7 @@ fn fresh_call() -> AuxiliaryCallStart {
 
 fn fresh_request(call: &AuxiliaryCallStart) -> AuxiliaryRequestStart {
     AuxiliaryRequestStart {
+        invocation: rustx_types::model::auxiliary::fixture_invocation_identity(),
         call_id: call.call_id.clone(),
         ordinal: 0,
         request_id: RequestId::generate_auxiliary(&SystemUuidV7Generator).unwrap(),

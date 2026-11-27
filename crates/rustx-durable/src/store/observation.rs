@@ -10,6 +10,14 @@ use crate::{ConversationStoreError, NativeTodoObservation, TranscriptCursor};
 /// frontiers those reads are admitted against.
 #[allow(clippy::missing_errors_doc)]
 pub trait ObservationStore: Send + Sync + 'static {
+    /// Seeks original Call starts owned by this exact Compaction at the read cut.
+    fn observation_compaction_call_ids(
+        &self,
+        cut: &crate::observation::ObservationReadCut,
+        operation: &rustx_types::runtime::identity::CompactionOperationId,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::observation::TraceCompactionCallIds, ConversationStoreError>;
     fn observation_workflow_nodes(
         &self,
         cut: &crate::observation::ObservationReadCut,
@@ -524,6 +532,25 @@ pub trait ObservationStore: Send + Sync + 'static {
         attempt: Option<&AttemptId>,
         limit: usize,
     ) -> Result<Vec<crate::observation::ObservationEventHeader>, ConversationStoreError>;
+    /// Latest foreground compaction lifecycle witness at the frozen Journal cut.
+    fn latest_foreground_compaction(
+        &self,
+        through: u64,
+    ) -> Result<Option<crate::observation::ObservationEventWitness>, ConversationStoreError>;
+    /// Exact bounded start mode for one operation before this Journal position.
+    fn compaction_start_mode_before(
+        &self,
+        operation_id: &rustx_types::runtime::identity::CompactionOperationId,
+        before: u64,
+    ) -> Result<rustx_types::context::operation::CompactionMode, ConversationStoreError>;
+    /// Latest status for the two most recently admitted operations at this cut.
+    fn latest_compaction_operations(
+        &self,
+        through: u64,
+    ) -> Result<
+        Vec<rustx_types::context::operation::CompactionOperationStatus>,
+        ConversationStoreError,
+    >;
     /// Exact committed call occurrence under one native Attempt and frozen read cut.
     fn tool_call_occurrence_at(
         &self,

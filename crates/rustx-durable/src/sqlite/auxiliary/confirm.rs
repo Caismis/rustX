@@ -95,6 +95,7 @@ impl SqliteConversationStore {
                 )
             })?;
         if !request_start_matches(&event, expected)
+            || request.invocation != expected.invocation
             || event.event_id != request_started_event_id(&expected.request_id)
         {
             return Err(ConversationStoreError::InvalidReference(format!(

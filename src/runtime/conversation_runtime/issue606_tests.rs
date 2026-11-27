@@ -16,6 +16,7 @@ use crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId;
 
 fn manual_compaction_slot() -> ForegroundSlot {
     ForegroundSlot::ManualCompaction(CurrentManualCompaction {
+        kind: super::foreground::CompactionOwnerKind::Manual,
         operation_id: CompactionOperationId::new("compaction-test"),
         cancellation: AgentCancellation::new(CancellationReason::UserRequested),
     })
@@ -73,6 +74,7 @@ fn a_lent_slot_poisons_and_blocks_every_future_owner() {
     assert!(!slot.poison());
     assert!(
         slot.lend_for_manual_compaction(CurrentManualCompaction {
+            kind: super::foreground::CompactionOwnerKind::Manual,
             operation_id: CompactionOperationId::new("compaction-late"),
             cancellation: AgentCancellation::new(CancellationReason::UserRequested),
         })
@@ -109,6 +111,18 @@ fn scheduled_slot_blocks_catalog_publication_until_settled() {
     assert!(!slot.blocks_runtime_publication());
 }
 
+fn seed_manual_compaction_history(runtime: &ConversationRuntime) {
+    for id in ["maintenance-history-one", "maintenance-history-two"] {
+        let mut message = test_support::runtime_inbound_message(id);
+        message.content = test_support::text_content(&"eligible older history ".repeat(100));
+        runtime
+            .inner
+            .store
+            .append_canonical(&MessageBlock::User(message))
+            .unwrap();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
     // ManualTail Pending + Post-compaction Admission: while the physical
@@ -122,9 +136,10 @@ async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
         ..Default::default()
     };
     let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
+    seed_manual_compaction_history(&fixture.runtime);
     let handle = fixture
         .runtime
-        .admit_compaction(None)
+        .admit_compaction(None, None)
         .expect("first compaction admitted");
     assert!(matches!(
         fixture.runtime.inner.lock_state().foreground.manual_tail,
@@ -133,14 +148,13 @@ async fn manual_tail_fences_admission_then_the_worker_reaps_and_admits() {
     // Pending tail: a second compaction is fenced even though the first
     // task's durable work is not yet reported.
     assert!(matches!(
-        fixture.runtime.admit_compaction(None),
+        fixture.runtime.admit_compaction(None, None),
         Err(compaction::ManualCompactionError::Busy)
     ));
     gate.wait_entered_async().await;
     gate.release();
-    // The physical task exits and records its outcome — success or the
-    // deterministic NoProgress refusal of an empty history, either way the
-    // tail is a finished, unreaped owner.
+    // The admitted maintenance task records its outcome and the reaper
+    // releases the physical tail.
     let _ = handle.wait().await;
     // The tail record stays Pending until a reaper claims it — but its
     // worker is finished, so the admission worker's next pass reaps it and
@@ -181,7 +195,10 @@ async fn concurrent_reapers_claim_one_join_handle() {
     };
     let fixture = test_support::headless_fixture_with(Some(coordinator_probe)).await;
     let runtime = fixture.runtime.clone();
-    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    seed_manual_compaction_history(&runtime);
+    let handle = runtime
+        .admit_compaction(None, None)
+        .expect("compaction admitted");
     // Drive a reap pass that claims the JoinHandle and pauses with
     // `Joining` published. The admission worker's next pass reaps it once
     // the task finishes; the barrier holds it inside `Reap::Work`.
@@ -594,7 +611,7 @@ async fn in_lock_panic_recovers_to_failed_admission_and_still_drains() {
     // Physical drain — the manual-tail reaper and shutdown — still
     // terminates: it reads the mid-transition facts and exits.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        let _ = runtime.admit_compaction(None);
+        let _ = runtime.admit_compaction(None, None);
         runtime.shutdown().await
     })
     .await
@@ -743,7 +760,7 @@ async fn the_admitted_scheduled_task_owns_the_runtime_until_settlement() {
     {
         let mut state = runtime.inner.lock_state();
         let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
-            b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent.model]\nmodel='scripted/scripted'\n",
+            b"agent_id='agent-a'\n[agent.model]\nmodel='scripted/scripted'\n",
         )
         .unwrap();
         config.approval_mode = ApprovalMode::FullAccess;
@@ -905,8 +922,11 @@ async fn manual_compaction_worker_panic_settles_through_the_join_error_path() {
     // publishes, and drain still terminates.
     let fixture = test_support::headless_fixture().await;
     let runtime = fixture.runtime.clone();
+    seed_manual_compaction_history(&runtime);
     runtime.install_manual_compaction_worker_panic();
-    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    let handle = runtime
+        .admit_compaction(None, None)
+        .expect("compaction admitted");
     // The worker unwinds; the `JoinHandle` resolves `Err`. The reaper's
     // join runs inside drain — shutdown drives it.
     let drained = tokio::spawn({
@@ -986,7 +1006,10 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
     // A real catalog observation and a real staged configuration candidate
     // wait behind the fence: both must be consumed after the join, not
     // before it.
-    let handle = runtime.admit_compaction(None).expect("compaction admitted");
+    seed_manual_compaction_history(&runtime);
+    let handle = runtime
+        .admit_compaction(None, None)
+        .expect("compaction admitted");
     // No inbound is needed to drive the reap: `finish_manual_compaction`
     // and `ManualTailExit::drop` each notify the admission worker, whose
     // level-triggered pass reaps the physically exited worker. Keeping the
@@ -1074,7 +1097,7 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
         }),
     });
     // ManualCompaction: refused Busy, not deferred.
-    let rejected = runtime.admit_compaction(None);
+    let rejected = runtime.admit_compaction(None, None);
     assert!(
         matches!(rejected, Err(ManualCompactionError::Busy)),
         "a second compaction is fenced by the unreaped tail"
@@ -1202,7 +1225,7 @@ async fn joining_manual_tail_fences_every_admission_until_the_join_publishes() {
     .await
     .expect("the idle epoch opens once the tail is reaped and the attempt settled");
     // ManualCompaction: admitted again.
-    let second = runtime.admit_compaction(None);
+    let second = runtime.admit_compaction(None, None);
     assert!(
         !matches!(second, Err(ManualCompactionError::Busy)),
         "the fenced compaction admits after the join"
@@ -1501,7 +1524,7 @@ async fn scheduled_fixture_with(
     {
         let mut state = runtime.inner.lock_state();
         let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
-            b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent.model]\nmodel='scripted/scripted'\n",
+            b"agent_id='agent-a'\n[agent.model]\nmodel='scripted/scripted'\n",
         )
         .unwrap();
         config.approval_mode = ApprovalMode::FullAccess;

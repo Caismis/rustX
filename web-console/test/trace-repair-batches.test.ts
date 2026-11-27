@@ -1,5 +1,5 @@
 import {afterEach,expect,it} from 'vitest';
-import type {Request,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v80';
+import type {Request,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v82';
 import {Server,checkpoint,snapshot,traceReceipt} from './fixture';
 import {requestDetail,traceRecord,traceTool} from './trace-fixture';
 

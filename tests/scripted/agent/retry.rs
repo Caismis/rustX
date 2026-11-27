@@ -29,7 +29,10 @@ use rustx::model::error::{
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::types::ModelUsage;
-use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, RequestId};
+use rustx::runtime::identity::{
+    AgentId, AttemptId, ContextContributorIdentity, ConversationId, MessageId,
+    NativeContextContributor, RequestId,
+};
 use rustx::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger};
 use rustx::runtime::types::CancellationReason;
 use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
@@ -734,14 +737,34 @@ async fn transient_retry_does_not_reset_overflow_budget() {
         snapshots[1].semantic_input_fingerprint,
         snapshots[2].semantic_input_fingerprint
     );
-    assert_eq!(
-        snapshots[1].request_context_ids,
-        [] as [crate::runtime::identity::MessageId; 0]
+    assert_eq!(snapshots[1].request_context_ids.len(), 1);
+    let reminder_id = &snapshots[1].request_context_ids[0];
+    assert!(
+        snapshots[2].request_context_ids.is_empty(),
+        "transient retry appends no new canonical context"
     );
-    assert_eq!(
-        snapshots[2].request_context_ids,
-        [] as [crate::runtime::identity::MessageId; 0]
-    );
+    for index in 1..=2 {
+        let reminders = snapshots[index]
+            .contributions
+            .iter()
+            .filter(|contribution| &contribution.message_id == reminder_id)
+            .collect::<Vec<_>>();
+        assert_eq!(reminders.len(), 1);
+        assert_eq!(
+            reminders[0].producer,
+            ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder),
+            "both starts select the same canonical permission reminder"
+        );
+        assert_eq!(
+            requests[index]
+                .messages
+                .iter()
+                .filter(|message| message.canonical_id() == Some(reminder_id))
+                .count(),
+            1,
+            "each selected request includes the exact reminder identity once"
+        );
+    }
     for id in &snapshots[0].request_context_ids {
         for request in &requests {
             assert_eq!(
@@ -1539,10 +1562,37 @@ async fn corrective_overflow_transient_retry_retains_latest_input_and_context() 
         snapshots[3].semantic_input_fingerprint
     );
     assert!(
-        snapshots[1..]
-            .iter()
-            .all(|s| s.request_context_ids.is_empty())
+        snapshots[1].request_context_ids.is_empty(),
+        "corrective retry adds no canonical context"
     );
+    assert_eq!(snapshots[2].request_context_ids.len(), 1);
+    let reminder_id = &snapshots[2].request_context_ids[0];
+    assert!(
+        snapshots[3].request_context_ids.is_empty(),
+        "transient retry appends no new canonical context"
+    );
+    for index in 2..=3 {
+        let reminders = snapshots[index]
+            .contributions
+            .iter()
+            .filter(|contribution| &contribution.message_id == reminder_id)
+            .collect::<Vec<_>>();
+        assert_eq!(reminders.len(), 1);
+        assert_eq!(
+            reminders[0].producer,
+            ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder),
+            "both starts select the same canonical permission reminder"
+        );
+        assert_eq!(
+            requests[index]
+                .messages
+                .iter()
+                .filter(|message| message.canonical_id() == Some(reminder_id))
+                .count(),
+            1,
+            "each selected request includes the exact reminder identity once"
+        );
+    }
     for id in &snapshots[0].request_context_ids {
         for request in &requests {
             assert_eq!(

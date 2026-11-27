@@ -883,7 +883,7 @@ impl AgentExecution<'_> {
         // composed from this opportunity keeps it no matter what else the
         // conversation durably accepts before the composition is observed.
         self.pending_post_tool_batch = Some(PendingPostToolBatch {
-            opportunity: PostToolBatchOpportunity,
+            opportunity: PostToolBatchOpportunity {},
             transcript_anchor: batch_anchor,
         });
         // FND-06 can kill a real process in the narrow window after the

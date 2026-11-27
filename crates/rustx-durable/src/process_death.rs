@@ -75,7 +75,7 @@
 //! (this one and the scripted provider adapter), exactly like the in-crate
 //! scripted suites described in `tests/scripted/mod.rs`. The same
 //! re-execute-the-test-binary pattern already backs the M7 MCP stdio fixture in
-//! `crate::tools::mcp::fixture`.
+//! `rustx_types::tools::mcp::fixture`.
 //!
 //! # Control channel
 //!

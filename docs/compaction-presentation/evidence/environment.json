@@ -1,0 +1,78 @@
+{
+  "web_reference": {
+    "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+    "scope": "Actual byte-verified CompactionItem, stylesheet and icon artwork; isolated component fixture",
+    "adapters": [
+      "shared rustX theme tokens",
+      "shared Markdown renderer and locale labels",
+      "SVG symbol mounting"
+    ],
+    "viewports": [
+      {
+        "width": 1440,
+        "height": 1050
+      },
+      {
+        "width": 390,
+        "height": 1050
+      }
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "states": [
+      "collapsed",
+      "expanded"
+    ]
+  },
+  "terminal_reference": {
+    "commit": "850ea2eae2f39eb16ae14e1f09448eab6da2188a",
+    "scope": "Actual Coding Agent CompactionSummaryMessageComponent; isolated component fixture",
+    "reference_pi_tui": "1.5.0",
+    "product_pi_tui": "0.82.1",
+    "adapters": [
+      "pinned dark-theme tokens",
+      "default Ctrl+O hint",
+      "empty extension transformers"
+    ],
+    "columns": [
+      80,
+      24
+    ],
+    "raw_ansi": "terminal-comparison.json"
+  },
+  "rendering": {
+    "node": "24.22.0",
+    "playwright": "1.63.0",
+    "browser_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+    "web_font": "Liberation Sans",
+    "terminal_gallery_font": "DejaVu Sans Mono",
+    "device_scale_factor": 1
+  },
+  "native_acceptance": {
+    "provider_scenario": "chunked_compaction",
+    "accepted_fragments": 21,
+    "physical_requests": 22,
+    "first_request": "rejected native JSON Schema",
+    "fallback": "Prompt JSON",
+    "clients": [
+      "real Web browser and App Server",
+      "TUI native client and actual terminal component"
+    ],
+    "race_proof": "Native gates, exact identities and correlated terminal observations; component comparison images are not race proof"
+  },
+  "stack_native_acceptance": {
+    "base": "ac175f729ed378f9ec8e74b671943ae21cfee60c",
+    "environment": "WSL Linux x86_64; Rust 1.98.1; Node 24.21.0; pnpm 11.13.1; immutable Playwright 1.63.0 image filesystem",
+    "app_server": 81,
+    "runtime_client": 88,
+    "sqlite": 90,
+    "inspector_image": "native-multi-call-inspector.png",
+    "inspector_sha256": "30e2f1b4db9da2f87fbe66a68f3860c56e62360d6d89231638273b373b1bc1c9",
+    "distinct_browser_cases_passed": 55,
+    "tui_cases_passed": 1370,
+    "tui_platform_skips": 1,
+    "references": "15 GitHub source files re-fetched and verified by exact Git blob and SHA-256 identities"
+  }
+}

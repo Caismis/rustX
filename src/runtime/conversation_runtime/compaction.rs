@@ -4,6 +4,30 @@
 use super::*;
 use crate::durable::observation::NativeObservationBatch;
 
+/// Maximum UTF-8 byte length of manual compaction focus instructions.
+pub const MANUAL_COMPACTION_INSTRUCTIONS_MAX_BYTES: usize = 4_096;
+
+/// Price the User reminder that the next primary start will stage after activation.
+pub(super) fn prospective_permission_reminder(
+    operation: &crate::runtime::identity::CompactionOperationId,
+    mode: crate::runtime::types::ApprovalMode,
+) -> crate::message::types::MessageBlock {
+    use crate::message::types::{
+        ContextKind, InboundKind, MessageBlock, UserMessageBlock, UserSource,
+    };
+    MessageBlock::User(UserMessageBlock {
+        id: crate::runtime::identity::MessageId::new(format!(
+            "rustx-context-idle-{operation}-permission-reminder"
+        )),
+        content: crate::context::assembly::permission_reminder_content(
+            &crate::runtime::permission::permission_reminder_text(mode),
+        ),
+        source: UserSource::Runtime,
+        kind: InboundKind::Context(ContextKind::NativeEnvironment),
+        timestamp: None,
+    })
+}
+
 pub(super) struct ManualCompactionTaskResult {
     pub(super) committed_failure: Option<ExecutedCompaction>,
     pub(super) conversation: ConversationState,
@@ -16,7 +40,7 @@ pub(super) struct ManualCompactionTaskResult {
 /// returned.
 pub(super) struct ManualCompactionSuccess {
     pub(super) outcome: ManualCompactionOutcome,
-    pub(super) completed: ExecutedCompaction,
+    pub(super) completed: Option<ExecutedCompaction>,
 }
 
 /// One runtime-owned manual compaction completion. The provider operation is
@@ -91,19 +115,20 @@ impl ManualCompactionCompletion {
     }
 }
 
-/// Metadata returned after one manual compaction committed successfully.
+/// The exact terminal outcome of one idle manual compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManualCompactionOutcome {
-    /// The durable projection activation coordinate.
-    pub generation: u64,
-    /// The immutable committed checkpoint identity.
-    pub checkpoint_id: crate::runtime::identity::CheckpointId,
-    /// The independently durable historical activation.
-    pub activation_id: crate::context::checkpoint::ProjectionActivationId,
-    /// The request-context measurement before compaction.
-    pub tokens_before: crate::runtime::types::TokenMeasurement,
-    /// The deterministic request-context estimate after compaction.
-    pub estimated_tokens_after: u64,
+pub enum ManualCompactionOutcome {
+    /// A checkpoint was committed and its exact receipt is available.
+    Compacted {
+        operation_id: crate::runtime::identity::CompactionOperationId,
+        generation: u64,
+        checkpoint_id: crate::runtime::identity::CheckpointId,
+        activation_id: crate::context::checkpoint::ProjectionActivationId,
+        tokens_before: crate::runtime::types::TokenMeasurement,
+        estimated_tokens_after: u64,
+    },
+    /// The current projection contained no eligible historical material.
+    Skipped,
 }
 
 /// A manual context-compaction failure.
@@ -116,6 +141,8 @@ pub enum ManualCompactionError {
     /// An attempt or another manual compaction currently owns the mutable
     /// conversation state.
     Busy,
+    /// Focus instructions exceed the finite manual-request bound.
+    InvalidInstructions,
     /// The runtime's durable authority is already failed.
     DurabilityFailed { message: String },
     /// The Session's published Model Catalog does not admit its configured
@@ -136,6 +163,10 @@ impl core::fmt::Display for ManualCompactionError {
             Self::Shutdown => formatter.write_str("the conversation runtime is shutting down"),
             Self::Busy => formatter
                 .write_str("manual context compaction requires an idle conversation runtime"),
+            Self::InvalidInstructions => write!(
+                formatter,
+                "manual compaction instructions exceed {MANUAL_COMPACTION_INSTRUCTIONS_MAX_BYTES} UTF-8 bytes"
+            ),
             Self::DurabilityFailed { message } => write!(
                 formatter,
                 "the conversation runtime durability authority failed: {message}"
@@ -196,14 +227,18 @@ impl RuntimeInner {
     /// Runs one manual compaction over the conversation state checked out by
     /// the coordinator. This is runtime-owned work: the task continues to
     /// settlement even if the requesting attachment disappears.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One admitted maintenance tail retains all frozen owners through release.
     pub(super) async fn run_manual_compaction(
         self: &Arc<Self>,
         mut conversation: ConversationState,
         context_runtime: ContextRuntime,
         tools: Vec<ModelToolDefinition>,
+        reminder: crate::message::types::MessageBlock,
         system_sections: Vec<crate::context::AcceptedSystemSection>,
         cancellation: &AgentCancellation,
         budget: crate::context::compaction_budget::CompactionBudget,
+        instructions: Option<String>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> ManualCompactionTaskResult {
         let operation_id = budget.operation_id().clone();
         let effective_system_prompt = render_effective_system_prompt(&system_sections);
@@ -221,6 +256,9 @@ impl RuntimeInner {
                 };
             }
         };
+        let progress = |event: crate::events::types::RuntimeEventEnvelope| {
+            self.publish_manual_compaction_receipt(request_id.as_ref(), &event);
+        };
         let executed = execute_compaction_in_operation(
             &mut conversation,
             &context_runtime,
@@ -229,7 +267,11 @@ impl RuntimeInner {
             &tools,
             None,
             &effective_system_prompt,
-            &CompactionConstraints::default(),
+            &CompactionConstraints {
+                staged_request_context: std::slice::from_ref(&reminder),
+                focus: instructions.as_deref(),
+                ..CompactionConstraints::default()
+            },
             &signal,
             CompactionAttribution {
                 operation_id: operation_id.clone(),
@@ -237,12 +279,14 @@ impl RuntimeInner {
                 turn_id: None,
             },
             operation.as_ref(),
+            Some(&progress),
         )
         .await;
         operation.close().await;
         let result = match executed {
             Ok(completed) => {
                 let RuntimeEvent::CompactionCompleted {
+                    operation_id,
                     generation,
                     checkpoint_id,
                     activation_id,
@@ -260,14 +304,26 @@ impl RuntimeInner {
                         }),
                     };
                 };
-                let outcome = ManualCompactionOutcome {
+                let outcome = ManualCompactionOutcome::Compacted {
+                    operation_id: operation_id.clone(),
                     generation: *generation,
                     checkpoint_id: checkpoint_id.clone(),
                     activation_id: *activation_id,
                     tokens_before: *tokens_before,
                     estimated_tokens_after: *estimated_tokens_after,
                 };
-                Ok(ManualCompactionSuccess { outcome, completed })
+                Ok(ManualCompactionSuccess {
+                    outcome,
+                    completed: Some(completed),
+                })
+            }
+            Err(CompactionExecutionError::Context(error))
+                if error.kind == ContextErrorKind::NoEligibleHistory =>
+            {
+                Ok(ManualCompactionSuccess {
+                    outcome: ManualCompactionOutcome::Skipped,
+                    completed: None,
+                })
             }
             Err(CompactionExecutionError::Context(error)) => {
                 Err(ManualCompactionError::Context(error))
@@ -282,6 +338,9 @@ impl RuntimeInner {
             Err(CompactionExecutionError::Durable(message)) => {
                 Err(ManualCompactionError::Durable { message })
             }
+            Err(CompactionExecutionError::HeadChanged) => Err(ManualCompactionError::Durable {
+                message: "manual compaction lost its projection head".into(),
+            }),
         };
         ManualCompactionTaskResult {
             committed_failure: None,
@@ -333,6 +392,7 @@ impl RuntimeInner {
     /// Restores the sole conversation state, records any durable failure,
     /// clears the maintenance slot, and hands pending inbound back to the one
     /// admission path.
+    #[allow(clippy::too_many_lines)] // Restore ownership and settle the full manual operation together.
     pub(super) fn finish_manual_compaction(
         self: &Arc<Self>,
         task: ManualCompactionTaskResult,
@@ -352,6 +412,7 @@ impl RuntimeInner {
                 .slot
                 .finish_manual_compaction(conversation)
                 .expect("manual compaction settlement owns the maintenance slot");
+            assert!(maintenance.kind == super::foreground::CompactionOwnerKind::Manual);
             if let Err(ManualCompactionError::Durable { message }) = &result {
                 self.record_durability_failure(
                     &mut state,
@@ -373,19 +434,47 @@ impl RuntimeInner {
                     // live completion is published only after coordinator
                     // ownership is restored and the maintenance slot is
                     // clear. Neither observation has an attempt identity.
-                    if success.completed.newly_committed {
-                        self.publish_manual_compaction_receipt(
-                            request_id,
-                            &success.completed.persisted_event,
-                        );
+                    match (success.outcome, success.completed) {
+                        (outcome @ ManualCompactionOutcome::Compacted { .. }, Some(completed)) => {
+                            if completed.newly_committed {
+                                self.publish_manual_compaction_receipt(
+                                    request_id,
+                                    &completed.persisted_event,
+                                );
+                            }
+                            // The activated checkpoint starts a new model context.
+                            state.config.last_permission_reminder_mode = None;
+                            Ok(outcome)
+                        }
+                        (ManualCompactionOutcome::Skipped, None) => self
+                            .publish_manual_compaction_event(
+                                &mut state,
+                                request_id,
+                                RuntimeEvent::CompactionSkipped {
+                                    operation_id: maintenance.operation_id,
+                                },
+                            )
+                            .map(|()| ManualCompactionOutcome::Skipped),
+                        _ => Err(ManualCompactionError::Durable {
+                            message: "manual compaction produced an inconsistent settlement".into(),
+                        }),
                     }
-                    // A successfully activated compaction is a new model
-                    // context: the next Attempt must re-emit the permission
-                    // reminder even when the mode is unchanged.
-                    state.config.last_permission_reminder_mode = None;
-                    Ok(success.outcome)
                 }
                 Err(error) if confirmed_commit => Err(error),
+                Err(
+                    error @ ManualCompactionError::Context(ContextError {
+                        kind: ContextErrorKind::Cancelled,
+                        ..
+                    }),
+                ) => self
+                    .publish_manual_compaction_event(
+                        &mut state,
+                        request_id,
+                        RuntimeEvent::CompactionCancelled {
+                            operation_id: maintenance.operation_id,
+                        },
+                    )
+                    .and(Err(error)),
                 Err(error) => self
                     .publish_manual_compaction_event(
                         &mut state,
@@ -399,13 +488,25 @@ impl RuntimeInner {
             };
         }
         self.settlement.notify_waiters();
+        // A ready independent result may have arrived while manual
+        // maintenance owned the conversation.
+        self.wake.notify.notify_one();
+        if matches!(
+            &completion_result,
+            Ok(ManualCompactionOutcome::Compacted { .. })
+        ) {
+            let coordinator =
+                super::asynchronous_compaction::RuntimeCompactionCoordinator(Arc::downgrade(self));
+            crate::context::asynchronous::CompactionCoordinator::head_changed(&coordinator);
+        }
         // A closed launcher's stderr is not a maintenance failure.
         let _ = writeln!(
             std::io::stderr(),
             "rustx: manual context compaction settled for {}: {}",
             self.conversation_id,
             match &completion_result {
-                Ok(_) => "committed".to_owned(),
+                Ok(ManualCompactionOutcome::Compacted { .. }) => "committed".to_owned(),
+                Ok(ManualCompactionOutcome::Skipped) => "skipped".to_owned(),
                 Err(error) => format!("failed: {error}"),
             }
         );
@@ -443,15 +544,26 @@ impl ConversationRuntime {
     pub async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        instructions: Option<String>,
     ) -> Result<ManualCompactionOutcome, ManualCompactionError> {
-        self.admit_compaction(request_id)?.wait().await
+        self.admit_compaction(request_id, instructions)?
+            .wait()
+            .await
     }
 
     #[allow(clippy::too_many_lines)] // Native ownership transfers the complete maintenance tail once.
     pub(crate) fn admit_compaction(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        instructions: Option<String>,
     ) -> Result<ManualCompactionHandle, ManualCompactionError> {
+        if instructions
+            .as_ref()
+            .is_some_and(|text| text.len() > MANUAL_COMPACTION_INSTRUCTIONS_MAX_BYTES)
+        {
+            return Err(ManualCompactionError::InvalidInstructions);
+        }
+        let instructions = instructions.filter(|text| !text.trim().is_empty());
         let completion = {
             let mut state = self.inner.lock_state();
             match self.inner.lifecycle.state() {
@@ -474,13 +586,44 @@ impl ConversationRuntime {
                 return Err(ManualCompactionError::Busy);
             }
             if let Err(error) = state.foreground.slot.hydrate(self.inner.store.as_ref()) {
-                return Err(ManualCompactionError::Durable {
-                    message: error.to_string(),
-                });
+                let message = error.to_string();
+                self.inner.record_durability_failure(
+                    &mut state,
+                    DurableOperation::HydrateConversation,
+                    message.clone(),
+                );
+                return Err(ManualCompactionError::Durable { message });
             }
             let operation_id = crate::runtime::identity::CompactionOperationId::new(
                 uuid::Uuid::now_v7().to_string(),
             );
+            // A zero Ledger and zero projection activation authoritatively
+            // prove there is no historical input, including Derived context.
+            // Resolve this before reserving model or auxiliary capacity.
+            let cut = match self.inner.store.compaction_resource_cut() {
+                Ok(cut) => cut,
+                Err(error) => {
+                    let message =
+                        format!("manual compaction could not capture its source cut: {error}");
+                    self.inner.record_durability_failure(
+                        &mut state,
+                        DurableOperation::CanonicalCommit,
+                        message.clone(),
+                    );
+                    return Err(ManualCompactionError::Durable { message });
+                }
+            };
+            if cut.ledger.0 == 0 && cut.projection_activation.0 == 0 {
+                self.inner.publish_manual_compaction_event(
+                    &mut state,
+                    request_id.as_ref(),
+                    RuntimeEvent::CompactionSkipped { operation_id },
+                )?;
+                let completion = Arc::new(ManualCompactionCompletion::default());
+                completion.joined.store(true, Ordering::Release);
+                completion.complete(Ok(ManualCompactionOutcome::Skipped));
+                return Ok(ManualCompactionHandle(completion));
+            }
             let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
             let budget = crate::context::compaction_budget::CompactionBudget::new(
                 operation_id.clone(),
@@ -518,7 +661,15 @@ impl ConversationRuntime {
             // Manual maintenance has no attempt lease, but it still freezes
             // the exact capability definitions used for planning at the
             // same admission boundary as the model/context snapshot.
-            let tools = resources.capability().tool_registry().model_definitions();
+            let tools = resources
+                .capability()
+                .tool_registry()
+                .for_model(model.primary().capabilities())
+                .model_definitions();
+            let reminder = prospective_permission_reminder(
+                &operation_id,
+                state.config.effective_approval_mode,
+            );
             let system_sections = resources
                 .context_assembly()
                 .system_sections(&resources.native_system_input())
@@ -533,12 +684,14 @@ impl ConversationRuntime {
                 request_id.as_ref(),
                 RuntimeEvent::CompactionStarted {
                     operation_id: operation_id.clone(),
+                    mode: crate::context::operation::CompactionMode::Manual,
                 },
             )?;
             let conversation = state
                 .foreground
                 .slot
                 .lend_for_manual_compaction(CurrentManualCompaction {
+                    kind: super::foreground::CompactionOwnerKind::Manual,
                     operation_id: operation_id.clone(),
                     cancellation: cancellation.clone(),
                 })
@@ -570,9 +723,12 @@ impl ConversationRuntime {
                         conversation,
                         context_runtime,
                         tools,
+                        reminder,
                         system_sections,
                         &cancellation,
                         budget,
+                        instructions,
+                        request_id.clone(),
                     )
                     .await;
                 #[cfg(test)]

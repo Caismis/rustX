@@ -289,7 +289,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 85 combines shared-control errors and bounded Trace refresh progress.
 /// Version 86 carries cursor-relative typed projection list edits.
 /// Version 87 combines that delivery with main's auxiliary and permission vocabulary.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 87;
+/// Version 88 adds the exact committed checkpoint to finite Compaction inspection.
+/// Version 89 combines cursor-relative projection edits with native asynchronous Compaction inspection.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 89;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -440,6 +442,9 @@ pub enum RuntimeClientRequest {
     CompactContext {
         /// Attachment-scoped request id.
         id: RequestId,
+        /// Optional focus hints for the summary, bounded in UTF-8 bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<String>,
     },
 
     /// Answer one live native interaction through the runtime-owned
@@ -904,6 +909,8 @@ pub enum RuntimeClientResult {
         /// independently of the latest published context.
         compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
+    /// No historical material was eligible; no checkpoint was committed.
+    ContextCompactionSkipped,
 
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.
@@ -1412,7 +1419,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 87);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 89);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

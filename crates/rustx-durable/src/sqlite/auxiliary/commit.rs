@@ -10,10 +10,10 @@ use super::{
     RuntimeEvent, RuntimeEventEnvelope, SqliteConversationStore, Transaction, TransactionBehavior,
     Utc, audit_fact_bytes, call_audit_at_tx, call_row_tx, call_start_matches,
     call_started_event_id, event_at_connection, has_call_journal_fact_tx, insert_audit_fact_tx,
-    journal_prefix, owner_row_tx, params, persist_event_tx, request_audit_at_tx, request_row_tx,
-    request_start_matches, request_started_event_id, require_audit_fact, same_terminal_envelope,
-    seq_to_i64, storage, validate_call_start_input, validate_request_start_input,
-    validate_settlement_pair, validate_terminal_envelope_shape,
+    journal_prefix, owner_row_tx, params, persist_event_tx, request_audit_at_tx, request_row_query,
+    request_row_tx, request_start_matches, request_started_event_id, require_audit_fact,
+    same_terminal_envelope, seq_to_i64, storage, validate_call_start_input,
+    validate_request_start_input, validate_settlement_pair, validate_terminal_envelope_shape,
 };
 
 pub fn run_auxiliary_write<T>(
@@ -193,6 +193,7 @@ impl SqliteConversationStore {
                         ))
                     })?;
                 if !request_start_matches(&event, start)
+                    || existing.invocation != start.invocation
                     || event.event_id != request_started_event_id(&start.request_id)
                 {
                     return Err(ConversationStoreError::InvalidReference(format!(
@@ -253,6 +254,26 @@ impl SqliteConversationStore {
                     start.request_id
                 )));
             }
+            if start.ordinal > 0 {
+                let first = request_row_query(
+                    transaction,
+                    "call_id=?1 AND ordinal=0",
+                    [start.call_id.as_str()],
+                )?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "auxiliary retry lacks its original request identity".into(),
+                    )
+                })?;
+                if first.model != start.model || first.invocation != start.invocation {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "auxiliary retry changed its frozen model binding".into(),
+                    ));
+                }
+            }
+            let invocation_json = serde_json::to_string(&start.invocation).map_err(|error| {
+                storage(format!("encode auxiliary invocation identity: {error}"))
+            })?;
             let event = RuntimeEventEnvelope {
                 tool_occurrence: None,
                 observation: None,
@@ -281,14 +302,15 @@ impl SqliteConversationStore {
             transaction
                 .execute(
                     "INSERT INTO auxiliary_requests(
-                        call_id,ordinal,request_id,model,started_sequence,
+                        call_id,ordinal,request_id,model,invocation_json,started_sequence,
                         terminal_sequence,terminal_kind
-                     ) VALUES(?1,?2,?3,?4,?5,NULL,NULL)",
+                     ) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL)",
                     params![
                         start.call_id.as_str(),
                         i64::from(start.ordinal),
                         start.request_id.as_str(),
                         start.model.as_str(),
+                        invocation_json,
                         seq_to_i64(persisted.event.sequence)?,
                     ],
                 )

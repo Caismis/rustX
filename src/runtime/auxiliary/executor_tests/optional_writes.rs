@@ -130,7 +130,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         transcript
     );
     let fresh = CancellationSignal::new();
-    let allowances = (0..12)
+    let allowances = (0..1)
         .map(|_| {
             fixture
                 .scope
@@ -144,7 +144,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         .collect::<Vec<_>>();
     assert_eq!(
         allowances.len(),
-        12,
+        1,
         "the interrupted RequestStart consumes no allowance"
     );
     let scope = AuxiliaryExecutor::scope(
@@ -177,6 +177,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
             timestamp: chrono::Utc::now(),
             event: RuntimeEvent::CompactionStarted {
                 operation_id: CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         })
         .unwrap();

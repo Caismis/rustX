@@ -78,7 +78,7 @@ impl TraceProjection<'_> {
                     }
                 }
             }
-            E::CompactionStarted { operation_id } => {
+            E::CompactionStarted { operation_id, .. } => {
                 detail.kind = TraceKind::Compaction;
                 if let Some(event) = self
                     .store
@@ -88,6 +88,8 @@ impl TraceProjection<'_> {
                             "compaction_started",
                             "compaction_completed",
                             "compaction_failed",
+                            "compaction_cancelled",
+                            "compaction_skipped",
                         ],
                         before: None,
                         after: anchor.sequence,

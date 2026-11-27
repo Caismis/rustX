@@ -44,6 +44,177 @@ fn admit_agent(
 }
 
 #[test]
+fn proactive_admission_commits_start_and_status_together_or_neither() {
+    use rustx_types::context::operation::{
+        CompactionMode, CompactionOperationPhase, CompactionOperationStatus,
+    };
+    use rustx_types::runtime::identity::CompactionOperationId;
+    let store = store();
+    let conversation = store.conversation_id().clone();
+    let operation = CompactionOperationId::new("atomic-proactive-admission");
+    let started = envelope(
+        &conversation,
+        "proactive-start",
+        None,
+        RuntimeEvent::CompactionStarted {
+            operation_id: operation.clone(),
+            mode: CompactionMode::Proactive,
+        },
+    );
+    let status = envelope(
+        &conversation,
+        "proactive-status",
+        None,
+        RuntimeEvent::CompactionOperationUpdated {
+            status: CompactionOperationStatus {
+                operation_id: operation,
+                admission_generation: 1,
+                triggering_attempt_id: None,
+                waiting_attempt_id: None,
+                phase: CompactionOperationPhase::Generating,
+                accepted_fragments: 0,
+                diagnostic: None,
+            },
+        },
+    );
+    assert!(
+        store.append_event(started.clone()).is_err(),
+        "proactive start requires the atomic admission path"
+    );
+    let mut mismatched = status.clone();
+    let RuntimeEvent::CompactionOperationUpdated { status: changed } = &mut mismatched.event else {
+        unreachable!()
+    };
+    changed.operation_id = CompactionOperationId::new("other");
+    assert!(
+        store
+            .append_compaction_admission(started.clone(), mismatched)
+            .is_err()
+    );
+    store.arm_fail_event_times(1);
+    assert!(
+        store
+            .append_compaction_admission(started.clone(), status.clone())
+            .is_err()
+    );
+    assert_eq!(
+        store.read_events(None, 8).unwrap().events,
+        [] as [rustx_types::events::types::RuntimeEventEnvelope; 0]
+    );
+    assert_eq!(
+        store.latest_compaction_operations(i64::MAX as u64).unwrap(),
+        [] as [rustx_types::context::operation::CompactionOperationStatus; 0]
+    );
+
+    let (first, second) = store.append_compaction_admission(started, status).unwrap();
+    assert_eq!(second.sequence, first.sequence + 1);
+    for event in [
+        RuntimeEvent::CompactionCancelled {
+            operation_id: CompactionOperationId::new("atomic-proactive-admission"),
+        },
+        RuntimeEvent::CompactionSkipped {
+            operation_id: CompactionOperationId::new("atomic-proactive-admission"),
+        },
+        RuntimeEvent::CompactionFailed {
+            operation_id: CompactionOperationId::new("atomic-proactive-admission"),
+            error: "foreground-only".into(),
+        },
+    ] {
+        assert!(matches!(
+            store.append_event(envelope(&conversation, "invalid-terminal", None, event)),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+    }
+
+    let events = store.read_events(None, 8).unwrap().events;
+    assert_eq!(events, vec![first, second]);
+    assert_eq!(
+        store
+            .latest_compaction_operations(i64::MAX as u64)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn compaction_progress_requires_open_owner_strict_sequence_and_bounded_ranges() {
+    use rustx_types::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
+    use rustx_types::runtime::identity::CompactionOperationId;
+    let store = store();
+    let conversation = store.conversation_id().clone();
+    let operation = CompactionOperationId::new("progress-test");
+    let range = AuxiliarySourceRange {
+        projection_index: 0,
+        role: AuxiliarySourceRole::User,
+        byte_start: 0,
+        byte_end: 1,
+    };
+    let chunk = |count, ranges| RuntimeEvent::CompactionChunkAccepted {
+        operation_id: operation.clone(),
+        accepted_fragments: count,
+        source_ranges: ranges,
+        generation: None,
+    };
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "orphan",
+                None,
+                chunk(1, vec![range.clone()])
+            ))
+            .is_err()
+    );
+    store
+        .append_event(envelope(
+            &conversation,
+            "begin",
+            None,
+            RuntimeEvent::CompactionStarted {
+                operation_id: operation.clone(),
+                mode: rustx_types::context::operation::CompactionMode::Blocking,
+            },
+        ))
+        .unwrap();
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "jump",
+                None,
+                chunk(2, vec![range.clone()])
+            ))
+            .is_err()
+    );
+    assert!(
+        store
+            .append_event(envelope(&conversation, "empty", None, chunk(1, vec![])))
+            .is_err()
+    );
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "too-many",
+                None,
+                chunk(1, vec![range.clone(); 33])
+            ))
+            .is_err()
+    );
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "missing-generation",
+                None,
+                chunk(1, vec![range])
+            ))
+            .is_err()
+    );
+}
+
+#[test]
 fn background_terminal_publication_is_idempotent_and_terminal_unique() {
     let store = store();
     let conversation_id = store.conversation_id().clone();
@@ -1411,7 +1582,8 @@ fn event_journal_enforces_dependencies_order_and_terminal_absorption() {
                 RuntimeEvent::CompactionStarted {
                     operation_id: rustx_types::runtime::identity::CompactionOperationId::new(
                         "fixture-compaction"
-                    )
+                    ),
+                    mode: rustx_types::context::operation::CompactionMode::Blocking,
                 },
             ))
             .is_err()
@@ -1425,6 +1597,7 @@ fn event_journal_enforces_dependencies_order_and_terminal_absorption() {
                 operation_id: rustx_types::runtime::identity::CompactionOperationId::new(
                     "fixture-compaction",
                 ),
+                mode: rustx_types::context::operation::CompactionMode::Blocking,
             },
         ))
         .unwrap();
@@ -1438,7 +1611,8 @@ fn event_journal_enforces_dependencies_order_and_terminal_absorption() {
                 RuntimeEvent::CompactionStarted {
                     operation_id: rustx_types::runtime::identity::CompactionOperationId::new(
                         "fixture-compaction"
-                    )
+                    ),
+                    mode: rustx_types::context::operation::CompactionMode::Blocking,
                 },
             ))
             .is_err()

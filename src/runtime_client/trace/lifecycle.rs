@@ -93,6 +93,7 @@ impl AnchorFacts {
             timing: self.timing,
             request,
             tool,
+            compaction: self.compaction,
             message_id,
             attachments,
             truncated,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
-import type { MethodResult, SourceSettings } from '../../protocol/app-server/v80';
+import type { MethodResult, SourceSettings } from '../../protocol/app-server/v82';
 import { ResourceBrowser } from '../src/app/resources/shared/ResourceBrowser';
 import { cfg3Source } from './cfg3-data';
 import { cfg3Client } from './cfg3-fixture';

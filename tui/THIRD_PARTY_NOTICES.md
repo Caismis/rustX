@@ -10,18 +10,29 @@
 
 ### Scope of use
 
-`@earendil-works/pi-tui` is consumed **as a published npm dependency only**.
+`@earendil-works/pi-tui@0.82.1` supplies the published rendering primitives.
 
-**No Pi source code — from `@earendil-works/pi-tui` or from the Pi coding
-agent — has been copied, vendored, or modified into this repository.** Every
-file under `tui/src/` and `tui/test/` is original rustX code.
+The committed-summary component in
+`src/ui/components/compaction-summary.ts` adapts Pi Coding Agent's
+[`compaction-summary-message.ts`](https://github.com/earendil-works/pi/blob/850ea2eae2f39eb16ae14e1f09448eab6da2188a/packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts)
+at immutable commit `850ea2eae2f39eb16ae14e1f09448eab6da2188a`.
+Its content and identity come from native rustX checkpoints, and disclosure is
+held in attachment-local presentation preferences. The MIT notice below also
+applies to this adaptation.
+
+Compaction-specific colors in `src/ui/theme.ts` reproduce that commit's
+`packages/coding-agent/src/modes/interactive/theme/dark.json`: background
+`#3a3055`, label `#a798d7` and text `#9da5a9`. The pinned upstream pi-tui
+1.5.0 color converter produced these sRGB values from the reference OKHSL
+tokens. The reference renderer is isolated from the product dependency graph.
 
 In particular, none of the following Pi coding-agent components were copied,
 ported, or adapted: `InteractiveMode`, `FooterComponent`, the
 `AgentSession`-bound assistant renderer, `ToolExecutionComponent`, the model
 resolver, the session selector, the session tree, compaction controls,
 authentication/login code, the extension infrastructure, the Skills runtime,
-or shell shortcuts.
+or shell shortcuts. The compaction-summary adaptation is the exception
+described above; status reason/cancellation grammar was studied at the same pin.
 
 ### Primitives imported
 
@@ -33,6 +44,7 @@ public entry point:
 | `TUI` | differential renderer and focus/overlay host |
 | `ProcessTerminal` | the `process.stdin`/`process.stdout` terminal |
 | `Container` | grouping of child components |
+| `Box` | terminal-width background bands, including committed summaries |
 | `Editor` | the multiline input editor |
 | `Markdown` | Markdown layout of rustX-rendered text |
 | `Text` | plain text layout (footer, background section) |
@@ -90,8 +102,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-Because no Pi source is copied into this repository, this notice is the whole
-of the attribution obligation for the dependency.
+The notice covers the published dependency and the identified Coding Agent
+summary adaptation.
 
 ## Development dependencies
 

@@ -1,4 +1,4 @@
-import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v82';
 import type { AppServerClient } from './app-server';
 import { acceptOlderTranscriptPage, extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptCoverageComplete, transcriptCoverageTarget, transcriptRepairs, repairTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
 import { transcriptWindowReady } from './history-policy';

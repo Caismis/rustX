@@ -141,8 +141,15 @@ pub(crate) struct CurrentAttempt {
 /// retains its cancellation trigger so runtime drain can supervise the
 /// provider-backed summary to terminal settlement.
 pub(crate) struct CurrentManualCompaction {
+    pub(crate) kind: CompactionOwnerKind,
     pub(crate) operation_id: crate::runtime::identity::CompactionOperationId,
     pub(crate) cancellation: AgentCancellation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompactionOwnerKind {
+    Manual,
+    BackgroundInstall,
 }
 
 /// The scheduled workflow run's coordinator owner record.

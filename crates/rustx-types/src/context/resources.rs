@@ -6,6 +6,11 @@ use crate::context::checkpoint::ProjectionActivationId;
 use crate::durable::canonical::TranscriptCursor;
 use crate::runtime::identity::ConversationId;
 
+/// Maximum occurrences in one detached Compaction resource cut.
+pub const COMPACTION_RESOURCE_ITEMS_MAX: usize = 8192;
+/// Maximum materialized bytes in one detached Compaction resource cut.
+pub const COMPACTION_RESOURCE_BYTES_MAX: usize = 16 * 1024 * 1024;
+
 /// Inclusive canonical commit position, independent of Journal and activation order.
 #[derive(
     Debug,

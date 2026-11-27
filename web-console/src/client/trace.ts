@@ -2,7 +2,7 @@ import { checkpointReadCutKey } from '../../../protocol/app-server/content-ident
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1, WorkflowNodeInstance, WorkflowTraceNode } from '../../../protocol/app-server/v80';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1, WorkflowNodeInstance, WorkflowTraceNode } from '../../../protocol/app-server/v82';
 
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
@@ -31,8 +31,8 @@ export interface TraceDetailEntry {
   /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
   readonly read?: object;
   readonly stale?: boolean;
-  readonly content?:import('../../../protocol/app-server/v80').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v80').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v80').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v82').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v82').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v82').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;
@@ -51,10 +51,20 @@ export interface TraceDetailEntry {
  * the interval it described no longer applies.
  */
 export interface TraceFieldReader {
+ readonly scope?:string;
  value(cut:CheckpointReadCut,field:TraceValueSelector,offset:number,current:()=>boolean):Promise<CheckpointValueChunk>;
  content(cut:CheckpointReadCut,reference:ContentRef,offset:number,current:()=>boolean):Promise<ContentChunk>;
  page(cut:CheckpointReadCut,domain:string,offset:number,current:()=>boolean):Promise<CheckpointPage>;
  workflowNode?(cut:CheckpointReadCut,instance:WorkflowNodeInstance,current:()=>boolean):Promise<WorkflowTraceNode|null>;
+}
+const readerScopes = new WeakMap<TraceFieldReader, string>();
+let nextReaderScope = 0n;
+/** Cache ownership only; native read authorization remains with the reader. */
+export function traceReaderScope(reader: TraceFieldReader): string {
+ if (reader.scope) return reader.scope;
+ let scope = readerScopes.get(reader);
+ if (!scope) { scope = `reader:${++nextReaderScope}`; readerScopes.set(reader, scope); }
+ return scope;
 }
 export interface TraceCache {
   /** Navigation marker only; locating history never pauses live appends. */
@@ -137,6 +147,7 @@ export function bindTraceDetailReader(reader:TraceFieldReader,page:CheckpointPag
   if(!current()||!owned()||checkpointReadCutKey(cut)!==checkpointReadCutKey(page.read_cut))throw new Error('Original Trace detail view was replaced.');
  };
  return {
+  scope:traceReaderScope(reader),
   value:async(cut,field,offset,owned)=>{valid(cut,owned);const chunk=await reader.value(cut,field,offset,()=>current()&&owned());valid(cut,owned);return chunk;},
   page:async(cut,domain,offset,owned)=>{valid(cut,owned);const result=await reader.page(cut,domain,offset,()=>current()&&owned());valid(cut,owned);return result;},
   content:async(cut,ref,offset,owned)=>{valid(cut,owned);const chunk=await reader.content(cut,ref,offset,()=>current()&&owned());valid(cut,owned);return chunk;},
@@ -299,6 +310,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       truncated: update.truncated,
       request: record.request && update.request ? { ...record.request, ...update.request } : record.request,
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
+      compaction: update.compaction,
     });
   };
   if (retainPage) page = { ...previous.page, records: previous.page.records.map(repair) };
@@ -326,12 +338,20 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   // Keep the original reader while the same native content remains represented.
   // A changed body is refreshed in the background; it never blanks the inspector.
   const unchanged = (id: string) => old.get(id) === latest.get(id) || contentIdentity(old.get(id)) === contentIdentity(latest.get(id));
+  // Compaction inspection owns a growing Call/request collection even when
+  // its visible record and phase are unchanged. Renew only at a later J cut.
+  const newerCompactionCut = (id: string) => {
+    const before = previous.readCuts?.[id] ?? previous.details[id]?.page?.read_cut;
+    const after = readCuts[id];
+    return latest.get(id)?.kind === 'compaction' && before != null && after != null
+      && before.conversation_id === after.conversation_id && BigInt(after.through) > BigInt(before.through);
+  };
   // Workflow collections are opened lazily through the live reader, rather
   // than an independently retained detail page. A freshly advertised native
   // head renews that row's cut even when its node extent is unchanged.
-  for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id) && latest.get(id)?.kind !== 'workflow') readCuts[id] = previous.readCuts[id];
+  for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id) && latest.get(id)?.kind !== 'workflow' && !newerCompactionCut(id)) readCuts[id] = previous.readCuts[id];
   const details = Object.fromEntries(Object.entries(previous.details).map(([id, entry]) =>
-    [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
+    [id, unchanged(id) && !newerCompactionCut(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
       ? entry : { ...entry, stale: true, error: undefined }],
   ));
   // A fuller native head may reveal an older prefix before the retained tail.

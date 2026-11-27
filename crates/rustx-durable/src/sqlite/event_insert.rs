@@ -361,6 +361,10 @@ fn prepare(
     let state_required = matches!(
         event.event,
         RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionChunkAccepted { .. }
+            | RuntimeEvent::CompactionOperationUpdated { .. }
+            | RuntimeEvent::CompactionCancelled { .. }
+            | RuntimeEvent::CompactionSkipped { .. }
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::Goal {

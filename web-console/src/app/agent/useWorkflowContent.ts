@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunId, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v80';
+import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunId, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v82';
 import { checkpointReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
 import { validateCanonicalInspectionPage } from '../../../../protocol/app-server/trace-inspection';

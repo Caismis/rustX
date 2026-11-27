@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceInspectionMessage, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v80';
+import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceInspectionMessage, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v82';
 import { traceFields } from '../../../../protocol/app-server/trace-identity';
 import { readRequestField, readTraceBlocks, readTraceMessages, readTraceSource, traceProgram } from '../../client/trace-content';
-import type { TraceFieldReader } from '../../client/trace';
+import { traceReaderScope, type TraceFieldReader } from '../../client/trace';
 import { readRequestPredecessor, requestDomain } from '../../client/request-system';
 import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
 
@@ -22,6 +22,7 @@ export function useTraceContent(page: CheckpointPage | undefined, reader: TraceF
   const section = inspection?.content.type === 'tool' ? 'tool' : inspection?.content.type === 'messages' ? facet === 'source' ? 'source' : 'message' : item.record.kind === 'request' && (facet === 'overview' || facet === 'options') ? 'options' : facet;
   const identity = JSON.stringify([page, item.type, item.type === 'ContextRow' ? item.context.locator : undefined, section, previousDomain]);
   const owner = JSON.stringify([page?.read_cut.conversation_id, page?.read_cut.activation_id,
+    reader && traceReaderScope(reader),
     item.owner_record_id, item.type, item.type === 'ContextRow' ? item.context.locator : undefined, section, previousDomain]);
   const latest = useRef({ identity, reader }); latest.current = { identity, reader };
   const [state, setState] = useState<{ identity: string; owner: string; reader: typeof reader; content?: Content; error?: string }>();

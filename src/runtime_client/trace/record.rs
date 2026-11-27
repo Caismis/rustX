@@ -49,6 +49,7 @@ impl TraceProjection<'_> {
             message_id,
             attachments,
             tool,
+            compaction,
             has_detail,
             truncated,
             fields,
@@ -73,6 +74,7 @@ impl TraceProjection<'_> {
             message_id,
             attachments,
             tool,
+            compaction,
             has_detail,
             truncated,
             fields,
@@ -245,7 +247,10 @@ pub(super) fn terminal(event: &E) -> TraceState {
                 S::DeadlineExpired { .. } => TraceState::TimedOut,
             }
         }
-        E::AttemptCancelled { .. } | E::WorkflowCancelled { .. } => TraceState::Cancelled,
+        E::AttemptCancelled { .. }
+        | E::WorkflowCancelled { .. }
+        | E::CompactionCancelled { .. } => TraceState::Cancelled,
+        E::CompactionSkipped { .. } => TraceState::Skipped,
         E::AttemptTimedOut { .. } => TraceState::TimedOut,
         E::AttemptLimitExceeded { .. } => TraceState::Limited,
         E::ModelRequestFailed { error, .. } => match error.kind {

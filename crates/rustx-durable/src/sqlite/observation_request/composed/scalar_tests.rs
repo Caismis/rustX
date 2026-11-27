@@ -317,6 +317,8 @@ fn commit(
     let request = ModelRequest {
         response_schema: snapshot.response_schema.clone(),
         response_byte_limit: None,
+        prompt_fallback_authorization:
+            rustx_types::model::types::PromptFallbackAuthorization::default(),
         messages: history.messages,
         images: rustx_types::model::images::ResolvedImages::new(),
         invocation: snapshot.invocation.clone(),

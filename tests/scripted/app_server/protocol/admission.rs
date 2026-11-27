@@ -254,17 +254,16 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
                 call: Method::CompactContext {
                     target: target.clone(),
                     request_id: "valid".to_owned().try_into().unwrap(),
+                    instructions: None,
                 },
             })
             .unwrap();
             wire["params"]["request_id"] = serde_json::Value::String(value.clone());
             assert_eq!(validator.is_valid(&wire), valid);
             let response = connection.handle_json(&wire.to_string()).await.unwrap();
-            let Response::Failure(failure) = response else {
-                panic!("empty context cannot compact")
-            };
             if valid {
-                assert_ne!(failure.error.code, -32602);
+                assert!(matches!(response, Response::Success(success)
+                    if matches!(success.result, MethodResult::ContextCompactionSkipped)));
                 let MethodResult::Checkpoint {
                     checkpoint: checkpoint_18,
                 } = read().await
@@ -275,8 +274,12 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
                 let result = snapshot.context.manual_compaction.unwrap();
                 assert_eq!(result.request_id.unwrap().as_str(), value);
                 assert!(result.released);
-                assert!(result.error.is_some());
+                assert!(result.error.is_none());
+                assert!(result.skipped);
             } else {
+                let Response::Failure(failure) = response else {
+                    panic!("invalid correlation must fail")
+                };
                 assert_eq!(failure.error.code, -32602);
                 // Equal cursor and full context prove no start or correlation mutation.
                 assert_eq!(

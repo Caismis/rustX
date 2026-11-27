@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, MessageBlock, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v80';
+import type { ForegroundToolExecution, MessageBlock, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v82';
 import type { Server } from '../fixture';
 import { workflowRun } from '../workflow-data';
 

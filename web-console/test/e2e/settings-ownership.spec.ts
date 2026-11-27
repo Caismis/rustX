@@ -21,11 +21,11 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    const settings = page.getByRole('region', { name: 'Settings', exact: true });
    await openSettingsPage(page, 'Advanced');
    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
-   await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
-   await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
-   await expect(settledSave(settings, 'Context')).toBeVisible();
+   await settings.getByLabel('Response start timeout (ms)', { exact: true }).fill('19000');
+   await settings.getByRole('button', { name: 'Save Model timeout', exact: true }).click();
+   await expect(settledSave(settings, 'Model timeout')).toBeVisible();
    const source = await readSource(remote,{kind:'user'});
-   expect(source.user.authored?.context?.reserve_tokens).toBe('19');
+   expect(source.user.authored?.model_timeout_policy?.response_start_timeout_ms).toBe('19000');
    expect(source.workspace).toBeNull();
    await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);

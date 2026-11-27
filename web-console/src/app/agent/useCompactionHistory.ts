@@ -1,46 +1,69 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v80';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v82';
 import type { AppServerClient } from '../../client/app-server';
 import { sameValue, useClientSelector } from '../../client/selectors';
 
-/** Read immutable checkpoint metadata from the native projection directory.
- * Already displayed markers may outlive their observation in the same reading
- * presentation, but do not retain read authority and are replaced on refresh. */
+const PAGE = 16n;
+type Marker = { head: RuntimeClientProjectionHeadView; command: boolean };
+
+/** One explicit native metadata page plus the active head. Retained display
+ * data never retains permission to perform a read after its owner changes. */
 export function useCompactionHistory(client: AppServerClient, sessionId: string | undefined, enabled: boolean, retained?: { owner: symbol; keep: boolean }) {
   const facts = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
     return { observation: view?.attachmentObservation,
       current: enabled && state.connection === 'connected' && view?.attachment === 'attached',
+      authority: state.authorityId, target: view?.target,
       receipt: view?.compactionRequest?.receipt,
       head: view?.snapshot?.context?.projection_head };
   }, sameValue);
-  const [loaded, setLoaded] = useState<{ observation: typeof facts.observation; records: RuntimeClientProjectionHeadView[] }>();
-  const presentation = useRef<{ owner: symbol; records: { head: RuntimeClientProjectionHeadView; command: boolean }[] }>(undefined);
+  const scope = JSON.stringify([facts.authority, sessionId, facts.target?.conversation_id, facts.target?.runtime_incarnation]);
+  const [navigation, navigate] = useState<{ scope: string; after: string }>();
+  const latestStart = facts.head && BigInt(facts.head.activation_id) > PAGE ? (BigInt(facts.head.activation_id) - PAGE).toString() : '0';
+  const after = navigation?.scope === scope ? navigation.after : latestStart;
+  const [retry, setRetry] = useState(0);
+  const activation = facts.head?.activation_id;
+  const [loaded, setLoaded] = useState<{ scope: string; after: string; observation: typeof facts.observation; activation: typeof activation; retry: number; records: RuntimeClientProjectionHeadView[]; error?: string }>();
+  const latest = useRef({ scope, after, observation: facts.observation, activation, retry }); latest.current = { scope, after, observation: facts.observation, activation, retry };
+  const presentation = useRef<{ owner: symbol; scope: string; records: Marker[] }>(undefined);
   if (!retained?.keep || presentation.current?.owner !== retained.owner) presentation.current = undefined;
   useEffect(() => {
     if (!facts.current || !sessionId || !facts.head) return;
     let mounted = true;
-    const current = () => mounted && client.isAttachmentObservationCurrent(sessionId, facts.observation);
-    void (async () => {
-      const records: RuntimeClientProjectionHeadView[] = [];
-      let after = '0';
-      do {
-        const page = await client.projections(sessionId, after);
-        if (!current()) return;
-        records.push(...page.records);
-        if (page.next_activation == null) break;
-        after = page.next_activation;
-      } while (current());
-      if (current()) setLoaded({ observation: facts.observation, records });
-    })().catch(() => {});
+    const current = () => mounted && latest.current.scope === scope && latest.current.after === after
+      && latest.current.activation === activation && latest.current.retry === retry
+      && latest.current.observation === facts.observation && client.isAttachmentObservationCurrent(sessionId, facts.observation);
+    const read = { scope, after, observation: facts.observation, activation, retry };
+    void client.projections(sessionId, after).then(page => {
+      if (!current()) return;
+      if (page.records.length > 16 || page.records.some((head, index) => BigInt(head.activation_id) <= BigInt(after)
+        || index > 0 && BigInt(head.activation_id) <= BigInt(page.records[index - 1]!.activation_id))) throw Error('Projection history page did not advance.');
+      setLoaded({ ...read, records: page.records });
+    }).catch(error => {
+      if (current()) setLoaded(previous => ({ ...read,
+        records: previous?.scope === scope ? previous.records : [], error: String(error).slice(0, 512) }));
+    });
     return () => { mounted = false; };
-  }, [client, sessionId, facts.observation, facts.current, facts.head?.activation_id]);
-  if (!facts.current) return retained?.keep ? presentation.current?.records ?? [] : [];
-  const complete = loaded?.observation === facts.observation;
-  const records = new Map((complete ? loaded?.records ?? [] : presentation.current?.records.map(item => item.head) ?? []).map(head => [head.activation_id, head]));
-  if (!facts.head) records.clear();
-  if (facts.head) records.set(facts.head.activation_id, facts.head);
-  const items = [...records.values()].map(head => ({ head, command: facts.receipt?.checkpoint_id === head.checkpoint_id || !!presentation.current?.records.find(item => item.head.activation_id === head.activation_id && item.command) }));
-  if (retained?.keep) presentation.current = { owner: retained.owner, records: items };
-  return items;
+  }, [client, sessionId, scope, after, facts.observation, facts.current, activation, retry]);
+  const page = loaded?.scope === scope ? loaded : undefined;
+  const resident = presentation.current?.scope === scope ? presentation.current : undefined;
+  const displayed = facts.current ? page?.records ?? resident?.records.map(item => item.head) ?? [] : [];
+  const records = new Map(displayed.map(head => [head.activation_id, head]));
+  if (facts.current && !facts.head) records.clear();
+  if (facts.current && facts.head) records.set(facts.head.activation_id, facts.head);
+  const markers = facts.current ? [...records.values()].map(head => ({ head,
+    command: facts.receipt?.checkpoint_id === head.checkpoint_id || !!resident?.records.find(item => item.head.activation_id === head.activation_id && item.command) }))
+    : retained?.keep ? presentation.current?.records ?? [] : [];
+  if (retained?.keep && facts.current) presentation.current = { owner: retained.owner, scope, records: markers };
+  const first = page?.records[0], last = page?.records.at(-1);
+  const currentPage = facts.current && page?.after === after && page.observation === facts.observation
+    && page.activation === activation && page.retry === retry ? page : undefined;
+  const busy = facts.current && !!facts.head && !currentPage;
+  return {
+    markers, busy, error: currentPage?.error,
+    earlier: !busy && first && BigInt(first.activation_id) > 1n ? () => navigate({ scope, after: (BigInt(first.activation_id) > PAGE + 1n ? BigInt(first.activation_id) - PAGE - 1n : 0n).toString() }) : undefined,
+    later: !busy && last && facts.head && BigInt(last.activation_id) < BigInt(facts.head.activation_id) ? () => navigate({ scope, after: last.activation_id }) : undefined,
+    latest: () => { if (!busy) navigate(undefined); },
+    retry: () => { if (currentPage?.error) setRetry(retry + 1); },
+  };
 }

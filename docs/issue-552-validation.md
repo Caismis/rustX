@@ -2,7 +2,7 @@
 
 The run view uses the existing Workflow canvas and native trace/value inspection.
 It never reads the current Workflow file to reconstruct an older run. SQLite schema
-88 intentionally refuses older databases without a migration or compatibility path.
+89 intentionally refuses older databases without a migration or compatibility path.
 
 ## Contract and evidence
 

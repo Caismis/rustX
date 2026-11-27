@@ -24,6 +24,7 @@ from fake_provider.control import ScenarioRun
 from fake_provider.measurement import Measurement, elapsed, stamp
 from fake_provider.protocols import codec_for, protocol_of_path
 from fake_provider.scenario import (
+    AdaptiveScenario,
     Disconnect,
     Gate,
     HttpError,
@@ -146,7 +147,20 @@ class ProviderServer:
             control.REQUEST_ACCEPTED, request_index=index, path=path, protocol=protocol
         )
 
-        if index >= len(self.run.scenario.steps):
+        if isinstance(self.run.scenario, AdaptiveScenario):
+            if self.run.final_step_selected:
+                await self.run.fail("unexpected request after final adaptive step", request_index=index)
+                await _write_json(writer, 500, {"error": {"type": "scenario_error", "message": "unexpected extra request"}})
+                return
+            try:
+                step, final = self.run.scenario.select(self.run.requests)
+            except ValueError as error:
+                await self.run.fail(str(error), request_index=index)
+                await _write_json(writer, 500, {"error": {"type": "scenario_error", "message": str(error)}})
+                return
+            self.run.step_states.append(control.STEP_PENDING)
+            self.run.final_step_selected = final
+        elif index >= len(self.run.scenario.steps):
             await self.run.fail(
                 f"unexpected provider request #{index + 1}: the scenario declares "
                 f"{len(self.run.scenario.steps)} step(s)",
@@ -158,8 +172,8 @@ class ProviderServer:
                 {"error": {"type": "scenario_error", "message": "unexpected extra request"}},
             )
             return
-
-        step = self.run.scenario.steps[index]
+        else:
+            step = self.run.scenario.steps[index]
         expected_codec = codec_for(step.expect.protocol)
         began = stamp() if measurement else None
         failures = step.expect.failures(request, expected_codec)

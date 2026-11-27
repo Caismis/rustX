@@ -32,6 +32,7 @@ fn compact_with_trace(
             timestamp: chrono::Utc::now(),
             event: RuntimeEvent::CompactionStarted {
                 operation_id: input.operation_id.clone(),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         })
         .unwrap();
@@ -151,4 +152,74 @@ fn t08_t14_compaction_trace_preview_preserves_original_utf8_bound_and_truncation
             .unwrap(),
         receipt.checkpoint
     );
+}
+
+#[test]
+fn overlapping_compaction_completion_belongs_to_its_exact_start() {
+    use crate::context::operation::{
+        CompactionMode, CompactionOperationPhase, CompactionOperationStatus,
+    };
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let input = commit_input(
+        &store,
+        "overlap-first",
+        candidate(&store, "overlap-first", vec![summary("first summary")]),
+        &CancellationSignal::new(),
+    );
+    let timestamp = chrono::Utc::now();
+    let envelope = |id: &str, event| RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(id),
+        sequence: 0,
+        conversation_id: store.conversation_id().clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event,
+    };
+    let first = store
+        .append_event(envelope(
+            "overlap-start-first",
+            RuntimeEvent::CompactionStarted {
+                operation_id: input.operation_id.clone(),
+                mode: CompactionMode::Blocking,
+            },
+        ))
+        .unwrap();
+    let other = crate::runtime::identity::CompactionOperationId::new("overlap-independent");
+    let status = CompactionOperationStatus {
+        operation_id: other.clone(),
+        admission_generation: 1,
+        triggering_attempt_id: None,
+        waiting_attempt_id: None,
+        phase: CompactionOperationPhase::Generating,
+        accepted_fragments: 0,
+        diagnostic: None,
+    };
+    let (second, _) = store
+        .append_compaction_admission(
+            envelope(
+                "overlap-start-second",
+                RuntimeEvent::CompactionStarted {
+                    operation_id: other,
+                    mode: CompactionMode::Proactive,
+                },
+            ),
+            envelope(
+                "overlap-status-second",
+                RuntimeEvent::CompactionOperationUpdated { status },
+            ),
+        )
+        .unwrap();
+    store.commit_projection(input).unwrap();
+    let cut = TraceProjection::new(&store).unwrap().history_cut().unwrap();
+    let old = inspected_compaction(&store, &cut, first.sequence);
+    let new = inspected_compaction(&store, &cut, second.sequence);
+    assert_eq!(old.record.state, TraceState::Completed);
+    assert_eq!(old.record.preview.as_ref().unwrap().text, "first summary");
+    assert_eq!(new.record.state, TraceState::Incomplete);
+    assert!(new.record.preview.is_none());
 }

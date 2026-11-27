@@ -1,5 +1,5 @@
 import { isPlainMessageKind } from '../../../../protocol/app-server/message-kind';
-import type { ConversationReadCut1, PendingInboundRef, UserContentBlock, UserInputBlock } from '../../../../protocol/app-server/v80';
+import type { ConversationReadCut1, PendingInboundRef, UserContentBlock, UserInputBlock } from '../../../../protocol/app-server/v82';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/contracts';
 import type { UploadAttachmentKey, UploadedAttachmentMetadata } from '../../client/session-uploads';
