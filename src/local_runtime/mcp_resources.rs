@@ -418,21 +418,6 @@ command = "fixture-server"
                 assert_eq!(script.args, expected);
             }
         }
-        let mut node = allowed.clone();
-        node.command = Some("node".into());
-        node.cwd = None;
-        node.args = [
-            "--require",
-            "dotenv/config",
-            "/bin/server.js",
-            "--model=gpt-4.1-mini",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-        let expected = node.args.clone();
-        resolve_stdio_paths(&mut node, user, None).unwrap();
-        assert_eq!(node.args, expected);
-
         let mut escaped = allowed.clone();
         escaped.args = vec!["--config=../../outside.toml".into()];
         assert!(
@@ -451,6 +436,20 @@ command = "fixture-server"
         host_relative.command = Some(r"C:\host\server.exe".into());
         host_relative.args.clear();
         assert!(resolve_stdio_paths(&mut host_relative, user, Some(workspace)).is_err());
+    }
+
+    #[test]
+    fn user_stdio_preserves_node_specifiers_and_dotted_options_without_workspace() {
+        let mut node: McpAuthoring = toml::from_str(
+            r#"
+command = "node"
+args = ["--require", "dotenv/config", "/bin/server.js", "--model=gpt-4.1-mini"]
+"#,
+        )
+        .unwrap();
+        let expected = node.args.clone();
+        resolve_stdio_paths(&mut node, Path::new("/unrelated/user"), None).unwrap();
+        assert_eq!(node.args, expected);
     }
 
     #[test]
