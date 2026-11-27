@@ -13,6 +13,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
+fn canonical_schema_shape_fingerprint_matches_created_schema() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    create_schema(&mut connection).unwrap();
+    assert_eq!(
+        schema_shape_fingerprint(&connection).unwrap(),
+        CANONICAL_SCHEMA_SHAPE_SHA256
+    );
+}
+
+#[test]
 fn frontier_schema_rejects_fake_primary_index_and_damaged_goal_index() {
     for damage in ["partial", "descending", "missing_goal", "wrong_goal"] {
         let directory = tempfile::tempdir().unwrap();
@@ -155,9 +165,9 @@ fn new_schema_birth_rolls_back_when_shape_validation_fails() {
         .authorizer(Some(move |context: AuthContext<'_>| {
             if matches!(
                 context.action,
-                AuthAction::Pragma {
-                    pragma_name: "table_info",
-                    pragma_value: Some("inherited_turn_provenance")
+                AuthAction::Read {
+                    table_name: "sqlite_schema" | "sqlite_master",
+                    column_name: "sql"
                 }
             ) {
                 observed.store(true, Ordering::SeqCst);

@@ -1,0 +1,336 @@
+{
+  "schema": 114,
+  "base_head": "b90398338dd27b91d6e4e8c9bce1a8a7656ce432",
+  "measurement_head_recorded_by_harness": "b90398338dd27b91d6e4e8c9bce1a8a7656ce432",
+  "binary_sha256": "93c7f531e4983b716e44443e2ab9e865bd1c6b0c6ece9fb1648be5d9a656926d",
+  "input_fixture_aggregate_sha256": "2470a78f4c24da3bb6c8a66eb485c75412c0b58aba07e500da5e58a9eef53732",
+  "input_files": {
+    "benchmarks/runtime/turn-growth.py": "b947483f4811234350211160455c2fef05fcffa387381cb2cbd83ed96e6a1cf6",
+    "benchmarks/runtime/app-server-capacity.py": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+    "Cargo.lock": "ed356c5c9b6250db39f481748b811d3ed673837f264e55b52b204d9c48d7f744",
+    "benchmarks/runtime/turn_growth_oracle.py": "1f68e487b6bbe7d54a235b2e66059d457287c321ee5ba762a44ac121990b1701",
+    "test-support/fake-provider/src/fake_provider/__init__.py": "617f9421bb7284c7bdd76ebd3ea2524560c1d31bd9fbd543e2f81c327a626491",
+    "test-support/fake-provider/src/fake_provider/__main__.py": "87f778f661598b62a8657162109317b68681a524d866166792002dc766246fd2",
+    "test-support/fake-provider/src/fake_provider/control.py": "9158550c555691bba1cce580ad793da12120ff2b4707644aa92cd8008d9ac978",
+    "test-support/fake-provider/src/fake_provider/measurement.py": "c91c8f0935e6c549b5a17e417e2234ef2873b30913a7d7f013223707f5d65807",
+    "test-support/fake-provider/src/fake_provider/protocols/__init__.py": "d720f8e42755b568c559304da1513a4b6a4646a536a3711fbd8c38ee70c4707a",
+    "test-support/fake-provider/src/fake_provider/protocols/anthropic_messages.py": "848a6dfd8fc89d70792486a62c88b05c93e5ae3bbd1a870f12ea75d1b2a9a080",
+    "test-support/fake-provider/src/fake_provider/protocols/base.py": "4c31d72916a399989746faed8f714461541aaacd1938568f37b136210097b693",
+    "test-support/fake-provider/src/fake_provider/protocols/openai_chat.py": "fe02dcaaf99c0b22969107c5f7682fdf6ea7961d31e3be1cce5f9895e4f93938",
+    "test-support/fake-provider/src/fake_provider/protocols/openai_responses.py": "a525ed78970b68b5efd6a66b0ccf9a736166f979bdd65a61aa151b1cf2ccdcaa",
+    "test-support/fake-provider/src/fake_provider/scenario.py": "b206d13bf33e050efaa3f47c9f0347330d53e7225bf20612c91ab4e998ac7ad9",
+    "test-support/fake-provider/src/fake_provider/scenarios/__init__.py": "e47fc5a3fd6f0baa39488a01160b7bc82fe3e41969d205eb1cb502323eb64bf4",
+    "test-support/fake-provider/src/fake_provider/scenarios/app_server.py": "1b4bbaf3fa18d4c41ee4868fa1273271b6c048f5e8c8447426ecd6fad558bdc1",
+    "test-support/fake-provider/src/fake_provider/scenarios/conformance.py": "d6aff1e20fdcdd16f5e49542b20dc746dc0f34ecdbf01e0ab042b14c9807c681",
+    "test-support/fake-provider/src/fake_provider/scenarios/observation.py": "21552ec3413629b9b56e7259af5d0cd25bd7fe7bc3fad0dd4ad1eff1775f476e",
+    "test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c2f61ade0eaf4411de2c183fb6ec63c96ceec9e64483332ea109e6929e6ecfaf",
+    "test-support/fake-provider/src/fake_provider/scenarios/tui.py": "504067979732fc96cc5bc7d1745131f24834f339aed8415a751606f08351f6dc",
+    "test-support/fake-provider/src/fake_provider/scenarios/web_console.py": "b08127a107aa95395532c19501f03dcb0d670d0be78a463f69ad87d112b24853",
+    "test-support/fake-provider/src/fake_provider/server.py": "2e56301a65a929b68a1cd0f7a6158091503d436b055142e1e4746ed5cae56281"
+  },
+  "protocol_version": 80,
+  "python": "3.13.18 (main, Nov 24 2026, 16:58:49) [Clang 23.1.3 ]",
+  "websockets": "17.4",
+  "runner": {
+    "logical_cpus": 8,
+    "affinity": [
+      2,
+      3
+    ],
+    "tokio_worker_threads": 4,
+    "kernel": "6.8.0-1060-aws"
+  },
+  "scope": "Server PID utime+stime and reaped-child cutime+cstime (reported separately), /proc/io, RSS/PSS. Fake provider and driver are siblings. Settled/idle latency excludes between-window settle. CPU/I/O includes settle and retirement reads. Reopen uses consistent backup copies in a separate fresh server process; the hot PID stays resident. OS file cache remains warm; this is not a dropped-cache storage test. Per-turn resource slopes use window midpoint; residency slopes use the same midpoint convention.",
+  "method": "128 sequential turns per scenario; 32-turn windows; reopen copies at 32 and 128; fake provider and driver are sibling processes; no compile/test ran concurrently",
+  "scenarios": {
+    "text": {
+      "samples": 128,
+      "settled_ms_median": 18.9961105,
+      "settled_ms_worst": {
+        "turn": 1,
+        "settled_ms": 85.058884,
+        "idle_ms": 85.681188,
+        "retirement_checks": 1,
+        "turn_id": "conv_01a2187a-951c-7c31-846b-fda019132d07-attempt-0"
+      },
+      "settled_ms_worst_after_first_turn": {
+        "turn": 52,
+        "settled_ms": 40.264344,
+        "idle_ms": 41.891857,
+        "retirement_checks": 1,
+        "turn_id": "conv_01a2187a-951c-7c31-846b-fda019132d07-attempt-51"
+      },
+      "idle_ms_median": 20.619775500000003,
+      "windows": [
+        {
+          "turn_start": 1,
+          "turn_end": 32,
+          "cpu_ms_per_turn": 46.875,
+          "wall_ms_per_turn": 20.28186575,
+          "idle_ms_per_turn": 21.74858059375,
+          "wall_p95_ms": 32.276003,
+          "wchar_per_turn": 220693.09375,
+          "write_bytes_per_turn": 209920.0,
+          "rss_bytes": 93487104,
+          "pss_bytes": 91070464,
+          "sqlite_main_bytes": 1486336,
+          "sqlite_wal_bytes": 4219424
+        },
+        {
+          "turn_start": 33,
+          "turn_end": 64,
+          "cpu_ms_per_turn": 44.375,
+          "wall_ms_per_turn": 19.45834396875,
+          "idle_ms_per_turn": 20.6077794375,
+          "wall_p95_ms": 25.462199,
+          "wchar_per_turn": 230108.25,
+          "write_bytes_per_turn": 226944.0,
+          "rss_bytes": 95031296,
+          "pss_bytes": 92614656,
+          "sqlite_main_bytes": 2564096,
+          "sqlite_wal_bytes": 4219424
+        },
+        {
+          "turn_start": 65,
+          "turn_end": 96,
+          "cpu_ms_per_turn": 46.875,
+          "wall_ms_per_turn": 20.47422834375,
+          "idle_ms_per_turn": 22.0517333125,
+          "wall_p95_ms": 27.080814,
+          "wchar_per_turn": 237577.53125,
+          "write_bytes_per_turn": 236416.0,
+          "rss_bytes": 95735808,
+          "pss_bytes": 93302784,
+          "sqlite_main_bytes": 3639296,
+          "sqlite_wal_bytes": 4219424
+        },
+        {
+          "turn_start": 97,
+          "turn_end": 128,
+          "cpu_ms_per_turn": 45.3125,
+          "wall_ms_per_turn": 19.9045383125,
+          "idle_ms_per_turn": 21.08001446875,
+          "wall_p95_ms": 28.934003,
+          "wchar_per_turn": 288561.0,
+          "write_bytes_per_turn": 311296.0,
+          "rss_bytes": 96059392,
+          "pss_bytes": 93626368,
+          "sqlite_main_bytes": 5710336,
+          "sqlite_wal_bytes": 4219424
+        }
+      ],
+      "slopes": {
+        "cpu_ms_per_turn": {
+          "slope_per_history_turn": -0.0068359375,
+          "intercept": 46.30029296875,
+          "r_squared": 0.05240641711229943
+        },
+        "wall_ms_per_turn": {
+          "slope_per_history_turn": -0.00036280605468750335,
+          "intercept": 20.053145084277343,
+          "r_squared": 0.0011170722092935792
+        },
+        "idle_ms_per_turn": {
+          "slope_per_history_turn": -0.0017554515624999766,
+          "intercept": 21.48525357890625,
+          "r_squared": 0.012392869093190262
+        },
+        "wchar_per_turn": {
+          "slope_per_history_turn": 659.603125,
+          "intercept": 201690.5671875,
+          "r_squared": 0.8062501303105356
+        },
+        "write_bytes_per_turn": {
+          "slope_per_history_turn": 980.0,
+          "intercept": 182934.0,
+          "r_squared": 0.816786684301911
+        },
+        "rss_bytes": {
+          "slope_per_history_turn": 26316.8,
+          "intercept": 93380966.4,
+          "r_squared": 0.9025206567457356
+        },
+        "pss_bytes": {
+          "slope_per_history_turn": 26112.0,
+          "intercept": 90969344.0,
+          "r_squared": 0.9007753213189553
+        },
+        "sqlite_main_bytes": {
+          "slope_per_history_turn": 42960.0,
+          "intercept": 579096.0,
+          "r_squared": 0.9695774151595805
+        },
+        "sqlite_wal_bytes": {
+          "slope_per_history_turn": 0.0,
+          "intercept": 4219424.0,
+          "r_squared": null
+        }
+      },
+      "reopen": [
+        {
+          "history_turns": 32,
+          "attach_wall_ms": 78.518653,
+          "subscribe_wall_ms": 13.686304,
+          "rss_growth_bytes": 29716480,
+          "pss_growth_bytes": 18757632
+        },
+        {
+          "history_turns": 128,
+          "attach_wall_ms": 135.378945,
+          "subscribe_wall_ms": 9.787068,
+          "rss_growth_bytes": 28672000,
+          "pss_growth_bytes": 18024448
+        }
+      ],
+      "message_counts": {
+        "user": 129,
+        "assistant": 128
+      }
+    },
+    "tool": {
+      "samples": 128,
+      "settled_ms_median": 50.967466,
+      "settled_ms_worst": {
+        "turn": 1,
+        "settled_ms": 140.666327,
+        "idle_ms": 141.684695,
+        "retirement_checks": 1,
+        "turn_id": "conv_01a2187a-abb1-7a82-9097-e45c2265d9d9-attempt-0"
+      },
+      "settled_ms_worst_after_first_turn": {
+        "turn": 128,
+        "settled_ms": 99.93692,
+        "idle_ms": 100.393679,
+        "retirement_checks": 1,
+        "turn_id": "conv_01a2187a-abb1-7a82-9097-e45c2265d9d9-attempt-127"
+      },
+      "idle_ms_median": 53.200275500000004,
+      "windows": [
+        {
+          "turn_start": 1,
+          "turn_end": 32,
+          "cpu_ms_per_turn": 103.75,
+          "wall_ms_per_turn": 55.05446146875,
+          "idle_ms_per_turn": 56.8555219375,
+          "wall_p95_ms": 90.544809,
+          "wchar_per_turn": 495475.59375,
+          "write_bytes_per_turn": 475520.0,
+          "rss_bytes": 101711872,
+          "pss_bytes": 99238912,
+          "sqlite_main_bytes": 2551808,
+          "sqlite_wal_bytes": 4211384
+        },
+        {
+          "turn_start": 33,
+          "turn_end": 64,
+          "cpu_ms_per_turn": 94.6875,
+          "wall_ms_per_turn": 51.591075125,
+          "idle_ms_per_turn": 53.014535,
+          "wall_p95_ms": 68.373107,
+          "wchar_per_turn": 579856.0,
+          "write_bytes_per_turn": 595584.0,
+          "rss_bytes": 102723584,
+          "pss_bytes": 100267008,
+          "sqlite_main_bytes": 5635584,
+          "sqlite_wal_bytes": 4230144
+        },
+        {
+          "turn_start": 65,
+          "turn_end": 96,
+          "cpu_ms_per_turn": 95.625,
+          "wall_ms_per_turn": 52.539595125,
+          "idle_ms_per_turn": 53.97107478125,
+          "wall_p95_ms": 69.072132,
+          "wchar_per_turn": 606283.03125,
+          "write_bytes_per_turn": 619008.0,
+          "rss_bytes": 103157760,
+          "pss_bytes": 100668416,
+          "sqlite_main_bytes": 8679424,
+          "sqlite_wal_bytes": 4230144
+        },
+        {
+          "turn_start": 97,
+          "turn_end": 128,
+          "cpu_ms_per_turn": 103.125,
+          "wall_ms_per_turn": 58.32926490625,
+          "idle_ms_per_turn": 60.11590725,
+          "wall_p95_ms": 86.750636,
+          "wchar_per_turn": 687735.25,
+          "write_bytes_per_turn": 738688.0,
+          "rss_bytes": 103292928,
+          "pss_bytes": 100803584,
+          "sqlite_main_bytes": 12670464,
+          "sqlite_wal_bytes": 4245152
+        }
+      ],
+      "slopes": {
+        "cpu_ms_per_turn": {
+          "slope_per_history_turn": -0.0029296875,
+          "intercept": 99.48583984375,
+          "r_squared": 0.0006349206349206549
+        },
+        "wall_ms_per_turn": {
+          "slope_per_history_turn": 0.03366540722656253,
+          "intercept": 52.20718039013672,
+          "r_squared": 0.2132067891379441
+        },
+        "idle_ms_per_turn": {
+          "slope_per_history_turn": 0.03355529912109374,
+          "intercept": 53.82494294887695,
+          "r_squared": 0.18777161466840953
+        },
+        "wchar_per_turn": {
+          "slope_per_history_turn": 1885.01875,
+          "intercept": 470753.759375,
+          "r_squared": 0.9659988482851696
+        },
+        "write_bytes_per_turn": {
+          "slope_per_history_turn": 2540.4,
+          "intercept": 443344.19999999995,
+          "r_squared": 0.9466958110298019
+        },
+        "rss_bytes": {
+          "slope_per_history_turn": 16179.2,
+          "intercept": 101677977.6,
+          "r_squared": 0.8724381586850866
+        },
+        "pss_bytes": {
+          "slope_per_history_turn": 15923.2,
+          "intercept": 99217433.6,
+          "r_squared": 0.8631468570472411
+        },
+        "sqlite_main_bytes": {
+          "slope_per_history_turn": 104374.4,
+          "intercept": 652171.2000000002,
+          "r_squared": 0.9954578724711881
+        },
+        "sqlite_wal_bytes": {
+          "slope_per_history_turn": 316.575,
+          "intercept": 4208786.9125,
+          "r_squared": 0.894478527607351
+        }
+      },
+      "reopen": [
+        {
+          "history_turns": 32,
+          "attach_wall_ms": 148.61848,
+          "subscribe_wall_ms": 19.22154,
+          "rss_growth_bytes": 31256576,
+          "pss_growth_bytes": 19290112
+        },
+        {
+          "history_turns": 128,
+          "attach_wall_ms": 174.133632,
+          "subscribe_wall_ms": 29.016148,
+          "rss_growth_bytes": 30420992,
+          "pss_growth_bytes": 18350080
+        }
+      ],
+      "message_counts": {
+        "user": 129,
+        "assistant": 256,
+        "tool": 128
+      }
+    }
+  }
+}
