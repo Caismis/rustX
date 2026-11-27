@@ -27,7 +27,7 @@ export const Input = forwardRef<HTMLInputElement, {
   unstyled?: boolean
 } & InputHTMLAttributes<HTMLInputElement>>(function Input({ icon, className, unstyled, ...rest }, ref) {
   if (icon == null) {
-    return <CossInput ref={ref} data-primitive-input="" className={clsx('h-8! text-[14px]! leading-[22px]! sm:h-8! sm:leading-[22px]!', className)} unstyled={unstyled} {...rest} />
+    return <CossInput ref={ref} data-primitive-input="" className={clsx('text-[14px] leading-[22px] [color:var(--dsw-alias-label-primary)] placeholder:[color:var(--dsw-alias-label-dimmed)]', className)} unstyled={unstyled} {...rest} />
   }
   return (
     <InputGroup className={clsx(GROUP_DESIGN, className)}>
