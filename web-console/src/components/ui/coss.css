@@ -323,6 +323,12 @@ body[data-ds-dark-theme] {
   textarea {
     font: inherit;
   }
+  /* Without preflight the UA `[hidden] { display: none }` loses to display
+     utilities (flex/grid/block) on the same element; the HTML semantics must
+     win or `hidden` buttons and rows keep rendering. */
+  [hidden]:not([hidden="until-found"]) {
+    display: none !important;
+  }
 }
 
 @utility session-line-areas-narrow {
