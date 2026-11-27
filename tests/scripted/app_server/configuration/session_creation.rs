@@ -1196,15 +1196,16 @@ async fn stdio_preserves_node_specifiers_and_validates_the_client_script_path() 
 [mcp_servers.inspect]
 command = "../node"
 cwd = ".."
-args = ["--require", "dotenv/config", "../client-input.txt", "--model=gpt-4.1-mini"]
+args = ["--require", "dotenv/config", "--require", "./preload", "../client-input.txt", "--model=gpt-4.1-mini"]
 "#;
         std::fs::write(agents.join("mcp.toml"), document).unwrap();
+        std::fs::write(agents.join("preload.js"), "'use strict';\n").unwrap();
         let input = directory.join("client-input.txt");
         std::fs::write(&input, "Client file contents\n").unwrap();
         let peer = directory.join("fixture-peer");
         std::fs::write(
             &peer,
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > observed-argv\n/bin/cat \"$3\" >> observed-argv\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > observed-argv\n/bin/cat \"$5\" >> observed-argv\n",
         )
         .unwrap();
         std::fs::set_permissions(&peer, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1229,7 +1230,8 @@ args = ["--require", "dotenv/config", "../client-input.txt", "--model=gpt-4.1-mi
         assert_eq!(
             std::fs::read_to_string(&observed).unwrap(),
             format!(
-                "--require\ndotenv/config\n{}\n--model=gpt-4.1-mini\nClient file contents\n",
+                "--require\ndotenv/config\n--require\n{}\n{}\n--model=gpt-4.1-mini\nClient file contents\n",
+                agents.join("preload").display(),
                 input.display()
             )
         );

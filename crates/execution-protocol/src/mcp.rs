@@ -24,19 +24,34 @@ pub fn foreign_stdio_path(value: &str) -> bool {
 pub struct StdioArgumentPath<'a> {
     /// Index of the complete argument in argv.
     pub index: usize,
-    /// Option name when the file was written as `--option=PATH`.
-    pub option: Option<&'a str>,
+    /// Text before the path, including any option separator.
+    pub prefix: &'a str,
     /// Path spelling supplied by the caller.
     pub value: &'a str,
-    /// Whether the operand must already exist before launch.
-    pub required: bool,
+    /// How the Client checks the resolved path.
+    pub kind: StdioPathKind,
+}
+
+/// Physical meaning of a stdio path on the Execution Client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioPathKind {
+    /// A file or directory that must already exist.
+    Input,
+    /// An existing directory, as required by `env --chdir`.
+    Directory,
+    /// A path-qualified Node preload that may use CommonJS extension lookup.
+    CommonJs,
+    /// An explicit path that may name a new leaf in a writable directory.
+    WritableLeaf,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Operand {
     Value,
     Input,
+    Directory,
     Loader,
+    CommonJs,
     Opaque,
     Inline,
 }
@@ -56,15 +71,12 @@ fn interpreter_operand(name: &str, option: &str) -> Option<Operand> {
         || (name.starts_with("python") && matches!(option, "-W" | "-X"))
     {
         Some(Operand::Opaque)
-    } else if matches!(name, "node" | "nodejs")
-        && matches!(
-            option,
-            "-r" | "--require" | "--import" | "--loader" | "--experimental-loader"
-        )
-    {
-        // Only path-qualified loader operands are files. Bare specifiers
-        // such as dotenv/config must reach Node's own module resolver.
-        Some(Operand::Loader)
+    } else if matches!(name, "node" | "nodejs") {
+        match option {
+            "-r" | "--require" => Some(Operand::CommonJs),
+            "--import" | "--loader" | "--experimental-loader" => Some(Operand::Loader),
+            _ => None,
+        }
     } else {
         None
     }
@@ -91,22 +103,113 @@ fn explicit_stdio_path(value: &str) -> bool {
         || foreign_stdio_path(value)
 }
 
-/// Walk argv once using the same path roles before and after Host resolution.
-/// A script or path option gives a bare relative value a file meaning. An
-/// otherwise ambiguous argument needs an explicit absolute or dot-relative path.
+fn argument_path<'a>(
+    index: usize,
+    prefix: &'a str,
+    value: &'a str,
+    role: Operand,
+) -> Option<StdioArgumentPath<'a>> {
+    if value.is_empty() || value == "-" || value.contains("://") {
+        return None;
+    }
+    let kind = match role {
+        Operand::Input => StdioPathKind::Input,
+        Operand::Directory => StdioPathKind::Directory,
+        Operand::Loader if explicit_stdio_path(value) => StdioPathKind::Input,
+        Operand::CommonJs if explicit_stdio_path(value) => StdioPathKind::CommonJs,
+        Operand::Value if explicit_stdio_path(value) => StdioPathKind::WritableLeaf,
+        _ => return None,
+    };
+    Some(StdioArgumentPath {
+        index,
+        prefix,
+        value,
+        kind,
+    })
+}
+
+fn split_option(arg: &str) -> (&str, &str, Option<&str>) {
+    arg.split_once('=')
+        .map_or((arg, "", None), |(flag, value)| {
+            (flag, &arg[..flag.len() + 1], Some(value))
+        })
+}
+
+fn env_option(arg: &str) -> (&str, &str, Option<&str>) {
+    if let Some(short) = arg
+        .strip_prefix('-')
+        .filter(|flags| !flags.starts_with('-'))
+    {
+        let rest = short.trim_start_matches(['i', 'v', '0']);
+        let flag = match rest.as_bytes().first() {
+            Some(b'a') => "-a",
+            Some(b'C') => "-C",
+            Some(b'S') => "-S",
+            Some(b'u') => "-u",
+            _ => return (arg, "", None),
+        };
+        let suffix = &rest[1..];
+        return if suffix.is_empty() {
+            (flag, "", None)
+        } else {
+            (flag, &arg[..arg.len() - suffix.len()], Some(suffix))
+        };
+    }
+    split_option(arg)
+}
+
+fn env_paths(args: &[String]) -> (usize, Vec<StdioArgumentPath<'_>>) {
+    let mut args_with_index = args.iter().enumerate();
+    let mut paths = Vec::new();
+    let mut options = true;
+    while let Some((index, arg)) = args_with_index.next() {
+        if options && arg == "--" {
+            options = false;
+        } else if options && arg.starts_with('-') && arg != "-" {
+            let (flag, prefix, attached) = env_option(arg);
+            let role = match flag {
+                "-C" | "--chdir" => Operand::Directory,
+                "--env0-from" => Operand::Input,
+                "-a" | "-u" | "--argv0" | "--unset" | "--quoting-style" => Operand::Opaque,
+                // The wrapper owns the quoting and expansion in split strings.
+                "-S" | "--split-string" => break,
+                _ => continue,
+            };
+            if let Some(value) = attached {
+                paths.extend(argument_path(index, prefix, value, role));
+            } else if let Some((value_index, value)) = args_with_index.next() {
+                paths.extend(argument_path(value_index, "", value, role));
+            }
+        } else if arg.contains('=') || options && arg == "-" {
+            options = false;
+        } else {
+            let role = if arg.contains('/') {
+                Operand::Input
+            } else {
+                Operand::Value
+            };
+            paths.extend(argument_path(index, "", arg, role));
+            return (index + 1, paths);
+        }
+    }
+    (args.len(), paths)
+}
+
+/// Walk argv using the same path roles before and after Host resolution.
+/// Ambiguous arguments need an explicit absolute or dot-relative path.
 pub fn stdio_argument_paths<'a>(
     program: &'a Path,
     args: &'a [String],
 ) -> impl Iterator<Item = StdioArgumentPath<'a>> {
-    let env_program = program
-        .file_name()
-        .filter(|name| *name == "env")
-        .and_then(|_| {
-            args.iter()
-                .position(|arg| !arg.starts_with('-') && !arg.contains('='))
-        });
-    let name = env_program
-        .map_or(program, |index| Path::new(&args[index]))
+    let (start, wrapper_paths) = if program.file_name().is_some_and(|name| name == "env") {
+        env_paths(args)
+    } else {
+        (0, Vec::new())
+    };
+    let name = start
+        .checked_sub(1)
+        .and_then(|index| args.get(index))
+        .map_or(program, Path::new)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
@@ -115,85 +218,67 @@ pub fn stdio_argument_paths<'a>(
         shell || matches!(name, "node" | "nodejs") || name.starts_with("python");
     let mut options = true;
     let mut next = None;
-    args.iter().enumerate().filter_map(move |(index, arg)| {
-        let arg = arg.as_str();
-        let (option, value, role) = if env_program.is_some_and(|program| index <= program) {
-            if env_program != Some(index) {
-                return None;
-            }
-            (
-                None,
-                arg,
-                if arg.contains('/') {
-                    Operand::Input
-                } else {
-                    Operand::Value
-                },
-            )
-        } else if let Some(role) = next.take() {
-            (None, arg, role)
-        } else if options && arg == "--" {
-            options = false;
-            return None;
-        } else if options
-            && (arg.starts_with('-') || before_script && shell && arg.starts_with('+'))
-        {
-            let (flag, value) = arg
-                .split_once('=')
-                .map_or((arg, None), |(flag, value)| (flag, Some(value)));
-            let role = if before_script {
-                interpreter_operand(name, flag)
-            } else {
-                None
-            }
-            .or_else(|| stdio_input_option(flag).then_some(Operand::Input));
-            if role == Some(Operand::Inline) {
-                before_script = false;
-            }
-            if value.is_none() {
-                next = role;
-                return None;
-            }
-            (
-                Some(flag),
-                value.expect("attached option value"),
-                role.unwrap_or(Operand::Value),
-            )
-        } else {
-            let script = std::mem::take(&mut before_script);
-            (
-                None,
-                arg,
-                if script {
-                    Operand::Input
-                } else {
-                    Operand::Value
-                },
-            )
-        };
-        let required = matches!(role, Operand::Input | Operand::Loader);
-        (matches!(role, Operand::Input | Operand::Loader | Operand::Value)
-            && !value.is_empty()
-            && value != "-"
-            && !value.contains("://")
-            && (role == Operand::Input || explicit_stdio_path(value)))
-        .then_some(StdioArgumentPath {
-            index,
-            option,
-            value,
-            required,
-        })
-    })
+    wrapper_paths
+        .into_iter()
+        .chain(
+            args.iter()
+                .enumerate()
+                .skip(start)
+                .filter_map(move |(index, arg)| {
+                    if let Some(role) = next.take() {
+                        return argument_path(index, "", arg, role);
+                    }
+                    if options && arg == "--" {
+                        options = false;
+                        return None;
+                    }
+                    if options
+                        && (arg.starts_with('-') && arg != "-"
+                            || before_script && shell && arg.starts_with('+'))
+                    {
+                        let (flag, prefix, value) = split_option(arg);
+                        let role = if before_script {
+                            interpreter_operand(name, flag)
+                        } else {
+                            None
+                        }
+                        .or_else(|| stdio_input_option(flag).then_some(Operand::Input));
+                        if role == Some(Operand::Inline) {
+                            before_script = false;
+                        }
+                        if let Some(value) = value {
+                            return argument_path(
+                                index,
+                                prefix,
+                                value,
+                                role.unwrap_or(Operand::Value),
+                            );
+                        }
+                        next = role;
+                        return None;
+                    }
+                    let role = if std::mem::take(&mut before_script) {
+                        // Only the interpreter consumes its own separator. The script
+                        // receives a fresh argv and can have file options of its own.
+                        options = true;
+                        Operand::Input
+                    } else {
+                        Operand::Value
+                    };
+                    argument_path(index, "", arg, role)
+                }),
+        )
 }
 
 #[cfg(test)]
 mod stdio_path_tests {
     use super::*;
+    use StdioPathKind::{CommonJs, Directory, Input, WritableLeaf};
 
-    fn path_values(program: &str, args: &[&str]) -> Vec<(usize, bool)> {
+    fn path_values(program: &str, args: &[&str]) -> Vec<(usize, StdioPathKind)> {
         let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
         stdio_argument_paths(Path::new(program), &args)
-            .map(|arg| (arg.index, arg.required))
+            .map(|arg| (arg.index, arg.kind))
             .collect()
     }
 
@@ -206,6 +291,7 @@ mod stdio_path_tests {
                     "node",
                     "--require",
                     "dotenv/config",
+                    "--require=./preload",
                     "--import=@scope/package",
                     "--loader=./loader.mjs",
                     "server.js",
@@ -216,7 +302,48 @@ mod stdio_path_tests {
                     "--log=./mcp.log",
                 ],
             ),
-            [(4, true), (5, true), (9, true), (10, false)]
+            [
+                (3, CommonJs),
+                (5, Input),
+                (6, Input),
+                (10, Input),
+                (11, WritableLeaf)
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapper_values_and_interpreter_separators_keep_their_roles() {
+        assert_eq!(
+            path_values(
+                "env",
+                &[
+                    "--unset",
+                    "PYTHONPATH",
+                    "--chdir=runtime",
+                    "APP=foo/bar",
+                    "python3",
+                    "--",
+                    "server.py",
+                    "--config=settings.toml",
+                    "--input",
+                    "requests.json",
+                    "--",
+                    "--config=literal",
+                ],
+            ),
+            [(2, Directory), (6, Input), (7, Input), (9, Input)]
+        );
+        assert_eq!(
+            path_values(
+                "env",
+                &["-iC./runtime", "-u", "NODE_PATH", "node", "server.js"]
+            ),
+            [(0, Directory), (4, Input)]
+        );
+        assert_eq!(
+            path_values("env", &["-C", "runtime", "--", "node", "server.js"]),
+            [(1, Directory), (4, Input)]
         );
     }
 
@@ -228,16 +355,16 @@ mod stdio_path_tests {
         for flag in ["-O", "+O", "-o"] {
             assert_eq!(
                 path_values("bash", &[flag, "extglob", "./server.sh"]),
-                [(2, true)]
+                [(2, Input)]
             );
         }
         assert_eq!(
             path_values("bash", &["--rcfile", "startup", "./server.sh"]),
-            [(1, true), (2, true)]
+            [(1, Input), (2, Input)]
         );
         assert_eq!(
             path_values("python3", &["-W", "ignore", "server.py"]),
-            [(2, true)]
+            [(2, Input)]
         );
         assert!(path_values("/usr/bin/env", &["python3", "-m", "package.server"]).is_empty());
         assert!(path_values("node", &["--eval=/program/text"]).is_empty());

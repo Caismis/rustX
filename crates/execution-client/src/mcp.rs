@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     future::Future,
     io::{self, Write},
-    path::Component,
+    path::{Component, Path},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -478,37 +478,87 @@ fn client_arguments(
     program: &std::path::Path,
     args: Vec<String>,
 ) -> Option<Vec<String>> {
+    use rustx_execution_protocol::{EntryKind, mcp::StdioPathKind};
+
     for arg in rustx_execution_protocol::mcp::stdio_argument_paths(program, &args) {
-        let path = std::path::Path::new(arg.value);
-        let required = arg.required;
-        if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        let path = Path::new(arg.value);
+        let kind = existing_argument(root, workspace, path)?;
+        let admitted = match arg.kind {
+            StdioPathKind::Input => kind.is_some(),
+            StdioPathKind::Directory => kind == Some(EntryKind::Directory),
+            StdioPathKind::CommonJs => commonjs_input_exists(root, workspace, path, kind)?,
+            StdioPathKind::WritableLeaf => kind.is_some() || writable_parent(root, workspace, path),
+        };
+        if !admitted {
             return None;
-        }
-        if let Ok(relative) = path.strip_prefix(workspace) {
-            let resolution = root.resolve_resource(workspace, relative).ok()?;
-            if resolution.entry.is_none()
-                && (required
-                    || !std::fs::symlink_metadata(path)
-                        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
-                    || !writable_parent(root, workspace, path))
-            {
-                return None;
-            }
-        } else {
-            match std::fs::symlink_metadata(path) {
-                Ok(_) => {
-                    std::fs::metadata(path).ok()?;
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound && !required => {
-                    if !writable_parent(root, workspace, path) {
-                        return None;
-                    }
-                }
-                Err(_) => return None,
-            }
         }
     }
     Some(args)
+}
+
+/// Distinguish a missing operand from one that cannot be admitted.
+fn existing_argument(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &Path,
+    path: &Path,
+) -> Option<Option<rustx_execution_protocol::EntryKind>> {
+    use rustx_execution_protocol::EntryKind;
+
+    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        return None;
+    }
+    let classify = |is_file, is_directory| {
+        if is_file {
+            EntryKind::RegularFile
+        } else if is_directory {
+            EntryKind::Directory
+        } else {
+            EntryKind::Other
+        }
+    };
+    if path == workspace {
+        root.verify().ok()?;
+        return Some(Some(EntryKind::Directory));
+    }
+    if let Ok(relative) = path.strip_prefix(workspace) {
+        if let Some(entry) = root.resolve_resource(workspace, relative).ok()?.entry {
+            return Some(Some(classify(
+                entry.metadata.is_file,
+                entry.metadata.is_directory,
+            )));
+        }
+    } else if std::fs::symlink_metadata(path).is_ok() {
+        let metadata = std::fs::metadata(path).ok()?;
+        return Some(Some(classify(metadata.is_file(), metadata.is_dir())));
+    }
+    std::fs::symlink_metadata(path)
+        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        .then_some(None)
+}
+
+fn commonjs_input_exists(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &Path,
+    path: &Path,
+    exact: Option<rustx_execution_protocol::EntryKind>,
+) -> Option<bool> {
+    use rustx_execution_protocol::EntryKind;
+
+    if exact == Some(EntryKind::RegularFile) {
+        return Some(true);
+    }
+    // Match the file candidates Node tries before directory resolution. The
+    // interpreter still owns package.json, index files and module execution.
+    for extension in [".js", ".json", ".node"] {
+        let mut candidate = path.as_os_str().to_owned();
+        candidate.push(extension);
+        if existing_argument(root, workspace, Path::new(&candidate))?
+            == Some(EntryKind::RegularFile)
+        {
+            return Some(true);
+        }
+    }
+    Some(exact == Some(EntryKind::Directory))
 }
 
 fn writable_parent(

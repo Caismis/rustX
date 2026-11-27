@@ -1174,6 +1174,8 @@ generic file arguments, including values written as `--option=PATH`.
 Interpreter scripts and options that identify input files also accept bare
 relative paths, and their files must exist. Bare Node loader specifiers, URLs,
 literal option values and inline interpreter programs are passed unchanged.
+Path-qualified Node preloads also allow CommonJS file extension lookup. The
+Client checks the directory passed to `env --chdir` before launch.
 A generic output operand may name a new leaf under an existing writable
 Client directory. A relative Host configuration path without a Client
 Workspace base fails admission.

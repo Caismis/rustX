@@ -136,9 +136,10 @@ fn resolve_stdio_paths(
                     .into_os_string()
                     .into_string()
                     .map_err(|_| "stdio argument requires a UTF-8 Client path")?;
-                let value = match arg.option {
-                    Some(name) => format!("{name}={resolved}"),
-                    None => resolved,
+                let value = if arg.prefix.is_empty() {
+                    resolved
+                } else {
+                    format!("{}{resolved}", arg.prefix)
                 };
                 Ok((arg.index, value))
             })
