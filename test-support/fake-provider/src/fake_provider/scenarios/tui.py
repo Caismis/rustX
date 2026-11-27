@@ -22,7 +22,7 @@ from fake_provider.scenario import (
     Text,
     Usage,
 )
-from fake_provider.scenarios.conformance import SUMMARY_INSTRUCTION
+from fake_provider.scenarios.conformance import SUMMARY_INSTRUCTION, summary_json
 
 INTEGRATION_MODEL = "integration-model"
 PROMPT = "hello from the tui"
@@ -40,17 +40,9 @@ SUMMARY_TWO_TEXT = "tui summary two: the assistant produced filler report two."
 
 
 def _filler(marker: str) -> str:
-    """~200 KB of deterministic filler, worth roughly 51k estimated tokens.
-
-    The compaction describe block publishes a 56k-token window with a 1.5k
-    reserve and a 1k output budget. Both the soft input limit and the summary
-    input limit carry the reserve, so both are 53.4k: above this span's
-    estimate and below the whole next-turn request estimate. The block text is
-    byte-identical to the Rust conformance scenarios' so the same proven
-    margins hold.
-    """
+    """Match the conformance fixture's 49.6k-token automatic-policy range."""
     return (marker + " ") + " ".join(
-        f"compaction filler block {index:05d}." for index in range(6800)
+        f"compaction filler block {index:05d}." for index in range(6400)
     )
 
 
@@ -213,7 +205,7 @@ def tui_compaction() -> Scenario:
                 body_contains=(SUMMARY_INSTRUCTION, FILLER_ONE_MARKER),
                 body_excludes=(FILLER_TWO_MARKER,),
             ),
-            Stream(Text(SUMMARY_ONE_TEXT), Finish("stop")),
+            Stream(Text(summary_json(SUMMARY_ONE_TEXT)), Finish("stop")),
         ),
         Step(
             Expect(
@@ -232,7 +224,7 @@ def tui_compaction() -> Scenario:
                 body_contains=(SUMMARY_INSTRUCTION, SUMMARY_ONE_TEXT, FILLER_TWO_MARKER),
                 body_excludes=(FILLER_ONE_MARKER,),
             ),
-            Stream(Text(SUMMARY_TWO_TEXT), Finish("stop")),
+            Stream(Text(summary_json(SUMMARY_TWO_TEXT)), Finish("stop")),
         ),
         Step(
             Expect(

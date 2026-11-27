@@ -178,9 +178,9 @@ export interface PresentationState {
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
   pendingInteractions: DisplayInteraction[];
-  publicationSettlements: import("../../../protocol/app-server/v80.ts").RuntimeClientPublicationSettlementRecord[];
-  deferredTranscriptEntries: import("../../../protocol/app-server/v80.ts").CheckpointPageItem[];
-  messageDescriptors: import("../../../protocol/app-server/v80.ts").RuntimeClientMessageDescriptor[];
+  publicationSettlements: import("../../../protocol/app-server/v82.ts").RuntimeClientPublicationSettlementRecord[];
+  deferredTranscriptEntries: import("../../../protocol/app-server/v82.ts").CheckpointPageItem[];
+  messageDescriptors: import("../../../protocol/app-server/v82.ts").RuntimeClientMessageDescriptor[];
   jobs: RuntimeClientJob[];
   agents: RuntimeClientAgent[];
   /**
@@ -196,13 +196,15 @@ export interface PresentationState {
    */
   statuses: AgentStatusView[];
   context: RuntimeClientContextView;
+  /** Terminal Summary notices already superseded by a locally observed checkpoint. */
+  dismissedCompactionNotices?: readonly string[];
   capabilities: CapabilityView;
   /** The active runtime resource generation: context files, agent profile. */
   resources: RuntimeClientResourcesView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
   /** Availability and deferral published by the native Session model owner. */
-  modelStatus: import("../../../protocol/app-server/v80.ts").RuntimeClientModelStatus | null;
+  modelStatus: import("../../../protocol/app-server/v82.ts").RuntimeClientModelStatus | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *

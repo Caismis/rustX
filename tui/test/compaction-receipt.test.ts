@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v80.ts';
+import type { RuntimeClientCompactionView } from '../../protocol/app-server/v82.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
+import { paramsOf } from './support/app-server-peer.ts';
 import { snapshot } from './support/fixtures.ts';
 
 const receipt = (generation: string): RuntimeClientCompactionView => ({
+  operation_id: `compaction-operation-${generation}`,
   generation, checkpoint_id: `conv_8498648a-66ba-716f-8243-8cf147533e5${generation}`, activation_id: generation,
   tokens_before: {input_tokens:'8400',source:'estimated'}, estimated_tokens_after:'1900',
 });
@@ -54,5 +56,20 @@ it('a native compaction error is returned without observation repair or operatio
     await failure;
     assert.equal(h.transport.log.count('context/compact'), 1);
     assert.equal(h.transport.log.count('session/checkpoint'), 1);
+  } finally { h.client.close(); }
+});
+
+it('a native skip resolves without a fabricated receipt or operation replay', async () => {
+  const h = await harness();
+  try {
+    const before = h.session.state;
+    const compacting = h.session.compactContext('Keep the retry decisions');
+    const request = await nextRequest(h, 'context/compact');
+    assert.equal(paramsOf(request, 'context/compact').instructions, 'Keep the retry decisions');
+    h.transport.respond(request.id, {type:'context_compaction_skipped'});
+    assert.equal(await compacting, undefined);
+    assert.equal(h.session.state, before);
+    assert.equal(h.transport.log.count('context/compact'), 1);
+    assert.equal(h.transport.log.count('conversation/checkpointPage'), 0);
   } finally { h.client.close(); }
 });

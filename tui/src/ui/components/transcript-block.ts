@@ -1,6 +1,7 @@
 import { Container, Box, Text, Markdown } from "@earendil-works/pi-tui";
 import type { TranscriptBlock } from "./transcript.ts";
 import { background, markdownTheme } from "../theme.ts";
+import { CompactionSummary } from './compaction-summary.ts';
 
 /**
  * Lays one transcript block out, on its background band when it has one.
@@ -16,6 +17,7 @@ import { background, markdownTheme } from "../theme.ts";
  */
 
 export function banded(block: TranscriptBlock): Container | Box | Text | Markdown {
+  if (block.kind === 'compaction') return new CompactionSummary(block.head, block.expanded, block.receipt ?? undefined);
   const pad = block.background === undefined ? 1 : 0;
   const content =
     block.kind === "markdown"

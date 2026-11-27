@@ -780,6 +780,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         let request_started = store
             .commit_auxiliary_request_start(
                 &AuxiliaryRequestStart {
+                    invocation: crate::model::auxiliary::fixture_invocation_identity(),
                     call_id: call_id.clone(),
                     ordinal: 0,
                     request_id: auxiliary_request_id.clone(),
@@ -925,7 +926,7 @@ fn post_tool_batch_status(
         turn,
         ContributionOpportunities {
             fresh_inbound: None,
-            post_tool_batch: Some(PostToolBatchOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
         },
         Some(crate::durable::TranscriptCursor::new(batch_cursor)),
     )
@@ -1802,7 +1803,7 @@ fn agent_status_opportunity_view_publishes_one_combined_observation() {
             fresh_inbound: Some(FreshInboundOpportunity {
                 target_message_id: MessageId::new("fresh-inbound"),
             }),
-            post_tool_batch: Some(PostToolBatchOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
         },
         post_tool_batch_anchor: Some(crate::durable::TranscriptCursor::new(6)),
         status: AgentStatus {
@@ -3143,6 +3144,7 @@ fn request_payloads_stay_internal_and_trace_is_owned_by_journal_batch() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
         RuntimeEvent::CompactionCompleted {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
@@ -3192,6 +3194,139 @@ fn request_payloads_stay_internal_and_trace_is_owned_by_journal_batch() {
 }
 
 #[test]
+fn accepted_compaction_fragments_advance_only_matching_live_progress() {
+    use crate::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
+    use crate::runtime::identity::CompactionOperationId;
+    let mut projection = projection();
+    let operation = CompactionOperationId::new("progress");
+    let range = AuxiliarySourceRange {
+        projection_index: 0,
+        role: AuxiliarySourceRole::User,
+        byte_start: 0,
+        byte_end: 5,
+    };
+    let chunk = |operation_id, accepted_fragments| RuntimeEvent::CompactionChunkAccepted {
+        operation_id,
+        accepted_fragments,
+        source_ranges: vec![range.clone()],
+        generation: None,
+    };
+    apply_event(
+        &mut projection,
+        RuntimeEvent::CompactionStarted {
+            operation_id: operation.clone(),
+            mode: crate::context::operation::CompactionMode::Blocking,
+        },
+    );
+    apply_event(
+        &mut projection,
+        chunk(CompactionOperationId::new("other"), 1),
+    );
+    apply_event(&mut projection, chunk(operation.clone(), 2));
+    assert_eq!(
+        projection
+            .snapshot()
+            .unwrap()
+            .0
+            .context
+            .compaction_progress
+            .unwrap()
+            .accepted_fragments,
+        0
+    );
+    apply_event(&mut projection, chunk(operation.clone(), 1));
+    apply_event(
+        &mut projection,
+        RuntimeEvent::CompactionFailed {
+            operation_id: CompactionOperationId::new("other"),
+            error: "stale".into(),
+        },
+    );
+    apply_event(&mut projection, chunk(operation.clone(), 1));
+    apply_event(
+        &mut projection,
+        RuntimeEvent::CompactionStarted {
+            operation_id: operation.clone(),
+            mode: crate::context::operation::CompactionMode::Blocking,
+        },
+    );
+    let (snapshot, _) = projection.snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .context
+            .compaction_progress
+            .unwrap()
+            .accepted_fragments,
+        1
+    );
+    assert_eq!(snapshot.context.compaction_count, 0);
+    assert!(snapshot.context.occupancy.is_none());
+    let events = collect(&mut projection, RuntimeClientCursor::new(0));
+    assert_eq!(
+        events
+            .iter()
+            .flat_map(|event| event.event.facts())
+            .filter(|fact| matches!(fact, RuntimeClientEvent::ContextCompactionProgressed { .. }))
+            .count(),
+        1
+    );
+    apply_event(
+        &mut projection,
+        RuntimeEvent::CompactionSkipped {
+            operation_id: operation,
+        },
+    );
+    let context = projection.snapshot().unwrap().0.context;
+    assert!(!context.compaction_in_progress);
+    assert!(context.compaction_progress.is_none());
+    assert_eq!(context.compaction_count, 0);
+}
+
+#[test]
+fn manual_compaction_cancellation_is_not_a_failure_or_completion() {
+    let mut projection = projection();
+    let operation_id = crate::runtime::identity::CompactionOperationId::new("cancelled-compaction");
+    for event in [
+        RuntimeEvent::CompactionStarted {
+            operation_id: operation_id.clone(),
+            mode: crate::context::operation::CompactionMode::Blocking,
+        },
+        RuntimeEvent::CompactionCancelled { operation_id },
+    ] {
+        projection.apply(ConversationObservation::ManualCompactionEvent {
+            request_id: None,
+            event,
+        });
+    }
+    let context = projection.snapshot().unwrap().0.context;
+    let manual = context.manual_compaction.unwrap();
+    assert!(manual.released && manual.cancelled);
+    assert!(!manual.skipped);
+    assert!(manual.error.is_none());
+    assert!(!context.compaction_in_progress);
+    assert!(context.compaction_progress.is_none());
+    assert!(context.compaction_error.is_none());
+    assert_eq!(context.compaction_count, 0);
+    let events = collect(&mut projection, RuntimeClientCursor::new(0));
+    assert!(
+        events
+            .iter()
+            .flat_map(|event| event.event.facts())
+            .any(|fact| matches!(fact, RuntimeClientEvent::ContextCompactionCancelled { .. }))
+    );
+    assert!(
+        !events
+            .iter()
+            .flat_map(|event| event.event.facts())
+            .any(|fact| matches!(
+                fact,
+                RuntimeClientEvent::ContextCompacted { .. }
+                    | RuntimeClientEvent::ContextCompactionFailed { .. }
+            ))
+    );
+}
+
+#[test]
 fn manual_compaction_projects_without_fabricating_an_attempt_identity() {
     let mut projection = projection();
     projection.apply(ConversationObservation::ManualCompactionEvent {
@@ -3200,6 +3335,7 @@ fn manual_compaction_projects_without_fabricating_an_attempt_identity() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
     });
     let admitted = projection
@@ -6875,6 +7011,111 @@ fn t14_t20_status_background_never_clones_or_serializes_hidden_job_body() {
         crate::tools::background::BackgroundLifecycle::PublishingTerminal
     );
     assert!(view.rendered.contains("publishing_terminal"));
+}
+
+#[test]
+fn asynchronous_status_is_bounded_and_terminal_cannot_reopen() {
+    use crate::context::operation::{CompactionOperationPhase as Phase, CompactionOperationStatus};
+    use crate::runtime::identity::CompactionOperationId;
+    let mut projection = projection();
+    let status = |id: &str, generation, phase| CompactionOperationStatus {
+        operation_id: CompactionOperationId::new(id),
+        admission_generation: generation,
+        triggering_attempt_id: None,
+        waiting_attempt_id: None,
+        phase,
+        accepted_fragments: 0,
+        diagnostic: None,
+    };
+    let publish = |projection: &mut RuntimeClientProjection, value| {
+        projection.fold_compaction_event(
+            None,
+            &RuntimeEvent::CompactionOperationUpdated { status: value },
+        );
+    };
+    publish(&mut projection, status("a", 1, Phase::Generating));
+    publish(&mut projection, status("a", 1, Phase::Ready));
+    publish(&mut projection, status("a", 1, Phase::Superseded));
+    publish(&mut projection, status("a", 1, Phase::Generating));
+    publish(&mut projection, status("b", 2, Phase::Generating));
+    assert_eq!(
+        projection.snapshot.context.compaction_operations[0]
+            .status
+            .phase,
+        Phase::Superseded
+    );
+    publish(&mut projection, status("c", 3, Phase::Generating));
+    publish(&mut projection, status("old", 1, Phase::Ready));
+    let operations = &projection.snapshot.context.compaction_operations;
+    assert_eq!(operations.len(), 2);
+    assert_eq!(operations[0].status.operation_id.as_str(), "b");
+    assert_eq!(operations[1].status.operation_id.as_str(), "c");
+    assert!(!projection.snapshot.context.compaction_in_progress);
+}
+
+#[test]
+fn background_completion_preserves_unrelated_foreground_progress() {
+    use crate::context::operation::CompactionMode;
+    use crate::runtime::identity::CompactionOperationId;
+    let mut projection = projection();
+    let foreground = CompactionOperationId::new("foreground");
+    let background = CompactionOperationId::new("background");
+    projection.fold_compaction_event(
+        None,
+        &RuntimeEvent::CompactionStarted {
+            operation_id: foreground.clone(),
+            mode: CompactionMode::Overflow,
+        },
+    );
+    projection.fold_compaction_event(
+        None,
+        &RuntimeEvent::CompactionChunkAccepted {
+            operation_id: foreground.clone(),
+            accepted_fragments: 1,
+            source_ranges: vec![crate::model::auxiliary::AuxiliarySourceRange {
+                projection_index: 0,
+                role: crate::model::auxiliary::AuxiliarySourceRole::User,
+                byte_start: 0,
+                byte_end: 1,
+            }],
+            generation: None,
+        },
+    );
+    projection.fold_compaction_event(
+        None,
+        &RuntimeEvent::CompactionCompleted {
+            operation_id: background,
+            generation: 1,
+            checkpoint_id: crate::runtime::identity::CheckpointId::new("checkpoint"),
+            activation_id: crate::context::checkpoint::ProjectionActivationId(1),
+            tokens_before: TokenMeasurement {
+                input_tokens: 1,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 1,
+            occupancy: None,
+        },
+    );
+    assert!(projection.snapshot.context.compaction_in_progress);
+    assert_eq!(
+        projection
+            .snapshot
+            .context
+            .compaction_progress
+            .as_ref()
+            .unwrap()
+            .operation_id,
+        foreground
+    );
+    let progress = projection
+        .snapshot
+        .context
+        .compaction_progress
+        .as_ref()
+        .unwrap();
+    assert_eq!(progress.mode, CompactionMode::Overflow);
+    assert_eq!(progress.accepted_fragments, 1);
+    assert_eq!(projection.snapshot.context.compaction_count, 1);
 }
 
 mod metadata_ownership_tests {

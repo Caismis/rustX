@@ -2,7 +2,7 @@ import { isPlainMessageKind } from '../../../protocol/app-server/message-kind';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { sameCanonicalLocator, statusIdentity } from '../../../protocol/app-server/projection';
 import { statusesAt, type AgentStatusPlacement } from './agent-status';
-import type { TurnProcessView, RuntimeClientTranscriptEntry, RuntimeClientMessageDescriptor } from '../../../protocol/app-server/v80';
+import type { TurnProcessView, RuntimeClientTranscriptEntry, RuntimeClientMessageDescriptor } from '../../../protocol/app-server/v82';
 /** Native completion owns finality; a canonical locator only identifies its member. */
 export function isFinalTurnMessage(entry: RuntimeClientTranscriptEntry): boolean {
   const process=entry.turn_process;

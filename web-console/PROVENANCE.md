@@ -12,7 +12,7 @@ The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
 As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
 identity and protocol do not infer a logo. The optional native `icon` slug is
 carried through source read/write, redaction and TOML serialization, and omitted
-at the inference catalog boundary. App Server v78 is the mandatory contract;
+at the inference catalog boundary. App Server v82 is the mandatory contract;
 no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
@@ -5699,3 +5699,22 @@ Current UI references are refreshed for the added primary navigation. The former
 Workflow reference is frozen byte-for-byte in the comparator fixtures so its
 historical CI observations remain independently verifiable. Existing comparison
 policies, regions and deltas are unchanged.
+
+## Compaction presentation
+
+The compaction-specific reference is Harness
+`fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`. The source inventory records the
+verified CompactionItem, command-card, stylesheet, ContextMeter, Trajectory and
+regular icon artwork references. Other inventory baselines remain unchanged.
+`CompactionIcon` adapts only three regular SVG glyphs. The marker preserves
+reference grouping, disclosure, spacing, sticky header and hover-capability
+rules while native operation, receipt, activation and read-cut facts retain
+all lifecycle and installation authority.
+
+The Inspector adds native bounded Call/physical-request metadata and its exact
+committed checkpoint header through App Server v82 / Runtime Client v89.
+No intermediate summary, trusted input or reasoning text becomes a Chat
+summary. [The reference map, hashes, visual evidence and validation](../docs/compaction-presentation/README.md)
+describe the adapters and necessary native differences, including separate
+primary occupancy and Auxiliary usage. Web notices retain the DeepSeek MIT
+notice; the terminal adaptation carries Pi's separate notice in `tui`.

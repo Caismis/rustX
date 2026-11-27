@@ -479,6 +479,8 @@ impl RequestSnapshot {
             })
             .collect::<Result<Vec<_>, RequestReconstructionError>>()?;
         let request = ModelRequest {
+            prompt_fallback_authorization:
+                rustx_types::model::types::PromptFallbackAuthorization::default(),
             response_schema: self.response_schema.clone(),
             response_byte_limit: None,
             images: self.images.clone(),

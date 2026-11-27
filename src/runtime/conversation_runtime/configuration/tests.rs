@@ -71,8 +71,9 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
     let adapter: Arc<dyn ModelAdapter> = model.clone();
     runtime_config.model = scripted_session_model(adapter);
     let config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
-        b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent]\nskills='all'\n[agent.model]\nmodel='scripted/scripted'\n",
-    ).expect("valid root configuration");
+        b"agent_id='agent-a'\n[agent]\nskills='all'\n[agent.model]\nmodel='scripted/scripted'\n",
+    )
+    .expect("valid root configuration");
     runtime_config.resources = Arc::new(runtime_config.resources.as_ref().clone().with_configuration(
         crate::runtime::resources::RuntimeConfiguration {
             config: Arc::new(config),

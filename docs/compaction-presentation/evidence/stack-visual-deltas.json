@@ -1,0 +1,139 @@
+{
+  "base": "d18cd63512ede8db9643b7e7229223ce714f4c1b",
+  "ui_source": "2e9aa65e10a8f6983f3f45b4395b3fba81aaf893",
+  "operation": "Apply the original compaction role/state pixel delta after the current layout moved its row upward 30 px; every changed pixel must match its old source before replacement.",
+  "comparison_policy": "Unchanged exact comparator and reference-local noise policies; no screenshot-update mode.",
+  "references": [
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-calls-linux.png",
+      "before_sha256": "4ed248f67f907b243361e2e3003f1a1d840ffb650db469d1ba0a94ffa56f3df4",
+      "after_sha256": "1094366a6d52320a985292799b502d0ad64289b5fd16db2314b1e659f29436ce",
+      "changed_pixels": 790,
+      "bounds": [
+        33,
+        522,
+        244,
+        537
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-inspector-1440-dark-linux.png",
+      "before_sha256": "13cf4b57481937568b9de331702f6e11f34b00bc7b72e746bc676e4b0d8ae3ac",
+      "after_sha256": "9bc94a30335d30973c4f8677974f67a3401676048714fbd9958c35047cd83ff6",
+      "changed_pixels": 799,
+      "bounds": [
+        33,
+        532,
+        244,
+        547
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-inspector-1440-light-linux.png",
+      "before_sha256": "2400629d2683f5cceee41e3fa8c965634b8acf110e261a4ccfeb8ced56ac8904",
+      "after_sha256": "913a0a95f193eefa51fbb5cf8fa12f3fc6ab39f1a351ea2a66a2d5eccd896be6",
+      "changed_pixels": 790,
+      "bounds": [
+        33,
+        532,
+        244,
+        547
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-ledger-1440-dark-linux.png",
+      "before_sha256": "36e96d75ca8c5c4d4ee5b77f800f33878a04159d9741001a21d4293e5c5f5351",
+      "after_sha256": "6bf8cae1d665c622a79e9476b3e5a6520fc2f67faf2127c6f8f7972632b8d0fd",
+      "changed_pixels": 799,
+      "bounds": [
+        33,
+        532,
+        244,
+        547
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-ledger-1440-light-linux.png",
+      "before_sha256": "b7e0b1855d0f6e1257d55323cd0de77f2f06e1860882681107f0adfc61f5df48",
+      "after_sha256": "d12f09a868458d06ed825c63c6fa859af245c76e5292798c4e1d7aad8c6a6733",
+      "changed_pixels": 790,
+      "bounds": [
+        33,
+        532,
+        244,
+        547
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-ledger-390-dark-linux.png",
+      "before_sha256": "14376e2344328d02ff9c25237e118ac8247ac882de7e690e70e7f3456edcf201",
+      "after_sha256": "21efed83afd49e2d3362cc7f34935186e8cf9642dc5679ec96d4c7ccfc747035",
+      "changed_pixels": 293,
+      "bounds": [
+        118,
+        532,
+        172,
+        541
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-ledger-390-light-linux.png",
+      "before_sha256": "cc5214837048baba0defb137ad0695127d93e7c9436c65a8c401d9b53da57698",
+      "after_sha256": "d7c9d704dd31d3685e27f142553780a46ff841debea217d8d58ad9093f081187",
+      "changed_pixels": 286,
+      "bounds": [
+        118,
+        532,
+        172,
+        541
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-resize-reset-linux.png",
+      "before_sha256": "9fb6acd0e14e6902e03ad50196ba2479a038c7f01a6c5cc4b65e68f83a011a85",
+      "after_sha256": "df8d2d2dcafc2da6538316cd97c24a4ad5f832c857d7c1be3af8297564342564",
+      "changed_pixels": 790,
+      "bounds": [
+        33,
+        532,
+        244,
+        547
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-resized-narrow-ledger-linux.png",
+      "before_sha256": "225563b95eca9a5891ed4e165854c9277456a422fe2c65e2f3363175069488d7",
+      "after_sha256": "a69a4a9a891d90adc47bf0a5940f5a4403758dfea6607b718cf1e5351f5f9fe3",
+      "changed_pixels": 286,
+      "bounds": [
+        118,
+        532,
+        172,
+        541
+      ],
+      "verified_against_actual": true
+    },
+    {
+      "path": "web-console/test/e2e/trajectory.spec.ts-snapshots/trajectory-truncated-diff-linux.png",
+      "before_sha256": "00502b4858d16eb9cc3525708aaf5a6f986fc12d3cfdacf372e5790f180dbeed",
+      "after_sha256": "95e8347326566adf50daaa8caa0564371b82af2daf57f3c5996eaeea69acdef3",
+      "changed_pixels": 790,
+      "bounds": [
+        33,
+        522,
+        244,
+        537
+      ],
+      "verified_against_actual": true
+    }
+  ],
+  "validation": "All ten merged references passed the unchanged exact comparator in the composed six-test browser rerun; all 52 static Trajectory/summary scenarios passed across the initial run and targeted rerun."
+}

@@ -901,7 +901,7 @@ fn latest_event(
     let (sql, parameters) = if let Some(attempt) = attempt {
         (
             concat!(
-                "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
+                "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
                 crate::sqlite::event_owner_key::attempt_parameter!("?1"),
                 " AND event_kind=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
             ),
@@ -915,7 +915,7 @@ fn latest_event(
     } else {
         (
             concat!(
-                "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE ",
+                "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
                 crate::sql!("event_kind"),
                 "=?1",
                 " AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
@@ -927,52 +927,35 @@ fn latest_event(
             ],
         )
     };
-    let row = connection
+    let sequence = connection
         .query_row(sql, rusqlite::params_from_iter(parameters), |row| {
-            Ok((
-                row.get::<_, u64>(0)?,
-                row.get::<_, Option<Vec<u8>>>(1)?,
-                row.get::<_, Option<Vec<u8>>>(2)?,
-            ))
+            row.get::<_, u64>(0)
         })
         .optional()
         .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
-    row.map(|(sequence, bytes, witness)| {
-        let witness = witness
-            .map(|bytes| {
-                serde_json::from_slice::<crate::observation::ObservationEventWitness>(&bytes)
-                    .map_err(|error| storage(error.to_string()))
+    sequence
+        .map(|sequence| {
+            let witness = super::observation_event::witness(connection, sequence, through)?;
+            Ok(crate::observation::ObservationEventHeader {
+                sequence,
+                event_id: witness
+                    .as_ref()
+                    .and_then(|witness| witness.event_id.clone()),
+                event_kind: kind.into(),
+                attempt_id: witness
+                    .as_ref()
+                    .and_then(|witness| witness.attempt_id.clone()),
+                turn_id: witness.as_ref().and_then(|witness| witness.turn_id.clone()),
+                owner: witness.as_ref().and_then(|witness| witness.owner),
+                auxiliary_call_id: witness
+                    .as_ref()
+                    .and_then(|witness| witness.auxiliary_call_id.clone()),
+                deferred: true,
+                witness,
+                display: None,
             })
-            .transpose()?;
-        if bytes
-            .as_ref()
-            .is_some_and(|bytes| bytes.len() > HEADER_ENCODED_MAX)
-        {
-            return Err(storage("oversized native Journal header"));
-        }
-        let display = bytes
-            .map(|bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())))
-            .transpose()?;
-        Ok(crate::observation::ObservationEventHeader {
-            sequence,
-            event_id: witness
-                .as_ref()
-                .and_then(|witness| witness.event_id.clone()),
-            event_kind: kind.into(),
-            attempt_id: witness
-                .as_ref()
-                .and_then(|witness| witness.attempt_id.clone()),
-            turn_id: witness.as_ref().and_then(|witness| witness.turn_id.clone()),
-            owner: witness.as_ref().and_then(|witness| witness.owner),
-            auxiliary_call_id: witness
-                .as_ref()
-                .and_then(|witness| witness.auxiliary_call_id.clone()),
-            deferred: display.is_none(),
-            witness,
-            display,
         })
-    })
-    .transpose()
+        .transpose()
 }
 
 pub fn tools(

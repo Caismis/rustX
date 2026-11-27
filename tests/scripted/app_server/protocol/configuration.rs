@@ -1085,7 +1085,7 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
         phases.enter("bounded projection");
         let projection = source::bounded(&native).unwrap();
         assert!(projection.inline.is_none());
-        assert_eq!(projection.fields.len(), 18);
+        assert_eq!(projection.fields.len(), 17);
         assert!(serde_json::to_vec(&projection).unwrap().len() < 786_432);
         phases.enter("field reconstruction");
         let mut reconstructed = serde_json::Map::new();

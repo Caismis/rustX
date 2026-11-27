@@ -55,6 +55,8 @@ test('native child live cuts, independent title, active and file-only resume upl
       && row.result?.observation?.type === 'checkpoint' && row.result.observation.source === 'durable_only'
       && row.result.observation.agent_id === id)?.result.observation;
     await expect.poll(() => !!retained()).toBe(true);
+    const process = child.locator('[data-turn-process][aria-expanded]').last();
+    if (await process.isVisible() && await process.getAttribute('aria-expanded') === 'false') await process.click();
     const committed = child.getByText('Live child first chunk. Second live chunk.', { exact: true });
     if (retained()!.checkpoint.snapshot.transcript.next_cursor != null) {
       const earlier = child.getByRole('button', { name: 'Load earlier', exact: true });
@@ -92,7 +94,6 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.screenshot({ path: '/tmp/rustx-native-child-sidebar-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await preview.getByRole('button', { name: /^Close preview / }).first().click();
-    const process = child.locator('[data-turn-process][aria-expanded]').last();
     if (await process.isVisible() && await process.getAttribute('aria-expanded') === 'false') await process.click();
     const tool = child.locator('[data-tool-call-id="child-image"]').last();
     const step = child.locator('[data-step-process]').filter({ has: page.locator('[data-tool-call-id="child-image"]') }).last().locator(':scope > button');

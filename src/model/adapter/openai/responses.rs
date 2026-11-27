@@ -19,7 +19,10 @@ use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
-use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
+use crate::model::adapter::openai::mapping::{
+    is_explicit_format_rejection, normalize_error, normalize_error_for_format,
+    rejects_format_field, stream_retry_disposition,
+};
 use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
 use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::adapter::{
@@ -86,7 +89,21 @@ impl ModelAdapter for OpenAiResponsesAdapter {
         if input.protocol() != self.protocol() {
             return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
         }
-        let normalizer = ResponsesNormalizer::new(tools, input.invocation.compat.responses_storage);
+        let mut normalizer =
+            ResponsesNormalizer::new(tools, input.invocation.compat.responses_storage);
+        if input
+            .response_schema
+            .as_ref()
+            .is_some_and(crate::model::structured::PreparedResponseSchema::is_native)
+        {
+            // Native format synthesis creates the parent only when the
+            // original request has no authored `text` parameters.
+            normalizer.native_format = if input.request_params().contains_key("text") {
+                ResponsesNativeFormat::Format
+            } else {
+                ResponsesNativeFormat::TextWrapper
+            };
+        }
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
                 client: self.client.clone(),
@@ -168,7 +185,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
                 }
                 Err(error) => Some((
                     ModelStreamItem::Event(ModelEvent::Failed {
-                        error: normalize_error(error),
+                        error: normalizer.normalize_error(error),
                     }),
                     ResponsesPhase::Finished,
                 )),
@@ -228,7 +245,7 @@ async fn responses_pull(
                     finish_responses(normalizer, pending);
                 } else {
                     pending.push_back(ModelStreamItem::Event(ModelEvent::Failed {
-                        error: normalize_error(error),
+                        error: normalizer.normalize_error(error),
                     }));
                 }
                 break;
@@ -336,6 +353,7 @@ struct ToolAssembly {
 #[derive(Debug)]
 struct ResponsesNormalizer {
     tools: std::sync::Arc<ValidatedTools>,
+    native_format: ResponsesNativeFormat,
     storage_mode: ResponsesStorageMode,
     blocks: BlockAllocator<ResponsesBlockKey>,
     tool_calls: BTreeMap<u32, ToolAssembly>,
@@ -353,6 +371,7 @@ impl ResponsesNormalizer {
     fn new(tools: std::sync::Arc<ValidatedTools>, storage_mode: ResponsesStorageMode) -> Self {
         Self {
             tools,
+            native_format: ResponsesNativeFormat::None,
             storage_mode,
             blocks: BlockAllocator::new(),
             tool_calls: BTreeMap::new(),
@@ -364,6 +383,14 @@ impl ResponsesNormalizer {
             terminal_emitted: false,
             response_id: None,
             pending_progress: None,
+        }
+    }
+
+    fn normalize_error(&self, error: async_openai::error::OpenAIError) -> ModelError {
+        if self.native_format == ResponsesNativeFormat::None {
+            normalize_error(error)
+        } else {
+            normalize_error_for_format(error, "text.format", self.native_format.owned_parent())
         }
     }
 
@@ -461,7 +488,7 @@ impl ResponsesNormalizer {
             event_type if unsupported_response_event(event_type) => Err(unsupported(format!(
                 "Responses stream event {event_type:?} has output semantics with no canonical representation"
             ))),
-            "response.error" | "error" => Err(responses_stream_error(event)),
+            "response.error" | "error" => Err(responses_stream_error(event, self.native_format)),
             _ => {
                 // Unknown top-level events carry no known output semantics
                 // and must not crash the parser.
@@ -1157,7 +1184,7 @@ impl ResponsesNormalizer {
     fn push_response_failed(&mut self, event: &serde_json::Value) -> Vec<ModelEvent> {
         self.terminal_emitted = true;
         vec![ModelEvent::Failed {
-            error: responses_stream_error(event),
+            error: responses_stream_error(event, self.native_format),
         }]
     }
 
@@ -2182,7 +2209,23 @@ fn provider_error(message: String) -> ModelError {
     }
 }
 
-fn responses_stream_error(event: &serde_json::Value) -> ModelError {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponsesNativeFormat {
+    None,
+    Format,
+    TextWrapper,
+}
+
+impl ResponsesNativeFormat {
+    fn owned_parent(self) -> Option<&'static str> {
+        (self == Self::TextWrapper).then_some("text")
+    }
+}
+
+fn responses_stream_error(
+    event: &serde_json::Value,
+    native_format: ResponsesNativeFormat,
+) -> ModelError {
     let response = event.get("response").unwrap_or(event);
     let error = response.get("error").unwrap_or(response);
     let message = str_field(error, "message")
@@ -2190,10 +2233,14 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
         .unwrap_or("OpenAI-compatible Responses stream error");
     let error_type = str_field(response, "error_type")
         .or_else(|| str_field(event, "error_type"))
-        .or_else(|| str_field(error, "error_type"));
+        .or_else(|| str_field(error, "error_type"))
+        .or_else(|| str_field(error, "type"));
     let code = str_field(error, "code").or_else(|| str_field(event, "code"));
+    let flat_error = event.get("response").is_none()
+        && event.get("error").is_none()
+        && str_field(event, "type") == Some("error");
     let provider_code = code.or(error_type);
-    let kind = if matches!(
+    let mut kind = if matches!(
         error_type,
         Some("authentication" | "authentication_error" | "invalid_api_key" | "401" | "403")
     ) || matches!(
@@ -2227,15 +2274,50 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
     } else {
         ModelErrorKind::ProviderError
     };
-    ModelError {
-        kind,
-        message: message.to_owned(),
-        retry_disposition: stream_retry_disposition(
+    if native_format != ResponsesNativeFormat::None
+        && ((kind == ModelErrorKind::InvalidRequest
+            && is_explicit_format_rejection(
+                str_field(error, "type"),
+                str_field(error, "code"),
+                str_field(error, "param"),
+                message,
+                "text.format",
+                native_format.owned_parent(),
+            ))
+            || (flat_error
+                && matches!(
+                    kind,
+                    ModelErrorKind::ProviderError | ModelErrorKind::InvalidRequest
+                )
+                && rejects_format_field(
+                    code,
+                    str_field(event, "param"),
+                    "text.format",
+                    native_format.owned_parent(),
+                )))
+        && event
+            .get("status")
+            .is_none_or(|value| value.as_u64() == Some(400) || value.as_str() == Some("400"))
+        && error
+            .get("status")
+            .is_none_or(|value| value.as_u64() == Some(400) || value.as_str() == Some("400"))
+    {
+        kind = ModelErrorKind::NativeFormatUnsupported;
+    }
+    let retry_disposition = if kind == ModelErrorKind::NativeFormatUnsupported {
+        crate::model::ModelRetryDisposition::Never
+    } else {
+        stream_retry_disposition(
             error_type,
             code,
             code.and_then(|value| value.parse().ok()),
             message,
-        ),
+        )
+    };
+    ModelError {
+        kind,
+        message: message.to_owned(),
+        retry_disposition,
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
@@ -2244,6 +2326,69 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
         generation: None,
     }
     .normalized()
+}
+
+#[cfg(test)]
+mod native_format_rejection_tests {
+    use super::{ResponsesNativeFormat, responses_stream_error};
+    use crate::model::{ModelErrorKind, ModelRetryDisposition};
+    use serde_json::json;
+
+    #[test]
+    fn type_message_only_stream_rejection_is_request_and_protocol_scoped() {
+        let detail = json!({
+            "type": "invalid_request_error",
+            "message": "'text.format.type' : value is not one of the allowed values ['text','json_object']"
+        });
+        let event = json!({"error": detail});
+        assert_eq!(
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        assert_eq!(
+            responses_stream_error(&event, ResponsesNativeFormat::None).kind,
+            ModelErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn stream_rejection_requires_native_request_and_exact_structured_fields() {
+        let mut event = json!({"error": {
+            "type": "invalid_request_error",
+            "code": "unsupported_parameter",
+            "param": "text.format",
+            "message": "feature unavailable"
+        }});
+        let typed = responses_stream_error(&event, ResponsesNativeFormat::Format);
+        assert_eq!(typed.kind, ModelErrorKind::NativeFormatUnsupported);
+        assert_eq!(typed.retry_disposition, ModelRetryDisposition::Never);
+        assert_eq!(
+            responses_stream_error(&event, ResponsesNativeFormat::None).kind,
+            ModelErrorKind::InvalidRequest
+        );
+        event["status"] = json!(429);
+        assert_ne!(
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        event.as_object_mut().unwrap().remove("status");
+        event["error"]["param"] = json!("response_format");
+        assert_eq!(
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
+            ModelErrorKind::InvalidRequest
+        );
+        event["error"]["param"] = json!("text.format");
+        event["error"]["message"] = json!("maximum context length exceeded");
+        assert_eq!(
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
+            ModelErrorKind::ContextWindowExceeded
+        );
+        event["error"]["type"] = json!("rate_limit_error");
+        assert_eq!(
+            responses_stream_error(&event, ResponsesNativeFormat::Format).kind,
+            ModelErrorKind::RateLimit
+        );
+    }
 }
 
 fn invalid_request(message: &str) -> ModelError {

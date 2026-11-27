@@ -84,7 +84,7 @@ import type { PresentationState } from "../presentation/state.ts";
 import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
 import { requestEffect } from "../../../protocol/app-server/method-policy.ts";
 import { sameTarget } from "../../../protocol/app-server/attachment-identity.ts";
-import type { Request1 } from "../../../protocol/app-server/v80.ts";
+import type { Request1 } from "../../../protocol/app-server/v82.ts";
 import { SessionReaders, TRANSCRIPT_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 
 type StateListener = (state: PresentationState) => void;
@@ -115,7 +115,7 @@ export class AppServerSession {
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> | undefined;
   readonly #observation = new ObservationChain<Parameters<typeof reduce>[1]['event']>();
-  #checkpoint?: import('../../../protocol/app-server/v80.ts').RuntimeClientCheckpoint;
+  #checkpoint?: import('../../../protocol/app-server/v82.ts').RuntimeClientCheckpoint;
   get observationPhase() { return this.#observation.phase; }
   /** Cancellation needs the live attachment, not an observed execution baseline. */
   get cancellationReady() { return !this.#released && !this.#serverClosed; }
@@ -182,7 +182,10 @@ export class AppServerSession {
   checkpointPage(...args: Parameters<SessionReaders['checkpointPage']>) { return this.#reads.checkpointPage(...args); }
   interactionValue(...args: Parameters<SessionReaders['interactionValue']>) { return this.#reads.interactionValue(...args); }
   capabilitiesPage(...args: Parameters<SessionReaders['capabilitiesPage']>) { return this.#reads.capabilitiesPage(...args); }
-  projections(...args: Parameters<SessionReaders['projections']>) { return this.#reads.projections(...args); }
+  get projectionHistory() { return this.#reads.projectionHistory; }
+  async projections(...args: Parameters<SessionReaders['projections']>) {
+    const page = await this.#reads.projections(...args); this.#publish(); return page;
+  }
   projectionDetail(...args: Parameters<SessionReaders['projectionDetail']>) { return this.#reads.projectionDetail(...args); }
 
   private constructor(
@@ -234,7 +237,7 @@ export class AppServerSession {
         threadId = selected.active_conversation_id; nodeId = selected.active_node;
       }
     }
-    let attached: Extract<import('../../../protocol/app-server/v80.ts').MethodResult,{type:'attached'}>;
+    let attached: Extract<import('../../../protocol/app-server/v82.ts').MethodResult,{type:'attached'}>;
     try {
       attached = await client.call('thread/resume', {threadId}, 'attached');
     } catch (error) {
@@ -248,14 +251,17 @@ export class AppServerSession {
       await client.close();
       throw Error('Mismatched Thread resume identity.');
     }
-    const applied=previous ? previous.#observation.applied : undefined;
-    const resume=previous && client.authorityId!==undefined && client.authorityId===previous.#client.authorityId && applied!==undefined && previous.#state.cursor===applied && previous.#checkpoint?.cursor===applied
+    const sameAttachment=previous && client.authorityId!==undefined && client.authorityId===previous.#client.authorityId
       && previous.#target.session_id===attached.target.session_id && previous.#target.conversation_id===attached.target.conversation_id
       && previous.#target.runtime_incarnation===attached.target.runtime_incarnation ? previous : undefined;
+    const applied=sameAttachment ? sameAttachment.#observation.applied : undefined;
+    const resume=sameAttachment && applied!==undefined && sameAttachment.#state.cursor===applied && sameAttachment.#checkpoint?.cursor===applied
+      ? sameAttachment : undefined;
     const checkpoint=(resume ? resume.#checkpoint : undefined) ?? (await client.call('session/checkpoint',{target:attached.target,trace_records:[]},'checkpoint')).checkpoint;
     validateRootCheckpoint(attached.target, checkpoint, resume ? resume.#observation.applied : undefined);
     const session = new AppServerSession(client, attached.target,
-      (resume ? resume.#state : undefined) ?? replaceFromSnapshot(checkpointSnapshot(checkpoint), checkpoint.cursor), nodeId,unknownModelSelections);
+      (resume ? resume.#state : undefined) ?? replaceFromSnapshot(checkpointSnapshot(checkpoint), checkpoint.cursor,
+        sameAttachment ? sameAttachment.#state : undefined), nodeId,unknownModelSelections);
     session.#checkpoint = checkpoint;
     prepared?.(session);
     const stopTemporaryRouting = prepared ? () => {} : client.onNotification(notification => session.applyNotification(notification));
@@ -545,16 +551,18 @@ export class AppServerSession {
     if (!deferred.length) return undefined;
     return `Binding ${this.#state.modelStatus?.binding_revision ?? 'unavailable'}: deferred model/profile choices at native positions ${deferred.map(item => item.offset).join(', ')}. Read /observation model_catalog.models; /model-position selects native defaults at the displayed binding revision.`;
   }
-  #modelCatalogPage?: import('../../../protocol/app-server/v80.ts').CheckpointPage;
+  #modelCatalogPage?: import('../../../protocol/app-server/v82.ts').CheckpointPage;
   get nextModelOffset() { return this.#modelCatalogPage?.next_offset == null ? undefined : Number(this.#modelCatalogPage.next_offset); }
-  /** Runs one manual idle compaction to its durable terminal result. */
-  async compactContext(): Promise<NonNullable<ResultOf<'context_compacted'>['compaction']>> {
+  /** Runs one manual idle compaction to its committed or skipped result. */
+  async compactContext(instructions?: string): Promise<NonNullable<ResultOf<'context_compacted'>['compaction']> | undefined> {
     if (this.#released || this.#serverClosed) throw new Error('Session attachment is unavailable.');
-    const { compaction } = await this.#client.call(
+    const result = await this.#client.call(
       "context/compact",
-      { target: this.#target, request_id: globalThis.crypto.randomUUID() },
-      "context_compacted",
+      { target: this.#target, request_id: globalThis.crypto.randomUUID(), ...(instructions ? { instructions } : {}) },
+      ["context_compacted", "context_compaction_skipped"] as const,
     );
+    if (result.type === "context_compaction_skipped") return undefined;
+    const { compaction } = result;
     if (!compaction) throw new Error('Native compaction response omitted its commit receipt.');
     return compaction;
   }
@@ -566,12 +574,12 @@ export class AppServerSession {
     return domainValue<RuntimeClientGoalView>(page,this.#reads.domainReader());
   }
 
-  #configurationCut?:import('../../../protocol/app-server/v80.ts').BoundedSessionApplication;
+  #configurationCut?:import('../../../protocol/app-server/v82.ts').BoundedSessionApplication;
   #configurationRead?:Promise<void>;
   #configurationObservationError?:string;
   get configurationObservationError(){return this.#configurationObservationError;}
   get deferredConfiguration(){return this.#configurationRead?this.#configurationCut:undefined;}
-  #observeConfiguration(cut:import('../../../protocol/app-server/v80.ts').BoundedSessionApplication) {
+  #observeConfiguration(cut:import('../../../protocol/app-server/v82.ts').BoundedSessionApplication) {
     if(this.#configurationCut && BigInt(cut.version)<=BigInt(this.#configurationCut.version))return;
     this.#configurationCut=cut;
     if(cut.inline){this.#configurationObservationError=undefined;this.#installConfiguration(cut.inline);return;}
@@ -651,7 +659,7 @@ export class AppServerSession {
    * a NoOp acknowledgement cannot settle an earlier unanswered request.
    */
   /** Selects native catalog defaults by finite ordinals at the displayed source revision. */
-  async modelSelect(choice:import('../../../protocol/app-server/v80.ts').CatalogModelSelection) {
+  async modelSelect(choice:import('../../../protocol/app-server/v82.ts').CatalogModelSelection) {
     if(!Number.isSafeInteger(choice.model_position)||choice.model_position<0 ||choice.profile_position!=null&&(!Number.isSafeInteger(choice.profile_position)||choice.profile_position<0))throw new Error('Invalid native model selection ordinal.');
     if(this.#released||this.#serverClosed)throw new Error('Session attachment is unavailable.');
     if(this.#modelMutationInFlight)throw new Error('A model selection request is still in flight; wait for its response or connection recovery.');
@@ -735,7 +743,7 @@ export class AppServerSession {
   }
 
   /** One native bounded Agent viewport; continuations retain its exact cut. */
-  async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v80.ts').CheckpointPage) {
+  async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v82.ts').CheckpointPage) {
     const epoch=this.#epoch;
     const page=previous
       ? await this.#reads.domainReader().page(previous,offset)
@@ -751,7 +759,7 @@ export class AppServerSession {
     return domainValue<RuntimeClientAgent>(page,this.#reads.domainReader());
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v80.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v82.js").UploadReceipt[] = []) {
     return this.#call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 
@@ -890,7 +898,7 @@ export class AppServerSession {
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {
     this.#epoch += 1;
-    this.#state = replaceFromSnapshot(snapshot, cursor);
+    this.#state = replaceFromSnapshot(snapshot, cursor, this.#state);
     this.#observationError = undefined;
     for (const listener of [...this.#snapshotListeners]) {
       listener();

@@ -4,7 +4,7 @@ import { useTranslation } from '../../locale/react';
 import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
-import type { SessionMessageVersion, SessionMessageVersionFamily, TraceRecord } from '../../../../protocol/app-server/v80';
+import type { SessionMessageVersion, SessionMessageVersionFamily, TraceRecord } from '../../../../protocol/app-server/v82';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import { MessageVersionPager } from '../agent/UserMessageVersions';

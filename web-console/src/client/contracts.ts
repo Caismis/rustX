@@ -6,7 +6,7 @@ import type { TranscriptCache } from './transcript';
 import type {
   AttachmentTarget, ConfigRepairReceipt, ConfigurationApplication, InteractionRef, MethodResult, ObservedTurnPage, PendingMutationOutcome,
   Request1, RuntimeClientCursor, RuntimeClientSnapshot, ServerCapabilities, SessionPersistentState, SessionSummary as NativeSessionSummary, ThreadStatusEntry, SourceTarget, UserInputBlock,
-} from '../../../protocol/app-server/v80';
+} from '../../../protocol/app-server/v82';
 
 /** Optional only in the replaceable local view before a native status read. */
 export type SessionSummary = NativeSessionSummary & {thread_id?:string;thread_status?:ThreadStatusEntry|null};
@@ -30,13 +30,12 @@ export type InboundControlOutcome =
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export type OutlinePagingIntent = { type: 'latest' } | { type: 'page'; offset: number };
 export interface CompactionRequestEvidence {
-  /** Presentation ordering only; never resolves an uncertain request. */
   baselineCount: number;
   generation: number;
   requestId: string;
   authorityId?: string;
   target: AttachmentTarget;
-  status: 'submitting' | 'uncertain' | 'succeeded' | 'failed';
+  status: 'submitting' | 'uncertain' | 'succeeded' | 'skipped' | 'cancelled' | 'failed';
   diagnostic?: string;
   receipt?: Extract<MethodResult, {type:'context_compacted'}>['compaction'];
 }
@@ -45,22 +44,23 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   readonly attachmentIntentRevision?: number;
   readonly lifecycle?: ReturnType<typeof lifecycleAvailability>;
   compactionRequest?: CompactionRequestEvidence;
+  compactionNotices?: import('./compaction-notices').CompactionNotices;
   id: string;
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
   threadStatus?:ThreadStatusEntry;
   snapshot?: RuntimeClientSnapshot;
   publicationHeads?: readonly PublicationHead[];
-  checkpoint?: import('../../../protocol/app-server/v80').RuntimeClientCheckpoint;
+  checkpoint?: import('../../../protocol/app-server/v82').RuntimeClientCheckpoint;
   observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v80').CheckpointReadCut;body:import('../../../protocol/app-server/v80').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v80').CheckpointPage;rows:import('../../../protocol/app-server/v80').RuntimeClientInteractionHeader[];offset:number};
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v82').CheckpointReadCut;body:import('../../../protocol/app-server/v82').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v82').CheckpointPage;rows:import('../../../protocol/app-server/v82').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v80').CheckpointReadCut; statistics: import('../../../protocol/app-server/v80').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v80').RuntimeClientContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v82').CheckpointReadCut; statistics: import('../../../protocol/app-server/v82').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v82').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -72,7 +72,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v80').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v82').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -173,7 +173,7 @@ export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conve
  * No call is ever retried; `dispatchCurrent` is re-checked adjacent to send. */
 export type ConnectionRequest = <T extends MethodResult['type']>(
   operation: Request1,
-  expected: T,
+  expected: T | readonly T[],
   acknowledged?: (result: Extract<MethodResult, { type: T }>) => void,
   dispatchCurrent?: (() => boolean) | OperationAdmission,
   observationSignal?: AbortSignal,

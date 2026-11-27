@@ -7,6 +7,9 @@ use rustx_types::context::occupancy::ContextBreakdown;
 use rustx_types::events::types::RuntimeEventEnvelope;
 use rustx_types::message::types::MessageBlock;
 
+use rustx_types::context::resources::{
+    COMPACTION_RESOURCE_BYTES_MAX, COMPACTION_RESOURCE_ITEMS_MAX,
+};
 pub use rustx_types::context::resources::{JournalFrontier, LedgerFrontier, ResourceReadCut};
 
 /// Hard logical materialization bounds, including the sum of all pages in an operation.
@@ -25,8 +28,8 @@ impl Default for ResourceLimits {
             page_items: 64,
             record_bytes: 1024 * 1024,
             page_bytes: 4 * 1024 * 1024,
-            total_items: 8192,
-            total_bytes: 16 * 1024 * 1024,
+            total_items: COMPACTION_RESOURCE_ITEMS_MAX,
+            total_bytes: COMPACTION_RESOURCE_BYTES_MAX,
         }
     }
 }

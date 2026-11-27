@@ -838,7 +838,7 @@ impl LocalConversationCore {
                 tool_deadline_policy: spec.tool_deadline_policy,
                 context: ConversationContextConfig {
                     status_clock: Arc::clone(&dependencies.status_clock),
-                    policy: spec.context,
+
                     estimator: Arc::clone(&dependencies.estimator),
                     // The child materializes exactly the extension composition
                     // its invoking generation froze into `ResolvedSubagentSpec`

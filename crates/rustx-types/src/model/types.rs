@@ -169,6 +169,15 @@ use crate::model::invocation_config::ModelInvocationConfig;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::tools::types::ModelToolDefinition;
 
+/// Opaque, process-local authorization for one Compaction prompt fallback.
+/// It is never serialized and cannot be constructed by external callers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PromptFallbackAuthorization {
+    provenance: Option<std::any::TypeId>,
+    operation_id: Option<crate::runtime::identity::CompactionOperationId>,
+    fingerprint: Option<String>,
+}
+
 /// A provider-neutral model request.
 ///
 /// A request has final provider-neutral values plus an explicit effective
@@ -187,6 +196,9 @@ use crate::tools::types::ModelToolDefinition;
 /// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
+    /// Process-local proof installed only by the admitted Auxiliary owner.
+    #[serde(skip)]
+    pub prompt_fallback_authorization: PromptFallbackAuthorization,
     /// Frozen per-call output contract. Ordinary text requests leave this absent.
     /// Prompt preparation retains the schema for the same local validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,6 +233,27 @@ pub struct ModelRequest {
 }
 
 impl ModelRequest {
+    pub fn authorize_prompt_fallback<Owner: 'static>(
+        &mut self,
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    ) {
+        self.prompt_fallback_authorization = PromptFallbackAuthorization {
+            provenance: Some(std::any::TypeId::of::<Owner>()),
+            operation_id: Some(operation_id),
+            fingerprint: Some(self.semantic_input_fingerprint()),
+        };
+    }
+
+    pub fn has_prompt_fallback_authorization<Owner: 'static>(
+        &self,
+        operation_id: &crate::runtime::identity::CompactionOperationId,
+    ) -> bool {
+        self.prompt_fallback_authorization.provenance == Some(std::any::TypeId::of::<Owner>())
+            && self.prompt_fallback_authorization.operation_id.as_ref() == Some(operation_id)
+            && self.prompt_fallback_authorization.fingerprint.as_deref()
+                == Some(self.semantic_input_fingerprint().as_str())
+    }
+
     /// Map the actual accepted output into this input and prove remote coverage.
     /// # Errors
     /// Missing/ambiguous output or reordered/omitted covered input fails explicitly.

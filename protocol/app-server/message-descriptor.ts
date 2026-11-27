@@ -1,4 +1,4 @@
-import type { RuntimeClientMessageDescriptor } from './v80.ts';
+import type { RuntimeClientMessageDescriptor } from './v82.ts';
 
 /** A Source-created descriptor carries positive process facts independently of its deferred body. */
 export function messageDescriptor(value: unknown): RuntimeClientMessageDescriptor | undefined {

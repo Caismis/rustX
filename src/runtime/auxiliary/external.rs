@@ -125,7 +125,6 @@ pub struct ExternalAuxiliary {
     /// composed, held weakly so the service never pins the runtime.
     runtime: OnceLock<Weak<crate::runtime::conversation_runtime::RuntimeInner>>,
     store: Arc<dyn ConversationStore>,
-    policy: crate::context::SessionContextPolicy,
     estimator: Arc<dyn crate::context::tokens::TokenEstimator>,
     tool_runtime: ConversationToolRuntime,
     /// The shared native auxiliary execution owner. This is the one handle:
@@ -143,7 +142,6 @@ pub struct ExternalAuxiliary {
 pub(crate) struct ExternalAuxiliaryParts {
     pub(crate) conversation_id: ConversationId,
     pub(crate) store: Arc<dyn ConversationStore>,
-    pub(crate) policy: crate::context::SessionContextPolicy,
     pub(crate) estimator: Arc<dyn crate::context::tokens::TokenEstimator>,
     pub(crate) tool_runtime: ConversationToolRuntime,
     pub(crate) executor: AuxiliaryExecutor,
@@ -154,7 +152,6 @@ impl ExternalAuxiliary {
             conversation_id: parts.conversation_id,
             runtime: OnceLock::new(),
             store: parts.store,
-            policy: parts.policy,
             estimator: parts.estimator,
             tool_runtime: parts.tool_runtime,
             executor: parts.executor,
@@ -573,12 +570,15 @@ impl ExternalAuxiliary {
             correlation: correlation.clone(),
             scope: scope_id.clone(),
         };
-        let policy = resources
-            .configuration()
-            .map_or(self.policy, |generation| generation.config.context_policy());
         let timeout = admitted.timeout;
         let mut engine = crate::context::ContextEngine::new(
-            policy.config_for_window(invocation.context_window()),
+            crate::context::policy::CompactionPolicy::resolve(
+                invocation.context_window(),
+                invocation.max_output_tokens(),
+                invocation.context_window(),
+                invocation.max_output_tokens(),
+            )?
+            .primary,
             self.estimator.clone(),
         )?;
         engine.set_image_projection(
@@ -683,6 +683,8 @@ impl ExternalAuxiliary {
                 crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text: question },
             ));
             let request = ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: Some(
                     crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES,
@@ -704,7 +706,7 @@ impl ExternalAuxiliary {
                 },
             )?;
             if engine.estimate_frozen_request(&request)
-                > engine.soft_input_limit(invocation.max_output_tokens())?
+                > engine.admissible_input_limit(invocation.max_output_tokens())?
             {
                 return Err(ContextError::new(
                     ContextErrorKind::CannotFit,

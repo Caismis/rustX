@@ -84,6 +84,7 @@ fn make_request_start(
     request_id: RequestId,
 ) -> AuxiliaryRequestStart {
     AuxiliaryRequestStart {
+        invocation: rustx_types::model::auxiliary::fixture_invocation_identity(),
         call_id,
         ordinal,
         request_id,
@@ -1058,7 +1059,7 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 116);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [

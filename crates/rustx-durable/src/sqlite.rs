@@ -370,7 +370,10 @@ pub trait OwnershipLock: std::fmt::Debug + Send + Sync {
 /// canonical Tool lookup an independent native Ledger position.
 /// Version 114 adds admission-bound Workflow run snapshots and the generated
 /// workflow-agent node index. Earlier stores are refused; there is no migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 114;
+/// Version 115 adds authenticated Compaction prefix coverage, invocation evidence,
+/// and independent asynchronous operation facts to the bounded native layout.
+/// Version 116 indexes foreground compaction independently of proactive work.
+pub const SQLITE_SCHEMA_VERSION: i64 = 116;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(any(test, feature = "test-hooks"))]
@@ -462,6 +465,8 @@ pub struct SqliteConversationStore {
     pub checkpoint_read_counts: Arc<[AtomicUsize; 3]>,
     #[cfg(any(test, feature = "test-hooks"))]
     fail_projection_history_remaining: AtomicUsize,
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fail_projected_history_when: Mutex<Option<Box<dyn Fn() -> bool + Send>>>,
     #[cfg(any(test, feature = "test-hooks"))]
     projection_commit_return_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(any(test, feature = "test-hooks"))]
@@ -809,6 +814,8 @@ impl SqliteConversationStore {
             checkpoint_read_counts: Arc::new(std::array::from_fn(|_| AtomicUsize::new(0))),
             #[cfg(any(test, feature = "test-hooks"))]
             fail_projection_history_remaining: AtomicUsize::new(0),
+            #[cfg(any(test, feature = "test-hooks"))]
+            fail_projected_history_when: Mutex::default(),
             #[cfg(any(test, feature = "test-hooks"))]
             projection_commit_return_probe: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]

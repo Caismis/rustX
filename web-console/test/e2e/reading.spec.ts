@@ -5,7 +5,7 @@ import { connectRemote, choose, openSettingsPage } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { followRoot } from './source-reading';
 
-const READING_PREPARATION_MS = 240_000;
+const READING_PREPARATION_MS = 360_000;
 
 // Building 300 durable Attempts is preparation, with its own fixture budget.
 // Browser/race assertions retain the repository's 120-second deadline and gates.

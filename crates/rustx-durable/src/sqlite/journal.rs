@@ -125,6 +125,13 @@ impl JournalStore for SqliteConversationStore {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         if requires_specialized_transition(&event.event)
+            || matches!(
+                &event.event,
+                RuntimeEvent::CompactionStarted {
+                    mode: rustx_types::context::operation::CompactionMode::Proactive,
+                    ..
+                }
+            )
             || (event.event.is_auxiliary_model_request()
                 && matches!(
                     event.event,
@@ -220,7 +227,65 @@ impl JournalStore for SqliteConversationStore {
         process_death::reach("after:workflow_start");
         Ok(persisted.event)
     }
-
+    fn append_compaction_admission(
+        &self,
+        started: RuntimeEventEnvelope,
+        status: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+        use rustx_types::context::operation::{CompactionMode, CompactionOperationPhase};
+        let valid = matches!(
+            (&started.event, &status.event),
+            (
+                RuntimeEvent::CompactionStarted { operation_id, mode: CompactionMode::Proactive },
+                RuntimeEvent::CompactionOperationUpdated { status }
+            ) if operation_id == &status.operation_id
+                && status.admission_generation > 0
+                && status.phase == CompactionOperationPhase::Generating
+                && status.waiting_attempt_id.is_none()
+                && status.accepted_fragments == 0
+                && status.diagnostic.is_none()
+        );
+        if !valid
+            || started.conversation_id != status.conversation_id
+            || started.timestamp != status.timestamp
+            || started.attempt_id.is_some()
+            || started.turn_id.is_some()
+            || status.attempt_id.is_some()
+            || status.turn_id.is_some()
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "proactive compaction admission requires one matching initial status".into(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("compaction admission transaction: {error}")))?;
+        let started = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            started,
+        )?
+        .event;
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected between proactive admission facts"));
+        }
+        let status = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            status,
+        )?
+        .event;
+        process_death::reach("before:compaction_admission");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("compaction admission commit: {error}")))?;
+        process_death::reach("after:compaction_admission");
+        Ok((started, status))
+    }
     fn commit_subagent_terminal(
         &self,
         event: RuntimeEventEnvelope,
@@ -700,6 +765,8 @@ pub fn persist_event_tx_with_requests(
         });
     }
     validate_event_identity(&event)?;
+    validate_compaction_status(transaction, &event)?;
+    validate_compaction_progress(transaction, &event)?;
     validate_attempt_start_uniqueness(transaction, &event)?;
     validate_agent_admission_reference(transaction, &event)?;
     if let Some(proof) = validated_start {
@@ -830,6 +897,14 @@ pub fn persist_event_tx_with_requests(
             prepare_observation,
         )?
     };
+    observation_state::index_compaction_operation(transaction, &persisted.event)?;
+    observation_state::index_foreground_compaction(transaction, &persisted.event)?;
+    if let RuntimeEvent::CompactionOperationUpdated { status } = &persisted.event.event
+        && status.phase.is_terminal()
+        && status.phase != rustx_types::context::operation::CompactionOperationPhase::Committed
+    {
+        transaction.execute_cached("INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_sequence=COALESCE(lifecycle_state.terminal_sequence,excluded.terminal_sequence)", params![format!("compaction:{}",status.operation_id),persisted.event.sequence]).map_err(|e| storage(e.to_string()))?;
+    }
     // The recovery frontier covers this fact in the same transaction.
     super::recovery_frontier::advance(transaction, conversation_id, &persisted.event)?;
     Ok(persisted)
@@ -933,6 +1008,10 @@ fn persist_event_isolated(
     let state_required = matches!(
         event.event,
         RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionChunkAccepted { .. }
+            | RuntimeEvent::CompactionOperationUpdated { .. }
+            | RuntimeEvent::CompactionCancelled { .. }
+            | RuntimeEvent::CompactionSkipped { .. }
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::Goal {
@@ -1173,6 +1252,16 @@ pub fn enrich_event_transcript(
 pub fn validate_event_identity(
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    if let RuntimeEvent::CompactionOperationUpdated { status } = &envelope.event {
+        status
+            .validate()
+            .map_err(|reason| ConversationStoreError::InvalidReference(reason.into()))?;
+        if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction operation status cannot belong to an attempt or turn".into(),
+            ));
+        }
+    }
     if matches!(
         &envelope.event,
         RuntimeEvent::TurnStarted | RuntimeEvent::TurnCompleted
@@ -1200,6 +1289,286 @@ pub fn validate_event_identity(
         ));
     }
     Ok(())
+}
+
+/// Enforce status identity, bounded order and terminal fences before indexing.
+fn validate_compaction_status(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    if let RuntimeEvent::CompactionFailed { operation_id, .. }
+    | RuntimeEvent::CompactionCancelled { operation_id }
+    | RuntimeEvent::CompactionSkipped { operation_id } = &envelope.event
+        && observation_state::is_proactive_operation(transaction, operation_id)?
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "proactive compaction requires an operation status for terminal settlement".into(),
+        ));
+    }
+    let RuntimeEvent::CompactionOperationUpdated { status } = &envelope.event else {
+        return Ok(());
+    };
+    if status.operation_id.as_str().len() > 256
+        || status
+            .triggering_attempt_id
+            .as_ref()
+            .is_some_and(|id| id.as_str().len() > 256)
+        || status
+            .waiting_attempt_id
+            .as_ref()
+            .is_some_and(|id| id.as_str().len() > 256)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction status identity exceeds its bound".into(),
+        ));
+    }
+    let started: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_started' AND json_extract(event_json,'$.event.mode')='proactive')", [status.operation_id.as_str()], |row| row.get(0)).map_err(|e| storage(e.to_string()))?;
+    if !started {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction status requires a proactive start".into(),
+        ));
+    }
+    let closed: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1 AND terminal_sequence IS NOT NULL)",
+        [format!("compaction:{}", status.operation_id)], |row| row.get(0),
+    ).map_err(|e| storage(e.to_string()))?;
+    if closed
+        && status.phase != rustx_types::context::operation::CompactionOperationPhase::Committed
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction lifecycle is already terminal".into(),
+        ));
+    }
+    let accepted: Option<u32> = transaction.query_row("SELECT json_extract(event_json,'$.event.accepted_fragments') FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1", [status.operation_id.as_str()], |row| row.get(0)).optional().map_err(|e| storage(e.to_string()))?;
+    if status.accepted_fragments > accepted.unwrap_or(0) {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction status exceeds accepted fragment facts".into(),
+        ));
+    }
+    let recent = observation_state::latest_compaction_operations(
+        transaction,
+        u64::try_from(i64::MAX).expect("positive"),
+    )?;
+    let known: Option<u64> = transaction.query_row("SELECT journal_sequence FROM state_observation_sources WHERE domain='compaction_identity' AND source_id=?1", [status.operation_id.as_str()], |row| row.get(0)).optional().map_err(|e| storage(e.to_string()))?;
+    if status.phase == rustx_types::context::operation::CompactionOperationPhase::Committed {
+        let completed: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_completed')", [status.operation_id.as_str()], |row| row.get(0)).map_err(|e| storage(e.to_string()))?;
+        if !completed {
+            return Err(ConversationStoreError::InvalidReference(
+                "committed status requires a completed compaction".into(),
+            ));
+        }
+    }
+    let matching = recent.iter().find(|old| {
+        old.operation_id == status.operation_id
+            && old.admission_generation == status.admission_generation
+    });
+    if let Some(old) = matching {
+        use rustx_types::context::operation::CompactionOperationPhase as Phase;
+        if old.phase.is_terminal()
+            || status.accepted_fragments < old.accepted_fragments
+            || old.triggering_attempt_id != status.triggering_attempt_id
+            || matches!(old.phase, Phase::Ready)
+                && matches!(status.phase, Phase::Generating | Phase::Retrying)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid compaction status transition".into(),
+            ));
+        }
+    } else if known.is_some()
+        || recent
+            .iter()
+            .any(|old| old.admission_generation >= status.admission_generation)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "stale compaction admission".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A progress fact is a bounded, strictly advancing observation of one open
+/// Compaction, never a new lifecycle or checkpoint commit.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Validate complete progress authority in one transaction"
+)]
+fn validate_compaction_progress(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let RuntimeEvent::CompactionChunkAccepted {
+        operation_id,
+        accepted_fragments,
+        source_ranges,
+        generation,
+    } = &envelope.event
+    else {
+        return Ok(());
+    };
+    if operation_id.as_str().is_empty()
+        || operation_id.as_str().len() > 256
+        || *accepted_fragments == 0
+        || *accepted_fragments > 256
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid compaction progress identity or count".into(),
+        ));
+    }
+    crate::auxiliary::validate_compaction_ranges(source_ranges)?;
+    crate::context_resources::bounded_encoded_len(&envelope.event, 8 * 1024)?;
+    let active: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1 AND terminal_sequence IS NULL)",
+        [format!("compaction:{operation_id}")], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    if !active {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress requires its open operation".into(),
+        ));
+    }
+    let previous: Option<Option<String>> = transaction.query_row(
+        "SELECT CASE WHEN octet_length(event_json)<=?2 THEN event_json END FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1",
+        params![operation_id.as_str(), 16 * 1024], |row| row.get(0),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    let previous = match previous {
+        None => None,
+        Some(Some(text)) => Some(text),
+        Some(None) => {
+            return Err(ConversationStoreError::ResourceBoundExceeded(
+                "previous compaction progress exceeds its bound".into(),
+            ));
+        }
+    };
+    let previous = previous
+        .map(|text| decode::<RuntimeEventEnvelope>(&text, "compaction progress"))
+        .transpose()?;
+    let (previous_count, previous_ranges, previous_generation) =
+        match previous.as_ref().map(|item| &item.event) {
+            Some(RuntimeEvent::CompactionChunkAccepted {
+                accepted_fragments,
+                source_ranges,
+                generation,
+                ..
+            }) => (
+                *accepted_fragments,
+                Some(source_ranges.as_slice()),
+                generation.as_ref(),
+            ),
+            None => (0, None, None),
+            _ => {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid previous compaction progress".into(),
+                ));
+            }
+        };
+    if *accepted_fragments != previous_count + 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction accepted-fragment count must advance exactly once".into(),
+        ));
+    }
+    let first = &source_ranges[0];
+    let contiguous = match previous_ranges.and_then(|ranges| ranges.last()) {
+        None => first.projection_index == 0 && first.byte_start == 0,
+        Some(last) if first.projection_index == last.projection_index => {
+            last.byte_end > last.byte_start
+                && first.byte_start == last.byte_end
+                && first.byte_end > first.byte_start
+        }
+        Some(last) => {
+            last.projection_index.checked_add(1) == Some(first.projection_index)
+                && first.byte_start == 0
+        }
+    };
+    if !contiguous {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress must advance through contiguous source ranges".into(),
+        ));
+    }
+    let reference = generation.as_ref().ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "accepted compaction progress requires a completed Summary generation".into(),
+        )
+    })?;
+    if previous_generation.is_some_and(|prior| prior.call_id == reference.call_id) {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress cannot reuse a Summary Call".into(),
+        ));
+    }
+    let used: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_chunk_accepted' AND json_extract(event_json,'$.event.generation.call_id')=?2)",
+        params![operation_id.as_str(), reference.call_id.as_str()], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    if used {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress cannot reuse a Summary Call".into(),
+        ));
+    }
+    let limits = crate::context_resources::ResourceLimits::default();
+    let mut remaining_records = limits.total_items;
+    let mut remaining_bytes = limits.total_bytes;
+    let mut call = super::auxiliary_lineage::progress_call(
+        transaction,
+        &envelope.conversation_id,
+        operation_id,
+        reference,
+        &mut remaining_records,
+        &mut remaining_bytes,
+    )?;
+    let rustx_types::model::auxiliary::AuxiliaryInputEvidence::Compaction {
+        source_ranges: expected,
+        ..
+    } = &call.input
+    else {
+        unreachable!()
+    };
+    if expected != source_ranges {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction progress ranges disagree with the Summary Call input".into(),
+        ));
+    }
+    // Reductions are real completed Summary Calls between accepted fragments.
+    // Follow their explicit previous-output links, never more than the shared
+    // operation start ceiling, until the previous accepted generation.
+    for _ in 0..(rustx_types::context::operation::MAX_PLANNED_SUMMARY_STARTS
+        + rustx_types::context::operation::COMPACTION_RECOVERY_LIMIT)
+    {
+        let prior = match &call.input {
+            rustx_types::model::auxiliary::AuxiliaryInputEvidence::Compaction {
+                previous_summary,
+                ..
+            } => previous_summary.as_ref(),
+            _ => None,
+        };
+        if prior == previous_generation {
+            return Ok(());
+        }
+        let Some(prior) = prior else {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction progress does not continue its prior accepted Summary".into(),
+            ));
+        };
+        if previous_generation.is_some_and(|accepted| accepted.call_id == prior.call_id) {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction progress changed the prior accepted Summary cut".into(),
+            ));
+        }
+        call = super::auxiliary_lineage::progress_call(
+            transaction,
+            &envelope.conversation_id,
+            operation_id,
+            prior,
+            &mut remaining_records,
+            &mut remaining_bytes,
+        )?;
+        if !matches!(&call.input, rustx_types::model::auxiliary::AuxiliaryInputEvidence::Compaction { source_ranges, .. } if source_ranges.is_empty())
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "intermediate Summary reduction contains unaccepted source ranges".into(),
+            ));
+        }
+    }
+    Err(ConversationStoreError::ResourceBoundExceeded(
+        "compaction progress Summary chain exceeds its bound".into(),
+    ))
 }
 
 /// An attempt identity starts exactly once in durable authority (Issue #12,
@@ -1479,10 +1848,12 @@ pub fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
                 (format!("auxiliary-request:{request_id}"), true),
             ];
         }
-        RuntimeEvent::CompactionStarted { operation_id } => {
+        RuntimeEvent::CompactionStarted { operation_id, .. } => {
             return vec![(format!("compaction:{operation_id}"), false)];
         }
         RuntimeEvent::CompactionCompleted { operation_id, .. }
+        | RuntimeEvent::CompactionSkipped { operation_id }
+        | RuntimeEvent::CompactionCancelled { operation_id }
         | RuntimeEvent::CompactionFailed { operation_id, .. } => {
             return vec![(format!("compaction:{operation_id}"), true)];
         }

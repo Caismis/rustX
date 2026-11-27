@@ -92,11 +92,13 @@ fn checkpoint(
         rustx::runtime::identity::CompactionOperationId::new(format!("operation:{id}"));
     store
         .commit_projection(rustx::durable::projection::ProjectionCommitInput {
+            prefix_proof: None,
             grant: rustx::runtime::CancellationSignal::new()
                 .authorize_compaction_commit(operation_id.clone())
                 .unwrap(),
             operation_id,
             candidate: CheckpointCandidate {
+                prefix_coverage: None,
                 checkpoint_id: rustx::runtime::identity::CheckpointId::new(id),
                 expected_head: history.cut.checkpoint_id,
                 read_cut: store.compaction_resource_cut().unwrap(),
@@ -129,6 +131,8 @@ fn freeze_request(
         .freeze_input(
             store.conversation_id(),
             &rustx::model::ModelRequest {
+                prompt_fallback_authorization:
+                    rustx::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 messages: history.messages.clone(),

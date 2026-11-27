@@ -18,6 +18,17 @@ use rustx_types::runtime::identity::{AttemptId, MessageId, RequestId};
 use std::sync::Arc;
 
 impl ObservationStore for SqliteConversationStore {
+    fn observation_compaction_call_ids(
+        &self,
+        cut: &crate::observation::ObservationReadCut,
+        operation: &rustx_types::runtime::identity::CompactionOperationId,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::observation::TraceCompactionCallIds, ConversationStoreError> {
+        self.read_at_cut(cut, |connection| {
+            observation_trace::compaction_call_ids(connection, cut, operation, after, limit)
+        })
+    }
     fn observation_workflow_nodes(
         &self,
         cut: &crate::observation::ObservationReadCut,
@@ -1045,6 +1056,43 @@ impl ObservationStore for SqliteConversationStore {
     ) -> Result<Vec<crate::observation::ObservationEventHeader>, ConversationStoreError> {
         let connection = self.lock()?;
         observation::latest_events(&connection, through, kinds, attempt, limit)
+    }
+    fn latest_foreground_compaction(
+        &self,
+        through: u64,
+    ) -> Result<Option<crate::observation::ObservationEventWitness>, ConversationStoreError> {
+        use crate::sqlite::statements::FixedStatements as _;
+        use rusqlite::OptionalExtension;
+        let connection = self.lock()?;
+        let sequence: Option<u64> = connection.query_row_cached("SELECT journal_sequence FROM state_observation_sources INDEXED BY state_observation_journal_idx WHERE domain='foreground_compaction' AND journal_sequence<=?1 ORDER BY journal_sequence DESC LIMIT 1",
+            [crate::sqlite::seq_to_i64(through)?], |row| row.get(0)).optional().map_err(|error| ConversationStoreError::Storage(error.to_string()))?;
+        sequence
+            .map(|sequence| {
+                observation_event::witness(&connection, sequence, through)?.ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "missing foreground compaction witness".into(),
+                    )
+                })
+            })
+            .transpose()
+    }
+    fn compaction_start_mode_before(
+        &self,
+        operation_id: &rustx_types::runtime::identity::CompactionOperationId,
+        before: u64,
+    ) -> Result<rustx_types::context::operation::CompactionMode, ConversationStoreError> {
+        let connection = self.lock()?;
+        super::super::observation_state::compaction_start_mode(&connection, operation_id, before)
+    }
+    fn latest_compaction_operations(
+        &self,
+        through: u64,
+    ) -> Result<
+        Vec<rustx_types::context::operation::CompactionOperationStatus>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        super::super::observation_state::latest_compaction_operations(&connection, through)
     }
     fn tool_call_occurrence_at(
         &self,

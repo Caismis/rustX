@@ -123,6 +123,15 @@ impl ClientInner {
         offset: u64,
         limit: usize,
     ) -> Option<Result<super::super::checkpoint::CheckpointPage, RuntimeClientError>> {
+        if super::super::trace_observation::compaction_selection(domain).is_some() {
+            return Some(super::super::trace_observation::compaction_page(
+                self.store.as_ref(),
+                cut,
+                domain,
+                offset,
+                limit,
+            ));
+        }
         if super::super::trace_observation::workflow_selection(domain).is_some() {
             // Durable facts stay immutable. A transient live label is admitted
             // only at the resident owner's currently published checkpoint.

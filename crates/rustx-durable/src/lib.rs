@@ -81,6 +81,7 @@
 pub mod artifacts;
 pub mod auxiliary;
 pub mod background_facts;
+pub mod compaction_coverage;
 pub mod context_resources;
 pub mod contribution;
 pub mod inbound;

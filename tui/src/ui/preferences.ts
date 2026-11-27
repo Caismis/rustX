@@ -138,6 +138,8 @@ export interface PresentationPreferences {
   expandedBackgroundExecutions: ReadonlySet<ToolExecutionId>;
   /** Expanded interaction cards, keyed by the full routed identity pair. */
   expandedInteractions: ReadonlySet<string>;
+  /** Expanded committed summaries, keyed by checkpoint and activation identity. */
+  expandedCompactions: ReadonlySet<string>;
   /** The collapsed budget of one verbose detail section. */
   previewBudget: PreviewBudget;
 }
@@ -148,6 +150,7 @@ export function defaultPreferences(): PresentationPreferences {
     expandedToolCalls: new Set(),
     expandedBackgroundExecutions: new Set(),
     expandedInteractions: new Set(),
+    expandedCompactions: new Set(),
     previewBudget: {
       maxLines: DEFAULT_PREVIEW_LINES,
       maxChars: DEFAULT_PREVIEW_CHARS,
@@ -286,7 +289,20 @@ export function withAllCollapsed(
     expandedToolCalls: new Set(),
     expandedBackgroundExecutions: new Set(),
     expandedInteractions: new Set(),
+    expandedCompactions: new Set(),
   };
+}
+
+export function compactionKey(head: { checkpoint_id: string; activation_id: string }): string {
+  return JSON.stringify([head.checkpoint_id, head.activation_id]);
+}
+
+export function withToggledCompaction(preferences: PresentationPreferences, key: string): PresentationPreferences {
+  return { ...preferences, expandedCompactions: toggled(preferences.expandedCompactions, key) };
+}
+
+export function withExpandedCompactions(preferences: PresentationPreferences, keys: Iterable<string>): PresentationPreferences {
+  return { ...preferences, expandedCompactions: new Set(keys) };
 }
 
 function toggled<T>(current: ReadonlySet<T>, value: T): ReadonlySet<T> {

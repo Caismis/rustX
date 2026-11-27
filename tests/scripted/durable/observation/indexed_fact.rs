@@ -99,6 +99,7 @@ pub(super) fn freeze_indexed_input(
     )
     .unwrap();
     let request = ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         continuation_source: None,
@@ -2518,4 +2519,69 @@ fn native_metadata_cached_statements_keep_historical_cuts_and_readiness_errors()
             crate::durable::sqlite::observation_statistics::trace_total(&connection, last).is_err()
         );
     }
+}
+
+#[test]
+fn latest_event_heads_read_binary_witnesses_without_obsolete_display_or_original_bytes() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = AttemptId::new("latest-native-head");
+    let started = store
+        .append_event(envelope(
+            store.conversation_id(),
+            "latest-native-attempt",
+            Some(attempt.clone()),
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            },
+        ))
+        .unwrap();
+    let compaction = store
+        .append_event(envelope(
+            store.conversation_id(),
+            "latest-native-compaction",
+            None,
+            RuntimeEvent::CompactionStarted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new("latest-native"),
+                mode: crate::context::operation::CompactionMode::Manual,
+            },
+        ))
+        .unwrap();
+    store
+        .lock()
+        .unwrap()
+        .authorizer(Some(deny_selected_original_columns))
+        .unwrap();
+    let global = store
+        .latest_observation_events(
+            compaction.sequence,
+            &["attempt_started".into(), "compaction_started".into()],
+            None,
+            2,
+        )
+        .unwrap();
+    assert_eq!(global.len(), 2);
+    assert_eq!(global[0].sequence, started.sequence);
+    assert_eq!(global[1].sequence, compaction.sequence);
+    assert_eq!(global[1].witness.as_ref().unwrap().value["mode"], "manual");
+    assert!(
+        global
+            .iter()
+            .all(|header| header.display.is_none() && header.deferred)
+    );
+    let scoped = store
+        .latest_observation_events(
+            compaction.sequence,
+            &["attempt_started".into(), "compaction_started".into()],
+            Some(&attempt),
+            2,
+        )
+        .unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].event_id, Some(started.event_id));
+    assert_eq!(scoped[0].attempt_id.as_ref(), Some(&attempt));
+    assert_eq!(
+        scoped[0].witness.as_ref().unwrap().event_kind,
+        "attempt_started"
+    );
 }

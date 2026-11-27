@@ -921,8 +921,8 @@ impl LocalConversationCore {
                     tool_deadline_policy,
                     context: ConversationContextConfig {
                         status_clock: Arc::clone(&dependencies.status_clock),
-                        policy: runtime_config.context_policy(),
-                        estimator: Arc::clone(&dependencies.estimator), // The root Agent's frozen native Agent Extension composition
+                        estimator: Arc::clone(&dependencies.estimator),
+                        // The root Agent's frozen native Agent Extension composition
                         // is materialized here, once, and never again (Issue #256).
                         // Its Todo half was materialized alongside the conversation's
                         // other owned resources in the tool runtime above.

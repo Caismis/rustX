@@ -134,3 +134,12 @@ impl SystemSectionLane {
         }
     }
 }
+
+/// Canonical native wrapper shared by admission and durable retry validation.
+pub fn permission_reminder_content(text: &str) -> Vec<crate::message::types::UserContentBlock> {
+    vec![crate::message::types::UserContentBlock::Text(
+        crate::message::content::TextBlock {
+            text: format!("<system-reminder>\n{text}\n</system-reminder>"),
+        },
+    )]
+}

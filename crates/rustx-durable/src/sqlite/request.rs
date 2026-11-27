@@ -169,7 +169,7 @@ impl RequestStore for SqliteConversationStore {
             ));
         }
         if snapshot.identity.retry_number != 0 {
-            verify_frozen_contributions_tx(&transaction, snapshot)?;
+            verify_frozen_contributions_tx(&transaction, snapshot, context)?;
         }
         // The request-scoped canonical context commits first, inside the
         // same transaction as the snapshot and the start fact: a failure

@@ -33,8 +33,6 @@ pub enum ConfigurationChangeReason {
 pub enum ConfigurationDomain {
     /// The effective system instructions, project guidance or Agent profile.
     Instructions,
-    /// The context budgeting/projection policy.
-    ContextPolicy,
     /// The model-facing Tool catalog.
     Tools,
     /// The Skill catalog.

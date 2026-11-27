@@ -108,43 +108,27 @@ pub(super) fn invalid_model(error: &ModelInvocationError) -> ModelUpdateError {
     ModelUpdateError::InvalidConfiguration(error.to_string())
 }
 
-/// Whether one model snapshot can run under the session context policy.
+/// Whether one model snapshot can satisfy the derived dual-model budgets.
 ///
-/// A model whose context window cannot accommodate the policy reserve plus
-/// the model output budget can never run an attempt. Rejecting it when the
-/// session model is *constructed* or *set* is what keeps the per-attempt
-/// context runtime construction infallible at admission, where there is no
-/// caller left to report a failure to.
+/// Reject impossible capacities when the Session model is constructed or
+/// updated, before an Attempt is admitted with a frozen model selection.
 ///
 /// # Errors
 ///
-/// Returns the engine configuration error.
-/// [`validate_context_policy`] for a Session's model state. An unavailable
-/// selection resolves no budget and admits no work, so there is nothing to
-/// fit; the selection that replaces it is validated when it is applied.
+/// Returns the context configuration error. An unavailable selection resolves
+/// no budget and admits no work; its replacement is validated when applied.
 pub(crate) fn validate_model_context(
-    policy: &SessionContextPolicy,
     model: &SessionModelState,
 ) -> Result<(), crate::context::ContextError> {
-    model.snapshot().map_or(Ok(()), |snapshot| {
-        validate_context_policy(policy, &snapshot)
-    })
+    model
+        .snapshot()
+        .map_or(Ok(()), |snapshot| validate_context_budgets(&snapshot))
 }
 
-pub(crate) fn validate_context_policy(
-    policy: &SessionContextPolicy,
+pub(crate) fn validate_context_budgets(
     model: &AttemptModelSnapshot,
 ) -> Result<(), crate::context::ContextError> {
-    policy.validate_budgets(
-        (
-            model.primary().context_window(),
-            model.primary().max_output_tokens(),
-        ),
-        (
-            model.summary_invocation().context_window(),
-            model.summary_invocation().max_output_tokens(),
-        ),
-    )
+    crate::context::policy::CompactionPolicy::for_models(model).map(|_| ())
 }
 
 impl ConversationRuntime {
@@ -216,7 +200,7 @@ impl ConversationRuntime {
         &self,
         config: SessionModelConfig,
     ) -> Result<PreparedModelSelection, ModelUpdateError> {
-        self.resolve_model_selection(self.capture_model_selection()?, config)
+        Self::resolve_model_selection(self.capture_model_selection()?, config)
     }
 
     /// Cheap immutable capture; the Session owner calls this under its source fence.
@@ -234,7 +218,6 @@ impl ConversationRuntime {
     }
 
     pub(crate) fn resolve_model_selection(
-        &self,
         mut candidate: PreparedModelSelection,
         config: SessionModelConfig,
     ) -> Result<PreparedModelSelection, ModelUpdateError> {
@@ -242,13 +225,7 @@ impl ConversationRuntime {
             .model
             .apply(config)
             .map_err(|error| invalid_model(&error))?;
-        let policy = candidate
-            .resources
-            .configuration()
-            .map_or(self.inner.context.policy, |generation| {
-                generation.config.context_policy()
-            });
-        validate_model_context(&policy, &candidate.model)
+        validate_model_context(&candidate.model)
             .map_err(|error| ModelUpdateError::InvalidConfiguration(error.message))?;
         Ok(candidate)
     }

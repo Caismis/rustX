@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 // detailed verifier so accepted noncanonical-but-valid layouts and precise
 // corruption diagnostics are unchanged.
 pub(super) const CANONICAL_SCHEMA_SHAPE_BLAKE3: &str =
-    "3b46919f09ef3f513b1466350f3e5d8f9973978953e47e010b3ab54569244b24";
+    "30d9eda82faf2c6fba5c79d97f7cbc773ea540d75a6d8e9cba81fbdcaf2e2107";
 
 fn validate_schema_text(bytes: &[u8], column: usize) -> Result<(), ConversationStoreError> {
     if std::str::from_utf8(bytes).is_err() {

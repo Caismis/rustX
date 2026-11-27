@@ -153,6 +153,108 @@ pub(crate) fn normalize_http_error(
     .normalized()
 }
 
+/// Which fields in the actual `output_config` are owned by the native schema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeFormat {
+    Absent,
+    FormatOnly,
+    WithSiblings,
+}
+
+impl NativeFormat {
+    pub(super) fn from_request(request: &crate::model::ModelRequest) -> Self {
+        if !request
+            .response_schema
+            .as_ref()
+            .is_some_and(crate::model::structured::PreparedResponseSchema::is_native)
+        {
+            return Self::Absent;
+        }
+        if request
+            .request_params()
+            .get("output_config")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|params| !params.is_empty())
+        {
+            Self::WithSiblings
+        } else {
+            Self::FormatOnly
+        }
+    }
+}
+
+/// Classify only explicit structured rejection of the actual native format.
+pub(super) fn is_native_format_rejection(
+    native: NativeFormat,
+    provider_type: Option<&str>,
+    code: Option<&str>,
+    param: Option<&str>,
+    message: &str,
+) -> bool {
+    if native == NativeFormat::Absent || provider_type != Some("invalid_request_error") {
+        return false;
+    }
+    let field = "output_config.format";
+    let owns_parent = native == NativeFormat::FormatOnly;
+    if code == Some("unsupported_parameter")
+        && (param == Some(field) || (owns_parent && param == Some("output_config")))
+    {
+        return true;
+    }
+    if code == Some("unsupported_value") && param == Some("output_config.format.type") {
+        return true;
+    }
+    let matches_field = |name: &str| {
+        crate::model::adapter::structured::explicit_format_rejection_message(message, name)
+            || message.trim().trim_end_matches('.')
+                == format!("{name}: Extra inputs are not permitted")
+    };
+    matches!(
+        code,
+        None | Some("invalid_request_error" | "unsupported_parameter" | "unsupported_value")
+    ) && ((matches!(
+        param,
+        None | Some("output_config.format" | "output_config.format.type")
+    ) && matches_field(field))
+        || (owns_parent
+            && matches!(param, None | Some("output_config"))
+            && matches_field("output_config")))
+}
+
+pub(super) fn normalize_http_error_for_format(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &[u8],
+    native_format: NativeFormat,
+) -> ModelError {
+    let mut error = normalize_http_error(status, headers, body);
+    if native_format != NativeFormat::Absent
+        && status == StatusCode::BAD_REQUEST
+        && error.kind == ModelErrorKind::InvalidRequest
+    {
+        let detail = serde_json::from_slice::<serde_json::Value>(body).ok();
+        let detail = detail
+            .as_ref()
+            .map(|root| root.get("error").filter(|v| v.is_object()).unwrap_or(root));
+        if detail.is_some_and(|detail| {
+            is_native_format_rejection(
+                native_format,
+                detail.get("type").and_then(serde_json::Value::as_str),
+                detail.get("code").and_then(serde_json::Value::as_str),
+                detail.get("param").and_then(serde_json::Value::as_str),
+                detail
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            )
+        }) {
+            error.kind = ModelErrorKind::NativeFormatUnsupported;
+            error.retry_disposition = ModelRetryDisposition::Never;
+        }
+    }
+    error
+}
+
 fn http_retry_disposition(
     status: StatusCode,
     provider_code: Option<&str>,
@@ -191,6 +293,8 @@ fn http_retry_disposition(
         ModelErrorKind::InvalidRequest
         | ModelErrorKind::Authentication
         | ModelErrorKind::Unsupported
+        | ModelErrorKind::NativeFormatUnsupported
+        | ModelErrorKind::StructuredOutputContractViolation
         | ModelErrorKind::ContextWindowExceeded
         | ModelErrorKind::Cancelled
         | ModelErrorKind::Transport
@@ -1153,6 +1257,82 @@ mod tests {
     use crate::tools::types::{
         ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolResultContent,
     };
+
+    #[test]
+    fn native_format_rejection_requires_request_specific_structured_evidence() {
+        let headers = reqwest::header::HeaderMap::new();
+        for code in ["unsupported_parameter", "unsupported_value"] {
+            for param in ["output_config.format", "output_config.format.type"] {
+                let body = serde_json::json!({"error":{"type":"invalid_request_error","code":code,"param":param,"message":"rejected"}}).to_string();
+                let classify = |status, native| {
+                    super::normalize_http_error_for_format(
+                        status,
+                        &headers,
+                        body.as_bytes(),
+                        if native {
+                            super::NativeFormat::FormatOnly
+                        } else {
+                            super::NativeFormat::Absent
+                        },
+                    )
+                    .kind
+                };
+                assert_eq!(
+                    classify(reqwest::StatusCode::BAD_REQUEST, true),
+                    if (code == "unsupported_parameter") == (param == "output_config.format") {
+                        ModelErrorKind::NativeFormatUnsupported
+                    } else {
+                        ModelErrorKind::InvalidRequest
+                    }
+                );
+                assert_eq!(
+                    classify(reqwest::StatusCode::BAD_REQUEST, false),
+                    ModelErrorKind::InvalidRequest
+                );
+                assert_eq!(
+                    classify(reqwest::StatusCode::UNAUTHORIZED, true),
+                    ModelErrorKind::Authentication
+                );
+                assert_eq!(
+                    classify(reqwest::StatusCode::TOO_MANY_REQUESTS, true),
+                    ModelErrorKind::RateLimit
+                );
+            }
+        }
+        for (scope, field, expected) in [
+            (super::NativeFormat::FormatOnly, "output_config", true),
+            (super::NativeFormat::WithSiblings, "output_config", false),
+            (
+                super::NativeFormat::WithSiblings,
+                "output_config.format",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                super::is_native_format_rejection(
+                    scope,
+                    Some("invalid_request_error"),
+                    Some("invalid_request_error"),
+                    None,
+                    &format!("{field}: Extra inputs are not permitted.")
+                ),
+                expected
+            );
+        }
+        for body in [
+            r#"{"error":{"type":"invalid_request_error","code":"unsupported_parameter","param":"thinking","message":"output_config.format"}}"#,
+            r#"{"error":{"type":"invalid_request_error","message":"unsupported output_config.format"}}"#,
+            r#"{"error":{"type":"invalid_request_error","code":"unsupported_parameter","param":"output_config.format","message":"prompt is too long: 213462 tokens > 200000 maximum"}}"#,
+        ] {
+            let error = super::normalize_http_error_for_format(
+                reqwest::StatusCode::BAD_REQUEST,
+                &headers,
+                body.as_bytes(),
+                super::NativeFormat::FormatOnly,
+            );
+            assert_ne!(error.kind, ModelErrorKind::NativeFormatUnsupported);
+        }
+    }
 
     /// The adapter — not the agent loop — recovers the provider's own
     /// measurement of a rejected oversized request, and it crosses the

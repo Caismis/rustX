@@ -62,6 +62,7 @@ fn managed_snapshot_survives_source_deletion_and_text_projection_keeps_correlati
     let canonical = messages.clone();
     let summary = crate::context::summarizer::SummaryRequest {
         retired: canonical.clone(),
+        ..Default::default()
     }
     .model_input();
     let crate::model::projected::ModelMessageView::User(content) = summary.messages[0].view()

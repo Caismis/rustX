@@ -27,8 +27,11 @@ pub enum TraceFactKind {
     ToolExecutionFailed,
     ToolMessageCommitted,
     CompactionStarted,
+    CompactionOperationUpdated,
     CompactionCompleted,
     CompactionFailed,
+    CompactionCancelled,
+    CompactionSkipped,
     BackgroundExecutionCommitted,
     BackgroundTerminalPublished,
     SubagentOwnershipCommitted,
@@ -61,6 +64,15 @@ pub struct TraceFactQuery {
     pub ascending: bool,
     pub limit: usize,
 }
+/// One bounded, operation-owned page of original auxiliary Call starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceCompactionCallIds {
+    pub total: u64,
+    pub items: Vec<(u64, rustx_types::runtime::identity::AuxiliaryCallId)>,
+    /// Exclusive original Journal coordinate for the next page.
+    pub next_offset: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceFactHeader {
     pub sequence: u64,
@@ -121,6 +133,10 @@ pub enum TraceFactData {
     },
     CompactionStart {
         native_id: Option<String>,
+        mode: rustx_types::context::operation::CompactionMode,
+    },
+    CompactionStatus {
+        status: rustx_types::context::operation::CompactionOperationStatus,
     },
     BackgroundStart {
         native_id: Option<String>,
@@ -164,6 +180,7 @@ pub enum TraceTerminalClass {
     Completed,
     Failed,
     Cancelled,
+    Skipped,
     TimedOut,
     Limited,
     Denied,
@@ -303,6 +320,10 @@ pub fn trace_fact_requires_publication(event: &rustx_types::events::types::Runti
         RuntimeEvent::ModelRequestStarted { .. }
         | RuntimeEvent::ModelRequestCompleted { .. }
         | RuntimeEvent::ModelRequestFailed { .. }
+        | RuntimeEvent::CompactionOperationUpdated { .. }
+        | RuntimeEvent::CompactionCancelled { .. }
+        | RuntimeEvent::CompactionSkipped { .. }
+        | RuntimeEvent::CompactionChunkAccepted { .. }
         | RuntimeEvent::AuxiliaryCallStarted { .. }
         | RuntimeEvent::AuxiliaryCallSettled { .. }
         | RuntimeEvent::AuxiliaryRetryScheduled { .. }

@@ -36,8 +36,8 @@ use crate::tools::types::ToolCallStart;
 
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
-    invalid_request, is_refusal, map_finish_reason, normalize_http_error, normalize_usage,
-    stream_retry_disposition,
+    NativeFormat, invalid_request, is_native_format_rejection, is_refusal, map_finish_reason,
+    normalize_http_error_for_format, normalize_usage, stream_retry_disposition,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
 
@@ -124,13 +124,15 @@ impl ModelAdapter for AnthropicMessagesAdapter {
             http_client: self.http_client.clone(),
             response_byte_limit: input.response_byte_limit,
             wire_request: body,
-            normalizer: AnthropicStreamNormalizer::new(tools),
+            normalizer: AnthropicStreamNormalizer::new(tools)
+                .with_native_format(NativeFormat::from_request(&input)),
             cancellation,
         };
         Box::pin(futures_util::stream::unfold(state, anthropic_phase_next))
     }
 }
 
+#[allow(clippy::too_many_lines)] // Preserve cancellation and terminal precedence in the single stream state machine.
 async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem, AnthropicPhase)> {
     match phase {
         AnthropicPhase::Preparing {
@@ -187,6 +189,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
                 &http_client,
                 wire_request,
                 response_byte_limit,
+                normalizer.native_format,
                 cancellation.clone(),
             )
             .await
@@ -248,6 +251,7 @@ enum OpeningOutcome {
 /// cancellation-aware: cancellation while waiting for the response headers
 /// drops the in-flight request and terminates with `Failed(Cancelled)`
 /// without retry.
+#[allow(clippy::too_many_arguments)] // Provider-owned HTTP fields and explicit request/cancellation authority.
 async fn open_stream(
     api_key: &str,
     url: &str,
@@ -255,6 +259,7 @@ async fn open_stream(
     http_client: &reqwest::Client,
     wire_request: bytes::Bytes,
     response_byte_limit: Option<usize>,
+    native_format: NativeFormat,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
     let send = http_client
@@ -290,7 +295,12 @@ async fn open_stream(
                 .bytes()
                 .await
                 .map_or_default(|bytes| bytes.to_vec());
-            OpeningOutcome::Failed(normalize_http_error(status, &headers, &body))
+            OpeningOutcome::Failed(normalize_http_error_for_format(
+                status,
+                &headers,
+                &body,
+                native_format,
+            ))
         }
         Ok(response) => {
             let stream: SseStream = Box::pin(response.bytes_stream().eventsource());
@@ -494,6 +504,7 @@ enum AnthropicBlockState {
 #[derive(Debug)]
 struct AnthropicStreamNormalizer {
     tools: std::sync::Arc<ValidatedTools>,
+    native_format: NativeFormat,
     blocks: BlockAllocator<AnthropicBlockKey>,
     block_states: BTreeMap<u32, AnthropicBlockState>,
     message_start_usage: Option<WireUsage>,
@@ -508,6 +519,7 @@ struct AnthropicStreamNormalizer {
 impl AnthropicStreamNormalizer {
     fn new(tools: std::sync::Arc<ValidatedTools>) -> Self {
         Self {
+            native_format: NativeFormat::Absent,
             tools,
             blocks: BlockAllocator::new(),
             block_states: BTreeMap::new(),
@@ -519,6 +531,11 @@ impl AnthropicStreamNormalizer {
             terminal_emitted: false,
             pending_progress: None,
         }
+    }
+
+    fn with_native_format(mut self, native_format: NativeFormat) -> Self {
+        self.native_format = native_format;
+        self
     }
 
     fn push_event(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ModelError> {
@@ -534,6 +551,7 @@ impl AnthropicStreamNormalizer {
         Ok(items)
     }
 
+    #[allow(clippy::too_many_lines)] // Normalize one closed wire event vocabulary without altering lifecycle order.
     fn push_events(&mut self, data: &str) -> Result<Vec<ModelEvent>, ModelError> {
         let event = parse_event(data)
             .map_err(|e| provider_error(format!("malformed Anthropic stream event: {e}")))?;
@@ -619,8 +637,30 @@ impl AnthropicStreamNormalizer {
                     .precise_error_type
                     .clone()
                     .or_else(|| error.error_type.clone());
+                let mut kind =
+                    stream_error_kind(provider_code.as_deref(), error.message.as_deref());
+                if matches!(
+                    kind,
+                    ModelErrorKind::InvalidRequest | ModelErrorKind::ProviderError
+                ) && is_native_format_rejection(
+                    self.native_format,
+                    error.error_type.as_deref(),
+                    error
+                        .code
+                        .as_deref()
+                        .or(error.precise_error_type.as_deref()),
+                    error.param.as_deref(),
+                    error.message.as_deref().unwrap_or_default(),
+                ) {
+                    kind = ModelErrorKind::NativeFormatUnsupported;
+                }
+                let retry_disposition = if kind == ModelErrorKind::NativeFormatUnsupported {
+                    ModelRetryDisposition::Never
+                } else {
+                    stream_retry_disposition(provider_code.as_deref(), error.message.as_deref())
+                };
                 Err(ModelError {
-                    kind: stream_error_kind(provider_code.as_deref(), error.message.as_deref()),
+                    kind,
                     message: format!(
                         "Anthropic stream error{}: {}",
                         provider_code
@@ -628,10 +668,7 @@ impl AnthropicStreamNormalizer {
                             .map_or_default(|t| format!(" ({t})")),
                         error.message.as_deref().unwrap_or("unknown")
                     ),
-                    retry_disposition: stream_retry_disposition(
-                        provider_code.as_deref(),
-                        error.message.as_deref(),
-                    ),
+                    retry_disposition,
                     retry_after_ms: None,
                     provider_code,
                     context_overflow: None,
@@ -1202,5 +1239,109 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         malformed_tool_proposal: None,
         timeout_phase: None,
         generation: None,
+    }
+}
+
+#[cfg(test)]
+mod native_format_error_tests {
+    use super::{AnthropicStreamNormalizer, ModelErrorKind, ModelProtocol};
+    use futures_util::StreamExt;
+
+    #[test]
+    fn streamed_format_rejection_is_limited_to_native_request_and_exact_field() {
+        let request = crate::scripted_suites::common::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "test",
+            "source",
+        );
+        let native = |enabled| {
+            AnthropicStreamNormalizer::new(
+                crate::model::adapter::validation::validate_request(
+                    &request,
+                    ModelProtocol::AnthropicMessages,
+                )
+                .unwrap()
+                .into(),
+            )
+            .with_native_format(if enabled {
+                super::NativeFormat::FormatOnly
+            } else {
+                super::NativeFormat::Absent
+            })
+        };
+        let classify = |body: &str, enabled| native(enabled).push_events(body).unwrap_err().kind;
+        let valid = r#"{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_value","param":"output_config.format.type","message":"rejected"}}"#;
+        assert_eq!(
+            classify(valid, true),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        assert_ne!(
+            classify(valid, false),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        let type_message_only = r#"{"type":"error","error":{"type":"invalid_request_error","message":"output_config.format is not supported by this model."}}"#;
+        assert_eq!(
+            classify(type_message_only, true),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        assert_ne!(
+            classify(type_message_only, false),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        let unrelated = r#"{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_value","param":"thinking","message":"output_config.format"}}"#;
+        assert_ne!(
+            classify(unrelated, true),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        let overflow = r#"{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_value","param":"output_config.format.type","message":"prompt is too long: 213462 tokens > 200000 maximum"}}"#;
+        assert_eq!(
+            classify(overflow, true),
+            ModelErrorKind::ContextWindowExceeded
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_adapter_rejects_forged_fallback_before_start() {
+        use crate::model::adapter::{ModelAdapter, ModelStreamItem};
+        use crate::model::event::ModelEvent;
+        use crate::model::structured::{
+            PreparedResponseSchema, ResponseSchema, StructuredOutputStrategy,
+        };
+        let mut request = crate::scripted_suites::common::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "test",
+            "source",
+        );
+        request.invocation.capabilities.json_schema_output = true;
+        let schema = ResponseSchema::new(
+            "summary".into(),
+            serde_json::json!({
+                "type":"object", "properties":{"goal":{"type":"string"}},
+                "required":["goal"], "additionalProperties":false
+            }),
+            128,
+        )
+        .unwrap();
+        request
+            .effective_system_prompt
+            .push_str(&schema.prompt_instruction());
+        request.response_schema = Some(PreparedResponseSchema {
+            schema,
+            strategy: StructuredOutputStrategy::PromptFallback {
+                operation_id: crate::runtime::identity::CompactionOperationId::new("forged"),
+            },
+        });
+        let adapter = super::AnthropicMessagesAdapter::new(super::AnthropicAdapterConfig::new(
+            "test",
+            "http://127.0.0.1:1",
+        ));
+        let mut stream = adapter.stream(
+            request,
+            crate::runtime::cancellation::CancellationSignal::new(),
+        );
+        assert!(
+            matches!(stream.next().await, Some(ModelStreamItem::Event(ModelEvent::Failed { error })) if error.kind == ModelErrorKind::InvalidRequest)
+        );
+        assert!(stream.next().await.is_none());
     }
 }

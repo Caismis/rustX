@@ -1,7 +1,9 @@
 import {validateCanonicalInspectionPage} from '../../protocol/app-server/trace-inspection.ts';
 import assert from 'node:assert/strict';
+import { CompactionSummary } from '../src/ui/components/compaction-summary.ts';
+import { plainText } from '../src/ui/theme.ts';
 import { it } from 'node:test';
-import type {CheckpointPage,TraceFieldSource,TraceInspectionHead,TraceInspectionMessage,TraceRecord} from '../../protocol/app-server/v80.ts';
+import type {CheckpointPage,TraceFieldSource,TraceInspectionHead,TraceInspectionMessage,TraceRecord} from '../../protocol/app-server/v82.ts';
 import {harness,nextRequest} from './support/app-server-harness.ts';
 import {paramsOf} from './support/app-server-peer.ts';
 import {SubagentTranscript} from '../src/app-server/subagent-transcript.ts';
@@ -303,12 +305,17 @@ it('T11 Root Tool result metadata and original image bytes remain independently 
 it('selected Projection provenance uses its returned cut and rejects a held range after replacement',async()=>{
  const h=await harness();
  const source:TraceFieldSource={type:'value',field:'provenance',domain:'context.projections.1.items.0.provenance',item_offset:0,path:[],encoded_bytes:'2'};
- const detail=(id:string,revision:string):import('../../protocol/app-server/v80.ts').ProjectionDetail=>({
+ const detail=(id:string,revision:string):import('../../protocol/app-server/v82.ts').ProjectionDetail=>({
   read_cut:checkpoint(snapshot(),revision).read_cut,
   checkpoint:{checkpoint_id:id,activation_id:'1',base_frontier:'1',activation_ledger:'1',transcript_anchor:'1',origin:{conversation_id:h.target.conversation_id,activation:'1',completed_journal:'1'},destination_installation:null,original_items:0,derived_items:1,summary_preview:null},
   next_item:null,items:[{occurrence:{checkpoint_id:id,item_index:0},content:{request_occurrence:null,role:'user',message_id:null,source:null,provenance:{type:'derived',sources:[],checkpoint_sources:[],transformations:['summary'],truncated:false},provenance_source:source,blocks:[],truncated:true}}],
  });
- const opening=h.dispatcher.submit('/context projection original');const request=await nextRequest(h,'session/projectionDetail');
+ const marker = { ...detail('original', '7').checkpoint, summary_preview: { text: 'Partial summary', truncated: true } };
+ const hint = new CompactionSummary(marker, true).render(120).map(plainText).join('\n');
+ const command = hint.match(/\/context projection \S+/)?.[0];
+ assert.ok(command);
+ const opening=h.dispatcher.submit(command);const request=await nextRequest(h,'session/projectionDetail');
+ assert.equal(paramsOf(request,'session/projectionDetail').checkpoint_id,marker.checkpoint_id);
  const first=detail('original','7');h.transport.respond(request.id,{type:'projection_detail',detail:first});await opening;
  const listing=await h.dispatcher.submit('/content');assert.equal(listing.kind,'inspect');if(listing.kind==='inspect')assert.match(listing.body,/projection:original\/0 · provenance/);
  const reading=h.dispatcher.submit('/content 1');const range=await nextRequest(h,'conversation/checkpointValueRead');
@@ -318,4 +325,33 @@ it('selected Projection provenance uses its returned cut and rejects a held rang
  h.transport.respond(range.id,{type:'checkpoint_value_chunk',chunk:{cut:first.read_cut,domain:source.domain,item_offset:0,path:[],offset:0,bytes_base64:'e30=',readable_end:2,next_offset:null,representation:'canonical_json_v1'}});
  const old=await reading;assert.equal(old.kind,'transient');if(old.kind==='transient')assert.match(old.text,/replaced/);
  assert.equal(h.session.state.cursor,'0');assert.equal(h.session.deferredTraceFields[0]?.record,'projection:replacement/0');h.client.close();
+});
+
+it('lists compaction Calls and reads later Calls’ physical requests at the selected cut', async () => {
+  const h = await harness();
+  const domain = 'trace.records.9.detail.calls';
+  const call = (id:string, sequence:string) => ({ call_id:id, started_sequence:sequence,
+    requests_domain:`${domain}.${id}.requests`, request_count:'1' });
+  const first = call('first', '7'), second = call('second', '11');
+  const head:TraceInspectionHead = {id:'trace:9',kind:'compaction',record:record('trace:9', 'compaction'),
+    content:{type:'compaction', page:{domain,total:'2',items:[first],next_offset:'7'}}};
+  const opening = h.dispatcher.submit('/observation trace trace:9');
+  const request = await nextRequest(h,'session/traceDetail');
+  const selected = page(head);
+  h.transport.respond(request.id,{type:'domain_page',page:selected});
+  await opening;
+  assert.ok(h.session.observationCollections.some(row=>row.frontier.domain===first.requests_domain));
+  const loading = h.dispatcher.submit(`/observation ${domain}`);
+  const calls = await nextRequest(h,'conversation/checkpointPage');
+  h.transport.respond(calls.id,{type:'checkpoint_page',page:{domain,total:'2',cursor:selected.cursor,read_cut:selected.read_cut,next_offset:null,
+    items:[first, second].map(value=>({offset:value.started_sequence,identity:value.call_id,value,content:[],deferred:false,body_complete:true}))}});
+  await loading;
+  assert.ok(h.session.observationCollections.some(row=>row.frontier.domain===second.requests_domain));
+  const physical = h.dispatcher.submit(`/observation ${second.requests_domain}`);
+  const read = await nextRequest(h,'conversation/checkpointPage',1);
+  assert.deepEqual(paramsOf(read,'conversation/checkpointPage').cut,selected.read_cut);
+  h.transport.respond(read.id,{type:'checkpoint_page',page:{domain:second.requests_domain,total:'1',cursor:selected.cursor,read_cut:selected.read_cut,next_offset:null,
+    items:[{offset:'0',identity:'physical-request',value:{ordinal:0},content:[],deferred:false,body_complete:true}]}});
+  await physical;
+  h.client.close();
 });

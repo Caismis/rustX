@@ -10,6 +10,14 @@ Agent requests retain their native Snapshot, selected-input root/digest/count, C
 
 A Call records bounded purpose, trigger, business source, input-selection evidence and fingerprints. Purpose and trigger are consumer-defined attribution strings, each limited to 512 UTF-8 bytes, nonempty and without control characters. Trigger describes the activation cause, not a transport category. The Store has no business-purpose dispatch or consumer allowlist. Business sources may be native Compaction/Human references or opaque consumer-owned namespace/reference pairs with the same text bounds. Opaque references grant no storage, inheritance or execution authority.
 
+Each physical RequestStarted also retains a redacted frozen invocation identity:
+ProviderId, logical ModelRef and selected Profile, with the wire model kept
+separately. Native execution captures these from its actual resolved invocation;
+neither model-reference spelling nor a later Session selection supplies them.
+The identity JSON is capped at 2 KiB before hydration. Retry, exact replay,
+confirmation and inherited Summary evidence retain the same binding. Parameters,
+credentials, endpoints and reasoning text are absent from this identity.
+
 Suggested-input generation uses the same contract with consumer-defined attribution and frozen historical context or temporary draft input. Candidate presentation and expiry belong to the consumer. An explicit user submission follows the normal Human input path; generating or displaying candidates leaves canonical history and primary Agent obligations unchanged.
 
 Business source and input selection have independent coordinates: native source references must exist when the Call starts, but may be newer than its frozen input cut. Only selected historical input references must be visible at that input cut. A historical selection records the complete native ResourceReadCut, including canonical and projection coordinates; a Journal sequence alone does not identify canonical history. Temporary input has no implied historical cut or retained copy. Explicit selected message references are independently bounded. These facts describe what was selected, not how to reconstruct absent temporary bytes.
@@ -85,7 +93,7 @@ cost. These measurements are not a schema-75 cost baseline. No history is pruned
 
 Clone/Fork canonical overlap never creates target-local auxiliary execution or reserves a local correlation. Only an explicitly retained Summary-generation dependency may carry source audit, with original source identity and the exact eligible prerequisite closure. Source audit remains distinct from target-local request ownership, quota and admission. Independent retained dependencies must survive source deletion.
 
-A new local checkpoint naming a Summary-generation dependency requires the successful physical request and completed local Call to be visible at the dependency's declared Journal cut. A later settlement cannot authorize a dependency captured before that settlement. Historical inspection and inherited source audit preserve open or failed execution evidence at their captured cuts; that evidence grants no new checkpoint commit authority.
+A new local checkpoint naming Summary-generation dependencies requires every accepted chunk to identify a successful physical request and completed local Call of the same operation and generation, with exact source ranges, visible at the declared Journal cut. The `preceding_call` and `previous_summary` links close the dependency chain, including failed calls when retained by a fork. A later settlement cannot authorize a dependency captured before that settlement. Historical inspection and inherited source audit preserve open or failed execution evidence at their captured cuts; that evidence grants no new checkpoint commit authority.
 
 Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary facts have a separate auxiliary_audit.jsonl projection at the captured Journal cut; generation rows identify their owner. Complete audit does not imply reconstructed prompts or generated output. Archive dependency validation walks the captured native Journal/activation prefix one checkpoint at a time. Each local Summary audit closure has its own bounded materialization budget; released history does not consume a lifetime archive allowance. Later checkpoints cannot enter an older captured archive. Archive projections explicitly exclude private diagnostics and execution bindings instead of serializing newly added native fields indiscriminately.
 
@@ -98,7 +106,8 @@ Real SQLite tests cover transaction atomicity, owner/index consistency, rollback
 Automatic and manual Summary and independent automatic Title use the same Runtime-owned bounded-retry executor.
 Native preparation reserves process total/general, Conversation total/general
 and write responsibility without waiting. Limits are 32/24 and 4/3; only
-native Compaction authority may omit the general reservations. A purpose or
+blocking/manual native Compaction authority may omit the general reservations.
+Session-owned proactive Summary uses ordinary general capacity. A purpose or
 trigger string grants no execution or protected-capacity authority. Both
 capacity and lifecycle-lock Busy refusals arbitrate under cancellation; an
 earlier cancellation remains cancellation, and active callers never wait for
@@ -134,12 +143,22 @@ no Store allocation. Unresolved exact intent moves to the native failed-durabili
 owner only after physical exit; historical uncertainty does not pin global
 capacity indefinitely. Live/unproven cleanup retains its old allocation.
 
-Compaction shares twelve confirmed/unresolved starts, three total input
-shrinks and a five-minute absolute deadline across carryover, input replans and
-technical retries. Automatic Compactions in one logical Agent step share that
-allowance from the first Compaction admission, including later entries into
-`perform_compaction`; each checkpoint still has its own operation identity and
-exact receipt. An independent manual Compaction gets a new business allowance.
+Compaction admits a finite plan of at most 256 normal Summary starts before any
+start. Twelve exceptional recovery actions are shared across re-entry, retries,
+format fallback, carryover degradation and replanning; at most three input
+reductions are permitted. For blocking/manual work, the original absolute deadline is five minutes plus
+30 seconds per planned start after the first, capped at two hours. Automatic
+blocking Compactions in one logical Agent step share this authority; a manual Compaction
+gets an independent allowance. Each checkpoint has its own operation receipt.
+
+Independent asynchronous generation instead retains the existing Auxiliary
+scope deadline from original admission. Planning does not derive another
+compaction-wide deadline, and a fully accepted result awaiting installation has
+no age TTL. Waiting Attempts do not become cancellation parents or renew the
+scope. Native request/EOF timeouts, retries and physical joins remain effective;
+current installation authority is obtained separately after generation closes.
+See [asynchronous compaction](asynchronous-compaction.md).
+
 The model and resources remain frozen. Manual compaction transfers its native
 business tail before the manager lease is released, and a lost observer or
 later checkpoint cannot replace the exact result of the original invocation.
@@ -168,7 +187,7 @@ The local delays are two then four seconds. The absolute next eligibility time i
 `failure_observed_at + max(local_delay, valid_provider_retry_after)`. The maximum
 acceptable single wait is 60 seconds; a larger Retry-After is refused, never
 shortened. Settlement latency consumes this delay. A next start must precede the
-original five-minute Call/parent deadline. Cancellation during backoff settles
+original Call/parent deadline. Cancellation during backoff settles
 only the Call; it neither repeats the failed request terminal nor creates a start.
 
 The failed request and AuxiliaryRetryScheduled commit in one Store transaction.

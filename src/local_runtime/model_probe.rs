@@ -67,6 +67,8 @@ impl SessionRuntimeManager {
                 config.max_output_tokens = config.max_output_tokens.min(256);
             }
             let request = ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: Some(256 * 1024),
                 images: crate::model::images::ResolvedImages::new(),
