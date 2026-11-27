@@ -1214,15 +1214,23 @@ mod tests {
     fn transfer_resolves_local_home_and_product_aliases_without_following_cache_links() {
         use std::os::unix::fs::symlink;
         let temporary = tempfile::tempdir().unwrap();
-        let home = temporary.path().join("home");
-        let home_alias = temporary.path().join("home-alias");
-        let product = temporary.path().join("configured-product");
+        let base = temporary.path().canonicalize().unwrap();
+        let home = base.join("home");
+        let home_alias = base.join("home-alias");
+        let product = base.join("configured-product");
         fs::create_dir(&home).unwrap();
         fs::create_dir(&product).unwrap();
         symlink(&home, &home_alias).unwrap();
         symlink(&product, home.join("rustx")).unwrap();
         let arbitration = Arbitration::new();
-        let mut skills = super::super::skills::UserSkills::from_home(Some(home_alias));
+        let mut skills = crate::skills::UserSkills::from_home(Some(home_alias));
+        let Reply::Collection { path, .. } = skills
+            .dispatch(&Request::Collection { probe: None }, &arbitration)
+            .unwrap()
+        else {
+            panic!("expected the Client-selected physical collection");
+        };
+        assert_eq!(path, product.canonicalize().unwrap().join(".agents/skills"));
         assert_eq!(
             skills
                 .dispatch(
@@ -1241,10 +1249,10 @@ mod tests {
                 .is_dir()
         );
         skills.lane_lost().unwrap();
-
         let mut transfer = Transfer::default();
-        let alternate_root = temporary.path().join("alternate-product");
-        let collection_target = temporary.path().join("collection-target");
+
+        let alternate_root = base.join("alternate-product");
+        let collection_target = base.join("collection-target");
         fs::create_dir_all(alternate_root.join(".agents")).unwrap();
         fs::create_dir(&collection_target).unwrap();
         symlink(&collection_target, alternate_root.join(".agents/skills")).unwrap();
@@ -1268,8 +1276,8 @@ mod tests {
         );
         transfer.lane_lost().unwrap();
 
-        let third_root = temporary.path().join("third-product");
-        let agents_target = temporary.path().join("agents-target");
+        let third_root = base.join("third-product");
+        let agents_target = base.join("agents-target");
         fs::create_dir(&third_root).unwrap();
         fs::create_dir(&agents_target).unwrap();
         symlink(&agents_target, third_root.join(".agents")).unwrap();
@@ -1293,9 +1301,9 @@ mod tests {
         );
         transfer.lane_lost().unwrap();
 
-        let unowned = temporary.path().join("unowned");
+        let unowned = base.join("unowned");
         fs::create_dir(&unowned).unwrap();
-        let linked = temporary.path().join("linked-product");
+        let linked = base.join("linked-product");
         fs::create_dir_all(linked.join(".agents/skills")).unwrap();
         symlink(&unowned, linked.join(".agents/skills/.rustx-sync")).unwrap();
         assert!(

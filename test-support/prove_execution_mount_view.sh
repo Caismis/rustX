@@ -52,6 +52,8 @@
 #    overlay, using an actual uv and the existing supervisor.
 #  - Stdio MCP reads the Client-only source declaration and launches the peer
 #    in that same mount. One foreground call crosses multiple execution pages.
+#  - User Skill bind regressions cover read-only shared roots, standalone
+#    markers beside linked assets, and an untouched dangling Client collection.
 #
 # The product proof runs only against the real prepared artifacts — the
 # process harness plus its metadata-verified sibling Execution Client — so
@@ -97,6 +99,8 @@ cargo test -p rustx --all-features --locked --lib \
 cargo test -p rustx --all-features --locked --lib \
     user_skill_sync_uses_separate_home_view_and_preserves_live_versions \
     -- --ignored --nocapture
+cargo test -p rustx --all-features --locked --lib \
+    skill_review_regressions -- --ignored --nocapture --test-threads=1
 if [ "${RUSTX_PAIRED_RELEASE_PROOF:-0}" = 1 ]; then
     sh test-support/prove_paired_skill_read.sh
 fi

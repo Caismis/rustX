@@ -112,6 +112,31 @@ pub fn valid_identity_packages(packages: &[PathBuf]) -> bool {
     true
 }
 
+/// Validate collection-root Markdown names for bounded metadata inquiries.
+/// No request can name an absolute path, a descendant, or non-Markdown data.
+#[must_use]
+pub fn valid_standalone_names(names: &[String]) -> bool {
+    if names.len() > MAX_IDENTITY_PACKAGES {
+        return false;
+    }
+    let mut bytes = 0usize;
+    for name in names {
+        let path = Path::new(name);
+        if name.starts_with('.')
+            || !valid_package_path(path)
+            || path.components().count() != 1
+            || path.extension().is_none_or(|extension| extension != "md")
+        {
+            return false;
+        }
+        bytes = bytes.saturating_add(name.len());
+        if bytes > MAX_IDENTITY_PATH_BYTES {
+            return false;
+        }
+    }
+    true
+}
+
 /// An inquiry addressed to the Client's fixed User root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -120,12 +145,16 @@ pub enum Request {
     /// freshly generated root-identity probe. Only the reserved probe name
     /// form is accepted; this is not an arbitrary file reader.
     Root { probe: Option<String> },
+    /// Inspect the Client-selected root directory itself, without reading files.
+    RootIdentity,
     /// Return the locally resolved official collection and inspect only a
     /// reserved, fresh probe directly beneath it when requested.
     Collection { probe: Option<String> },
     /// Inspect package directory identities and their fixed `SKILL.md` files.
     /// No arbitrary leaf path or file contents can be requested.
     Packages { packages: Vec<PathBuf> },
+    /// Inspect only named, collection-root Markdown files; no file body is read.
+    Standalone { names: Vec<String> },
     /// Hash only the named package's `SKILL.md`, with a fixed byte budget.
     Digest { package: PathBuf },
     /// Enter one authority's owned cache and acquire its nonblocking sync lock.
@@ -191,6 +220,11 @@ pub struct PackageIdentity {
 pub enum Reply {
     /// The Client-local `~/rustx` and optional proof for the requested probe.
     Root { path: PathBuf, probe: Option<Probe> },
+    /// The locally selected root and its optional no-follow directory identity.
+    RootIdentity {
+        path: PathBuf,
+        identity: Option<EntryIdentity>,
+    },
     /// The Client-local collection and optional fresh-probe evidence.
     Collection {
         path: PathBuf,
@@ -201,6 +235,10 @@ pub enum Reply {
     /// have no identity and cannot establish a shared-root skip.
     Packages {
         packages: Vec<Option<PackageIdentity>>,
+    },
+    /// One root-level Markdown file identity per requested name, in order.
+    Standalone {
+        identities: Vec<Option<EntryIdentity>>,
     },
     /// The digest, or `None` when the instruction file is missing or too big.
     Digest { digest: Option<Sha256Hex> },

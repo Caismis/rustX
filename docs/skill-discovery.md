@@ -85,11 +85,18 @@ subsequent root inquiry must report that same path, including after recovery.
 The Host's `~/rustx/.agents/skills` is the User authority. At Client bind,
 rustX synchronizes its valid discoverable packages before publishing their Client
 paths. Malformed definitions retain their diagnostics; their attachment trees
-are not opened or copied. Copy elision requires fresh identity probes in the
-standing `~/rustx` root and the actual Skill collection, plus matching directory
-and `SKILL.md` identities for every admitted package. Configured HOME and
-`rustx` aliases resolve to Client-readable physical paths. Equal path strings
-alone are insufficient. Discarding a Client never removes the standing User root.
+are not opened or copied. When the Host has no valid User Skills, the Client
+collection is not inspected or changed. For a local Unix binding, matching
+opened root and collection identities establish sharing in the same kernel;
+each package directory and marker is checked separately. A remote binding
+requires a fresh root probe and, when the collection is on another filesystem,
+a fresh collection probe. A candidate on another filesystem must be copied
+unless its identity can be established locally. Standalone root Markdown files
+are checked individually using bounded, no-follow metadata inquiries. These
+checks permit read-only shared roots and collections where sharing is proved.
+Configured HOME and `rustx` aliases resolve to Client-readable physical paths.
+Equal path strings alone are insufficient. Discarding a Client never removes
+the standing User root.
 
 Separate filesystems use an ownership-marked cache under
 `<client-home>/rustx/.agents/skills/.rustx-sync`. An immutable package version
@@ -121,7 +128,8 @@ inside a package and special files are refused. Neither hardlinks nor writable
 bind mounts are used. A User can exclude a
 legitimately oversized package by adding its path to the User collection's
 `.ignore` file; the same discovery ignore rules then omit it from both sync
-and the catalog. Standalone root Markdown Skills are copied as individual files.
+and the catalog. Standalone root Markdown Skills that require transfer are
+copied as individual files.
 
 File tools deny writes into the official User Skill tree, whether it is the
 shared standing root or the synced cache. Bash can still modify a shared

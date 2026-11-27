@@ -24,10 +24,10 @@
 
 The Host standing User root owns Skill definitions. Each admitted Client
 receives a complete package at a readable location before the bound catalog
-publishes it. The copy can be skipped when a fresh shared-filesystem proof
-succeeds or when the Client's existing instruction digest matches. A changed
-instruction publishes a whole replacement package. Discarding a Client
-releases its staging area and leases and preserves the standing User root.
+publishes it. The copy can be skipped when the binding proves it shares the
+package's filesystem objects or when the Client's existing instruction digest
+matches. A changed instruction publishes a whole replacement package. Discarding
+a Client releases its staging area and leases and preserves the standing User root.
 
 Workspace fingerprints are hints. A changed sample requests exact resource
 observation. The first sample establishes a baseline, and a failed sample

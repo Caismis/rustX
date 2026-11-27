@@ -12,7 +12,7 @@ use rustx_execution_protocol::save::Sha256Hex;
 use rustx_execution_protocol::skills::{
     COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER, COLLECTION_PROOF_MARKER_CONTENT,
     EntryIdentity, MAX_DIGEST_BYTES, PackageIdentity, Probe, Reply, Request,
-    valid_identity_packages, valid_package_path, valid_probe_name,
+    valid_identity_packages, valid_package_path, valid_probe_name, valid_standalone_names,
 };
 use sha2::{Digest, Sha256};
 
@@ -69,7 +69,9 @@ impl UserSkills {
         arbitration: &super::mutation::Arbitration,
     ) -> io::Result<Reply> {
         match request {
-            Request::Root { .. } => self.inquire_checked(request, Some(arbitration)),
+            Request::Root { .. } | Request::RootIdentity => {
+                self.inquire_checked(request, Some(arbitration))
+            }
             Request::Collection { .. } => {
                 let reply = self.inquire_checked(request, Some(arbitration))?;
                 let Reply::Collection { path, .. } = &reply else {
@@ -88,7 +90,7 @@ impl UserSkills {
                 self.selected_collection = Some(path.clone());
                 Ok(reply)
             }
-            Request::Packages { .. } | Request::Digest { .. } => {
+            Request::Packages { .. } | Request::Standalone { .. } | Request::Digest { .. } => {
                 self.check_selected_collection()?;
                 self.inquire_checked(request, Some(arbitration))
             }
@@ -161,6 +163,26 @@ impl UserSkills {
                 Ok(Reply::Root {
                     path: root.clone(),
                     probe,
+                })
+            }
+            Request::RootIdentity => {
+                let identity = match PackageDirectory::open(root) {
+                    Ok(directory) => Some(Self::directory_identity(&directory)?),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound
+                                | io::ErrorKind::NotADirectory
+                                | io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        None
+                    }
+                    Err(error) => return Err(error),
+                };
+                Ok(Reply::RootIdentity {
+                    path: root.clone(),
+                    identity,
                 })
             }
             Request::Collection { probe } => {
@@ -255,6 +277,56 @@ impl UserSkills {
                 Ok(Reply::Packages {
                     packages: identities,
                 })
+            }
+            Request::Standalone { names } => {
+                if !valid_standalone_names(names) {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                let collection = Self::collection_path(root)?;
+                if self
+                    .selected_collection
+                    .as_ref()
+                    .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                let directory = match PackageDirectory::open(&collection) {
+                    Ok(directory) => directory,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound
+                                | io::ErrorKind::NotADirectory
+                                | io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        return Ok(Reply::Standalone {
+                            identities: vec![None; names.len()],
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let mut identities = Vec::with_capacity(names.len());
+                for name in names {
+                    if let Some(arbitration) = arbitration {
+                        arbitration.check_grant()?;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    identities.push(Self::standalone_identity(&directory, name)?);
+                }
+                directory.verify()?;
+                if Self::collection_path(root)? != collection
+                    || self
+                        .selected_collection
+                        .as_ref()
+                        .is_some_and(|selected| selected != &collection)
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                Ok(Reply::Standalone { identities })
             }
             Request::Digest { package } => {
                 if !valid_package_path(package) {
@@ -411,6 +483,53 @@ impl UserSkills {
                 device: rustx_execution_protocol::DecimalU64::new(marker.dev()),
                 inode: rustx_execution_protocol::DecimalU64::new(marker.ino()),
             },
+        }))
+    }
+
+    fn standalone_identity(
+        root: &PackageDirectory,
+        name: &str,
+    ) -> io::Result<Option<EntryIdentity>> {
+        let path = Path::new(name);
+        let named = match root.entry_metadata(path) {
+            Ok(metadata) if metadata.is_file => metadata,
+            Ok(_) => return Ok(None),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let file = match root.file(path) {
+            Ok(file) => file,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::NotADirectory
+                        | io::ErrorKind::PermissionDenied
+                ) || error.raw_os_error() == Some(libc::ELOOP) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        if rustx_confined_fs::FileMetadata::of(&file)? != named
+            || root.entry_metadata(path)? != named
+        {
+            return Ok(None);
+        }
+        let metadata = file.metadata()?;
+        root.verify()?;
+        Ok(Some(EntryIdentity {
+            device: rustx_execution_protocol::DecimalU64::new(metadata.dev()),
+            inode: rustx_execution_protocol::DecimalU64::new(metadata.ino()),
         }))
     }
 
@@ -766,6 +885,67 @@ mod tests {
                     packages: vec!["../outside".into()]
                 })
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn standalone_inquiry_is_bounded_and_refuses_links() {
+        let home = tempfile::tempdir().unwrap();
+        let collection = home.path().join("rustx/.agents/skills");
+        fs::create_dir_all(&collection).unwrap();
+        fs::write(collection.join("guide.md"), b"instructions").unwrap();
+        std::os::unix::fs::symlink("guide.md", collection.join("linked.md")).unwrap();
+        let skills = UserSkills::from_home(Some(home.path().to_path_buf()));
+        let Reply::Standalone { identities } = skills
+            .inquire(&Request::Standalone {
+                names: vec!["guide.md".into(), "linked.md".into(), "absent.md".into()],
+            })
+            .unwrap()
+        else {
+            panic!("standalone identities")
+        };
+        let metadata = fs::metadata(collection.join("guide.md")).unwrap();
+        assert_eq!(
+            identities[0]
+                .as_ref()
+                .map(|identity| (identity.device.get(), identity.inode.get())),
+            Some((metadata.dev(), metadata.ino()))
+        );
+        assert_eq!(identities[1..], [None, None]);
+        for name in [
+            "../secret.md",
+            "subdir/secret.md",
+            ".hidden.md",
+            "secret.txt",
+        ] {
+            assert!(
+                skills
+                    .inquire(&Request::Standalone {
+                        names: vec![name.into()]
+                    })
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn root_identity_reports_only_the_configured_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        fs::create_dir(&root).unwrap();
+        let skills = UserSkills::from_home(Some(home.path().to_path_buf()));
+        let Reply::RootIdentity {
+            path,
+            identity: Some(identity),
+        } = skills.inquire(&Request::RootIdentity).unwrap()
+        else {
+            panic!("root identity")
+        };
+        let metadata = fs::metadata(&root).unwrap();
+        assert_eq!(path, root);
+        assert_eq!(
+            (identity.device.get(), identity.inode.get()),
+            (metadata.dev(), metadata.ino())
         );
     }
 

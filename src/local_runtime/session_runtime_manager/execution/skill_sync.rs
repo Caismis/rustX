@@ -1,8 +1,8 @@
 //! Host/Client User Skill filesystem identity.
 //!
-//! Device and inode values alone are not globally unique across machines or
-//! filesystem namespaces. A fresh, private challenge must be visible at
-//! both roots and the opened file's identity and content must agree.
+//! Device and inode values alone are not globally unique across machines.
+//! Local Unix bindings share a kernel; remote bindings require a fresh
+//! challenge before identities on its filesystem can establish sharing.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -20,7 +20,7 @@ use rustx_execution_protocol::skills::{
     CACHE_DIRECTORY, CACHE_LOCK, COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER,
     COLLECTION_PROOF_MARKER_CONTENT, EntryIdentity, MAX_DIGEST_BYTES, MAX_PACKAGE_ENTRIES,
     MAX_SKILL_BYTES, MAX_SYNC_BYTES, PackageIdentity, Probe, Reply, Request,
-    valid_identity_packages,
+    valid_identity_packages, valid_standalone_names,
 };
 use rustx_execution_protocol::{DecimalU64, MAX_RAW_CHUNK_BYTES};
 use rustx_execution_server::LocalConnection;
@@ -31,6 +31,18 @@ use super::LocalExecutionEndpoint;
 struct ProbeFile<'a> {
     root: &'a PackageDirectory,
     name: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SharedRoot {
+    device: DecimalU64,
+    local_kernel: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum CandidateIdentity {
+    Package(PathBuf, PackageIdentity),
+    Standalone(String, EntryIdentity),
 }
 
 #[derive(Clone)]
@@ -306,60 +318,76 @@ fn collection_proof_directory(
     Ok(Some(directory))
 }
 
-fn host_package_identities(
+fn regular_file_identity(
+    directory: &PackageDirectory,
+    path: &Path,
+) -> io::Result<Option<EntryIdentity>> {
+    let named = match directory.entry_metadata(path) {
+        Ok(metadata) if metadata.is_file => metadata,
+        _ => return Ok(None),
+    };
+    let Ok(file) = directory.file(path) else {
+        return Ok(None);
+    };
+    if rustx_confined_fs::FileMetadata::of(&file)? != named
+        || directory.entry_metadata(path).ok() != Some(named)
+    {
+        return Ok(None);
+    }
+    let metadata = file.metadata()?;
+    directory.verify()?;
+    Ok(Some(EntryIdentity {
+        device: DecimalU64::new(metadata.dev()),
+        inode: DecimalU64::new(metadata.ino()),
+    }))
+}
+
+fn host_candidate_identities(
     collection: &PackageDirectory,
     root: &Path,
     files: &[PathBuf],
     signal: &crate::runtime::CancellationSignal,
     deadline: Instant,
-) -> io::Result<Option<(Vec<PathBuf>, Vec<PackageIdentity>)>> {
-    let mut packages = Vec::with_capacity(files.len());
-    for marker in files {
-        if marker.file_name().is_none_or(|name| name != "SKILL.md") {
-            return Ok(None);
-        }
-        let relative = marker
-            .strip_prefix(root)
-            .map_err(|_| io::ErrorKind::InvalidData)?;
-        packages.push(relative.parent().unwrap_or(Path::new("")).to_owned());
-    }
-    if !valid_identity_packages(&packages) {
-        return Ok(None);
-    }
+) -> io::Result<Vec<Option<CandidateIdentity>>> {
     let mut identities = Vec::with_capacity(files.len());
-    for package_path in &packages {
+    for marker in files {
         crate::package_io::check_cancelled(signal)?;
         if Instant::now() >= deadline {
             return Err(io::ErrorKind::TimedOut.into());
         }
-        let Ok(directory) = collection.descend(package_path) else {
-            return Ok(None);
-        };
-        let named = match directory.entry_metadata(Path::new("SKILL.md")) {
-            Ok(metadata) if metadata.is_file => metadata,
-            _ => return Ok(None),
-        };
-        let Ok(marker_file) = directory.file(Path::new("SKILL.md")) else {
-            return Ok(None);
-        };
-        if rustx_confined_fs::FileMetadata::of(&marker_file)? != named
-            || directory.entry_metadata(Path::new("SKILL.md"))? != named
+        let relative = marker
+            .strip_prefix(root)
+            .map_err(|_| io::ErrorKind::InvalidData)?;
+        let identity = if relative.file_name().is_some_and(|name| name == "SKILL.md") {
+            let package = relative.parent().unwrap_or(Path::new("")).to_owned();
+            if !valid_identity_packages(std::slice::from_ref(&package)) {
+                None
+            } else if let Ok(directory) = collection.descend(&package) {
+                regular_file_identity(&directory, Path::new("SKILL.md"))?
+                    .map(|marker| {
+                        directory_identity(&directory).map(|directory| {
+                            CandidateIdentity::Package(
+                                package,
+                                PackageIdentity { directory, marker },
+                            )
+                        })
+                    })
+                    .transpose()?
+            } else {
+                None
+            }
+        } else if let Some(name) = relative.to_str().map(str::to_owned)
+            && valid_standalone_names(std::slice::from_ref(&name))
         {
-            return Ok(None);
-        }
-        let metadata = marker_file.metadata()?;
-        let directory_identity = directory_identity(&directory)?;
-        directory.verify()?;
-        identities.push(PackageIdentity {
-            directory: directory_identity,
-            marker: EntryIdentity {
-                device: DecimalU64::new(metadata.dev()),
-                inode: DecimalU64::new(metadata.ino()),
-            },
-        });
+            regular_file_identity(collection, relative)?
+                .map(|identity| CandidateIdentity::Standalone(name, identity))
+        } else {
+            None
+        };
+        identities.push(identity);
     }
     collection.verify()?;
-    Ok(Some((packages, identities)))
+    Ok(identities)
 }
 
 impl LocalExecutionEndpoint {
@@ -389,79 +417,153 @@ impl LocalExecutionEndpoint {
         client_root: &Path,
         client_collection: &Path,
         client_identity: Option<&EntryIdentity>,
+        root_proof: &SharedRoot,
         files: &[PathBuf],
         signal: &crate::runtime::CancellationSignal,
         deadline: Instant,
-    ) -> io::Result<bool> {
+    ) -> io::Result<Vec<bool>> {
+        let unshared = || vec![false; files.len()];
         let collection = PackageDirectory::open(host_collection)?;
         let host_identity = directory_identity(&collection)?;
         if client_identity != Some(&host_identity) {
-            return Ok(false);
+            return Ok(unshared());
         }
-        let Some(proof_directory) = collection_proof_directory(&collection)? else {
-            return Ok(false);
+        // A proved remote root anchors identities on that same filesystem;
+        // local Unix endpoints additionally share one kernel's device IDs.
+        let anchored = root_proof.local_kernel || host_identity.device == root_proof.device;
+        let proof_directory = if anchored {
+            None
+        } else {
+            let Some(directory) = collection_proof_directory(&collection)? else {
+                return Ok(unshared());
+            };
+            Some(directory)
         };
-        let Some((probe, expected)) = new_probe(&proof_directory)? else {
-            return Ok(false);
+        let probe = if let Some(directory) = &proof_directory {
+            let Some(probe) = new_probe(directory)? else {
+                return Ok(unshared());
+            };
+            Some(probe)
+        } else {
+            None
         };
-        let (path, identity, observed) =
-            self.inspect_skill_collection(Some(probe.name.clone()), deadline)?;
-        if path != client_collection
-            || identity.as_ref() != Some(&host_identity)
-            || observed.as_ref() != Some(&expected)
-        {
-            return Ok(false);
+        if let Some((probe, expected)) = &probe {
+            let (path, identity, observed) =
+                self.inspect_skill_collection(Some(probe.name.clone()), deadline)?;
+            if path != client_collection
+                || identity.as_ref() != Some(&host_identity)
+                || observed.as_ref() != Some(expected)
+            {
+                return Ok(unshared());
+            }
         }
-        let Some((packages, host_before)) =
-            host_package_identities(&collection, host_collection, files, signal, deadline)?
-        else {
-            return Ok(false);
-        };
-        let Reply::Packages { packages: client } = self.user_skills_inquiry(
-            &Request::Packages {
-                packages: packages.clone(),
-            },
+        let host_before =
+            host_candidate_identities(&collection, host_collection, files, signal, deadline)?;
+        let mut shared = self.verify_candidate_identities(&host_before, signal, deadline)?;
+        let host_after =
+            host_candidate_identities(&collection, host_collection, files, signal, deadline)?;
+        for ((matched, before), after) in shared.iter_mut().zip(&host_before).zip(&host_after) {
+            *matched &= before == after;
+            // A separate mount inside the collection needs its own positive
+            // cross-kernel proof. Equal numeric device IDs alone are local to
+            // each kernel, so such a candidate must be copied remotely.
+            if !root_proof.local_kernel {
+                *matched &= match before {
+                    Some(CandidateIdentity::Package(_, identity)) => {
+                        identity.directory.device == host_identity.device
+                            && identity.marker.device == host_identity.device
+                    }
+                    Some(CandidateIdentity::Standalone(_, identity)) => {
+                        identity.device == host_identity.device
+                    }
+                    None => false,
+                };
+            }
+        }
+        let (path, identity, observed) = self.inspect_skill_collection(
+            probe.as_ref().map(|(probe, _)| probe.name.clone()),
             deadline,
-        )?
-        else {
-            return Err(io::ErrorKind::InvalidData.into());
-        };
-        if client
-            .iter()
-            .zip(&host_before)
-            .any(|(actual, expected)| actual.as_ref() != Some(expected))
-        {
-            return Ok(false);
-        }
-        let Some((after_packages, host_after)) =
-            host_package_identities(&collection, host_collection, files, signal, deadline)?
-        else {
-            return Ok(false);
-        };
-        if packages != after_packages || host_before != host_after {
-            return Ok(false);
-        }
-        let (path, identity, observed) =
-            self.inspect_skill_collection(Some(probe.name.clone()), deadline)?;
-        let (root, root_shared) = self.shared_user_skill_root(host_home, deadline)?;
+        )?;
+        let (root, root_after) = self.shared_user_skill_root(host_home, deadline)?;
         collection.verify()?;
-        proof_directory.verify()?;
-        Ok(path == client_collection
+        if let Some(directory) = &proof_directory {
+            directory.verify()?;
+        }
+        let still_shared = path == client_collection
             && identity.as_ref() == Some(&host_identity)
-            && observed.as_ref() == Some(&expected)
+            && observed.as_ref() == probe.as_ref().map(|(_, expected)| expected)
             && root == client_root
-            && root_shared
-            && host_home.join("rustx/.agents/skills").canonicalize()? == host_collection)
+            && root_after.as_ref() == Some(root_proof)
+            && host_home.join("rustx/.agents/skills").canonicalize()? == host_collection;
+        Ok(if still_shared { shared } else { unshared() })
+    }
+
+    fn verify_candidate_identities(
+        &self,
+        identities: &[Option<CandidateIdentity>],
+        signal: &crate::runtime::CancellationSignal,
+        deadline: Instant,
+    ) -> io::Result<Vec<bool>> {
+        let mut shared = vec![false; identities.len()];
+        let packages: Vec<_> = identities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, identity)| match identity {
+                Some(CandidateIdentity::Package(path, identity)) => Some((index, path, identity)),
+                _ => None,
+            })
+            .collect();
+        for batch in packages.chunks(16) {
+            crate::package_io::check_cancelled(signal)?;
+            let Reply::Packages { packages: actual } = self.user_skills_inquiry(
+                &Request::Packages {
+                    packages: batch.iter().map(|(_, path, _)| (*path).clone()).collect(),
+                },
+                deadline,
+            )?
+            else {
+                return Err(io::ErrorKind::InvalidData.into());
+            };
+            for ((index, _, expected), actual) in batch.iter().zip(actual) {
+                shared[*index] = actual.as_ref() == Some(*expected);
+            }
+        }
+        let standalone: Vec<_> = identities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, identity)| match identity {
+                Some(CandidateIdentity::Standalone(name, identity)) => {
+                    Some((index, name, identity))
+                }
+                _ => None,
+            })
+            .collect();
+        for batch in standalone.chunks(16) {
+            crate::package_io::check_cancelled(signal)?;
+            let Reply::Standalone { identities: actual } = self.user_skills_inquiry(
+                &Request::Standalone {
+                    names: batch.iter().map(|(_, name, _)| (*name).clone()).collect(),
+                },
+                deadline,
+            )?
+            else {
+                return Err(io::ErrorKind::InvalidData.into());
+            };
+            for ((index, _, expected), actual) in batch.iter().zip(actual) {
+                shared[*index] = actual.as_ref() == Some(*expected);
+            }
+        }
+        Ok(shared)
     }
 
     /// Return the Client's root and whether it is demonstrably the same
-    /// physical standing root as the Host's. A missing or non-writable Host
-    /// root cannot prove sharing and therefore never enables the skip.
-    pub(crate) fn shared_user_skill_root(
+    /// physical standing root as the Host's. Remote roots require a fresh
+    /// probe; local Unix peers can compare opened objects in the same kernel.
+    fn shared_user_skill_root(
         &self,
         host_home: &Path,
         deadline: Instant,
-    ) -> io::Result<(PathBuf, bool)> {
+    ) -> io::Result<(PathBuf, Option<SharedRoot>)> {
         let configured = host_home.join("rustx");
         let host_root = match configured.canonicalize() {
             Ok(path) => path,
@@ -474,7 +576,7 @@ impl LocalExecutionEndpoint {
                 ) =>
             {
                 let (path, _) = self.inspect_user_skill_root(None, deadline)?;
-                return Ok((path, false));
+                return Ok((path, None));
             }
             Err(error) => return Err(error),
         };
@@ -489,18 +591,51 @@ impl LocalExecutionEndpoint {
                 ) =>
             {
                 let (path, _) = self.inspect_user_skill_root(None, deadline)?;
-                return Ok((path, false));
+                return Ok((path, None));
             }
             Err(error) => return Err(error),
         };
+        let local_kernel = matches!(
+            &self.authority,
+            super::EndpointAuthority::Reserved(reserved)
+                if matches!(&reserved.listener, super::ExecutionListener::Unix(_))
+        );
+        if local_kernel {
+            let expected = directory_identity(&root)?;
+            let Reply::RootIdentity { path, identity } =
+                self.user_skills_inquiry(&Request::RootIdentity, deadline)?
+            else {
+                return Err(io::ErrorKind::InvalidData.into());
+            };
+            if self.user_root.get() != Some(&path) {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            let shared =
+                identity.as_ref() == Some(&expected) && configured.canonicalize()? == host_root;
+            root.verify()?;
+            return Ok((
+                path,
+                shared.then_some(SharedRoot {
+                    device: expected.device,
+                    local_kernel,
+                }),
+            ));
+        }
         let Some((probe, expected)) = new_probe(&root)? else {
             let (path, _) = self.inspect_user_skill_root(None, deadline)?;
-            return Ok((path, false));
+            return Ok((path, None));
         };
         let (path, observed) = self.inspect_user_skill_root(Some(probe.name.clone()), deadline)?;
-        let shared = observed == Some(expected) && configured.canonicalize()? == host_root;
+        let shared =
+            observed.as_ref() == Some(&expected) && configured.canonicalize()? == host_root;
         root.verify()?;
-        Ok((path, shared))
+        Ok((
+            path,
+            shared.then_some(SharedRoot {
+                device: expected.device,
+                local_kernel,
+            }),
+        ))
     }
 
     /// Eagerly synchronize every discoverable Host User Skill and return a
@@ -524,6 +659,10 @@ impl LocalExecutionEndpoint {
         Ok((sync.collection, sync.paths, sync.capture))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one bind owns discovery, proof, transfer and catalog publication"
+    )]
     fn sync_user_skills_owned(
         &self,
         host_home: &Path,
@@ -531,27 +670,38 @@ impl LocalExecutionEndpoint {
         deadline: Instant,
         flight: &SyncFlight,
     ) -> io::Result<UserSkillSync> {
-        let (client_root, root_shared) = self.shared_user_skill_root(host_home, deadline)?;
-        flight.progressed();
-        let (client_collection, client_identity, _) =
-            self.inspect_skill_collection(None, deadline)?;
         let host_collection = host_home.join("rustx/.agents/skills");
         let capture = crate::skills::package::capture_user_skills(&host_collection, signal)?;
         flight.progressed();
+        let client_root = self.user_root.get().cloned().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Client User root is unavailable",
+            )
+        })?;
+        let inert_collection = client_root.join(".agents/skills");
+        let found: Vec<_> = capture.candidates().collect();
+        if found.is_empty() {
+            return Ok(UserSkillSync {
+                collection: inert_collection,
+                paths: BTreeMap::new(),
+                capture,
+            });
+        }
         let host_collection = match host_collection.canonicalize() {
             Ok(root) => root,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Ok(UserSkillSync {
-                    collection: client_collection,
+                    collection: inert_collection,
                     paths: BTreeMap::new(),
                     capture,
                 });
             }
             Err(error) => return Err(error),
         };
-        let mut invalid_paths = BTreeMap::new();
+        let mut invalid_relative = Vec::new();
         let mut valid_files = Vec::new();
-        for (marker, valid) in capture.candidates() {
+        for (marker, valid) in found {
             if valid {
                 valid_files.push(marker);
             } else {
@@ -559,48 +709,74 @@ impl LocalExecutionEndpoint {
                     .strip_prefix(&host_collection)
                     .map_err(|_| io::ErrorKind::InvalidData)?;
                 let diagnostic = PathBuf::from(relative.to_string_lossy().into_owned());
-                invalid_paths.insert(diagnostic.clone(), client_collection.join(diagnostic));
+                invalid_relative.push(diagnostic);
             }
         }
         if valid_files.is_empty() {
             return Ok(UserSkillSync {
-                collection: client_collection,
-                paths: invalid_paths,
+                paths: invalid_relative
+                    .into_iter()
+                    .map(|relative| {
+                        let path = inert_collection.join(&relative);
+                        (relative, path)
+                    })
+                    .collect(),
+                collection: inert_collection,
                 capture,
             });
         }
-        if root_shared
-            && self.shared_skill_collection(
+        let (client_root, root_proof) = self.shared_user_skill_root(host_home, deadline)?;
+        flight.progressed();
+        let (client_collection, client_identity, _) =
+            self.inspect_skill_collection(None, deadline)?;
+        let mut paths: BTreeMap<_, _> = invalid_relative
+            .into_iter()
+            .map(|relative| {
+                let path = client_collection.join(&relative);
+                (relative, path)
+            })
+            .collect();
+        let shared = if let Some(proof) = &root_proof {
+            self.shared_skill_collection(
                 host_home,
                 &host_collection,
                 &client_root,
                 &client_collection,
                 client_identity.as_ref(),
+                proof,
                 &valid_files,
                 signal,
                 deadline,
             )?
-        {
-            for marker in valid_files {
+        } else {
+            vec![false; valid_files.len()]
+        };
+        let mut to_copy = Vec::new();
+        for (marker, is_shared) in valid_files.into_iter().zip(shared) {
+            if is_shared {
                 let relative = marker
                     .strip_prefix(&host_collection)
                     .map_err(|_| io::ErrorKind::InvalidData)?;
-                invalid_paths.insert(relative.to_owned(), client_collection.join(relative));
+                paths.insert(relative.to_owned(), client_collection.join(relative));
+            } else {
+                to_copy.push(marker);
             }
+        }
+        if to_copy.is_empty() {
             return Ok(UserSkillSync {
                 collection: client_collection,
-                paths: invalid_paths,
+                paths,
                 capture,
             });
         }
         let authority = authority_id(&host_home.join("rustx"), &host_collection)?;
-        let paths = self.with_bounded_data_connection(deadline, |connection| {
+        let copied = self.with_bounded_data_connection(deadline, |connection| {
             let result = sync_packages(
                 connection,
                 &authority,
                 &host_collection,
                 &client_collection,
-                &valid_files,
+                &to_copy,
                 signal,
                 deadline,
                 flight,
@@ -615,10 +791,10 @@ impl LocalExecutionEndpoint {
                 }
             })
         })?;
-        invalid_paths.extend(paths);
+        paths.extend(copied);
         Ok(UserSkillSync {
             collection: client_collection,
-            paths: invalid_paths,
+            paths,
             capture,
         })
     }

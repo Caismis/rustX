@@ -29,7 +29,7 @@ impl ProgressReporter for NoProgress {
     fn report(&self, _progress: ToolProgress) {}
 }
 
-struct NativeTools {
+pub(super) struct NativeTools {
     conversation: ConversationId,
     workspace: Workspace,
     artifacts: ArtifactStore,
@@ -40,7 +40,7 @@ struct NativeTools {
 }
 
 impl NativeTools {
-    async fn new(fixture: &Fixture, storage: &Path) -> Self {
+    pub(super) async fn new(fixture: &Fixture, storage: &Path) -> Self {
         let conversation = fixture.id(0).await;
         let workspace = Workspace::for_session(
             &fixture.workspaces[0],
@@ -78,7 +78,7 @@ impl NativeTools {
         )
     }
 
-    async fn read(&self, path: &Path) -> String {
+    pub(super) async fn read(&self, path: &Path) -> String {
         let result = ReadTool
             .start(
                 ToolInvocation {

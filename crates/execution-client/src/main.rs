@@ -1005,8 +1005,10 @@ fn serve_requests(
                 let inquiry = matches!(
                     request,
                     rustx_execution_protocol::skills::Request::Root { .. }
+                        | rustx_execution_protocol::skills::Request::RootIdentity
                         | rustx_execution_protocol::skills::Request::Collection { .. }
                         | rustx_execution_protocol::skills::Request::Packages { .. }
+                        | rustx_execution_protocol::skills::Request::Standalone { .. }
                         | rustx_execution_protocol::skills::Request::Digest { .. }
                 );
                 let transfer = if inquiry {
