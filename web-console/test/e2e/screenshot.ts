@@ -42,7 +42,22 @@ const captureOptions = { animations: 'disabled', caret: 'hide', scale: 'css' } a
  * same one the pinned authority was measured under. */
 function browserCapture(target: Page | Locator): Capture {
   const page: Page = typeof (target as Locator).page === 'function' ? (target as Locator).page() : (target as Page);
+  // Transitioned elements can keep stale composited-layer rasterization after
+  // their animation ends (chromium layer demotion is timing-dependent per
+  // session, which made otherwise identical captures bistable). A hidden-reflow
+  // cycle before the first capture forces a clean repaint of the final state.
+  let primed = false;
   return async settleMs => {
+    if (!primed) {
+      primed = true;
+      await page.evaluate(() => {
+        const root = document.body;
+        root.style.display = 'none';
+        void root.offsetHeight;
+        root.style.display = '';
+        void root.offsetHeight;
+      });
+    }
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     if (settleMs) await new Promise(resolve => setTimeout(resolve, settleMs));
     return target.screenshot(captureOptions);
