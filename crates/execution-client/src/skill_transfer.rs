@@ -26,6 +26,7 @@ use super::mutation::Arbitration;
 const MARKER: &str = ".rustx-owned";
 const MARKER_CONTENT: &[u8] = b"rustx user skill cache v1\n";
 const AUTHORITY_LOCK: &str = ".lock";
+const RETIRED_PREFIX: &str = ".retired-";
 const VERSION_MARKER: &str = ".version";
 const LEASE: &str = ".lease";
 const SIZE: &str = ".bytes";
@@ -145,6 +146,7 @@ impl Transfer {
             Err(error) => return Err(error.into()),
         }
         let cache = ensure_owned(&skills, OsStr::new(CACHE))?;
+        cleanup_retired_authorities(&cache)?;
         make_authority_room(&cache, authority)?;
         let owner = ensure_owned(&cache, OsStr::new(authority))?;
         let Some(lock) = lock_authority(&owner)? else {
@@ -563,7 +565,6 @@ fn retire_inactive_authority(cache: &PackageDirectory, name: &OsStr) -> io::Resu
     let Some(_lock) = lock_authority(&owner)? else {
         return Ok(false);
     };
-    let mut children = Vec::new();
     for child in owner.names(MAX_CACHE_VERSIONS * 2 + 4)? {
         let Some(text) = child.to_str() else {
             return Ok(false);
@@ -593,17 +594,74 @@ fn retire_inactive_authority(cache: &PackageDirectory, name: &OsStr) -> io::Resu
                 Err(error) => return Err(error.into()),
             }
         }
-        children.push(child);
-    }
-    for child in children {
-        remove_tree(&owner, child.as_os_str(), &mut (MAX_PACKAGE_ENTRIES + 5))?;
     }
     owner.verify()?;
-    rustix::fs::unlinkat(owner.descriptor(), AUTHORITY_LOCK, AtFlags::empty())?;
-    rustix::fs::unlinkat(owner.descriptor(), MARKER, AtFlags::empty())?;
+    cache.verify()?;
+    let retired = mark_retired(cache, name)?;
+    cleanup_retired_authority(cache, OsStr::new(&retired))?;
+    Ok(true)
+}
+
+fn mark_retired(cache: &PackageDirectory, name: &OsStr) -> io::Result<String> {
+    let authority = name.to_str().ok_or(io::ErrorKind::InvalidInput)?;
+    let retired = format!("{RETIRED_PREFIX}{authority}");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    rustix::fs::renameat_with(
+        cache.descriptor(),
+        name,
+        cache.descriptor(),
+        retired.as_str(),
+        rustix::fs::RenameFlags::NOREPLACE,
+    )?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return Err(io::ErrorKind::Unsupported.into());
+    Ok(retired)
+}
+
+fn cleanup_retired_authorities(cache: &PackageDirectory) -> io::Result<()> {
+    for name in cache.names(MAX_CACHE_AUTHORITIES * 2 + 1)? {
+        if name
+            .to_str()
+            .and_then(|name| name.strip_prefix(RETIRED_PREFIX))
+            .is_some_and(valid_cache_id)
+        {
+            cleanup_retired_authority(cache, name.as_os_str())?;
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_retired_authority(cache: &PackageDirectory, name: &OsStr) -> io::Result<()> {
+    let retired = cache.child(name)?;
+    let children = retired.names(MAX_CACHE_VERSIONS * 2 + 4)?;
+    match verify_marker(&retired, MARKER) {
+        Ok(()) => {
+            for child in children {
+                let text = child.to_str().ok_or(io::ErrorKind::InvalidData)?;
+                match text {
+                    MARKER => {}
+                    AUTHORITY_LOCK => {
+                        rustix::fs::unlinkat(retired.descriptor(), text, AtFlags::empty())?;
+                    }
+                    _ if valid_cache_id(text) || stage_name(text) => {
+                        // A prior cleanup may have removed a child marker.
+                        // The enclosing authority's marker owns the retirement.
+                        remove_tree(&retired, child.as_os_str(), &mut (MAX_PACKAGE_ENTRIES + 5))?;
+                    }
+                    _ => return Err(io::ErrorKind::PermissionDenied.into()),
+                }
+            }
+            retired.verify()?;
+            rustix::fs::unlinkat(retired.descriptor(), MARKER, AtFlags::empty())?;
+        }
+        // The last step of an interrupted cleanup can leave an empty
+        // reserved directory. No child is removed without an ownership marker.
+        Err(error) if error.kind() == io::ErrorKind::NotFound && children.is_empty() => {}
+        Err(error) => return Err(error),
+    }
     cache.verify()?;
     rustix::fs::unlinkat(cache.descriptor(), name, AtFlags::REMOVEDIR)?;
-    Ok(true)
+    Ok(())
 }
 
 /// Evict oldest unleased versions when an incoming package would exceed the
@@ -825,6 +883,44 @@ mod tests {
                 .count(),
             MAX_CACHE_AUTHORITIES
         );
+    }
+
+    #[test]
+    fn interrupted_authority_retirement_allows_the_same_authority_to_bind() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap().join("rustx");
+        let arbitration = Arbitration::new();
+        let request = || Request::BeginSync {
+            authority: authority(),
+        };
+        let mut transfer = Transfer::default();
+        assert_eq!(
+            call(&mut transfer, &root, &arbitration, request()).unwrap(),
+            Reply::SyncStarted
+        );
+        let cache_path = root.join(".agents/skills").join(CACHE);
+        let cache = PackageDirectory::open(&cache_path).unwrap();
+        let authority = authority();
+        let owner = cache.child(OsStr::new(&authority)).unwrap();
+        let version = version('a');
+        let stage = ensure_directory(&owner, OsStr::new(&version)).unwrap().0;
+        write_new(&stage, VERSION_MARKER, MARKER_CONTENT).unwrap();
+        let data = ensure_directory(&stage, OsStr::new("data")).unwrap().0;
+        write_new(&data, "SKILL.md", b"retired instructions").unwrap();
+        transfer.lane_lost().unwrap();
+
+        let retired = mark_retired(&cache, OsStr::new(&authority)).unwrap();
+        let retired_path = cache_path.join(retired);
+        fs::remove_file(retired_path.join(&version).join(VERSION_MARKER)).unwrap();
+
+        assert_eq!(
+            call(&mut transfer, &root, &arbitration, request()).unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(!retired_path.exists());
+        let owner = cache.child(OsStr::new(&authority)).unwrap();
+        verify_marker(&owner, MARKER).unwrap();
+        assert!(!cache_path.join(authority).join(version).exists());
     }
 
     #[test]

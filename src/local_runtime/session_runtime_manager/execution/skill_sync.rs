@@ -85,6 +85,9 @@ struct SyncFlight {
 struct FlightState {
     result: Option<Result<UserSkillSync, FlightError>>,
     progress: Instant,
+    transfer_remaining: u64,
+    #[cfg(test)]
+    after_transfer: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl Default for SyncFlight {
@@ -93,6 +96,9 @@ impl Default for SyncFlight {
             state: std::sync::Mutex::new(FlightState {
                 result: None,
                 progress: Instant::now(),
+                transfer_remaining: MAX_SYNC_BYTES,
+                #[cfg(test)]
+                after_transfer: None,
             }),
             ready: std::sync::Condvar::new(),
             #[cfg(test)]
@@ -104,6 +110,21 @@ impl Default for SyncFlight {
 impl SyncFlight {
     fn progressed(&self) {
         self.state.lock().expect("User Skill flight state").progress = Instant::now();
+        self.ready.notify_all();
+    }
+
+    fn transfer_remaining(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("User Skill flight state")
+            .transfer_remaining
+    }
+
+    fn transferred(&self, bytes: u64) {
+        let mut state = self.state.lock().expect("User Skill flight state");
+        state.transfer_remaining -= bytes;
+        state.progress = Instant::now();
+        drop(state);
         self.ready.notify_all();
     }
 }
@@ -422,6 +443,23 @@ impl LocalExecutionEndpoint {
         assert!(was_empty);
     }
 
+    #[cfg(test)]
+    pub(crate) fn after_user_skill_transfer(
+        &self,
+        limit: u64,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        assert!(limit <= MAX_SYNC_BYTES);
+        let was_empty = self
+            .test_hooks
+            .lock()
+            .unwrap()
+            .after_user_skill_transfer
+            .replace((limit, Box::new(hook)))
+            .is_none();
+        assert!(was_empty);
+    }
+
     fn inspect_skill_collection(
         &self,
         probe: Option<String>,
@@ -685,6 +723,18 @@ impl LocalExecutionEndpoint {
         let sync = self
             .user_skill_flights
             .run(host_home, signal, deadline, |flight| {
+                #[cfg(test)]
+                if let Some((limit, hook)) = self
+                    .test_hooks
+                    .lock()
+                    .unwrap()
+                    .after_user_skill_transfer
+                    .take()
+                {
+                    let mut state = flight.state.lock().unwrap();
+                    state.transfer_remaining = limit;
+                    state.after_transfer = Some(hook);
+                }
                 loop {
                     crate::package_io::check_cancelled(signal)?;
                     if Instant::now() >= deadline {
@@ -1199,6 +1249,13 @@ fn sync_locked(
                     &mut budget,
                 )?;
             }
+            #[cfg(test)]
+            {
+                let hook = flight.state.lock().unwrap().after_transfer.take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
             marker.verify(&source, &source_name)?;
             if digest.is_some()
                 && marker_digest(&source, &source_name, signal)
@@ -1440,6 +1497,7 @@ fn copy_file(
     if !before.is_file()
         || before.len() > MAX_SKILL_BYTES.saturating_sub(budget.bytes)
         || before.len() > MAX_SYNC_BYTES.saturating_sub(*budget.total)
+        || before.len() > budget.flight.transfer_remaining()
     {
         return Err(io::Error::new(
             io::ErrorKind::FileTooLarge,
@@ -1476,7 +1534,7 @@ fn copy_file(
             },
             wire_deadline(),
         )?;
-        budget.flight.progressed();
+        budget.flight.transferred(count as u64);
         offset += count as u64;
     }
     if offset != before.len()

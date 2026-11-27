@@ -110,7 +110,9 @@ Unleased versions are evicted when necessary to keep that authority's cache
 under 4 GiB and 1,024 versions.
 The Client admits at most 64 cached authorities. When a new authority needs
 room, it reclaims a marked authority whose synchronization lock and version
-leases are free. If every eligible authority is still in use, the new
+leases are free. The Client moves the authority out of the active namespace
+before deleting it and resumes any interrupted cleanup at the next bind.
+If every eligible authority is still in use, the new
 synchronization fails. Client cleanup removes its private staging directory
 and releases its leases.
 
@@ -122,8 +124,9 @@ attachment subtree has a different mount view; this is an intentional
 performance tradeoff. A missing or different digest causes a whole
 package copy. The Host checks the marker revision captured with the metadata
 before reusing or publishing content. An intervening save restarts discovery.
-Copies stream regular files and directories with a 512 MiB
-per-package and 1 GiB per-bind payload cap; executable files remain executable.
+Copies stream regular files and directories with a 512 MiB per-package and
+1 GiB per-bind payload cap. The bind counts bytes sent before a retry.
+Executable files remain executable.
 When `SKILL.md` is at the collection root, the copy excludes rustX's reserved
 cache, cache lock, and identity probe directory.
 A collection-level link to a package directory is resolved and pinned; links

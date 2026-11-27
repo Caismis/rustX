@@ -336,7 +336,9 @@ impl SkillMarkerChanged {
     }
 
     pub(crate) fn matches(error: &io::Error) -> bool {
-        error.get_ref().is_some_and(|cause| cause.is::<Self>())
+        error
+            .get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Self>)
     }
 
     pub(crate) fn if_missing(error: io::Error) -> io::Error {
