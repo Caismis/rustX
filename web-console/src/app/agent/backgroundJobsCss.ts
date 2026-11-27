@@ -31,6 +31,7 @@ export const backgroundJobsCss = {
  hoverFacts: 'flex items-center flex-wrap gap-x-[12px] text-[#ADB2B8] text-[12px] leading-[20px] tabular-nums',
  hoverFact: 'inline-flex items-center gap-[4px] whitespace-nowrap',
  hoverFactIcon: 'inline-flex flex-none [&_svg]:w-[14px] [&_svg]:h-[14px]',
- panel: '[font:inherit] min-w-0 mt-[2px] mx-[6px] mb-[6px] [--dsl-terminal-command-whitespace:pre-wrap] [--dsl-terminal-line-whitespace:pre-wrap] [--dsl-terminal-output-max-height:288px] [&_[data-terminal]]:[--dsl-terminal-gutter:12px] [&_[data-terminal]]:[--dsl-terminal-font:var(--dsw-font-markdown-code-block-small)] [&_[data-terminal]]:[--dsl-terminal-line-height:18px] [&_[data-terminal]]:m-0 [&_[data-terminal]]:[border:0.5px_solid_var(--dsw-alias-border-l1)]-0 mx-[8px] mb-[6px] [color:var(--dsw-alias-label-tertiary)] text-[11px] leading-[16px]',
+ panel: 'min-w-0 mt-[2px] mx-[6px] mb-[6px] [--dsl-terminal-command-whitespace:pre-wrap] [--dsl-terminal-line-whitespace:pre-wrap] [--dsl-terminal-output-max-height:288px] [&_[data-terminal]]:[--dsl-terminal-gutter:12px] [&_[data-terminal]]:[--dsl-terminal-font:var(--dsw-font-markdown-code-block-small)] [&_[data-terminal]]:[--dsl-terminal-line-height:18px] [&_[data-terminal]]:m-0 [&_[data-terminal]]:[border:0.5px_solid_var(--dsw-alias-border-l1)]',
+ notice: 'mt-0 mx-[8px] mb-[6px] [color:var(--dsw-alias-label-tertiary)] text-[11px] leading-[16px]',
  noticeError: '[color:var(--dsw-alias-state-error-primary)]',
 };
