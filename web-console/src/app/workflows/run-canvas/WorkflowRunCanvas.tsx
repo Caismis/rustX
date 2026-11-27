@@ -1049,6 +1049,7 @@ export function WorkflowRunCanvas({
     finalFocus={() => false}
     initialFocus={() => dialogRef.current?.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? false}
   >
+    <section className={runCanvasCss.dialogSurface}>
     <div data-workflow-run-canvas="" data-workflow-run-id={runKey} style={{ display: 'contents' }}>
       <header className={runCanvasCss.header}>
         <div className={runCanvasCss.titleGroup}>
@@ -1313,6 +1314,6 @@ export function WorkflowRunCanvas({
           </div>
         </aside>
       </div>
-    </div>
+    </div></section>
   </DialogSurface>;
 }
