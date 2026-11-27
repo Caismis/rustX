@@ -3520,9 +3520,12 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
         let list_calls = mcp.list_tools_calls.clone();
         let catalog_reads = || list_calls.load(Ordering::Relaxed);
         let (mcp_runtime, mcp_workspace) = (runtime.clone(), workspace.clone());
-        let private_ip = workspace_http::select_private_ipv4().expect(
-            "a non-loopback private IPv4 interface or RUSTX_WORKSPACE_HTTP_FIXTURE_IP is required for real-process Workspace HTTP MCP tests",
-        );
+        let private_ip = match workspace_http::ensure_private_ipv4_or_reexec(
+            "app_server::installed_web_discovers_workspace_mcp_and_workflow_tools_before_creating_a_session",
+        ) {
+            workspace_http::WorkspaceHttpFixtureIp::Ready(ip) => ip,
+            workspace_http::WorkspaceHttpFixtureIp::DelegatedToIsolatedNetns => return,
+        };
         let listener = tokio::net::TcpListener::bind((private_ip, 0))
             .await
             .unwrap();

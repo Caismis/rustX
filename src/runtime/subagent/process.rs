@@ -704,7 +704,19 @@ pub(crate) async fn spawn_staged(
         .resolved
         .model
         .export_process_credentials(&mut credentials);
-    for binding in wire_spec.resolved.materialization.sources.values_mut() {
+    for (source_id, binding) in &mut wire_spec.resolved.materialization.sources {
+        if let crate::capabilities::ToolSourceId::Mcp(server_id) = source_id
+            && let Some(scope) = execution_scope.as_ref()
+        {
+            if preparation_cancellation.is_cancelled() {
+                return Err(discard_unstaged_resources(
+                    runtime_root,
+                    SpawnError::Cancelled,
+                ));
+            }
+            crate::tools::mcp::hydrate_client_credentials_with_scope(server_id, binding, scope)
+                .await;
+        }
         binding
             .credentials
             .export_process_credentials(&mut credentials);

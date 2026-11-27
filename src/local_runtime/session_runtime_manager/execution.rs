@@ -4009,6 +4009,9 @@ impl SessionRuntimeManager {
     }
 }
 
+#[cfg(all(test, feature = "mcp-fixture"))]
+pub(crate) use tests::{AdmittedTestExecution, admitted_scope_for_workspace};
+
 #[cfg(test)]
 mod tests {
     use std::io::Read;
@@ -4821,6 +4824,36 @@ mod tests {
             !socket_path(&published).exists(),
             "the retired endpoint's private directory was removed"
         );
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    pub(crate) struct AdmittedTestExecution {
+        pub(crate) session: SessionId,
+        pub(crate) scope: SessionExecutionScope,
+        _endpoint: Arc<LocalExecutionEndpoint>,
+        _registry: Arc<SessionExecutionRegistry>,
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    pub(crate) fn admitted_scope_for_workspace(
+        workspace: &Path,
+        capabilities: BTreeSet<Capability>,
+    ) -> (AdmittedTestExecution, UnixStream) {
+        let registry = Arc::new(SessionExecutionRegistry::default());
+        let session = SessionId::generate();
+        let slot = create(&registry, &session, workspace);
+        let endpoint = prepare(&slot, &session, workspace);
+        let client = admit_scripted_peer(&endpoint, capabilities, control_peer_loop);
+        let scope = scope_for(&registry, &session);
+        (
+            AdmittedTestExecution {
+                session,
+                scope,
+                _endpoint: endpoint,
+                _registry: registry,
+            },
+            client,
+        )
     }
 
     /// One registry-claimed, published endpoint with a scripted peer

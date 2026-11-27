@@ -91,13 +91,23 @@ pub(crate) async fn hydrate_client_credentials(
     binding: &mut McpServerBinding,
     workspace: &Workspace,
 ) {
+    let Some(scope) = workspace.execution_scope() else {
+        return;
+    };
+    hydrate_client_credentials_with_scope(server_id, binding, scope).await;
+}
+
+/// Hydrates Session-bound Client environment grants using an explicit
+/// [`SessionExecutionScope`], e.g. when preparing an admitted Subagent child.
+pub(crate) async fn hydrate_client_credentials_with_scope(
+    server_id: &McpServerId,
+    binding: &mut McpServerBinding,
+    scope: &crate::local_runtime::session_runtime_manager::SessionExecutionScope,
+) {
     if !binding.credentials.needs_client_hydration() {
         return;
     }
     let McpTransportConfig::StreamableHttp { endpoint: url, .. } = &binding.transport else {
-        return;
-    };
-    let Some(scope) = workspace.execution_scope() else {
         return;
     };
     let Ok(endpoint) = scope.endpoint() else {

@@ -1586,7 +1586,7 @@ impl StreamableHttpClient for McpHttpClient {
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../../../tests/support/workspace_http.rs"]
-mod workspace_http;
+pub(crate) mod workspace_http;
 
 #[cfg(test)]
 fn workspace_fixture_registry()

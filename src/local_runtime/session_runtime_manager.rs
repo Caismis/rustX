@@ -35,6 +35,8 @@ mod schedule_driver;
 pub(crate) mod status;
 #[cfg(target_os = "linux")]
 pub(crate) use execution::maintain_local_client;
+#[cfg(all(test, feature = "mcp-fixture"))]
+pub(crate) use execution::{AdmittedTestExecution, admitted_scope_for_workspace};
 pub(crate) use execution::{
     ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, LocalClient, OutputBinding,
     ReceiveExchange, StandaloneExecution, StdioMcpBinding, WorkspaceDocumentSnapshot,
