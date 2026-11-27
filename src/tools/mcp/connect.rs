@@ -84,6 +84,45 @@ impl<'a> OwnedConnect<'a> {
     }
 }
 
+/// Hydrates Session-bound Client environment grants only when a service is actually
+/// prepared or connected. Unselected Workspace HTTP services never contact the Client.
+pub(crate) async fn hydrate_client_credentials(
+    server_id: &McpServerId,
+    binding: &mut McpServerBinding,
+    workspace: &Workspace,
+) {
+    if !binding.credentials.needs_client_hydration() {
+        return;
+    }
+    let McpTransportConfig::StreamableHttp { endpoint: url, .. } = &binding.transport else {
+        return;
+    };
+    let Some(scope) = workspace.execution_scope() else {
+        return;
+    };
+    let Ok(endpoint) = scope.endpoint() else {
+        return;
+    };
+    let Ok(parsed) = url::Url::parse(url) else {
+        return;
+    };
+    let request = rustx_execution_protocol::mcp_environment::Request {
+        service: server_id.to_string(),
+        origin: parsed.origin().ascii_serialization(),
+        names: binding.credentials.client_environment_names(),
+    };
+    if request.names.is_empty() {
+        return;
+    }
+    let hydration = tokio::task::spawn_blocking(move || endpoint.mcp_environment(&request)).await;
+    binding.credentials.mark_client_hydrated();
+    if let Ok(Ok(values)) = hydration {
+        binding
+            .credentials
+            .capture(crate::credentials::CredentialSnapshot::new(values));
+    }
+}
+
 impl McpServerRuntime {
     /// Connects a protocol fixture without constructing a Session binding.
     ///
@@ -141,9 +180,11 @@ impl McpServerRuntime {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::Connect,
         );
-        let binding = request
-            .binding
-            .with_connection_redactions(request.server_id);
+        let mut binding = request.binding.clone();
+        if !request.cancellation.is_cancelled() {
+            hydrate_client_credentials(request.server_id, &mut binding, request.workspace).await;
+        }
+        let binding = binding.with_connection_redactions(request.server_id);
         let request = OwnedConnect {
             binding: &binding,
             ..request

@@ -51,6 +51,7 @@ impl DelegatedWork {
                 | ClientRequest::ReadDirectory { .. }
                 | ClientRequest::ReadBashOutput { .. }
                 | ClientRequest::SearchBashOutput { .. }
+                | ClientRequest::McpEnvironment(_)
         ) {
             return Ok(());
         }

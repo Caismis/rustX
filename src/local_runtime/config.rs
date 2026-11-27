@@ -693,7 +693,6 @@ pub(super) fn resolve_mcp_bindings(
                         crate::credentials::EnvironmentReference::from_name(name),
                     );
                 }
-                credentials.capture(document.client_environment.clone());
             }
             Ok((
                 server_id.clone(),
@@ -849,9 +848,6 @@ pub struct McpServerDocument {
     #[serde(skip)]
     #[schemars(skip)]
     pub(crate) workspace_source: bool,
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub(crate) client_environment: crate::credentials::CredentialSnapshot,
     /// Explicit references owned by the complete winning User/Workspace definition;
     /// ordinary `env` is literal. Resolution happens only for admitted demand.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

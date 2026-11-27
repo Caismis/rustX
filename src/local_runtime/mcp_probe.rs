@@ -301,12 +301,8 @@ fn capture(
         .ok_or(SettingsError::Invalid)?;
     let mut definition = definition.clone().resolve();
     if target.workspace().is_some() {
-        let endpoint = bound_workspace
-            .as_ref()
-            .map(SessionExecutionScope::endpoint)
-            .transpose()
-            .map_err(|_| SettingsError::ExecutionUnavailable)?;
-        super::configuration::capture::bind_workspace_mcp(&mut definition, id, endpoint.as_deref());
+        definition.client_owned = true;
+        definition.workspace_source = true;
     }
     let mut bindings =
         super::config::resolve_mcp_bindings(&BTreeMap::from([(id.clone(), definition)]))
@@ -857,14 +853,7 @@ os.execv(sys.argv[2], sys.argv[2:])
         use crate::local_runtime::session_runtime_manager::StandaloneExecution;
         use crate::tools::mcp::{catalog::CatalogKind, test_sync::CloseProbe};
 
-        let fixture = HttpFixture::start_on(
-            (
-                crate::tools::mcp::streamable_http::private_workspace_ip(),
-                0,
-            ),
-            HttpFixtureControl::default(),
-        )
-        .await;
+        let fixture = HttpFixture::start_workspace(HttpFixtureControl::default()).await;
         let directory = tempfile::tempdir().unwrap();
         let owner = owner(directory.path());
         let workspace = directory.path().canonicalize().unwrap();

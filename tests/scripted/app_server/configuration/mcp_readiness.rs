@@ -245,36 +245,20 @@ impl McpFixture {
             paginate: Arc::new(AtomicBool::new(false)),
             cancelled: tokio::sync::watch::channel(0).0,
         };
-        // Workspace HTTP definitions are not allowed to reach loopback. Keep
-        // this fixture on a test-owned private interface, which the product
-        // policy intentionally permits.
-        let address = nix::ifaddrs::getifaddrs()
-            .unwrap()
-            .filter(|interface| {
-                !interface
-                    .flags
-                    .contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK)
-            })
-            .filter_map(|interface| {
-                interface.address.and_then(|address| {
-                    address
-                        .as_sockaddr_in()
-                        .map(nix::sys::socket::SockaddrIn::ip)
-                })
-            })
-            .find(|ip| ip.is_private() && !ip.is_loopback() && !ip.is_link_local())
-            .expect("a private local interface is required for HTTP MCP fixtures");
-        let listener = tokio::net::TcpListener::bind((address, 0)).await.unwrap();
+        // Workspace HTTP definitions are not allowed to reach loopback. Bind a
+        // controlled Workspace fixture host so this suite needs no external NIC.
+        let (listener, guard) =
+            crate::tools::mcp::streamable_http::WorkspaceFixtureGuard::bind().await;
         let handler = control.clone();
         let mut config = StreamableHttpServerConfig::default();
         config.sse_keep_alive = None;
-        config.allowed_hosts = vec![listener.local_addr().unwrap().to_string()];
+        config.allowed_hosts = vec![guard.authority()];
         let service = StreamableHttpService::<StartupServer, LocalSessionManager>::new(
             move || Ok(handler.clone()),
             Arc::default(),
             config,
         );
-        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let endpoint = guard.url("/mcp");
         let closed = control.closed.clone();
         let app =
             axum::Router::new()
@@ -297,6 +281,7 @@ impl McpFixture {
                     },
                 ));
         let task = tokio::spawn(async move {
+            let _guard = guard;
             axum::serve(listener, app).await.unwrap();
         });
         Self {

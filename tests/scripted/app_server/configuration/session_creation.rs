@@ -3126,13 +3126,9 @@ async fn bound_workspace_http_uses_scoped_client_environment() {
 
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {
-        let ip = nix::ifaddrs::getifaddrs().unwrap()
-            .filter(|interface| !interface.flags.contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK))
-            .filter_map(|interface| interface.address.and_then(|address| address.as_sockaddr_in().map(nix::sys::socket::SockaddrIn::ip)))
-            .find(|ip| ip.is_private() && !ip.is_loopback() && !ip.is_link_local())
-            .expect("a private test interface is required for this proof");
-        let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (listener, guard) =
+            crate::tools::mcp::streamable_http::WorkspaceFixtureGuard::bind().await;
+        let origin = guard.origin();
         let sentinel = format!("client{}", uuid::Uuid::new_v4().simple());
         let expected = Arc::new(format!("Bearer {sentinel}"));
         let accepted = Arc::new(AtomicUsize::new(0));
@@ -3141,7 +3137,7 @@ async fn bound_workspace_http_uses_scoped_client_environment() {
         let handler = HttpFixtureServer::new(control.clone());
         let mut config = StreamableHttpServerConfig::default();
         config.sse_keep_alive = None;
-        config.allowed_hosts = vec![listener.local_addr().unwrap().to_string()];
+        config.allowed_hosts = vec![guard.authority()];
         let service = StreamableHttpService::<HttpFixtureServer, LocalSessionManager>::new(
             move || Ok(handler.clone()), Arc::default(), config,
         );
@@ -3164,7 +3160,10 @@ async fn bound_workspace_http_uses_scoped_client_environment() {
                 }
             }
         }));
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let server = tokio::spawn(async move {
+            let _guard = guard;
+            axum::serve(listener, app).await.unwrap();
+        });
 
         let fixture = Fixture::with_session_count(None, 1).await;
         let workspace = &fixture.workspaces[0];

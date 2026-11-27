@@ -302,14 +302,11 @@ async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting()
 
     bounded(async {
         let fixture = Fixture::with_session_count(None, 2).await;
-        let peer = FixtureServer::start_on(
-            (
-                crate::tools::mcp::streamable_http::private_workspace_ip(),
-                0,
-            ),
-            |_, _| FixtureReply::body(400, "Bad Request", "text/plain", "fixture"),
-        )
-        .await;
+        let (listener, guard) =
+            crate::tools::mcp::streamable_http::WorkspaceFixtureGuard::bind().await;
+        let peer = FixtureServer::start_with_listener(listener, Some(guard.origin()), |_, _| {
+            FixtureReply::body(400, "Bad Request", "text/plain", "fixture")
+        });
         let target = SourceTarget::Workspace {
             directory: fixture.workspaces[0].clone(),
         };
@@ -430,14 +427,7 @@ async fn workspace_mcp_management_requires_its_binding_only_after_reservation() 
 
     let fixture = Fixture::with_session_count(None, 2).await;
     let control = HttpFixtureControl::new();
-    let peer = HttpFixture::start_on(
-        (
-            crate::tools::mcp::streamable_http::private_workspace_ip(),
-            0,
-        ),
-        control.clone(),
-    )
-    .await;
+    let peer = HttpFixture::start_workspace(control.clone()).await;
     let target = SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };

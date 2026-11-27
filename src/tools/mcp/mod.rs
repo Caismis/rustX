@@ -177,7 +177,7 @@ use crate::runtime::identity::McpServerId;
 use crate::tools::limits::bounded_text_preview;
 use crate::tools::types::ToolInvocationPolicy;
 
-pub(crate) use connect::OwnedConnect;
+pub(crate) use connect::{OwnedConnect, hydrate_client_credentials};
 pub(crate) use connection::McpConnection;
 pub use executor::{
     CanonicalMcpTool, McpToolExecutor, definitions, mcp_tool_id, source_server_id,

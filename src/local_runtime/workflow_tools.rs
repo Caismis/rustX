@@ -294,15 +294,10 @@ fn capture(
     let mut plans = Vec::new();
     for (id, definition) in &mcp.definitions {
         let source_scope = scope_of(mcp.locations.get(id));
-        let binding = definition.as_ref().ok().and_then(|definition| {
-            mcp_binding(
-                id,
-                definition,
-                source_scope,
-                endpoint.as_deref(),
-                &credentials,
-            )
-        });
+        let binding = definition
+            .as_ref()
+            .ok()
+            .and_then(|definition| mcp_binding(id, definition, source_scope, &credentials));
         plans.push(Plan {
             source_id: id.to_string(),
             kind: WorkflowToolSourceKind::Mcp,
@@ -345,12 +340,12 @@ fn mcp_binding(
     id: &McpServerId,
     definition: &super::authoring::McpAuthoring,
     scope: SourceScope,
-    endpoint: Option<&super::session_runtime_manager::LocalExecutionEndpoint>,
     host_credentials: &crate::credentials::CredentialSnapshot,
 ) -> Option<McpServerBinding> {
     let mut definition = definition.clone().resolve();
     if scope == SourceScope::Workspace {
-        super::configuration::capture::bind_workspace_mcp(&mut definition, id, endpoint);
+        definition.client_owned = true;
+        definition.workspace_source = true;
     }
     let mut binding =
         super::config::resolve_mcp_bindings(&BTreeMap::from([(id.clone(), definition)]))
@@ -478,14 +473,14 @@ mod tests {
         ).unwrap();
         let host =
             crate::credentials::CredentialSnapshot::new([("TOKEN".into(), "host-value".into())]);
-        let host_binding = mcp_binding(&id, &definition, SourceScope::User, None, &host).unwrap();
+        let host_binding = mcp_binding(&id, &definition, SourceScope::User, &host).unwrap();
         assert!(!host_binding.credentials.client_owned);
         assert_eq!(
             host_binding.credentials.resolve().unwrap().headers["Authorization"].expose(),
             "host-value"
         );
         let workspace_binding =
-            mcp_binding(&id, &definition, SourceScope::Workspace, None, &host).unwrap();
+            mcp_binding(&id, &definition, SourceScope::Workspace, &host).unwrap();
         assert!(workspace_binding.credentials.client_owned);
         assert!(workspace_binding.credentials.workspace_source);
         assert!(workspace_binding.credentials.resolve().is_err());

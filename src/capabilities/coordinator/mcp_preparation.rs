@@ -343,11 +343,23 @@ impl McpPreparationOwner {
             .clone();
         let inner = Arc::clone(&self.inner);
         let server_id_owned = server_id.clone();
-        let binding_owned = binding.clone();
+        let mut binding_owned = binding.clone();
         let preparation_cancellation = preparation_cancellation.cloned();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::runtime::Handle::current();
         tokio::spawn(async move {
+            if !cancellation.is_cancelled()
+                && !preparation_cancellation
+                    .as_ref()
+                    .is_some_and(crate::runtime::cancellation::CancellationSignal::is_cancelled)
+            {
+                crate::tools::mcp::hydrate_client_credentials(
+                    &server_id_owned,
+                    &mut binding_owned,
+                    &inner.workspace,
+                )
+                .await;
+            }
             let request = crate::tools::mcp::OwnedConnect::new(
                 &server_id_owned,
                 &binding_owned,

@@ -1612,10 +1612,18 @@ impl CapabilityCoordinator {
         let preparation = self.inner.mcp_owner.prepare_sources(
             bindings,
             &cancellation,
-            |(server_id, binding)| {
+            |(server_id, mut binding)| {
                 let cancellation = &cancellation;
                 async move {
                     let owner = &self.inner.mcp_owner;
+                    if !cancellation.is_cancelled() {
+                        crate::tools::mcp::hydrate_client_credentials(
+                            &server_id,
+                            &mut binding,
+                            &owner.workspace,
+                        )
+                        .await;
+                    }
                     let key = startup_live_mcp.and_then(|required| {
                         let key = crate::tools::mcp::declaration_cache::DeclarationKey::for_source(
                             &self.inner.python_store_root,

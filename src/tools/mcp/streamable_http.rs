@@ -1124,6 +1124,15 @@ impl reqwest::dns::Resolve for WorkspaceResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let hostname = name.as_str().to_owned();
         Box::pin(async move {
+            #[cfg(test)]
+            if let Some(address) = workspace_fixture_registry()
+                .lock()
+                .expect("fixture registry")
+                .get(&hostname.trim_end_matches('.').to_ascii_lowercase())
+                .copied()
+            {
+                return Ok(Box::new(std::iter::once(address)) as reqwest::dns::Addrs);
+            }
             if is_localhost_name(&hostname) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -1574,6 +1583,69 @@ impl StreamableHttpClient for McpHttpClient {
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../tests/support/workspace_http.rs"]
+mod workspace_http;
+
+#[cfg(test)]
+fn workspace_fixture_registry()
+-> &'static std::sync::Mutex<std::collections::BTreeMap<String, std::net::SocketAddr>> {
+    static REGISTRY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, std::net::SocketAddr>>,
+    > = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
+#[cfg(test)]
+pub(crate) struct WorkspaceFixtureGuard {
+    host: String,
+    address: std::net::SocketAddr,
+}
+
+#[cfg(test)]
+impl WorkspaceFixtureGuard {
+    pub(crate) async fn bind() -> (tokio::net::TcpListener, Self) {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind controlled Workspace HTTP fixture listener");
+        let address = listener.local_addr().expect("fixture listener address");
+        let host = format!(
+            "workspace-fixture-{}.test",
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        workspace_fixture_registry()
+            .lock()
+            .expect("fixture registry")
+            .insert(host.clone(), address);
+        (listener, Self { host, address })
+    }
+
+    pub(crate) fn authority(&self) -> String {
+        format!("{}:{}", self.host, self.address.port())
+    }
+
+    pub(crate) fn origin(&self) -> String {
+        format!("http://{}", self.authority())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn url(&self, path: &str) -> String {
+        format!("{}{}", self.origin(), path)
+    }
+}
+
+#[cfg(test)]
+impl Drop for WorkspaceFixtureGuard {
+    fn drop(&mut self) {
+        workspace_fixture_registry()
+            .lock()
+            .expect("fixture registry")
+            .remove(&self.host);
+    }
+}
+
 /// Deterministic regressions for the request lifecycle contract
 /// (Issue #205).
 ///
@@ -1583,45 +1655,12 @@ impl StreamableHttpClient for McpHttpClient {
 /// "the POST already finished" are three different proven states rather than
 /// three readings of the same missing record.
 #[cfg(test)]
-pub(crate) fn try_private_workspace_ip() -> Option<std::net::Ipv4Addr> {
-    nix::ifaddrs::getifaddrs()
-        .ok()?
-        .filter(|interface| {
-            !interface
-                .flags
-                .contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK)
-        })
-        .filter_map(|interface| {
-            interface.address.and_then(|address| {
-                address
-                    .as_sockaddr_in()
-                    .map(nix::sys::socket::SockaddrIn::ip)
-            })
-        })
-        .find(|ip| {
-            let [first, second, ..] = ip.octets();
-            let cgnat = first == 100 && (64..=127).contains(&second);
-            (ip.is_private() || cgnat) && workspace_address_allowed((*ip).into())
-        })
-}
-
-#[cfg(test)]
-pub(crate) fn private_workspace_ip() -> std::net::Ipv4Addr {
-    try_private_workspace_ip()
-        .expect("a private non-loopback local interface is required for HTTP MCP fixtures")
-}
-
-#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use rmcp::model::RequestId;
 
     use super::{LocalRequestTermination, McpHttpRequestOwnership, OutboundDispatch, RequestPhase};
-
-    fn private_test_ip() -> Option<std::net::Ipv4Addr> {
-        super::try_private_workspace_ip()
-    }
 
     #[test]
     fn workspace_addresses_cover_mapped_and_link_local_without_banning_private_networks() {
@@ -1735,14 +1774,10 @@ mod tests {
 
     #[tokio::test]
     async fn workspace_redirect_rechecks_a_real_local_destination() {
-        let Some(ip) = private_test_ip() else {
-            eprintln!("private interface unavailable; local redirect proof not run");
-            return;
-        };
         let forbidden = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let target = format!("http://{}/forbidden", forbidden.local_addr().unwrap());
-        let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (listener, guard) = super::WorkspaceFixtureGuard::bind().await;
+        let origin = guard.origin();
         let app = axum::Router::new()
             .route(
                 "/bad",
@@ -1791,20 +1826,28 @@ mod tests {
                 Box::pin(async move { Ok(Box::new(addresses.into_iter()) as Addrs) })
             }
         }
-        let Some(ip) = private_test_ip() else {
-            eprintln!("private interface unavailable; local DNS fallback proof not run");
-            return;
-        };
         let forbidden = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = forbidden.local_addr().unwrap().port();
-        // Prove the permitted local address has no listener at this port;
-        // the connector therefore exercises its fallback list.
-        drop(tokio::net::TcpListener::bind((ip, port)).await.unwrap());
+        let ip = if let Some(private) = super::workspace_http::select_private_ipv4() {
+            // Prove the permitted local address has no listener at this port;
+            // the connector therefore exercises its fallback list.
+            drop(
+                tokio::net::TcpListener::bind((private, port))
+                    .await
+                    .unwrap(),
+            );
+            std::net::IpAddr::V4(private)
+        } else {
+            // Loopback-only namespaces without an external route reject TEST-NET-1
+            // immediately while keeping the candidate address permitted by policy.
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1))
+        };
         let allowed = std::net::SocketAddr::from((ip, port));
         let denied = forbidden.local_addr().unwrap();
         let client = reqwest::Client::builder()
             .no_proxy()
             .dns_resolver(Arc::new(FixtureResolver(vec![allowed, denied])))
+            .connect_timeout(std::time::Duration::from_millis(250))
             .timeout(std::time::Duration::from_secs(2))
             .build()
             .unwrap();

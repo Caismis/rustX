@@ -117,6 +117,13 @@ impl CredentialEnvironment for CredentialSnapshot {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientHydrationState {
+    #[default]
+    Unhydrated,
+    Hydrated,
+}
+
 /// Declared source secrets plus a private, once-resolved instance cache.
 /// Only reference names cross normal serialization; resolved bytes never do.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -147,6 +154,8 @@ pub struct SourceCredentials {
     /// Native transport literals remain write-only in every observation.
     #[serde(skip)]
     pub(crate) literal_redactions: Vec<ResolvedCredential>,
+    #[serde(skip)]
+    pub(crate) client_hydration: ClientHydrationState,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip predicate receives a reference.
@@ -192,6 +201,29 @@ impl SourceCredentials {
             output.push((name.clone(), value));
             reference.0 = name;
         }
+    }
+
+    pub(crate) fn client_environment_names(&self) -> BTreeSet<String> {
+        self.templates
+            .values()
+            .chain(self.headers.values())
+            .map(|reference| reference.name().to_owned())
+            .collect()
+    }
+
+    pub(crate) fn needs_client_hydration(&self) -> bool {
+        self.client_owned
+            && !self.client_grant_lost
+            && self.client_hydration == ClientHydrationState::Unhydrated
+            && self
+                .templates
+                .values()
+                .chain(self.headers.values())
+                .any(|reference| self.captured.var(reference.name()).is_none())
+    }
+
+    pub(crate) fn mark_client_hydrated(&mut self) {
+        self.client_hydration = ClientHydrationState::Hydrated;
     }
 
     /// A Client grant is session-bound and cannot be escrowed in the Host journal.

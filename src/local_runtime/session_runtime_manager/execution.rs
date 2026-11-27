@@ -5574,6 +5574,251 @@ mod tests {
         drop(peer.join().unwrap());
     }
 
+    fn spawn_unselected_mcp_peer(
+        mut client: UnixStream,
+        mcp_toml: String,
+        revision: String,
+    ) -> (
+        Arc<std::sync::Mutex<Vec<String>>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let requested_services = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let requested_for_peer = Arc::clone(&requested_services);
+        let peer = std::thread::spawn(move || {
+            while let Ok(request) = read_record::<ClientRequest>(&mut client) {
+                let reply = match request {
+                    ClientRequest::Ping => ClientReply::Pong,
+                    ClientRequest::ResolveResourceEntry { relative_path } => {
+                        if relative_path == Path::new(".agents/mcp.toml") {
+                            ClientReply::ResourceEntry {
+                                relative_path,
+                                metadata: rustx_execution_protocol::EntryStamp {
+                                    kind: rustx_execution_protocol::EntryKind::RegularFile,
+                                    stamp: FileStamp {
+                                        size: DecimalU64::new(mcp_toml.len() as u64),
+                                        revision: revision.clone(),
+                                        identity: String::from("1:1"),
+                                        modified_at_ms: None,
+                                    },
+                                },
+                                link_paths: Vec::new(),
+                            }
+                        } else {
+                            ClientReply::ResourceUnavailable {
+                                link_paths: Vec::new(),
+                                unresolved_path: Some(relative_path),
+                            }
+                        }
+                    }
+                    ClientRequest::ReadRange {
+                        relative_path,
+                        offset,
+                        ..
+                    } => {
+                        if relative_path == Path::new(".agents/mcp.toml") {
+                            range_reply(
+                                offset.get(),
+                                mcp_toml.as_bytes(),
+                                None,
+                                mcp_toml.len() as u64,
+                                &revision,
+                                "1:1",
+                            )
+                        } else {
+                            ClientReply::Error {
+                                kind: ReadError::NotFound,
+                            }
+                        }
+                    }
+                    ClientRequest::GetMetadata { relative_path }
+                        if relative_path.as_os_str().is_empty() =>
+                    {
+                        ClientReply::Metadata {
+                            metadata: rustx_execution_protocol::EntryStamp {
+                                kind: rustx_execution_protocol::EntryKind::Directory,
+                                stamp: FileStamp {
+                                    size: DecimalU64::new(0),
+                                    revision: revision.clone(),
+                                    identity: String::from("0:0"),
+                                    modified_at_ms: None,
+                                },
+                            },
+                        }
+                    }
+                    ClientRequest::GetMetadata { .. } | ClientRequest::ReadDirectory { .. } => {
+                        ClientReply::Error {
+                            kind: ReadError::NotFound,
+                        }
+                    }
+                    ClientRequest::McpEnvironment(request) => {
+                        requested_for_peer
+                            .lock()
+                            .unwrap()
+                            .push(request.service.clone());
+                        let values = if request.service == "selected" {
+                            std::collections::BTreeMap::from([(
+                                String::from("SELECTED_TOKEN"),
+                                String::from("Bearer client-selected-secret"),
+                            )])
+                        } else {
+                            std::collections::BTreeMap::new()
+                        };
+                        ClientReply::McpEnvironment(
+                            rustx_execution_protocol::mcp_environment::Reply { values },
+                        )
+                    }
+                    other => {
+                        panic!("unexpected client request during MCP capture proof: {other:?}")
+                    }
+                };
+                write_record(&mut client, &reply).unwrap();
+            }
+        });
+        (requested_services, peer)
+    }
+
+    fn unselected_mcp_config_manager(root: &Path) -> UserConfigManager {
+        let home = root.join("home");
+        let rustx_dir = home.join("rustx");
+        std::fs::create_dir_all(&rustx_dir).unwrap();
+        let config_path = rustx_dir.join("rustx.toml");
+        std::fs::write(
+            &config_path,
+            r#"[providers.local]
+protocol = "openai_responses"
+base_url = "http://127.0.0.1:9/v1"
+api_key = "SECRET_SENTINEL"
+
+[models."local/a"]
+provider = "local"
+id = "wire-a"
+context_window = 128000
+max_output_tokens = 8192
+
+[models."local/a".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+
+[agent.model]
+model = "local/a"
+
+[agent.tools.sources]
+selected = "all"
+"#,
+        )
+        .unwrap();
+        UserConfigManager::new(UserConfigSources {
+            home_directory: home,
+            config_path,
+            runtime_root: root.join("runtime"),
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unselected_workspace_mcp_triggers_zero_client_environment_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = unselected_mcp_config_manager(root.path());
+
+        let (registry, session, endpoint, client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+                Capability::DirectoryMetadata,
+            ]));
+        let mcp_toml = r#"[mcp_servers.selected]
+url = "http://workspace-fixture.invalid/mcp"
+sensitive_headers = { Authorization = "$SELECTED_TOKEN" }
+
+[mcp_servers.unselected]
+url = "http://workspace-fixture.invalid/mcp"
+sensitive_headers = { Authorization = "$UNSELECTED_TOKEN" }
+
+[mcp_servers.denied]
+url = "http://workspace-fixture.invalid/mcp"
+sensitive_headers = { Authorization = "$DENIED_TOKEN" }
+"#
+        .to_owned();
+        let (requested_services, peer) =
+            spawn_unselected_mcp_peer(client, mcp_toml, "a".repeat(64));
+
+        let input = SessionConfigInput::new(workspace.clone());
+        let captured = tokio::task::spawn_blocking({
+            let endpoint = Arc::clone(&endpoint);
+            move || {
+                manager
+                    .capture_session_application_with_python(
+                        &input,
+                        &CredentialSnapshot::default(),
+                        Some(&endpoint),
+                        Some(crate::runtime::resources::ManagedPythonCatalog::default()),
+                        &mut crate::local_runtime::configuration::application::BoundSourceReads::default(),
+                    )
+                    .unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        let prospective = captured.context.unwrap();
+        assert!(
+            requested_services.lock().unwrap().is_empty(),
+            "configuration capture must trigger zero Client McpEnvironment RPCs"
+        );
+
+        let mut bindings = prospective.config.mcp_bindings().unwrap();
+        let selected_id = crate::runtime::identity::McpServerId::new("selected");
+        let unselected_id = crate::runtime::identity::McpServerId::new("unselected");
+        let denied_id = crate::runtime::identity::McpServerId::new("denied");
+        let mut selected = bindings.remove(&selected_id).unwrap();
+        let unselected = bindings.remove(&unselected_id).unwrap();
+        let mut denied = bindings.remove(&denied_id).unwrap();
+        assert!(selected.credentials.client_owned);
+        assert!(unselected.credentials.client_owned);
+        assert!(selected.credentials.resolve().is_err());
+        assert!(unselected.credentials.resolve().is_err());
+
+        let bound_workspace =
+            crate::tools::Workspace::for_session(&workspace, scope_for(&registry, &session))
+                .unwrap();
+        crate::tools::mcp::hydrate_client_credentials(
+            &selected_id,
+            &mut selected,
+            &bound_workspace,
+        )
+        .await;
+        crate::tools::mcp::hydrate_client_credentials(
+            &selected_id,
+            &mut selected,
+            &bound_workspace,
+        )
+        .await;
+        assert_eq!(
+            *requested_services.lock().unwrap(),
+            vec![String::from("selected")],
+            "only the prepared selected service triggers one McpEnvironment RPC; unselected triggers zero"
+        );
+        assert_eq!(
+            selected.credentials.resolve().unwrap().headers["Authorization"].expose(),
+            "Bearer client-selected-secret"
+        );
+        assert!(unselected.credentials.resolve().is_err());
+
+        // Missing or denied Client grants mark the binding hydrated so follow-up steps never re-ask.
+        crate::tools::mcp::hydrate_client_credentials(&denied_id, &mut denied, &bound_workspace)
+            .await;
+        crate::tools::mcp::hydrate_client_credentials(&denied_id, &mut denied, &bound_workspace)
+            .await;
+        assert_eq!(
+            *requested_services.lock().unwrap(),
+            vec![String::from("selected"), String::from("denied")]
+        );
+        assert!(denied.credentials.resolve().is_err());
+
+        drop(endpoint);
+        drop(registry);
+        peer.join().unwrap();
+    }
+
     /// The shared data budget and the single writer permit are per
     /// *connection*: eight admitted Agent dispatches — one holding the
     /// wire, seven waiting on the async side — exhaust the budget, so a

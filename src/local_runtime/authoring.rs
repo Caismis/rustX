@@ -422,7 +422,6 @@ impl McpAuthoring {
         McpServerDocument {
             client_owned: false,
             workspace_source: false,
-            client_environment: crate::credentials::CredentialSnapshot::default(),
             sensitive_env: self.sensitive_env.unwrap_or_default(),
             sensitive_headers: self.sensitive_headers.unwrap_or_default(),
             transport_type: self.transport_type,
