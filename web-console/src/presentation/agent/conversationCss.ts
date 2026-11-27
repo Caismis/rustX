@@ -14,7 +14,7 @@ export const conversationCss = {
   headerActions: 'flex flex-none items-center gap-[8px] [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',
   headerUtilities: 'flex flex-none items-center gap-[8px] ml-[20px] empty:hidden max-[640px]:ml-[8px] [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',
   headerCorner: 'cv-corner flex flex-none items-center ml-[8px] mr-[-16px] empty:hidden [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',
-  iconButton: 'flex-none w-[28px] p-0 [color:var(--dsw-alias-label-secondary)] [&_svg]:w-[15px]! [&_svg]:h-[15px]!',
+  iconButton: 'flex-none w-[28px]! p-0! [color:var(--dsw-alias-label-secondary)] [&_svg]:w-[15px]! [&_svg]:h-[15px]!',
   mirrored: '-scale-x-100',
   tabs: 'cv-tabs relative z-1 flex gap-[36px] mt-[10px] pl-[8px]',
   tab: 'relative pb-[9px] border-none bg-transparent text-[13px] leading-[16px] font-medium [color:var(--dsw-alias-label-tertiary)] cursor-pointer after:content-[""] after:absolute after:inset-x-0 after:bottom-[-1px] after:h-[2px] after:rounded-[2px] after:bg-transparent',

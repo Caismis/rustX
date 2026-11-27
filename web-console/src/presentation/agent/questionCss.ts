@@ -16,7 +16,7 @@ export const questionCss = {
  footerActions: 'flex items-center gap-[12px] flex-shrink-0',
  pager: 'flex items-center gap-[6px] flex-shrink-0',
  progress: 'px-[4px] [color:var(--dsw-alias-label-secondary)] text-[14px] leading-[24px] font-medium whitespace-nowrap [word-spacing:-2px]',
- iconButton: 'grid place-items-center w-[24px] h-[24px] p-0 border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-primary)] disabled:[color:var(--dsw-alias-label-dimmed)] disabled:cursor-default',
+ iconButton: 'grid place-items-center w-[24px]! h-[24px]! p-0! border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] hover:not-disabled:[color:var(--dsw-alias-label-primary)] disabled:[color:var(--dsw-alias-label-dimmed)] disabled:cursor-default',
  body: 'flex flex-1 flex-col min-h-0 overflow-y-auto overscroll-contain',
  options: 'flex flex-col gap-[1px] mt-[8px] px-[12px] py-[4px]',
  optionRow: 'q-row relative w-full min-h-[40px] flex-shrink-0 [border:0.5px_solid_transparent] rounded-[var(--dsw-radius-md)] bg-transparent transition-[background-color,border-color] duration-120 ease-in-out [timeline-scope:--description-copy] data-[expanded]:[&_.q-opt]:pb-[32px] data-[expanded]:[&_.q-copy-toggle]:visible data-[expanded]:[&_.q-copy-toggle]:animate-none',

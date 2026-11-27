@@ -36,5 +36,5 @@ export const rowsCss = {
  hoverPath: 'text-[12px] leading-[16px] text-[#CFD3D6] break-all',
  hoverTime: 'text-[12px] leading-[16px] text-[#CFD3D6]',
  hoverStatus: 'flex items-center gap-[8px] text-[12px] leading-[20px] text-[#ADB2B8]',
- iconButton: 'flex-none inline-flex items-center justify-center w-[16px] h-[16px] border-none rounded-[var(--dsw-radius-xs)] p-0 bg-transparent cursor-pointer [color:var(--dsw-alias-label-tertiary)] hover:[color:var(--dsw-alias-label-primary)]',
+ iconButton: 'flex-none inline-flex items-center justify-center w-[16px]! h-[16px]! border-none rounded-[var(--dsw-radius-xs)] p-0! bg-transparent cursor-pointer [color:var(--dsw-alias-label-tertiary)] hover:[color:var(--dsw-alias-label-primary)]',
 };

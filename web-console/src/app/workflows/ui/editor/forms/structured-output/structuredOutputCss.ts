@@ -1,7 +1,7 @@
 export const structuredOutputCss = {
  dialog: 'w-[min(960px,calc(100vw-24px))] h-[min(800px,calc(100dvh-24px))] max-h-[calc(100dvh-24px)] flex-shrink-0 gap-0 p-0 rounded-[var(--dsw-radius-lg)] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-bg-layer-2)] max-[600px]:w-[calc(100vw-16px)] max-[600px]:h-[calc(100dvh-24px)]',
  header: 'flex items-center justify-between pt-[20px] px-[24px] pb-[12px] [&_h2]:m-0 [&_h2]:text-[18px] [&_h2]:font-medium [&_h2]:leading-[28px] max-[600px]:pt-[16px] max-[600px]:px-[16px] max-[600px]:pb-[12px] max-[600px]:[&_h2]:text-[16px]',
- iconButton: 'inline-flex items-center justify-center flex-none w-[26px] h-[26px] p-[4px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)]',
+ iconButton: 'inline-flex items-center justify-center flex-none w-[26px]! h-[26px]! p-[4px]! border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)]',
  tabs: 'flex flex-col flex-1 min-h-0',
  toolbar: 'flex items-center justify-between gap-[12px] pt-[4px] px-[24px] pb-[8px] max-[600px]:pt-[4px] max-[600px]:px-[12px] max-[600px]:pb-[8px] max-[600px]:gap-[4px]',
  tabList: 'flex items-center gap-[1px] p-[2px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-alias-interactive-bg-hover-solid)]',
