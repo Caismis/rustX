@@ -260,7 +260,9 @@ class AffectedSteps(unittest.TestCase):
             with self.subTest(labels=labels):
                 for path in ("web-console/host/step-native/main.cpp", "web-console/host/workspace-preview.ts",
                              "web-console/src/app/components/documents/geometry/viewport.ts",
-                             "web-console/test/e2e/native-step.spec.ts", ".github/workflows/ci.yml"):
+                             "web-console/test/e2e/native-step.spec.ts", ".github/workflows/ci.yml",
+                             "web-console/package.json", "web-console/pnpm-lock.yaml", "tui/pnpm-lock.yaml",
+                             "web-console/scripts/browser-artifact.ts", "web-console/test/workbench.vite.config.ts"):
                     run = v.plan("pull_request", labels, modified(path))["run"]
                     self.assertTrue(run["native-step"] and run["browser-prepare"], path)
                 self.assertFalse(v.plan("pull_request", labels, modified("web-console/src/presentation/a.tsx"))["run"]["native-step"])

@@ -134,6 +134,10 @@ def classify(changes):
 
 NATIVE_STEP = (
     ".github/workflows/ci.yml", ".github/scripts/verification.py", ".github/actions/browser-inputs/**",
+    "web-console/package.json", "web-console/pnpm-lock.yaml", "web-console/pnpm-workspace.yaml",
+    "tui/package.json", "tui/pnpm-lock.yaml", "tui/pnpm-workspace.yaml",
+    "web-console/vite.config.ts", "web-console/test/workbench.vite.config.ts",
+    "web-console/scripts/browser-artifact.ts",
     "web-console/host/step-native/**", "web-console/host/step-preview.ts",
     "web-console/host/workspace-preview.ts", "web-console/host/workspaces.ts", "web-console/host/http.ts",
     "web-console/shared/file-preview.ts", "web-console/src/client/geometry-source.ts",
@@ -153,6 +157,7 @@ def selected_jobs(profile, surfaces, paths=()):
     full = profile == "full"
     s = set(surfaces)
     rust = "rust" in s or "protocol" in s
+    native_step = not paths or any(matches(path, NATIVE_STEP) for path in paths)
     return {
         "quality": full or rust,
         "rust-fast": not full and rust,
@@ -174,9 +179,9 @@ def selected_jobs(profile, surfaces, paths=()):
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,
         "desktop-macos": False,
-        "browser-prepare": full or bool(s & {"web", "dev", "rust", "protocol"}),
+        "browser-prepare": native_step or full or bool(s & {"web", "dev", "rust", "protocol"}),
         "web-client": full or bool(s & {"web", "dev", "rust", "protocol"}),
-        "native-step": not paths or any(matches(path, NATIVE_STEP) for path in paths),
+        "native-step": native_step,
         "browser-shard": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "browser-report": full or bool(s & {"web", "dev", "rust", "protocol"}),
     }

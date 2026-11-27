@@ -48,7 +48,7 @@ case "${1:-}" in
     git -C "$scratch/source" checkout --quiet --detach FETCH_HEAD
     git -C "$scratch/source" apply "$patch"
     cmake -S "$scratch/source" -B "$scratch/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DINSTALL_DIR="$prefix" \
       -DINSTALL_DIR_LIB=lib -DINSTALL_DIR_INCLUDE=include/opencascade \
       '-DBUILD_ADDITIONAL_TOOLKITS=TKXDESTEP TKRWMesh' -DUSE_RAPIDJSON=ON \
       -DUSE_FREETYPE=OFF -DUSE_TBB=OFF -DUSE_OPENGL=OFF \
