@@ -19,7 +19,7 @@ export const subagentCatalogCss = {
   disclosureOpen: 'rotate-90',
   content: 'flex flex-1 flex-col min-w-0',
   labelCls: 'overflow-hidden text-ellipsis whitespace-nowrap [color:inherit] font-normal',
-  currentLabel: 'font-medium',
+  currentLabel: 'font-medium!',
   summary: 'overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-tertiary)] text-[10px] leading-[15px]',
   metrics: 'grid grid-rows-[17px_15px] flex-none [color:var(--dsw-alias-label-tertiary)] text-[10px] leading-[15px] tabular-nums text-right whitespace-nowrap',
   metricToken: '[grid-row:1] leading-[17px]',

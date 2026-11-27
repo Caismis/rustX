@@ -10,7 +10,7 @@ export const conversationCss = {
   crumbSep: '[color:var(--dsw-alias-label-caption)] text-[14px] leading-[20px]',
   crumb: 'inline-block max-w-[220px] overflow-hidden px-[8px] py-[4px] border-none rounded-[var(--dsw-radius-md)] bg-transparent text-[14px] leading-[20px] [color:var(--dsw-alias-label-tertiary)] text-ellipsis whitespace-nowrap cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)]',
   crumbSubagent: 'text-[12px] leading-[18px]',
-  crumbCurrent: 'font-medium [color:var(--dsw-alias-label-primary)] cursor-default',
+  crumbCurrent: 'font-medium! [color:var(--dsw-alias-label-primary)]! cursor-default',
   headerActions: 'flex flex-none items-center gap-[8px] [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',
   headerUtilities: 'flex flex-none items-center gap-[8px] ml-[20px] empty:hidden max-[640px]:ml-[8px] [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',
   headerCorner: 'cv-corner flex flex-none items-center ml-[8px] mr-[-16px] empty:hidden [[data-platform=darwin]_&]:[-webkit-app-region:no-drag]',

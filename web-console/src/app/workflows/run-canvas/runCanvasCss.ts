@@ -10,7 +10,7 @@ export const runCanvasCss = {
  closeButton: 'inline-flex items-center justify-center min-w-[32px] h-[32px] px-[10px] [border:0.5px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-2)] [color:var(--dsw-alias-label-primary)] text-[12px] font-medium cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1',
  breadcrumbs: 'flex flex-wrap items-center gap-[4px] px-[16px] py-[7px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l1)] bg-[var(--dsw-alias-bg-layer-1)] text-[12px]',
  crumbButton: 'px-[7px] py-[2px] border border-transparent rounded-[var(--dsw-radius-sm)] bg-none [color:var(--dsw-alias-label-secondary)] text-[12px] cursor-pointer max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-primary)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1',
- crumbCurrent: '[color:var(--dsw-alias-label-primary)] font-medium',
+ crumbCurrent: '[color:var(--dsw-alias-label-primary)]! font-medium!',
  crumbSep: '[color:var(--dsw-alias-label-tertiary)]',
  banner: 'flex flex-wrap items-center justify-between gap-[8px] m-0 px-[16px] py-[9px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l2)] bg-[color-mix(in_srgb,var(--dsw-alias-state-warn-primary)_10%,var(--dsw-alias-bg-layer-1))] [color:var(--dsw-alias-label-primary)] text-[12.5px]',
  bannerError: 'bg-[color-mix(in_srgb,var(--dsw-alias-state-error-primary)_12%,var(--dsw-alias-bg-layer-1))]',

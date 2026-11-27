@@ -1627,7 +1627,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "615c37c56aa855c3aace897f4a088171d1b84c8abbd378e97c3d0c121b3c9a2a",
+      "local_sha256": "9a9522398f04762cb4484f1dd6849cf0568e05f79beeade617cf42bbfe278c81",
       "classification": "A"
     },
     {
@@ -1700,6 +1700,7 @@
       "retained_dependencies": [
         "@/components/ui/input",
         "@/components/ui/input-group",
+        "clsx",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1710,7 +1711,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "4002bf54cec8996065ffa5597b713748f10f332b269c4227a7651e878bf4ff97",
+      "local_sha256": "ee37ebf417cea1ba22f7303034553a0a30a3d9e131e8a3be127a717b647d0800",
       "classification": "A"
     },
     {

@@ -29,7 +29,7 @@ export const modelsCss = {
  modelBadges: "flex items-center gap-[4px]",
  modelActions: "flex items-center gap-[4px] ml-auto",
  emptyModels: "mx-[16px] my-[14px] px-[14px] py-[12px] [border:1px_dashed_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-md,10px)] [color:var(--dsw-alias-label-secondary)] text-[13px] leading-[20px]",
- unselected: "col-span-full flex gap-[8px] px-[16px] py-[24px] items-center flex-col [border:0.5px_dashed_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-lg)] text-center [color:var(--dsw-alias-label-secondary)] text-[13px]",
+ unselected: "col-span-full flex gap-[8px] px-[16px] py-[24px] items-center flex-col [border:0.5px_dashed_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-lg)] text-center [color:var(--dsw-alias-label-secondary)]! text-[13px]",
  defaultModel: "[border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[var(--dsw-radius-lg)] px-[14px] [&>div]:border-0",
  defaultChoices: "grid grid-cols-[repeat(auto-fit,minmax(min(100%,210px),1fr))] gap-x-[12px] [&>div]:min-w-0",
  templates: "flex flex-wrap gap-[6px] mb-[6px] [&_button]:rounded-[var(--dsw-radius-sm)] [&_button[aria-pressed=true]]:bg-[var(--dsw-alias-interactive-bg-hover)] [&_button[aria-pressed=true]]:[border-color:var(--dsw-alias-label-secondary)]",

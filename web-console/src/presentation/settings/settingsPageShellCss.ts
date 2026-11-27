@@ -8,7 +8,7 @@ export const settingsPageShellCss = {
  backButton: 'inline-flex items-center gap-[5px] h-[28px] pr-[11px] pl-[8px] [border:1px_solid_var(--dsw-alias-border-l3)] rounded-full bg-[var(--dsw-alias-bg-layer-1)] [color:var(--dsw-alias-label-secondary)] text-[12.5px] font-medium leading-[18px] cursor-pointer transition-[background-color,border-color,color] duration-140 hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[border-color:var(--dsw-alias-border-l4)] hover:[color:var(--dsw-alias-label-primary)] active:bg-[var(--dsw-alias-interactive-bg-active)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-2 motion-reduce:transition-none',
  backIcon: 'inline-flex items-center justify-center [color:inherit]',
  crumbSep: 'inline-flex items-center [color:var(--dsw-alias-label-tertiary)]',
- crumbCurrent: 'text-[12.5px] leading-[18px] [color:var(--dsw-alias-label-tertiary)] wrap-anywhere',
+ crumbCurrent: 'text-[12.5px] leading-[18px] [color:var(--dsw-alias-label-tertiary)]! wrap-anywhere',
  titleCls: 'm-0 text-[20px] leading-[28px] font-semibold tracking-[-0.01em] wrap-anywhere',
  descriptionCls: 'm-0 text-[13px] leading-[20px] [color:var(--dsw-alias-label-secondary)] wrap-anywhere',
  headToolbar: 'flex-1 flex flex-wrap items-center justify-end gap-[8px] min-w-[min(260px,100%)]',

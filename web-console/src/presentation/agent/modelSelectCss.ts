@@ -20,7 +20,7 @@ export const modelSelectCss = {
  option: 'box-border flex items-center gap-[6px] w-auto min-w-full min-h-[34px] px-[7px] py-[5px] border-none rounded-[var(--dsw-radius-md)] outline-none bg-transparent [color:inherit] text-left cursor-pointer not-[.ms-model-option]:hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:outline-none disabled:[color:var(--dsw-alias-label-dimmed)] disabled:cursor-default',
  modelOption: 'ms-model-option',
  optionActive: 'not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)]',
- selected: 'bg-transparent',
+ selected: 'bg-transparent!',
  optionCopy: 'flex flex-1 flex-col min-w-0',
  modelName: 'overflow-hidden [color:inherit] text-[13px] leading-[18px] font-normal text-ellipsis whitespace-nowrap',
  check: 'grid place-items-center flex-[0_0_14px] [color:var(--dsw-alias-label-primary)] [&_svg]:w-[14px] [&_svg]:h-[14px]',
