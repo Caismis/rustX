@@ -1179,6 +1179,74 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_preserves_node_specifiers_and_validates_the_client_script_path() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::{Method, MethodResult};
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::mcp_probe::McpProbeOutcome;
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let directory = &fixture.workspaces[0];
+        let agents = directory.join(".agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let document = br#"
+[mcp_servers.inspect]
+command = "../node"
+cwd = ".."
+args = ["--require", "dotenv/config", "../client-input.txt", "--model=gpt-4.1-mini"]
+"#;
+        std::fs::write(agents.join("mcp.toml"), document).unwrap();
+        let input = directory.join("client-input.txt");
+        std::fs::write(&input, "Client file contents\n").unwrap();
+        let peer = directory.join("fixture-peer");
+        std::fs::write(
+            &peer,
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > observed-argv\n/bin/cat \"$3\" >> observed-argv\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&peer, std::fs::Permissions::from_mode(0o700)).unwrap();
+        symlink("fixture-peer", directory.join("node")).unwrap();
+        let mut client = fixture.start_execution(0).await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let request = || Method::McpProbe {
+            target: SourceTarget::Workspace {
+                directory: directory.clone(),
+            },
+            execution_session: Some(fixture.sessions[0].id.clone()),
+            id: crate::runtime::identity::McpServerId::new("inspect"),
+            expected_revision: crate::local_runtime::settings::revision(Some(document)),
+        };
+        let MethodResult::McpProbe { result } = call(&connection, 1, request()).await else {
+            panic!("Workspace stdio probe");
+        };
+        // The argv fixture exits without speaking MCP.
+        assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
+        let observed = directory.join("observed-argv");
+        assert_eq!(
+            std::fs::read_to_string(&observed).unwrap(),
+            format!(
+                "--require\ndotenv/config\n{}\n--model=gpt-4.1-mini\nClient file contents\n",
+                input.display()
+            )
+        );
+        std::fs::remove_file(&observed).unwrap();
+        std::fs::remove_file(input).unwrap();
+        let MethodResult::McpProbe { result } = call(&connection, 2, request()).await else {
+            panic!("Workspace stdio probe with missing script");
+        };
+        assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
+        assert!(!observed.exists(), "missing script must prevent physical launch");
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disabled_workflow_missing_agent_does_not_block_session_creation() {
     let fixture = Fixture::with_session_count(None, 0).await;
     let directory = fixture.workspaces[0].clone();

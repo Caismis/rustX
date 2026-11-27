@@ -19,119 +19,58 @@ pub fn foreign_stdio_path(value: &str) -> bool {
         || value.starts_with("\\\\")
 }
 
-/// Recognize path-shaped stdio operands without treating URLs or package names as files.
-/// The optional prefix is the option name of a `--option=PATH` argument.
-#[must_use]
-pub fn stdio_path_operand(arg: &str, required: bool) -> Option<(Option<&str>, &str)> {
-    let (prefix, value) = if arg.starts_with('-') {
-        let (name, value) = arg.split_once('=')?;
-        (Some(name), value)
-    } else {
-        (None, arg)
-    };
-    let path = Path::new(value);
-    let filename_like = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.bytes().any(|byte| byte.is_ascii_alphabetic()));
-    (!value.contains("://")
-        && !value.starts_with('@')
-        && (required
-            || prefix.is_some_and(stdio_input_option)
-            || value.contains('/')
-            || value.starts_with('.')
-            || filename_like
-            || foreign_stdio_path(value)))
-    .then_some((prefix, value))
+/// A stdio argument whose path is resolved by the Host and checked by the Client.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StdioArgumentPath<'a> {
+    /// Index of the complete argument in argv.
+    pub index: usize,
+    /// Option name when the file was written as `--option=PATH`.
+    pub option: Option<&'a str>,
+    /// Path spelling supplied by the caller.
+    pub value: &'a str,
+    /// Whether the operand must already exist before launch.
+    pub required: bool,
 }
 
-/// Whether this interpreter flag is followed by program text or a module name.
-#[must_use]
-pub fn stdio_inline_script(program: &Path, argument: &str) -> bool {
-    let executable = program
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    let shell = matches!(executable, "sh" | "bash" | "dash" | "zsh");
-    let shell_command = shell
-        && argument.strip_prefix('-').is_some_and(|options| {
-            !options.is_empty()
-                && options.bytes().all(|byte| byte.is_ascii_alphabetic())
-                && options.contains('c')
-        });
-    shell_command
-        || ((matches!(executable, "node" | "nodejs") || executable.starts_with("python"))
-            && matches!(argument, "-c" | "-e" | "--eval"))
-        || (executable.starts_with("python") && argument == "-m")
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Operand {
+    Value,
+    Input,
+    Loader,
+    Opaque,
+    Inline,
 }
 
-/// Find an interpreter explicitly launched through `env` without executing it.
-#[must_use]
-pub fn stdio_interpreter<'a>(program: &'a Path, args: &'a [String]) -> &'a Path {
-    if program.file_name().is_some_and(|name| name == "env") {
-        args.iter()
-            .find(|arg| !arg.starts_with('-') && !arg.contains('='))
-            .map_or(program, |arg| Path::new(arg))
-    } else {
-        program
-    }
-}
-
-/// Index of an interpreter's positional script, excluding inline code and module names.
-#[must_use]
-pub fn stdio_script_index(program: &Path, args: &[String]) -> Option<usize> {
-    let interpreter = stdio_interpreter(program, args);
-    let name = interpreter.file_name()?.to_str()?;
-    if !matches!(name, "sh" | "bash" | "dash" | "zsh" | "node" | "nodejs")
-        && !name.starts_with("python")
-    {
-        return None;
-    }
-    let start = if program.file_name().is_some_and(|name| name == "env") {
-        args.iter()
-            .position(|arg| !arg.starts_with('-') && !arg.contains('='))?
-            + 1
-    } else {
-        0
-    };
+fn interpreter_operand(name: &str, option: &str) -> Option<Operand> {
     let shell = matches!(name, "sh" | "bash" | "dash" | "zsh");
-    let mut option_value = false;
-    for (index, argument) in args.iter().enumerate().skip(start) {
-        if option_value {
-            option_value = false;
-            continue;
-        }
-        if stdio_inline_script(interpreter, argument) {
-            return None;
-        }
-        if (name.starts_with("python") && matches!(argument.as_str(), "-W" | "-X"))
-            || (shell
-                && matches!(
-                    argument.as_str(),
-                    "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file"
-                ))
-            || (matches!(name, "node" | "nodejs")
-                && matches!(
-                    argument.as_str(),
-                    "-r" | "--require" | "--import" | "--loader"
-                ))
-        {
-            option_value = true;
-            continue;
-        }
-        if argument == "--" {
-            return (index + 1 < args.len()).then_some(index + 1);
-        }
-        if !(argument.starts_with('-') || shell && argument.starts_with('+')) {
-            return Some(index);
-        }
+    if (shell
+        && option.strip_prefix('-').is_some_and(|flags| {
+            flags.bytes().all(|byte| byte.is_ascii_alphabetic()) && flags.contains('c')
+        }))
+        || (matches!(name, "node" | "nodejs")
+            && matches!(option, "-e" | "--eval" | "-p" | "--print"))
+        || (name.starts_with("python") && matches!(option, "-c" | "-m"))
+    {
+        Some(Operand::Inline)
+    } else if (shell && matches!(option, "-o" | "+o" | "-O" | "+O"))
+        || (name.starts_with("python") && matches!(option, "-W" | "-X"))
+    {
+        Some(Operand::Opaque)
+    } else if matches!(name, "node" | "nodejs")
+        && matches!(
+            option,
+            "-r" | "--require" | "--import" | "--loader" | "--experimental-loader"
+        )
+    {
+        // Only path-qualified loader operands are files. Bare specifiers
+        // such as dotenv/config must reach Node's own module resolver.
+        Some(Operand::Loader)
+    } else {
+        None
     }
-    None
 }
 
-/// Common options that explicitly identify a pre-existing input file.
-#[must_use]
-pub fn stdio_input_option(name: &str) -> bool {
+fn stdio_input_option(name: &str) -> bool {
     matches!(
         name,
         "--config"
@@ -144,38 +83,165 @@ pub fn stdio_input_option(name: &str) -> bool {
     )
 }
 
+fn explicit_stdio_path(value: &str) -> bool {
+    value.starts_with('/')
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || matches!(value, "." | "..")
+        || foreign_stdio_path(value)
+}
+
+/// Walk argv once using the same path roles before and after Host resolution.
+/// A script or path option gives a bare relative value a file meaning. An
+/// otherwise ambiguous argument needs an explicit absolute or dot-relative path.
+pub fn stdio_argument_paths<'a>(
+    program: &'a Path,
+    args: &'a [String],
+) -> impl Iterator<Item = StdioArgumentPath<'a>> {
+    let env_program = program
+        .file_name()
+        .filter(|name| *name == "env")
+        .and_then(|_| {
+            args.iter()
+                .position(|arg| !arg.starts_with('-') && !arg.contains('='))
+        });
+    let name = env_program
+        .map_or(program, |index| Path::new(&args[index]))
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let shell = matches!(name, "sh" | "bash" | "dash" | "zsh");
+    let mut before_script =
+        shell || matches!(name, "node" | "nodejs") || name.starts_with("python");
+    let mut options = true;
+    let mut next = None;
+    args.iter().enumerate().filter_map(move |(index, arg)| {
+        let arg = arg.as_str();
+        let (option, value, role) = if env_program.is_some_and(|program| index <= program) {
+            if env_program != Some(index) {
+                return None;
+            }
+            (
+                None,
+                arg,
+                if arg.contains('/') {
+                    Operand::Input
+                } else {
+                    Operand::Value
+                },
+            )
+        } else if let Some(role) = next.take() {
+            (None, arg, role)
+        } else if options && arg == "--" {
+            options = false;
+            return None;
+        } else if options
+            && (arg.starts_with('-') || before_script && shell && arg.starts_with('+'))
+        {
+            let (flag, value) = arg
+                .split_once('=')
+                .map_or((arg, None), |(flag, value)| (flag, Some(value)));
+            let role = if before_script {
+                interpreter_operand(name, flag)
+            } else {
+                None
+            }
+            .or_else(|| stdio_input_option(flag).then_some(Operand::Input));
+            if role == Some(Operand::Inline) {
+                before_script = false;
+            }
+            if value.is_none() {
+                next = role;
+                return None;
+            }
+            (
+                Some(flag),
+                value.expect("attached option value"),
+                role.unwrap_or(Operand::Value),
+            )
+        } else {
+            let script = std::mem::take(&mut before_script);
+            (
+                None,
+                arg,
+                if script {
+                    Operand::Input
+                } else {
+                    Operand::Value
+                },
+            )
+        };
+        let required = matches!(role, Operand::Input | Operand::Loader);
+        (matches!(role, Operand::Input | Operand::Loader | Operand::Value)
+            && !value.is_empty()
+            && value != "-"
+            && !value.contains("://")
+            && (role == Operand::Input || explicit_stdio_path(value)))
+        .then_some(StdioArgumentPath {
+            index,
+            option,
+            value,
+            required,
+        })
+    })
+}
+
 #[cfg(test)]
 mod stdio_path_tests {
     use super::*;
 
+    fn path_values(program: &str, args: &[&str]) -> Vec<(usize, bool)> {
+        let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        stdio_argument_paths(Path::new(program), &args)
+            .map(|arg| (arg.index, arg.required))
+            .collect()
+    }
+
     #[test]
-    fn input_urls_and_shell_option_values_remain_arguments() {
-        for option in ["-O", "+O", "-o", "--rcfile"] {
-            let args = [option, "extglob", "./server.sh"].map(str::to_owned);
-            assert_eq!(stdio_script_index(Path::new("bash"), &args), Some(2));
-        }
-        assert_eq!(stdio_path_operand("https://example.test/feed", true), None);
+    fn node_preserves_bare_specifiers_and_literal_values() {
         assert_eq!(
-            stdio_path_operand("--input=https://example.test/feed", false),
-            None
-        );
-        assert_eq!(
-            stdio_path_operand("--config=settings", false),
-            Some((Some("--config"), "settings"))
+            path_values(
+                "/usr/bin/env",
+                &[
+                    "node",
+                    "--require",
+                    "dotenv/config",
+                    "--import=@scope/package",
+                    "--loader=./loader.mjs",
+                    "server.js",
+                    "--model=gpt-4.1-mini",
+                    "owner/repo",
+                    "report.json",
+                    "--config=settings",
+                    "--log=./mcp.log",
+                ],
+            ),
+            [(4, true), (5, true), (9, true), (10, false)]
         );
     }
 
     #[test]
-    fn combined_shell_flags_and_interpreter_options_keep_their_meaning() {
+    fn interpreter_payloads_and_urls_remain_opaque() {
         for flag in ["-c", "-lc", "-ic"] {
-            assert!(stdio_inline_script(Path::new("bash"), flag));
-            let args = vec![flag.into(), "printf 'x/y'".into()];
-            assert_eq!(stdio_script_index(Path::new("bash"), &args), None);
+            assert!(path_values("bash", &[flag, "/some/program"]).is_empty());
         }
-        let args = vec!["-W".into(), "ignore".into(), "server.py".into()];
-        assert_eq!(stdio_script_index(Path::new("python3"), &args), Some(2));
-        let args = vec!["python3".into(), "-m".into(), "package.server".into()];
-        assert_eq!(stdio_script_index(Path::new("/usr/bin/env"), &args), None);
+        for flag in ["-O", "+O", "-o"] {
+            assert_eq!(
+                path_values("bash", &[flag, "extglob", "./server.sh"]),
+                [(2, true)]
+            );
+        }
+        assert_eq!(
+            path_values("bash", &["--rcfile", "startup", "./server.sh"]),
+            [(1, true), (2, true)]
+        );
+        assert_eq!(
+            path_values("python3", &["-W", "ignore", "server.py"]),
+            [(2, true)]
+        );
+        assert!(path_values("/usr/bin/env", &["python3", "-m", "package.server"]).is_empty());
+        assert!(path_values("node", &["--eval=/program/text"]).is_empty());
+        assert!(path_values("server", &["--input=https://example.test/feed"]).is_empty());
     }
 }
 

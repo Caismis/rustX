@@ -129,38 +129,22 @@ fn resolve_stdio_paths(
         }
     }
     let program = definition.command.as_deref().unwrap_or_default();
-    let interpreter =
-        rustx_execution_protocol::mcp::stdio_interpreter(Path::new(program), &definition.args)
-            .to_path_buf();
-    let script_index =
-        rustx_execution_protocol::mcp::stdio_script_index(Path::new(program), &definition.args);
-    let mut script_next = false;
-    let mut input_next = false;
-    for (index, arg) in definition.args.iter_mut().enumerate() {
-        if script_next {
-            script_next = false;
-            continue;
-        }
-        if rustx_execution_protocol::mcp::stdio_inline_script(&interpreter, arg) {
-            script_next = true;
-            continue;
-        }
-        if rustx_execution_protocol::mcp::stdio_input_option(arg) {
-            input_next = true;
-            continue;
-        }
-        let required = std::mem::take(&mut input_next) || script_index == Some(index);
-        let Some((prefix, value)) =
-            rustx_execution_protocol::mcp::stdio_path_operand(arg, required)
-        else {
-            continue;
-        };
-        let prefix = prefix.map(str::to_owned);
-        let resolved = resolve(Path::new(value))?
-            .into_os_string()
-            .into_string()
-            .map_err(|_| "stdio argument requires a UTF-8 Client path")?;
-        *arg = prefix.map_or(resolved.clone(), |name| format!("{name}={resolved}"));
+    let replacements =
+        rustx_execution_protocol::mcp::stdio_argument_paths(Path::new(program), &definition.args)
+            .map(|arg| {
+                let resolved = resolve(Path::new(arg.value))?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| "stdio argument requires a UTF-8 Client path")?;
+                let value = match arg.option {
+                    Some(name) => format!("{name}={resolved}"),
+                    None => resolved,
+                };
+                Ok((arg.index, value))
+            })
+            .collect::<Result<Vec<_>, &'static str>>()?;
+    for (index, value) in replacements {
+        definition.args[index] = value;
     }
     Ok(())
 }
@@ -370,7 +354,7 @@ args = ["--input", "https://example.test/feed", "--input=https://example.test/tw
 [mcp_servers.allowed]
 command = "../fixture-server"
 cwd = ".."
-args = ["../fixture.py", "server.py", "dir/my tool.py", "--config=../settings.toml", "--flag", "https://example.com/a"]
+args = ["../fixture.py", "server.py", "./dir/my tool.py", "--config=../settings.toml", "--flag", "https://example.com/a"]
 [mcp_servers.unavailable]
 command = "../../unexpected-server"
 [mcp_servers.system]
@@ -392,7 +376,7 @@ command = "fixture-server"
             allowed.args,
             [
                 "/logical/client/fixture.py",
-                "/logical/client/.agents/server.py",
+                "server.py",
                 "/logical/client/.agents/dir/my tool.py",
                 "--config=/logical/client/settings.toml",
                 "--flag",
@@ -433,6 +417,20 @@ command = "fixture-server"
                 assert_eq!(script.args, expected);
             }
         }
+        let mut node = allowed.clone();
+        node.command = Some("node".into());
+        node.cwd = None;
+        node.args = [
+            "--require",
+            "dotenv/config",
+            "/bin/server.js",
+            "--model=gpt-4.1-mini",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let expected = node.args.clone();
+        resolve_stdio_paths(&mut node, user, None).unwrap();
+        assert_eq!(node.args, expected);
 
         let mut escaped = allowed.clone();
         escaped.args = vec!["--config=../../outside.toml".into()];

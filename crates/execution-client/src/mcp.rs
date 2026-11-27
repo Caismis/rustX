@@ -396,17 +396,19 @@ fn launch_parameters(
         }
         return Some((python.prepared_launch(source, operations)?, lifecycle, info));
     }
+    // Classify the authored interpreter spelling on both sides, even when
+    // the Client pins that executable through a Workspace symlink.
+    let args = client_arguments(
+        operations.workspace_root(),
+        operations.workspace(),
+        &launch.program,
+        launch.args,
+    )?;
     let program = client_program(
         operations.workspace_root(),
         operations.workspace(),
         &launch.cwd,
         launch.program,
-    )?;
-    let args = client_arguments(
-        operations.workspace_root(),
-        operations.workspace(),
-        &program,
-        launch.args,
     )?;
     Some((
         InteractiveProcessSpec {
@@ -476,32 +478,9 @@ fn client_arguments(
     program: &std::path::Path,
     args: Vec<String>,
 ) -> Option<Vec<String>> {
-    let interpreter = rustx_execution_protocol::mcp::stdio_interpreter(program, &args);
-    let script_index = rustx_execution_protocol::mcp::stdio_script_index(program, &args);
-    let mut script_next = false;
-    let mut input_next = false;
-    for (index, arg) in args.iter().enumerate() {
-        if script_next {
-            script_next = false;
-            continue;
-        }
-        if rustx_execution_protocol::mcp::stdio_inline_script(interpreter, arg) {
-            script_next = true;
-            continue;
-        }
-        if rustx_execution_protocol::mcp::stdio_input_option(arg) {
-            input_next = true;
-            continue;
-        }
-        let required = std::mem::take(&mut input_next) || script_index == Some(index);
-        let Some((prefix, value)) =
-            rustx_execution_protocol::mcp::stdio_path_operand(arg, required)
-        else {
-            continue;
-        };
-        let path = std::path::Path::new(value);
-        let required =
-            required || prefix.is_some_and(rustx_execution_protocol::mcp::stdio_input_option);
+    for arg in rustx_execution_protocol::mcp::stdio_argument_paths(program, &args) {
+        let path = std::path::Path::new(arg.value);
+        let required = arg.required;
         if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
             return None;
         }
@@ -895,7 +874,7 @@ mod launch_tests {
                 &root,
                 &workspace,
                 Path::new("fixture"),
-                vec!["relative.py".into()]
+                vec!["./relative.py".into()]
             )
             .is_none()
         );
