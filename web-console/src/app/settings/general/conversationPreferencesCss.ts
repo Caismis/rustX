@@ -1,7 +1,7 @@
 export const conversationPreferencesCss = {
   row: 'flex items-center gap-[8px] py-[16px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l2)]',
   rowText: 'flex-1 min-w-0 flex flex-col gap-[4px] pr-[48px] max-[480px]:pr-[8px]',
-  title: 'text-[14px] font-normal leading-[22px] [color:var(--dsw-alias-label-primary)]',
+  titleCls: 'text-[14px] font-normal leading-[22px] [color:var(--dsw-alias-label-primary)]',
   desc: 'text-[12px] font-normal leading-[18px] [color:var(--dsw-alias-label-secondary)]',
   control: 'inline-flex items-center gap-[8px]',
   stepper: 'group/cpstep relative inline-flex items-center justify-center min-w-[72px] h-[36px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-alias-bg-module-platform)]',

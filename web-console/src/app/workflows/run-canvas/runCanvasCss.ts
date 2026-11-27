@@ -3,7 +3,7 @@ export const runCanvasCss = {
   dialog: 'flex flex-col w-full max-w-[1380px] min-w-0 min-h-0 overflow-hidden border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-alias-bg-base)] [color:var(--dsw-alias-label-primary)] shadow-[var(--dsw-elevation-prominent)] max-[820px]:rounded-none',
   header: 'flex flex-wrap items-center justify-between gap-x-[14px] gap-y-[8px] px-[16px] py-[12px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l2)] bg-[var(--dsw-alias-bg-layer-1)]',
   titleGroup: 'flex flex-wrap items-center gap-[8px] min-w-0',
-  title: 'm-0 text-[15px] font-medium overflow-hidden text-ellipsis whitespace-nowrap',
+  titleCls: 'm-0 text-[15px] font-medium overflow-hidden text-ellipsis whitespace-nowrap',
   badge: 'inline-flex items-center px-[8px] py-[2px] rounded-full [corner-shape:round] [border:0.5px_solid_var(--dsw-alias-border-l3)] bg-[var(--dsw-alias-bg-layer-2)] [color:var(--dsw-alias-label-secondary)] text-[11px] font-medium whitespace-nowrap',
   provenance: 'flex flex-wrap items-center gap-[6px] text-[11px] [color:var(--dsw-alias-label-tertiary)] [&_code]:[font-family:var(--ds-font-family-code)] [&_code]:px-[5px] [&_code]:py-[1px] [&_code]:rounded-[var(--dsw-radius-xs)] [&_code]:bg-[var(--dsw-alias-bg-layer-2)] [&_code]:[color:var(--dsw-alias-label-secondary)]',
   closeButton: 'inline-flex items-center justify-center min-w-[32px] h-[32px] px-[10px] [border:0.5px_solid_var(--dsw-alias-border-l3)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-2)] [color:var(--dsw-alias-label-primary)] [font:inherit] text-[12px] font-medium cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1',

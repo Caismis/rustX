@@ -949,7 +949,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         <SettingsNotice text={unit.facts.authored.state === 'invalid' ? `${tx('settings:bridge.authored-source-is-invalid')} ${unit.facts.authored.diagnostic}`
           : unit.facts.effective.state === 'invalid' ? `${tx('settings:bridge.native-effective-resolution-failed')} ${unit.facts.effective.diagnostic}` : undefined}/>
       </>}
-      {redacted && <p className={settingsContentCss.hint}>{tx('settings:forms.secret-replacement')}</p>}
+      {redacted && <p className={settingsContentCss.hintCls}>{tx('settings:forms.secret-replacement')}</p>}
       {unit.definition && (!presentation || unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} />}
       {/* Inspecting an inherited definition shows its safe native facts in the
           same fields, and none of them is writable until the explicit
@@ -990,7 +990,7 @@ export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
     {unit.definition === 'inherited' && <p role="status" data-definition-state="inherited">{tx('settings:forms.using-global')}</p>}
     <SettingsNotice text={unit.definition === 'inherited' ? shadowed?.diagnostic : undefined}/>
     {unit.definition === 'overriding' && <p role="status" data-definition-state="overriding">{tx('settings:forms.workspace-customization')}</p>}
-    {!!shadowed?.withheld.length && <p className={settingsContentCss.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
+    {!!shadowed?.withheld.length && <p className={settingsContentCss.hintCls}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
     {unit.unparsed && <p role="status" data-definition-state="authored">{tx('settings:forms.unreadable')}</p>}
   </>;
 }

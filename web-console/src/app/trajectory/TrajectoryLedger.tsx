@@ -150,6 +150,6 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
         }} />;
       })}
     </div>
-    {!rows.length && <p className={trajectoryCss.note}>{searching ? tx('trajectory:trajectory.no-loaded-item-matches-this-search') : tx('trajectory:trajectory.no-records-in-the-loaded-window')}</p>}
+    {!rows.length && <p className={trajectoryCss.noteCls}>{searching ? tx('trajectory:trajectory.no-loaded-item-matches-this-search') : tx('trajectory:trajectory.no-records-in-the-loaded-window')}</p>}
   </div>;
 }

@@ -18,7 +18,7 @@ export const trajectoryCss: Record<string, string> = {
   "searchIcon": "flex-none",
   "searchInput": "min-w-0 w-full p-0 border-0 outline-0 [color:var(--dsw-alias-label-primary)] bg-transparent [font:var(--dsw-font-xxs-12)] focus-visible:outline-0 placeholder:[color:var(--dsw-alias-label-caption)] [&::-webkit-search-cancel-button]:w-[12px] [&::-webkit-search-cancel-button]:h-[12px] [&::-webkit-search-cancel-button]:cursor-pointer",
   "error": "tj-error [color:var(--dsw-alias-state-error-primary)]",
-  "note": "m-0 px-[12px] py-[6px] [color:var(--dsw-alias-label-secondary)] text-[11px]",
+  "noteCls": "m-0 px-[12px] py-[6px] [color:var(--dsw-alias-label-secondary)] text-[11px]",
   "split": "relative flex flex-1 w-full min-h-0 overflow-hidden bg-[var(--dsw-alias-bg-layer-1)] [container-type:inline-size]",
   "ledgerPane": "relative flex-1 min-w-0 [container:trajectory-table/inline-size]",
   "ledger": "[--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [--trajectory-turn-accent:color-mix(in_srgb,var(--dsw-static-blue-500)_22%,var(--dsw-alias-bg-layer-1))] relative h-full box-border pb-(--dsh-trajectory-bottom-clearance,0px) overflow-x-hidden overflow-y-auto [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-bg-layer-1)] [font:var(--dsw-font-xxs-12)]",

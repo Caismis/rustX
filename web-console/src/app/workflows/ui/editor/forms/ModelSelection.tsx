@@ -115,8 +115,8 @@ function ModelParameters({ policy, address, port, onChange }: {
 
 function ChoicePages({ choices: { state, load }, kind }: { choices: ReturnType<typeof useModelChoices>; kind: 'models' | 'profiles' }) {
   const tx = useTranslation();
-  if (state?.loading) return <p className={editorCss.note} role="status">{tx('workflows:inspector.model-choices-loading')}</p>;
-  if (state?.failed) return <div><p className={editorCss.note} role="alert">{tx('workflows:inspector.model-choices-failed')}</p>
+  if (state?.loading) return <p className={editorCss.noteCls} role="status">{tx('workflows:inspector.model-choices-loading')}</p>;
+  if (state?.failed) return <div><p className={editorCss.noteCls} role="alert">{tx('workflows:inspector.model-choices-failed')}</p>
     <button type="button" className={editorCss.smallButton} onClick={() => load()}>{tx('workflows:inspector.model-choices-reload')}</button></div>;
   if (!state?.choices) return null;
   const { revision, next_offset } = state.choices;

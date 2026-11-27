@@ -53,13 +53,13 @@ export function Modal({
           <>
             <div className={clsx(modalCss.content, contentClassName)}>
               <div className={modalCss.header}>
-                <h2 className={modalCss.title}>{title}</h2>
+                <h2 className={modalCss.titleCls}>{title}</h2>
                 <button type="button" className={modalCss.close} aria-label={closeLabel} onClick={onClose}>
                   <IconCloseOutline16 size={14} />
                 </button>
               </div>
               {description !== undefined && description !== '' && (
-                <p className={modalCss.description}>{description}</p>
+                <p className={modalCss.descriptionCls}>{description}</p>
               )}
               {children !== undefined && <div className={modalCss.body}>{children}</div>}
             </div>

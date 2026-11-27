@@ -69,7 +69,7 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
         <ul aria-label={receipt.status === 'unresolved' ? tx('settings:auto-repair.not-applied') : tx('settings:auto-repair.changes')}>
           {receipt.changes.map((change, index) => <li key={index}>{repairChangeLabel(tx, change)}</li>)}
         </ul>
-        {receipt.truncated && <p className={settingsContentCss.hint}>{tx('settings:auto-repair.truncated', { shown: receipt.changes.length, total: receipt.changed_count })}</p>}
+        {receipt.truncated && <p className={settingsContentCss.hintCls}>{tx('settings:auto-repair.truncated', { shown: receipt.changes.length, total: receipt.changed_count })}</p>}
       </>}
       <p>{receipt.backup_available ? tx('settings:auto-repair.backup-kept') : tx('settings:auto-repair.backup-none')}</p>
       {receipt.status !== 'repaired' && malformed && <p>{tx('settings:auto-repair.manual-repair')}</p>}

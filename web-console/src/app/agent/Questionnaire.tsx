@@ -134,7 +134,7 @@ export function Questionnaire(props: QuestionnaireProps) {
       <header className={questionCss.header}>
         <div className={questionCss.headingBlock}>
           <div className={questionCss.eyebrow}>{form?.eyebrow ?? question.header}</div>
-          {minimized && <h2 className={questionCss.title} id={titleId}>{form?.title ?? question.question}</h2>}
+          {minimized && <h2 className={questionCss.titleCls} id={titleId}>{form?.title ?? question.question}</h2>}
         </div>
         <div className={questionCss.headerActions}>
           {(status || record !== undefined) && <span className={questionCss.waitStatus}>{record !== undefined ? tx('interactions:questionnaire.recorded') : status}</span>}
@@ -153,7 +153,7 @@ export function Questionnaire(props: QuestionnaireProps) {
       </header>
       {!minimized && <>
         <div className={questionCss.body} data-question-scroll>
-          <div className={questionCss.questionTitle} data-expanded={expandedCopy.has(titleId) || undefined}><h2 className={clsx(questionCss.title, questionCss.titlePreview)} id={titleId}>{form?.title ?? question.question}</h2>{copyToggle(titleId, questionCss.questionToggle)}</div>
+          <div className={questionCss.questionTitle} data-expanded={expandedCopy.has(titleId) || undefined}><h2 className={clsx(questionCss.titleCls, questionCss.titlePreview)} id={titleId}>{form?.title ?? question.question}</h2>{copyToggle(titleId, questionCss.questionToggle)}</div>
           {form && <div className={questionCss.detail}><MarkdownText text={question.question}/></div>}
           <div className={questionCss.options} role={shape.type === 'single_choice' ? 'radiogroup' : 'group'} aria-labelledby={titleId}>
             {hasOptions && shape.options.map((option, optionIndex) => {
@@ -170,7 +170,7 @@ export function Questionnaire(props: QuestionnaireProps) {
                     : <span className={questionCss.number}>{optionIndex + 1}</span>}
                   <span className={questionCss.optionCopy}><span className={questionCss.optionLine}>
                     <span className={questionCss.optionLabel}>{display.label}</span>{display.recommended && <span className={questionCss.badge}>{tx('interactions:questionnaire.recommended')}</span>}
-                  </span>{hasDescription && <span className={questionCss.description} id={descriptionId}>{option.description}</span>}</span>
+                  </span>{hasDescription && <span className={questionCss.descriptionCls} id={descriptionId}>{option.description}</span>}</span>
                 </button>
                 {hasDescription && copyToggle(descriptionId, questionCss.descriptionToggle)}</div>
                 {option.preview && selected && <div className={questionCss.detail}><MarkdownText text={option.preview}/></div>}

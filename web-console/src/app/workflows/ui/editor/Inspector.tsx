@@ -77,7 +77,7 @@ export function Inspector({ document, block, selection, onSelect, edit, navigate
     if (selection.kind === 'start') description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />;
     // As Dify's Loop and Iteration Start: a body has no input of its own; it
     // reads the variables around it.
-    body = owner && (path.length ? <p className={editorCss.note}>{tx('workflows:inspector.body-start')}</p>
+    body = owner && (path.length ? <p className={editorCss.noteCls}>{tx('workflows:inspector.body-start')}</p>
       : <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} tools={vocabulary?.builtin_tools ?? []} start={selection.kind === 'start'} />);
   }
   return <aside ref={root} className={editorCss.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}

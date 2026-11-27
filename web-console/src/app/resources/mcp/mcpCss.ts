@@ -13,7 +13,7 @@ export const mcpCss = {
   scope: "flex items-center gap-[8px] min-w-0 text-[12px] [color:var(--dsw-alias-label-secondary)] [&_span]:px-[8px] [&_span]:py-[2px] [&_span]:[border:1px_solid_var(--dsw-alias-border-l3)] [&_span]:rounded-[var(--dsw-radius-md)] [&_span]:wrap-anywhere",
   short: "w-[240px] max-w-full [&>div]:p-0 [&_button]:min-h-[36px] [&_button]:h-[36px] [&_button]:text-[13px]",
   optionalMap: "[border-top:1px_solid_var(--dsw-alias-border-l2)] pt-[12px]",
-  hint: "m-0 [color:var(--dsw-alias-label-secondary)] text-[12px] leading-[18px]",
+  hintCls: "m-0 [color:var(--dsw-alias-label-secondary)] text-[12px] leading-[18px]",
   error: "[color:var(--dsw-alias-state-error-primary)] text-[13px]",
   notice: "flex flex-col gap-[8px]",
 };

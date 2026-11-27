@@ -314,7 +314,7 @@ function NodeField({
   if (field === undefined) return null
   return (
     <span
-      className={clsx(jsonTreeCss.label, expandable && jsonTreeCss.clickableLabel)}
+      className={clsx(jsonTreeCss.labelCls, expandable && jsonTreeCss.clickableLabel)}
       onClick={expandable ? onToggle : undefined}
     >
       {fieldText(field)}:
@@ -415,7 +415,7 @@ function JsonString({
     const fieldId = `${contentsId}-field`
     return (
       <div className={jsonTreeCss.stringField} data-expanded>
-        {field !== undefined && <span id={fieldId} className={jsonTreeCss.label}>{fieldText(field)}:</span>}
+        {field !== undefined && <span id={fieldId} className={jsonTreeCss.labelCls}>{fieldText(field)}:</span>}
         <pre
           ref={rawRef}
           id={contentsId}
@@ -494,7 +494,7 @@ function JsonString({
               </button>
             </span>
           )}
-          {field !== undefined && <span className={jsonTreeCss.label}>{fieldText(field)}:</span>}
+          {field !== undefined && <span className={jsonTreeCss.labelCls}>{fieldText(field)}:</span>}
           {primitiveValue(value)}
           {!lastElement && <span className={jsonTreeCss.punctuation}>,</span>}
         </span>

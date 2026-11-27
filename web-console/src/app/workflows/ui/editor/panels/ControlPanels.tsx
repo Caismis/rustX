@@ -124,7 +124,7 @@ export function IterationPanel(props: PanelProps) {
 /** As Dify's Exit Loop: no configuration. */
 export function LoopEndPanel() {
   const tx = useTranslation();
-  return <Section title={tx('workflows:kind.loop_end')}><p className={editorCss.note}>{tx('workflows:kind-about.loop_end')}</p></Section>;
+  return <Section title={tx('workflows:kind.loop_end')}><p className={editorCss.noteCls}>{tx('workflows:kind-about.loop_end')}</p></Section>;
 }
 
 /** Dify's write modes a variable type offers, in its menu order. */
@@ -150,10 +150,10 @@ export function AssignerPanel(props: PanelProps) {
   const variables = owner?.type === 'loop' ? owner.loop_variables ?? [] : [];
   const setItems = (items: WorkflowAssignment[], array?: ArrayEdit) => update(current => ({ ...current, items }), at('items'), array);
   const typeOf = (item: WorkflowAssignment) => item.variable[0] === step?.node ? variables.find(variable => variable.label === item.variable[1])?.var_type : undefined;
-  if (owner?.type !== 'loop') return <Section title={tx('workflows:assigner.variables')}><p className={editorCss.note}>{tx('workflows:assigner.outside-loop')}</p></Section>;
+  if (owner?.type !== 'loop') return <Section title={tx('workflows:assigner.variables')}><p className={editorCss.noteCls}>{tx('workflows:assigner.outside-loop')}</p></Section>;
   return <Section title={tx('workflows:assigner.variables')} aside={<button type="button" className={editorCss.iconButton} aria-label={tx('workflows:assigner.add')} disabled={!variables.length||node.items.length>=32}
     onClick={() => { const first = variables[0]; setItems([...node.items, { variable: [step!.node, first.label], operation: 'overwrite', value: unset() }], { array: at('items'), inserted: node.items.length }); }}><IconPlus size={14} /></button>}>
-    {!variables.length && <p className={editorCss.note}>{tx('workflows:assigner.no-loop-variables')}</p>}
+    {!variables.length && <p className={editorCss.noteCls}>{tx('workflows:assigner.no-loop-variables')}</p>}
     {node.items.length ? node.items.map((item, index) => {
       const type = typeOf(item), base = at('items', index);
       const set = (variable: string[], operation: WorkflowWriteMode, value: Value | undefined) =>
@@ -172,6 +172,6 @@ export function AssignerPanel(props: PanelProps) {
         {item.value?.type === 'reference' ? <ReferencePicker address={within(base, ['value'])} path={item.value.path} edit={props.edit} token placeholder={tx('workflows:branch.select-variable')} />
           : item.value && type ? <ConstantField label={tx('workflows:loop.value')} type={item.operation === 'set' ? type : 'number'} value={item.value} address={within(base, ['value'])} edit={props.edit} /> : null}
       </div>;
-    }) : variables.length ? <p className={editorCss.note}>{tx('workflows:assigner.empty')}</p> : null}
+    }) : variables.length ? <p className={editorCss.noteCls}>{tx('workflows:assigner.empty')}</p> : null}
   </Section>;
 }

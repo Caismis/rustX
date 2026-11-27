@@ -94,10 +94,10 @@ function FieldCard({ document, parent, name, onCancel, onConfirm }: {
       <TypeSelector value={type} onChange={setType} />
       <div className={structuredOutputCss.fieldActions}><span className={structuredOutputCss.required}>{tx('workflows:schema.required')}<Switch className={structuredOutputCss.requiredSwitch} label={tx('workflows:schema.required')} checked={required} onChange={setRequired} /></span>
         <span className={structuredOutputCss.separator} /><button type="button" onClick={onCancel}>{tx('workflows:dialog.cancel')}</button>
-        <button type="submit" className={structuredOutputCss.confirm} disabled={!field.trim()}>{tx('workflows:structured.confirm')}<kbd>{/* i18n-raw: keyboard shortcut */ 'Ctrl ↵'}</kbd></button>
+        <button type="submit" className={structuredOutputCss.confirmCls} disabled={!field.trim()}>{tx('workflows:structured.confirm')}<kbd>{/* i18n-raw: keyboard shortcut */ 'Ctrl ↵'}</kbd></button>
       </div>
     </div>
-    <TextInput className={structuredOutputCss.description} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
+    <TextInput className={structuredOutputCss.descriptionCls} aria-label={tx('workflows:schema.description')} placeholder={tx('workflows:panel.description-placeholder')} value={description} onChange={event => setDescription(event.target.value)} />
     {type === 'string' && <div className={structuredOutputCss.validations}><div className={structuredOutputCss.validationTitle}>{tx('workflows:structured.string-validations')}<span /></div>
       <label>{tx('workflows:structured.enum')}<Textarea aria-label={tx('workflows:structured.enum')} placeholder={tx('workflows:structured.enum-placeholder')} rows={2} value={enums} onChange={event => setEnums(event.target.value)} /></label>
     </div>}

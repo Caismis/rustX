@@ -17,7 +17,7 @@ export const backgroundJobsCss = {
   rowInteractive: 'hover:bg-[var(--dsw-alias-interactive-bg-hover)]',
   row: 'bj-row flex flex-1 items-center gap-[8px] min-w-0 p-0 border-0 bg-transparent [color:var(--dsw-alias-label-primary)] [font:inherit] text-left [&:is(button)]:cursor-pointer [&:is(button)]:after:absolute [&:is(button)]:after:inset-0 [&:is(button)]:after:rounded-[inherit] [&:is(button)]:after:content-[""] [&:is(button):focus-visible]:outline-none',
   glyph: 'grid flex-none place-items-center w-[16px] h-[20px]',
-  label: 'flex-1 text-[13px] leading-[20px]',
+  labelCls: 'flex-1 text-[13px] leading-[20px]',
   duration: 'flex-none [color:var(--dsw-alias-label-tertiary)] text-[12px] tabular-nums leading-[20px]',
   chevron: 'grid pointer-events-none flex-none self-center place-items-center w-[16px] h-[20px] [color:var(--dsw-alias-label-tertiary)]',
   chevronOpen: 'rotate-180',

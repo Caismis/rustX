@@ -1052,7 +1052,7 @@ export function WorkflowRunCanvas({
     <div data-workflow-run-canvas="" data-workflow-run-id={runKey} style={{ display: 'contents' }}>
       <header className={runCanvasCss.header}>
         <div className={runCanvasCss.titleGroup}>
-          <h2 className={runCanvasCss.title}>{tx('workflows:run-canvas.title', { p0: displayWorkflowId })}</h2>
+          <h2 className={runCanvasCss.titleCls}>{tx('workflows:run-canvas.title', { p0: displayWorkflowId })}</h2>
           <span className={runCanvasCss.badge}>{tx('workflows:run-canvas.read-only')}</span>
           <span className={runCanvasCss.badge}>{tx(activeRun && activeRun.state.type !== 'settled' ? 'workflows:run-canvas.source-live' : 'workflows:run-canvas.source-history')}</span>
           {readyHeader && <span className={runCanvasCss.provenance}>

@@ -33,7 +33,7 @@ export function QuestionRow({ row, inspect, title, kind = 'ask_user', renderQues
   const state = row.verdict === 'waiting' ? 'running' : row.verdict === 'interrupted' || row.verdict === 'timed-out' ? 'stopped' : 'ok';
   return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={row.id} data-tool-name={kind}>
     <div className={toolCss.root} data-state={state} data-tool={kind}>
-      <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.title} chevronClassName={toolCss.chevron}
+      <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.titleCls} chevronClassName={toolCss.chevron}
         icon={<IconQuestionOutline14/>} title={title ?? tx('tools:ask.row-title')} open={open && expandable} expandable={expandable}
         expandOnRowClick={panelAction === undefined} keepContentWhenOpen onToggle={toggle}
         collapsedContent={<><span className={toolCss.sep} aria-hidden/><span className={toolCss.summary}>{summary}</span>

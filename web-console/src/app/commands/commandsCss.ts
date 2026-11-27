@@ -5,7 +5,7 @@ export const commandsCss = {
   icon: 'inline-flex flex-none w-[14px] h-[14px] [color:var(--dsw-alias-label-tertiary)] [&_svg]:w-[14px] [&_svg]:h-[14px]',
   name: 'flex-none max-w-[40%] overflow-hidden text-ellipsis whitespace-nowrap',
   alias: 'flex-none max-w-[20%] overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]',
-  description: 'flex-1 min-w-0 text-right overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]',
+  descriptionCls: 'flex-1 min-w-0 text-right overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]',
   options: 'max-h-[40vh] overflow-y-auto',
   search: 'w-full mb-[8px]',
   row: 'flex items-center justify-between gap-[8px] w-full px-[10px] py-[8px] border-0 rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-primary)] text-left cursor-pointer wrap-anywhere aria-selected:bg-[var(--dsw-alias-interactive-bg-hover)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] [&_small]:[color:var(--dsw-alias-label-tertiary)]',

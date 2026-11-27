@@ -25,7 +25,7 @@ export function Names({ label, value, change }: { label: string; value: string[]
       <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => change(value.filter((_, at) => at !== index))}>{tx('settings:controls.remove')}</Button>
     </div>)}
     <Button onClick={() => change([...value, ''])}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
-    {!value.length && <p className={settingsContentCss.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
+    {!value.length && <p className={settingsContentCss.hintCls}>{tx('settings:controls.empty-list-no-entries')}</p>}
   </fieldset>;
 }
 

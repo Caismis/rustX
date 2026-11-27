@@ -3,7 +3,7 @@ export const toolCss = {
   row: 'overflow-hidden [color:var(--dsw-alias-label-tertiary)] transition-colors duration-100 motion-reduce:transition-none focus-visible:[color:var(--dsw-alias-label-secondary)] hover:[color:var(--dsw-alias-label-secondary)]',
   leading: 'flex-shrink-0 [color:inherit]',
   chevron: '[color:inherit]',
-  title: 'font-normal [color:inherit]',
+  titleCls: 'font-normal [color:inherit]',
   sep: 'flex-none w-[2px] h-[2px] rounded-[1px] mx-[8px] bg-[var(--dsw-alias-label-caption)]',
   summary: 'flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font-size:var(--dsh-content-font-size-secondary,13px)] [line-height:calc(24px+var(--dsh-content-font-delta,0px))] [color:inherit] data-[error]:[color:var(--dsw-alias-state-error-primary)] data-[stopped]:[color:var(--dsw-alias-state-warn-label)]',
   diffCaption: 'mt-[4px] mr-0 mb-0 ml-[4px] [color:var(--dsw-alias-label-tertiary)]',

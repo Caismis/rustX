@@ -31,7 +31,7 @@ export function ResourceCard({ name, subtitle, label, icon, description, diagnos
         {menu}
       </div>}
     </div>
-    {(diagnostic || description) && <p className={clsx(catalogCss.cardDescription, resourceCatalogCss.description, diagnostic && catalogCss.invalid)}>{diagnostic ?? description}</p>}
+    {(diagnostic || description) && <p className={clsx(catalogCss.cardDescription, resourceCatalogCss.descriptionCls, diagnostic && catalogCss.invalid)}>{diagnostic ?? description}</p>}
     {actions && <div className={resourceCatalogCss.cardActions}>{actions}</div>}
   </li>;
 }

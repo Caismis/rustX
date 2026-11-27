@@ -74,7 +74,7 @@ export function SubagentMenu({ agents, workflowChildren = [], limited, selected,
         {branch ? <button type="button" tabIndex={-1} className={`${subagentCatalogCss.disclosure} ${isExpanded ? subagentCatalogCss.disclosureOpen : ''}`} aria-label={tx(isExpanded ? 'common:subagents.collapse-branch' : 'common:subagents.expand-branch', { name: agent.title })} onClick={event => { event.stopPropagation(); toggle(agent.agent_id); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button> : entries.some(entry => inventory.some(child => child.parent_agent_id === entry.agent_id)) && <span className={subagentCatalogCss.disclosureSpace}/>}
         <div className={subagentCatalogCss.clickarea}>
           <span className={subagentCatalogCss.rowActivitySlot}><StateDot state={agentDot(agent)} size={7}/></span>
-          <span className={subagentCatalogCss.content}><span className={`${subagentCatalogCss.label} ${current ? subagentCatalogCss.currentLabel : ''}`}>{agent.title}</span><span className={subagentCatalogCss.summary}>{agent.agent} · {agentStatus(agent, tx)}</span></span>
+          <span className={subagentCatalogCss.content}><span className={`${subagentCatalogCss.labelCls} ${current ? subagentCatalogCss.currentLabel : ''}`}>{agent.title}</span><span className={subagentCatalogCss.summary}>{agent.agent} · {agentStatus(agent, tx)}</span></span>
           {metrics && <span className={subagentCatalogCss.metrics}>{usage?.total_tokens != null && <span className={subagentCatalogCss.metricToken}>{tx('agent:usage.count', { count: formatTokens(usage.total_tokens, tx) })}</span>}<span className={subagentCatalogCss.metricDuration} title={duration}>{duration}</span></span>}
           {!current && scope.openAside && <Tooltip label={tx('common:subagents.open-aside', { name: agent.title })} side="bottom" delayMs={500}><button type="button" className={subagentCatalogCss.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: agent.title })} onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openAside?.(agent.agent_id); close(); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button></Tooltip>}
         </div>
@@ -115,7 +115,7 @@ function WorkflowChildRow({ child, selected, close }: { child: WorkflowChild; se
       <div className={subagentCatalogCss.clickarea}>
         <span className={subagentCatalogCss.rowActivitySlot}><StateDot state={workflowDot(state)} size={7}/></span>
         <span className={subagentCatalogCss.content}>
-          <span className={`${subagentCatalogCss.label} ${selected ? subagentCatalogCss.currentLabel : ''}`}>{child.title}</span>
+          <span className={`${subagentCatalogCss.labelCls} ${selected ? subagentCatalogCss.currentLabel : ''}`}>{child.title}</span>
           <span className={subagentCatalogCss.summary}>{tx('common:subagents.workflow-source', { name: child.workflowId })}</span>
           <span className={subagentCatalogCss.summary}>{pending ? tx('common:activity.loading') : status}
             {child.instance.block.definition.blocks.length > 0 && ` · ${child.instance.block.definition.blocks.join(' / ')}`}

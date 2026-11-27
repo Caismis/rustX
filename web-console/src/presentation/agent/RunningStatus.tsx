@@ -20,7 +20,7 @@ export const RunningStatus = memo(function RunningStatus({ startTime }: { startT
     ? tx('agent:duration.seconds', { n: seconds })
     : tx('agent:duration.minutes-seconds', { m: Math.floor(seconds / 60), s: seconds % 60 });
   const label = duration === undefined ? tx('agent:turn-process.deep-diving') : tx('agent:copy.deep-diving-for-value', { p0: duration });
-  return <div className={chatCss.running} data-chat-running>
+  return <div className={chatCss.runningCls} data-chat-running>
     <span className={chatCss.runningAnnouncement} role="status" aria-live="polite" aria-atomic="true">{tx('agent:turn-process.deep-diving')}</span>
     <span className={chatCss.runningDivider} aria-hidden="true" />
     <span className={chatCss.runningContent}><RunningWhaleTail /><TextShimmer active className={chatCss.runningText}>{label}</TextShimmer></span>

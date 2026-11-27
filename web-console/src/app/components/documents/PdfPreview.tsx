@@ -104,7 +104,7 @@ const PdfPage = memo(function PdfPage({ owner, page, zoom, root, signal, onGeome
   return <div ref={host} className={pdfPreviewCss.page} data-pdf-page={page}>
     {!size && !error && <div className={pdfPreviewCss.unmeasured} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
     <div className={`${pdfPreviewCss.surface} ${zoomSurfaceClass}`} data-document-zoom-surface hidden={!size} style={size ? { '--document-zoom-width': `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` } as CSSProperties : undefined}>
-      {!ready && !error && <div className={pdfPreviewCss.placeholder} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
+      {!ready && !error && <div className={pdfPreviewCss.placeholderCls} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
       <canvas ref={canvas} className={pdfPreviewCss.canvas} role="img" aria-label={`${tx('artifacts:document.page')} ${page}`}/>
       <div ref={text} className={pdfPreviewCss.text} data-pdf-text/>
     </div>

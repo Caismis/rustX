@@ -312,7 +312,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "6b1805f755140fc9ccd1610d3b5a90b6d1fd24e07e3693f30fdb60c8172128b7",
+      "local_sha256": "1f205c86e71076f57208a4607d99fddef8624a8df4a53519a5b62235c4ed1880",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -342,7 +342,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "59bec03d639646e09b119167774a9fc9fb3640efc0c78e7312551719b789f682"
+      "local_sha256": "496db5683263053ebc0f898a54fc9909419284744b0b62f485566e4c0dc2b436"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
@@ -593,7 +593,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "be1d43abc653cebfcd51b6098d970156a353b353b72ce43b476485bfc6aa8079"
+      "local_sha256": "7a939a2deaad5b880657a1059d6d42707f86c7db149a379825b64fb2b7dafd9a"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -1165,7 +1165,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "ed599d996784c9200c6b90202eb6716ee5fc73e008ef94c4eac0d8b5b977fa10",
+      "local_sha256": "3ae31fbcf5bc383f1bd3924a8116d5349b33583e4c694687a5e126fceb5950a2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -1240,7 +1240,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "c27c37e5b6421c71b59991b83f6053262683dd6387dd9a670c67f41f39240c29",
+      "local_sha256": "95f9db2309ebf419c7c28c655bcef4d084d87a1a97f89fb1a409685a58f520f2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -1735,7 +1735,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9b17cb61a4e20edef6fa7362ba1e176515347771f7a0921039022495f9644c07"
+      "local_sha256": "af9c2f94cd1d4f25390a10cb758d5f6d64142269709082493ccbffbb6631391f"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Menu.tsx",
@@ -1759,7 +1759,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "bbe3a847303d830e83cf034323279c9ddfd9f0e719301c422e786285c196ada5",
+      "local_sha256": "9e0e7c2b946548693da93c4cfe63b693bc543a716ead9107bbf58150b39c52d4",
       "classification": "B",
       "additional_sources": [
         {
@@ -1790,7 +1790,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "52183cef8351c81fba637eb48cc0d00bd6a1eddeffb3ff3a2172679df0174041",
+      "local_sha256": "e64b78874be909c336e06459e0eb6442bcf38e2b66c2cd3497998c8229ac121c",
       "classification": "A"
     },
     {
@@ -2209,7 +2209,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "74c18487ac16da05caae22cb6da155714f55da74dfce6737939e05ee54e3bb3c",
+      "local_sha256": "e15a984d42267d0a871a4b98897409c1ad3c116e00559e284584a98030314269",
       "classification": "B",
       "additional_sources": [
         {
@@ -2564,7 +2564,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "8b307a4462fbd10f843e75ce268f5ed45968b5fc8c315cc91f4e54e034dbcd56",
+      "local_sha256": "bc5c2f129d278ba44d66c73b18c6db37da002e49b0f4abdf50029ae5211737cd",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -2604,7 +2604,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "726d84c1ad9aa69f5e3bba8159b629791a439c9e53aac9dde3d83900a0bc2860",
+      "local_sha256": "fa71cb850fc0269692fdf3db4502cfc3f878297ac0a75b138c14308d0e714fbc",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/RiskConfirmation.tsx",
@@ -3131,7 +3131,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "2d3d29d6012ca1caec09752b64ef4038bc1c1a464b994b843794585fe5d7a351"
+      "local_sha256": "ecd93ea4dfdcf7d96d0cee0e66339412baf854f43333f95721013fefd7ebecf2"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
@@ -3222,7 +3222,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "9307510e3291500ed07ab0d158fd9cd81d7c36bc626e9af4d9cdb98c2420f821",
+      "local_sha256": "4917958c7b7d43d122abe8482a71d1d210d7c6bc401699388f0a06bb695845e2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/QuestionToolRow.tsx",
@@ -3655,7 +3655,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "80e8d7d04db1a963c66e9465e4078e211fb992ed0afc0416a2b176f1ab3796b3"
+      "local_sha256": "b0bba0f5237f5fa187f4dd68c3c01f03bf83f43eadb9054016f93bc43af52e36"
     },
     {
       "upstream": "packages/client/ui-primitives/src/CodeToolbar.tsx",
@@ -4894,7 +4894,7 @@
       "excluded_dependencies": [
         "Harness Session store and slot contracts"
       ],
-      "local_sha256": "8ecba83ff53e3b0f40a18643a210d1e0c1815d3ac0906a9fd9374966292b0192"
+      "local_sha256": "32addb8354dc2ab049950a5cfc0f18ad1d65b7f711159e13e2fcec55cdd2c652"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -4958,7 +4958,7 @@
           "treatment": "Settings row layout and selection interaction."
         }
       ],
-      "local_sha256": "403fa163987cae3e80e4ca6e71778c03dfa9ca26a519b5ac7764fd1f226079db"
+      "local_sha256": "343a36b0b4aa8d024faa05ab8aba50be96dffdca905d9c690fc62c5ab747353b"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -5007,7 +5007,7 @@
         "Cordis slots and PropsLocale",
         "Harness Inspect navigation"
       ],
-      "local_sha256": "00b1744032b591c8642f24606c1de6fc0dd843ca2db71f539a88e78ac7dc68ac"
+      "local_sha256": "60fe213d3ab2596b36753aa78d5025376b99ae34172598762bfaec3e65a2acfe"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/PresentedFileCard.tsx",
@@ -5062,7 +5062,7 @@
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "4cb849a8a499301acac153e60173fbbbe533a6a57ed6349456d823034112d1c5",
+      "local_sha256": "fd2a656be675a2bf2f0f934f3e664adb30616120db1327052520bc2871e8aa6f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
@@ -5194,7 +5194,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "37bf6018a59d7973cabe604b4a99b91692e1975c292b4a88c399ddcf531898cf"
+      "local_sha256": "266c7d437cc1c3b22786a826f44796b4be04029ff419239f800b95302bb17dfa"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -5604,7 +5604,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "32ee94cc2f0e328f2f55d0882178f756226a7dac4dfa3daf326c73d619711e1e",
+      "local_sha256": "332a9b437824f2c18835b185b5850793744741973f85a0f8fe6a7f4a22308d38",
       "additional_sources": [
         {
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -5751,7 +5751,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e1f6be0ba1416de91a67a24f0aad50e994d1bd7ecc73614400ae0d4bdd18522e"
+      "local_sha256": "d70157df9552c3548407d15b558d1387aad2003f2c4728809133d51ede36c328"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",
@@ -6528,7 +6528,7 @@
           "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
         }
       ],
-      "local_sha256": "58d257e176f46941324285c169f8e7ffb0f60c3277bf0509607e60103aa8be34"
+      "local_sha256": "824a3bde18eb732c2eba0f41840154431b528a3dc2b16b138b3438abdc25a4eb"
     }
   ],
   "inspected_only": [

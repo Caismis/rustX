@@ -17,7 +17,7 @@ export function Field({ label, hint, children, error }: { label: string; hint?: 
   return <div className={editorCss.field}>
     <label htmlFor={id} className={editorCss.fieldLabel}>{label}</label>
     {children(id, hint || error ? hintId : undefined)}
-    {(error || hint) && <small id={hintId} className={clsx(editorCss.hint, error && editorCss.hintError)} role={error ? 'alert' : undefined}>{error ?? hint}</small>}
+    {(error || hint) && <small id={hintId} className={clsx(editorCss.hintCls, error && editorCss.hintError)} role={error ? 'alert' : undefined}>{error ?? hint}</small>}
   </div>;
 }
 
@@ -155,7 +155,7 @@ export function KeyField({ label, hint, value, address, rename, onRenamed, error
   const input = (id?: string, describedBy?: string) => <TextInput unstyled id={id} data-workflow-field={encodeField(address)} aria-describedby={describedBy} aria-label={compact} aria-invalid={!!field.error || !!error || undefined} className={clsx(editorCss.input, editorCss.mono, compact && editorCss.branchKey)} value={field.text} spellCheck={false}
     onChange={event => field.change(event.target.value)} onBlur={field.apply}
     onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />;
-  if (compact) return <span className={editorCss.keyField}>{input()}{shown && <small className={clsx(editorCss.hint, editorCss.hintError)} role="alert">{shown}</small>}<ConflictActions field={field} /></span>;
+  if (compact) return <span className={editorCss.keyField}>{input()}{shown && <small className={clsx(editorCss.hintCls, editorCss.hintError)} role="alert">{shown}</small>}<ConflictActions field={field} /></span>;
   return <Field label={label} hint={hint} error={shown}>{(id, describedBy) => <><div className={editorCss.inline}>
     {input(id, describedBy)}
     <button type="button" className={editorCss.smallButton} disabled={!field.pending} onClick={field.apply}>{tx('workflows:inspector.rename')}</button>

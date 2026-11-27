@@ -389,7 +389,7 @@ export function DraftConversationRow({ focus }: { focus: () => void }) {
   const tx = useTranslation();
   return <div className={clsx(rowsCss.sessionRow, rowsCss.selected)} role="treeitem" aria-selected="true" data-draft-conversation="" onClick={focus}>
     <span className={rowsCss.slot}/>
-    <button type="button" className={clsx(rowsCss.title, rowsCss.titleButton)} aria-current="page">{tx('sidebar:session.new')}</button>
+    <button type="button" className={clsx(rowsCss.titleCls, rowsCss.titleButton)} aria-current="page">{tx('sidebar:session.new')}</button>
   </div>;
 }
 
@@ -454,7 +454,7 @@ export function SessionNodeItem({
       <span className={rowsCss.slot}>
         {showStatus ? <SessionStatusDots statuses={statuses} /> : node.taskMark}
       </span>
-<button ref={titleButton} type="button" className={clsx(rowsCss.title, rowsCss.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={rowsCss.observation}>{node.observation}</small>}</button>
+<button ref={titleButton} type="button" className={clsx(rowsCss.titleCls, rowsCss.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={rowsCss.observation}>{node.observation}</small>}</button>
       <span className={rowsCss.time}>{timeLabel(row.updatedAt, now, t)}</span>
       {node.pinned && <span className={rowsCss.pinIndicator} role="img" aria-label={t('workspace:row.pinned')}><IconPinFill16 size={14}/></span>}
         <span className={rowsCss.rowActions} onClick={event => event.stopPropagation()}>

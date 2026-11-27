@@ -141,7 +141,7 @@ export function ErrorStrategy({ strategy, choose, note, children }: { strategy: 
           </MenuPopup>
       </Menu>
     </h3>
-    {note && <p className={editorCss.note}>{note}</p>}
+    {note && <p className={editorCss.noteCls}>{note}</p>}
     {children}
     {strategy === 'fail_branch' && <div className={editorCss.failBranchCard}><b>{tx('workflows:failure.branch-customize')}</b><p>{tx('workflows:failure.branch-tip')}</p></div>}
   </section>;

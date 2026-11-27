@@ -32,7 +32,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
  const summary = open ? tool.details?.expandedSummary ?? tool.summary : tool.summary;
  return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
  <div className={toolCss.root} data-state={state} data-variant={tool.variant}>
- <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.title} chevronClassName={toolCss.chevron}
+ <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.titleCls} chevronClassName={toolCss.chevron}
  running={tool.state === 'running'}
  icon={tool.icon ?? <Icon size={14}/>}
  title={tool.title} open={open && expandable} expandable={expandable} expandOnRowClick={!onOpenPath} keepContentWhenOpen onToggle={toggle}

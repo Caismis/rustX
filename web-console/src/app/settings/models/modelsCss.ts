@@ -2,7 +2,7 @@ export const modelsCss = {
   section: "[container-type:inline-size] flex flex-col gap-[20px]",
   providerList: "flex flex-col gap-[10px]",
   toolbar: "flex flex-wrap items-start justify-between gap-[12px] [&>div:first-child]:flex-[1_1_220px] [&>div:first-child]:min-w-0",
-  description: "mt-[4px] [color:var(--dsw-alias-label-secondary)] text-[13px] leading-[20px]",
+  descriptionCls: "mt-[4px] [color:var(--dsw-alias-label-secondary)] text-[13px] leading-[20px]",
   headerActions: "flex items-center gap-[8px] flex-none",
   layout: "grid grid-cols-[minmax(144px,28%)_minmax(0,1fr)] items-stretch has-[.mp-navigation]:[border:0.5px_solid_var(--dsw-alias-border-l2)] has-[.mp-navigation]:rounded-[var(--dsw-radius-lg)] [@container(max-width:520px)]:grid-cols-[minmax(0,1fr)]",
   navigation: "mp-navigation grid content-start gap-[8px] min-w-0 px-[12px] py-[14px] [border-inline-end:0.5px_solid_var(--dsw-alias-border-l2)] [&>div]:p-0 [&_h4]:m-0 [&_h4]:[color:var(--dsw-alias-label-secondary)] [&_h4]:text-[13px] [@container(max-width:520px)]:border-b-[0.5px] [@container(max-width:520px)]:[border-bottom:0.5px_solid_var(--dsw-alias-border-l2)] [@container(max-width:520px)]:[border-inline-end:0]",

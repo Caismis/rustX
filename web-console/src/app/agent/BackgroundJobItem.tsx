@@ -116,7 +116,7 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
 
   const body = <>
     <span className={backgroundJobsCss.glyph}><JobStateDot state={dot}/></span>
-    <MarqueeText ref={labelRef} className={backgroundJobsCss.label} data-job-label="">{label}</MarqueeText>
+    <MarqueeText ref={labelRef} className={backgroundJobsCss.labelCls} data-job-label="">{label}</MarqueeText>
     <span id={summaryId} className={backgroundJobsCss.visuallyHidden}>{`${value.tool_name} · ${stateText}`}</span>
     {durationCell}
   </>;

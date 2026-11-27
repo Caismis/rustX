@@ -160,7 +160,7 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
    onBlur={() => setSelectionFocus(false)} onClick={() => {
     if (open) close(true); else { setSelectionFocus(false); trigger.current?.focus(); setQuery(''); setHighlight(null); if (!selected) focusPane.current = 'drill'; setPane(selected ? 'root' : 'model'); setOpen(true); lastAction.current = 'load'; load(); }
    }}>
-   <IconDataOutline16 size={16} className={modelSelectCss.triggerIcon}/><span className={modelSelectCss.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>
+   <IconDataOutline16 size={16} className={modelSelectCss.triggerIcon}/><span className={modelSelectCss.triggerLabelCls}>{current ?? tx('agent:model-select.choose-model')}</span>
    {effortLabel && <span className={modelSelectCss.triggerEffort}>{effortLabel}</span>}
    <span className={modelSelectCss.triggerIndicator}>{busy ? <StateDot state="ongoing"/> : <IconChevronDownOutline14 className={clsx(modelSelectCss.chevron, open && modelSelectCss.chevronOpen)}/>}</span>
   </button>

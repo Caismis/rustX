@@ -127,7 +127,7 @@ export function ExtensionsPage({
                 {!!entry.diagnostics.length && <SettingsNotice text={entry.diagnostics[0]} />}
               </section>
             ))}
-            {!entries.length && <p className={settingsContentCss.hint}>{tx('settings:catalog.empty')}</p>}
+            {!entries.length && <p className={settingsContentCss.hintCls}>{tx('settings:catalog.empty')}</p>}
           </SettingsGroup>
         )}
       </FilterTabs>

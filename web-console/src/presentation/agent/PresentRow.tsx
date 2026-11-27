@@ -28,7 +28,7 @@ export function PresentRow({ row, inspect }: { row: PresentRowView; inspect?: ()
   return <div className="rounded-[var(--dsw-radius-sm)]" data-tool-call-id={row.id} data-tool-name="present">
     <div className={toolCss.root} data-tool="present" data-state={row.phase === 'preparing' ? 'running' : row.phase} data-present-phase={row.phase}
       aria-label={row.phase === 'preparing' ? tx('tools:present.preparing') : undefined}>
-      <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.title} chevronClassName={toolCss.chevron}
+      <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.titleCls} chevronClassName={toolCss.chevron}
         icon={<IconDeliverDocOutline14/>} title={tx('tools:present.title')} open={expanded && expandable} expandable={expandable}
         expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
         collapsedContent={<><span className={toolCss.sep} aria-hidden/><span className={toolCss.summary}>

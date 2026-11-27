@@ -167,7 +167,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           <UnitForm<ModelLayer> immediate title={tx('settings:models-page.default-model')} legendHidden authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
             blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
             removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
-            {(value, change) => <><p className={settingsContentCss.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
+            {(value, change) => <><p className={settingsContentCss.hintCls}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
               <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
           </UnitForm>
         </SettingsGroup>
@@ -179,7 +179,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
               modelCount={catalog.filter(item => (item.authored ?? item.effective)?.provider === entry.id).length}
               onOpen={() => focusWithGuard({ kind: 'provider', id: entry.id })}/>)}
           </div>
-          {!navigation.length && <p className={settingsContentCss.hint}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
+          {!navigation.length && <p className={settingsContentCss.hintCls}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
         </SettingsGroup>
       </WorkspaceFollowGlobal>
     </section>
@@ -216,7 +216,7 @@ function ProviderCard({ entry, revision, scope, modelCount, onOpen }: {
       <ProviderIcon icon={provider?.icon} size={16}/>
       <strong>{name}</strong>
       {provider && <Badge>{provider.protocol}</Badge>}
-      <span className={settingsContentCss.hint}>{modelCount ? String(modelCount) : ''}</span>
+      <span className={settingsContentCss.hintCls}>{modelCount ? String(modelCount) : ''}</span>
       {provider && <Switch checked={!provider.hidden} label={tx('settings:models.show-provider', { p0: name })}
         disabled={!unit.admitted || unit.busy || unit.awaitingObservation || unit.draft || !entry.authored}
         onChange={checked => unit.apply({ ...unit.displayed, hidden: !checked })}/>}
@@ -386,7 +386,7 @@ function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSele
           else setProfile({ mode: 'model_default' });
         }
       }} />
-    <p className={settingsContentCss.hint}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
+    <p className={settingsContentCss.hintCls}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
     <fieldset><legend>{tx('settings:models-page.auxiliary-model-settings')}</legend>
       {profileMode === 'explicit' && modelId && <ModelProfileChoice label={tx('settings:models-page.auxiliary-profile')} profile={auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined}
         profiles={profiles[modelId] ?? []}

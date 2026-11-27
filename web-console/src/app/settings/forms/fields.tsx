@@ -168,7 +168,7 @@ export function Strings<T>({ form, name, label }: { form: TypedUnitForm<T>; name
         <Button aria-label={tx('settings:controls.remove-value-value', { p0: label, p1: index + 1 })} onClick={() => field.removeValue(index)}>{tx('settings:controls.remove')}{' '}</Button>
       </div>)}
       <Button onClick={() => field.pushValue('' as never)}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
-      {!value.length && <p className={settingsContentCss.hint}>{tx('settings:controls.empty-list-no-entries')}</p>}
+      {!value.length && <p className={settingsContentCss.hintCls}>{tx('settings:controls.empty-list-no-entries')}</p>}
     </fieldset>;
   }}</Field>;
 }
@@ -276,6 +276,6 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
             : message(failure.kind === 'duplicate_key' ? 'settings:fields.request-params-duplicate-key' : 'settings:fields.request-params-inexact-number',
               { p0: failure.line, p1: failure.column }));
       }} />
-    <p className={settingsContentCss.hint}>{hint ?? tx('settings:fields.request-params-hint')}</p>
+    <p className={settingsContentCss.hintCls}>{hint ?? tx('settings:fields.request-params-hint')}</p>
   </div>;
 }

@@ -20,7 +20,7 @@ export function InboundMessage({ message }: { message: Extract<MessageBlock, { r
   const tx = useTranslation(), [expanded, setExpanded] = useState(false), scope = useSubagents();
   const notice = backgroundNotice(message);
   if (notice) return <div className="my-[6px] [color:var(--dsw-alias-label-tertiary)]" data-inbound-source="job">
-    <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.title} chevronClassName={toolCss.chevron} icon={<IconApiOutline14/>} title={tx('common:activity.background-ended')} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={toolCss.sep}/><span className={toolCss.summary}>{notice.tool} · {jobStateLabel(tx, notice.state)}</span></>}>
+    <DisclosureRow rowClassName={toolCss.row} leadingClassName={toolCss.leading} titleClassName={toolCss.titleCls} chevronClassName={toolCss.chevron} icon={<IconApiOutline14/>} title={tx('common:activity.background-ended')} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={toolCss.sep}/><span className={toolCss.summary}>{notice.tool} · {jobStateLabel(tx, notice.state)}</span></>}>
       <JobResultDetails items={[notice]}/><Content messageId={message.id} blocks={message.content.slice(1)} markdown/>
     </DisclosureRow>
   </div>;

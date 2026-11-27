@@ -73,10 +73,10 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
   const currentValue = path.length > 1 ? path.slice(1).join(' / ') : tx('workflows:value.whole');
   const panelBody = <>
       <TextInput unstyled ref={searchInput} className={editorCss.input} aria-label={tx('workflows:value.search')} placeholder={tx('workflows:value.search')} value={search} onChange={event => setSearch(event.target.value)} />
-      {!result && <p role="status" className={editorCss.note}>{tx('workflows:value.analyzing')}</p>}
-      {result?.failed && <p role="alert" className={editorCss.note}>{tx('workflows:value.analysis-failed')}</p>}
-      {report?.diagnostic && <p className={editorCss.note}>{report.diagnostic}</p>}
-      {!token && report?.selected && <p className={editorCss.note}>{tx(`workflows:value.${report.selected.availability}`)} · {tx(`workflows:value.${report.selected.compatibility}`)}</p>}
+      {!result && <p role="status" className={editorCss.noteCls}>{tx('workflows:value.analyzing')}</p>}
+      {result?.failed && <p role="alert" className={editorCss.noteCls}>{tx('workflows:value.analysis-failed')}</p>}
+      {report?.diagnostic && <p className={editorCss.noteCls}>{report.diagnostic}</p>}
+      {!token && report?.selected && <p className={editorCss.noteCls}>{tx(`workflows:value.${report.selected.availability}`)} · {tx(`workflows:value.${report.selected.compatibility}`)}</p>}
       {[...groups].map(([producer, choices]) => <fieldset className={editorCss.variableGroup} key={producer}>
         <legend>{titleOf(choices[0])}<code>{producer}</code></legend>
         {choices.map(choice => {
@@ -91,8 +91,8 @@ export function ReferencePicker({ address, path, edit, initiallyOpen = false, on
           </button>;
         })}
       </fieldset>)}
-      {report && !groups.size && <p className={editorCss.note}>{tx('workflows:value.no-matches')}</p>}
-      {report?.truncated && <p className={editorCss.note}>{tx('workflows:value.truncated')}</p>}
+      {report && !groups.size && <p className={editorCss.noteCls}>{tx('workflows:value.no-matches')}</p>}
+      {report?.truncated && <p className={editorCss.noteCls}>{tx('workflows:value.truncated')}</p>}
       <button type="button" className={editorCss.smallButton} onClick={close}>{tx('workflows:value.close-picker')}</button>
   </>;
   const panelKeyDown = (event: KeyboardEvent<HTMLElement>) => {

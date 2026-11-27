@@ -10,7 +10,7 @@ export const workbenchFilesCss = {
   fileIcon: 'flex-none',
   name: 'min-w-0 overflow-hidden whitespace-nowrap text-ellipsis',
   other: '[color:var(--dsw-alias-label-tertiary)] cursor-default hover:bg-transparent!',
-  note: 'm-0 px-[10px] py-[3px] [color:var(--dsw-alias-label-tertiary)] text-[12px]',
+  noteCls: 'm-0 px-[10px] py-[3px] [color:var(--dsw-alias-label-tertiary)] text-[12px]',
   status: 'flex flex-col px-[10px] py-[12px]',
   statusLine: 'm-0 [color:var(--dsw-alias-label-secondary)] text-[length:var(--dsh-content-font-size-secondary,13px)] leading-relaxed',
   tool: 'inline-flex flex-none items-center justify-center w-[28px] h-[28px] p-[6px] [color:var(--dsw-alias-label-secondary)] leading-none bg-transparent border-none rounded-[var(--dsw-radius-sm)] cursor-pointer [&_svg]:w-[15px] [&_svg]:h-[15px] hover:[color:var(--dsw-alias-label-primary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] aria-pressed:[color:var(--dsw-alias-label-primary)] aria-pressed:bg-[var(--dsw-alias-interactive-bg-hover)] [&[hidden]]:hidden',

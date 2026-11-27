@@ -55,7 +55,7 @@ export function Choice<T extends string>({ label, value, onChange, options, disa
         {options.map(([key, text]) => <SelectItem key={key} value={key} disabled={disabledSet.has(key)}>{text}</SelectItem>)}
       </SelectPopup>
     </CossSelect>
-    {description && <span className={settingsContentCss.hint}>{description}</span>}
+    {description && <span className={settingsContentCss.hintCls}>{description}</span>}
   </div>;
 }
 /** A resource search box. Filtering is presentation; the identities it filters

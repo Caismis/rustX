@@ -48,7 +48,7 @@ export function CommandMenu({ rows, active, select, highlight, fileDescription }
         <span className={commandsCss.icon} aria-hidden="true"><CommandIcon id={command.id}/></span>
         <span className={commandsCss.name}>{tx(`commands:menu.${command.id}`)}</span>
         <small className={commandsCss.alias}>{command.id}</small>
-        <span id={`command-description-${command.id}`} className={commandsCss.description}>{command.id === 'file' && fileDescription ? fileDescription : tx(`commands:menu.description.${command.id}`)}</span>
+        <span id={`command-description-${command.id}`} className={commandsCss.descriptionCls}>{command.id === 'file' && fileDescription ? fileDescription : tx(`commands:menu.description.${command.id}`)}</span>
       </button>
     </Fragment>) : <p role="status">{tx('commands:command-menu.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prom')}</p>}
   </div>;

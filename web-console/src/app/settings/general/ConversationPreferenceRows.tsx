@@ -14,7 +14,7 @@ export function ConversationPreferenceRows() {
   const selector = useRef<HTMLButtonElement>(null);
   return <div>
     <div className={conversationPreferencesCss.row}>
-      <div className={conversationPreferencesCss.rowText}><div className={conversationPreferencesCss.title}>{tx('settings:general-page.font-size')}</div><div className={conversationPreferencesCss.desc}>{tx('settings:general-page.font-description')}</div></div>
+      <div className={conversationPreferencesCss.rowText}><div className={conversationPreferencesCss.titleCls}>{tx('settings:general-page.font-size')}</div><div className={conversationPreferencesCss.desc}>{tx('settings:general-page.font-description')}</div></div>
       <div className={conversationPreferencesCss.control}><div className={conversationPreferencesCss.stepper}>
         <output className={conversationPreferencesCss.value} aria-label={tx('settings:general-page.font-size')}>{preferences.fontSize}</output>
         <span className={conversationPreferencesCss.arrows}>
@@ -24,7 +24,7 @@ export function ConversationPreferenceRows() {
       </div><span className={conversationPreferencesCss.unit}>{tx('settings:general-page.font-unit')}</span></div>
     </div>
     <div className={conversationPreferencesCss.row}>
-      <div className={conversationPreferencesCss.rowText}><div id="work-details-label" className={conversationPreferencesCss.title}>{tx('settings:general-page.work-details')}</div><div id="work-details-description" className={conversationPreferencesCss.desc}>{tx('settings:general-page.work-description')}</div></div>
+      <div className={conversationPreferencesCss.rowText}><div id="work-details-label" className={conversationPreferencesCss.titleCls}>{tx('settings:general-page.work-details')}</div><div id="work-details-description" className={conversationPreferencesCss.desc}>{tx('settings:general-page.work-description')}</div></div>
       <Menu open={menuOpen} onClose={() => setMenuOpen(false)} align="end" autoFocus selectedId={preferences.transcriptMode}
         items={TRANSCRIPT_MODES.map(mode => ({id: mode, label: tx(`settings:general-page.${mode}`)}))}
         onSelect={id => { selector.current?.focus({preventScroll:true}); setMenuOpen(false); preferenceStore.update({transcriptMode: id as TranscriptMode}); }}
@@ -32,7 +32,7 @@ export function ConversationPreferenceRows() {
 
     </div>
     <div className={conversationPreferencesCss.row}>
-      <div className={conversationPreferencesCss.rowText}><div className={conversationPreferencesCss.title}>{tx('settings:general-page.coding-view')}</div><div className={conversationPreferencesCss.desc}>{tx('settings:general-page.coding-description')}</div></div>
+      <div className={conversationPreferencesCss.rowText}><div className={conversationPreferencesCss.titleCls}>{tx('settings:general-page.coding-view')}</div><div className={conversationPreferencesCss.desc}>{tx('settings:general-page.coding-description')}</div></div>
       <Switch label={tx('settings:general-page.coding-view')} checked={preferences.codingView} onChange={codingView => preferenceStore.update({codingView})}/>
     </div>
   </div>;

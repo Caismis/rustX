@@ -83,7 +83,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
   const field = (name: string, label: string, control: (controlId: string) => ReactNode, hint?: string) => <div className={editorCss.field}>
     <label htmlFor={`${id}-${name}-control`} className={editorCss.fieldLabel}>{label}</label>
     {control(`${id}-${name}-control`)}
-    {problem(name) ? <small id={`${id}-${name}`} role="alert" className={clsx(editorCss.hint, editorCss.hintError)}>{problem(name)}</small> : hint && <small className={editorCss.hint}>{hint}</small>}
+    {problem(name) ? <small id={`${id}-${name}`} role="alert" className={clsx(editorCss.hintCls, editorCss.hintError)}>{problem(name)}</small> : hint && <small className={editorCss.hintCls}>{hint}</small>}
   </div>;
 
   return <Modal open onClose={close} title={tx(original ? 'workflows:fields.edit-title' : 'workflows:fields.add-title')} closeLabel={tx('workflows:dialog.close')} className={inputFieldsCss.dialog}
@@ -116,7 +116,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
               onClick={() => { const options = form.options.filter((_, at) => at !== index); change({ options, defaultText: options.includes(form.defaultText) ? form.defaultText : '' }); }}><IconCloseOutline16 /></button>
           </div>)}
           <button type="button" className={inputFieldsCss.addOption} onClick={() => change({ options: [...form.options, ''] })}><IconPlusOutline16 />{tx('workflows:fields.option-add')}</button>
-          {problem('options') ? <small id={`${id}-options`} role="alert" className={clsx(editorCss.hint, editorCss.hintError)}>{problem('options')}</small> : <small className={editorCss.hint}>{tx('workflows:fields.options-hint')}</small>}
+          {problem('options') ? <small id={`${id}-options`} role="alert" className={clsx(editorCss.hintCls, editorCss.hintError)}>{problem('options')}</small> : <small className={editorCss.hintCls}>{tx('workflows:fields.options-hint')}</small>}
         </fieldset>
       </>}
 
@@ -126,7 +126,7 @@ export function FieldDialog({ document, address, keys, original, schema, require
       {(type === 'object' || type === 'raw') && <div className={inputFieldsCss.code}>
         <JsonCodeEditor label={tx(type === 'raw' ? 'workflows:fields.json' : 'workflows:fields.object-schema')} value={form.schemaJson} allowEmpty={false} minHeight={160}
           error={problem('schema')} onChange={schemaJson => change({ schemaJson })} />
-        <small className={editorCss.hint}>{tx('workflows:fields.json-hint')}</small>
+        <small className={editorCss.hintCls}>{tx('workflows:fields.json-hint')}</small>
       </div>}
 
       {type !== 'raw' && <>
@@ -151,7 +151,7 @@ function DefaultValue({ id, form, change, problem }: { id: string; form: FieldFo
   const tx = useTranslation(), label = tx('workflows:fields.default');
   const control = `${id}-default-control`;
   const described = { 'aria-invalid': !!problem || undefined, 'aria-describedby': problem ? `${id}-default` : undefined };
-  const hint = problem ? <small id={`${id}-default`} role="alert" className={clsx(editorCss.hint, editorCss.hintError)}>{problem}</small> : <small className={editorCss.hint}>{tx('workflows:fields.default-hint')}</small>;
+  const hint = problem ? <small id={`${id}-default`} role="alert" className={clsx(editorCss.hintCls, editorCss.hintError)}>{problem}</small> : <small className={editorCss.hintCls}>{tx('workflows:fields.default-hint')}</small>;
   if (form.type === 'array' || form.type === 'object') return <div className={inputFieldsCss.code}>
     <JsonCodeEditor label={label} value={form.defaultJson} allowEmpty={false} minHeight={96} error={problem} onChange={defaultJson => change({ defaultJson })} />
   </div>;

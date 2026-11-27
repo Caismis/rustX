@@ -69,8 +69,8 @@ export function SettingsPageShell({
           <div className={settingsPageShellCss.headInner}>
             <div className={settingsPageShellCss.headTitle}>
               {breadcrumb}
-              {title && <h1 className={settingsPageShellCss.title}>{title}</h1>}
-              {description && <p className={settingsPageShellCss.description}>{description}</p>}
+              {title && <h1 className={settingsPageShellCss.titleCls}>{title}</h1>}
+              {description && <p className={settingsPageShellCss.descriptionCls}>{description}</p>}
             </div>
             {toolbar && <div className={settingsPageShellCss.headToolbar}>{toolbar}</div>}
           </div>

@@ -56,8 +56,8 @@ export function ToolPanel(props: PanelProps) {
     : catalog.state.status === 'ready' ? catalog.state.sources.find(item => item.source_id === source)?.tools.find(item => item.name === selector.name) : undefined;
   const fields = argumentFields(node.arguments);
   return <>
-    {selector.origin==='builtin' && selector.name==='bash' && <p className={editorCss.note}>{tx('workflows:data.code-cwd')}</p>}
-    {source !== undefined && catalog.state.status === 'loading' && <p className={editorCss.note} role="status">{tx('workflows:tool.loading')}</p>}
+    {selector.origin==='builtin' && selector.name==='bash' && <p className={editorCss.noteCls}>{tx('workflows:data.code-cwd')}</p>}
+    {source !== undefined && catalog.state.status === 'loading' && <p className={editorCss.noteCls} role="status">{tx('workflows:tool.loading')}</p>}
     <ToolSelection {...props} tool={tool} />
     {choice && fields ? <ToolInputs {...props} tool={tool} choice={choice} fields={fields} />
       : <Section title={tx('workflows:tool.inputs')}><ValueEditor label={tx('workflows:inspector.tool-arguments')} address={tool.at('arguments')} value={node.arguments} edit={props.edit} /></Section>}
@@ -137,7 +137,7 @@ function ToolInputs(props: PanelProps & { tool: ToolNode; choice: WorkflowToolCh
     <h3 className={editorCss.groupHeading}>{tx('workflows:tool.inputs')}</h3>
     <div className={editorCss.toolForm}>
       {Object.entries(properties).map(([name, value]) => <ToolArgument key={name} {...props} name={name} schema={schemaObject(value) ?? {}} required={required.includes(name)} value={props.fields[name]} set={set} />)}
-      {!Object.keys(properties).length && <p className={editorCss.note}>{tx('workflows:tool.no-inputs')}</p>}
+      {!Object.keys(properties).length && <p className={editorCss.noteCls}>{tx('workflows:tool.no-inputs')}</p>}
     </div>
   </section>;
 }

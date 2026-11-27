@@ -101,7 +101,7 @@ export function PathEditor({ address, path, edit }: { address: FieldAddress; pat
     </span>)}
     <TextInput unstyled data-workflow-field={encodeField({ ...address, role: 'append' })} className={clsx(editorCss.input, editorCss.mono, editorCss.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} aria-invalid={!!adding.error || undefined} spellCheck={false} size={6}
       onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } else if (event.key === 'Escape') adding.reset(); }} />
-    <small className={editorCss.hint}>{tx('workflows:value.path-hint')}</small>
+    <small className={editorCss.hintCls}>{tx('workflows:value.path-hint')}</small>
   </div>;
 }
 

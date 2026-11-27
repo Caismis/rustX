@@ -215,7 +215,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
         {mode === 'json' ? <>
           <JsonCodeEditor label={tx('settings:mcp.json')} value={json} allowEmpty={false} minHeight={280}
             error={error ? tx('settings:mcp.invalid-json',{error}) : ''} onChange={updateJson}/>
-          <p className={mcpCss.hint}>{tx('settings:mcp.json-help')}</p>
+          <p className={mcpCss.hintCls}>{tx('settings:mcp.json-help')}</p>
           {Object.keys(imports).length > 1 && <div className={mcpCss.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} disabled={reviewNeeded} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
         </> : <fieldset className={mcpCss.formBody}>
           <McpFormFields key={formReset} value={value} change={unit.edit} invalidFields={invalidFields} validity={validity} disabled={duplicate || !unit.writable}

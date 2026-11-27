@@ -217,7 +217,7 @@ export default function WorkflowEditor({ surface, editor, scopeLabel }: {
           <span className={editorCss.muted}>{tx('workflows:library.title')}</span><span aria-hidden className={editorCss.sep}>/</span>
           <span className={editorCss.muted}>{target.scope.kind === 'user' ? tx('workflows:scope.global') : tx('workflows:scope.workspace-value', { p0: scopeLabel })}</span><span aria-hidden className={editorCss.sep}>/</span>
           {document?.editor?.display && <WorkflowIcon icon={document.editor.display.icon} size={16} />}
-          <h1 id="workflow-editor-title" className={editorCss.title}>{document?.editor?.display?.title.trim() || target.id}</h1>
+          <h1 id="workflow-editor-title" className={editorCss.titleCls}>{document?.editor?.display?.title.trim() || target.id}</h1>
         </div>
         <p className={editorCss.fileLine}><IconFile size={14} /><code title={base?.source.path}>{base?.source.relative_path ?? /* i18n-raw: native canonical file location */ `.agents/workflows/${target.id}.yaml`}</code><span aria-hidden className={editorCss.sep}>│</span><span>{fileState}</span>
           {base && <span className={editorCss.revision} title={base.revision}>{shortRevision(base.revision)}</span>}</p>

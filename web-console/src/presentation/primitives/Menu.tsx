@@ -372,7 +372,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
   const flush = () => {
     if (!group) return
     rows.push(<MenuGroup key={group.id}>
-      <MenuGroupLabel className={menuCss.label}>{group.label}</MenuGroupLabel>
+      <MenuGroupLabel className={menuCss.labelCls}>{group.label}</MenuGroupLabel>
       {group.items}
     </MenuGroup>)
     group = null

@@ -18,7 +18,7 @@ export const rowsCss = {
   arrow: 'transition-transform duration-150 motion-reduce:transition-none',
   arrowOpen: 'rotate-90',
   projectText: 'flex-1 min-w-0 flex flex-col gap-[2px]',
-  title: 'rw-title min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[14px] leading-[20px]',
+  titleCls: 'rw-title min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[14px] leading-[20px]',
   renameInput: 'min-w-0 text-[14px] leading-[20px] px-[2px] [border:0.5px_solid_var(--dsw-alias-border-l4)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-button-elevated-fill)] [color:inherit] outline-none',
   titleButton: 'rw-title-button [color:inherit] [font:inherit] text-left border-0 p-0 bg-transparent cursor-pointer min-w-0 [&>span]:block [&>span]:overflow-hidden [&>span]:text-ellipsis [&>span]:whitespace-nowrap [&>span[data-scrolled]]:[mask-image:linear-gradient(to_right,transparent,#000_12px)] [&>span[data-clipped]]:[mask-image:linear-gradient(to_left,transparent,#000_12px)] [&>span[data-scrolled][data-clipped]]:[mask-image:linear-gradient(to_right,transparent,#000_12px,#000_calc(100%-12px),transparent)]',
   meta: 'overflow-hidden text-ellipsis whitespace-nowrap text-[12px] leading-[20px] [color:var(--dsw-alias-label-tertiary)]',
