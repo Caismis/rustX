@@ -850,12 +850,17 @@ impl LocalConnection {
 
     /// Read only explicitly Client-granted names for one HTTP MCP source.
     ///
+    /// `admit` runs on the connection immediately before writing the request,
+    /// matching other bounded exchanges so a pre-wire refusal sends nothing and
+    /// leaves the live connection intact.
+    ///
     /// # Errors
-    /// Returns a denial, transport failure, or invalid reply.
+    /// Returns an admission refusal, denial, transport failure, or invalid reply.
     pub fn mcp_environment(
         &mut self,
         request: &rustx_execution_protocol::mcp_environment::Request,
         deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<std::collections::BTreeMap<String, String>> {
         use rustx_execution_protocol::mcp_environment::MAX_VALUE_BYTES;
         if !request.valid() {
@@ -864,7 +869,7 @@ impl LocalConnection {
         match self.exchange_admitted(
             &ClientRequest::McpEnvironment(request.clone()),
             Some(deadline),
-            || Ok(()),
+            admit,
             || (),
         )? {
             ClientReply::McpEnvironment(reply) => {

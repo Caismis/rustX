@@ -3200,7 +3200,8 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${{4%/*}
         let deadline = std::time::Instant::now()
             + crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
         let granted = tokio::task::spawn_blocking(move || {
-            endpoint.mcp_environment_by(&grant_request, deadline)
+            let no_cancel = crate::runtime::CancellationSignal::new();
+            endpoint.mcp_environment_by(&grant_request, deadline, &no_cancel)
         })
         .await
         .unwrap()

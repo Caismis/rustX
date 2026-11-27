@@ -142,8 +142,10 @@ pub(crate) async fn hydrate_client_credentials_with_scope_until(
         binding.credentials.mark_client_hydrated();
         return true;
     }
-    let mut task =
-        tokio::task::spawn_blocking(move || endpoint.mcp_environment_by(&request, deadline));
+    let worker_cancel = cancellation.clone();
+    let mut task = tokio::task::spawn_blocking(move || {
+        endpoint.mcp_environment_by(&request, deadline, &worker_cancel)
+    });
     let hydration = tokio::select! {
         biased;
         () = cancellation.cancelled() => {

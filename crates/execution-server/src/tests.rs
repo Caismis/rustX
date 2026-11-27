@@ -4273,3 +4273,68 @@ fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
         "durable recovery fence stays on disk when cutoff expires unconfirmed"
     );
 }
+
+#[test]
+fn mcp_environment_refused_by_admit_sends_nothing_and_keeps_connection_live() {
+    let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+    let (mut connection, mut peer) = live(&binding, &hello);
+    let request = rustx_execution_protocol::mcp_environment::Request {
+        service: String::from("inventory"),
+        origin: String::from("https://mcp.example.invalid"),
+        names: BTreeSet::from([String::from("API_TOKEN")]),
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    let error = connection
+        .mcp_environment(&request, deadline, || {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "cancelled before dispatch",
+            ))
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+
+    peer.set_nonblocking(true).unwrap();
+    let mut probe = [0u8; 1];
+    assert_eq!(
+        peer.read(&mut probe).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    peer.set_nonblocking(false).unwrap();
+    assert_eq!(binding.status().phase, BindingPhase::Live);
+
+    let expected = request.clone();
+    let answer = thread::spawn(move || {
+        let received: ClientRequest = read_record(&mut peer).unwrap();
+        assert_eq!(received, ClientRequest::McpEnvironment(expected));
+        write_record(
+            &mut peer,
+            &ClientReply::McpEnvironment(rustx_execution_protocol::mcp_environment::Reply {
+                values: std::collections::BTreeMap::from([(
+                    String::from("API_TOKEN"),
+                    String::from("secret-value"),
+                )]),
+            }),
+        )
+        .unwrap();
+        peer
+    });
+
+    let granted = connection
+        .mcp_environment(&request, deadline, || Ok(()))
+        .unwrap();
+    assert_eq!(
+        granted,
+        std::collections::BTreeMap::from([(
+            String::from("API_TOKEN"),
+            String::from("secret-value")
+        )])
+    );
+    let mut peer = answer.join().unwrap();
+    peer.set_nonblocking(true).unwrap();
+    assert_eq!(
+        peer.read(&mut probe).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}

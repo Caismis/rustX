@@ -817,9 +817,24 @@ impl LocalExecutionEndpoint {
         deadline: Instant,
         dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
     ) -> io::Result<T> {
+        self.with_bounded_data_connection_cancellable(deadline, None, dispatch)
+    }
+
+    fn with_bounded_data_connection_cancellable<T>(
+        &self,
+        deadline: Instant,
+        cancellation: Option<&crate::runtime::CancellationSignal>,
+        dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
         tokio::runtime::Handle::current().block_on(async {
-            let _data = wait_for_execution_permit(self.data_slots.clone(), deadline).await?;
-            self.wait_for_connection(deadline, dispatch).await
+            let _data = wait_for_execution_permit_cancellable(
+                self.data_slots.clone(),
+                deadline,
+                cancellation,
+            )
+            .await?;
+            self.wait_for_connection_cancellable(deadline, cancellation, dispatch)
+                .await
         })
     }
 
@@ -849,9 +864,14 @@ impl LocalExecutionEndpoint {
         &self,
         request: &rustx_execution_protocol::mcp_environment::Request,
         deadline: Instant,
+        cancellation: &crate::runtime::CancellationSignal,
     ) -> io::Result<std::collections::BTreeMap<String, String>> {
-        self.with_bounded_data_connection(deadline, |connection| {
-            connection.mcp_environment(request, deadline)
+        self.with_bounded_data_connection_cancellable(deadline, Some(cancellation), |connection| {
+            connection.mcp_environment(request, deadline, || {
+                cancellation
+                    .with_active(|| ())
+                    .ok_or_else(cancelled_before_dispatch)
+            })
         })
     }
 
@@ -957,7 +977,7 @@ impl LocalExecutionEndpoint {
         cancellation: &crate::runtime::CancellationSignal,
     ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
         let request = rustx_execution_protocol::mcp::PythonSourceRequest::Prepare { key };
-        self.with_bounded_data_connection(deadline, |connection| {
+        self.with_bounded_data_connection_cancellable(deadline, Some(cancellation), |connection| {
             connection.python_source_admitted(&request, deadline, || {
                 cancellation
                     .with_active(|| ())
@@ -969,19 +989,44 @@ impl LocalExecutionEndpoint {
     async fn wait_for_connection<T>(
         &self,
         deadline: Instant,
+        dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.wait_for_connection_cancellable(deadline, None, dispatch)
+            .await
+    }
+
+    async fn wait_for_connection_cancellable<T>(
+        &self,
+        deadline: Instant,
+        cancellation: Option<&crate::runtime::CancellationSignal>,
         mut dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
     ) -> io::Result<T> {
         let limit = tokio::time::Instant::from_std(deadline);
         loop {
             let released = self.connection_released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if cancellation.is_some_and(crate::runtime::CancellationSignal::is_cancelled) {
+                return Err(cancelled_before_dispatch());
+            }
             if Instant::now() >= deadline {
                 return Err(execution_wait_timeout());
             }
             match self.with_connection_slot(false, &mut dispatch) {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    tokio::time::timeout_at(limit, released)
-                        .await
-                        .map_err(|_| execution_wait_timeout())?;
+                    if let Some(signal) = cancellation {
+                        tokio::select! {
+                            biased;
+                            () = signal.cancelled() => return Err(cancelled_before_dispatch()),
+                            waited = tokio::time::timeout_at(limit, released) => {
+                                waited.map_err(|_| execution_wait_timeout())?;
+                            }
+                        }
+                    } else {
+                        tokio::time::timeout_at(limit, released)
+                            .await
+                            .map_err(|_| execution_wait_timeout())?;
+                    }
                 }
                 result => return result,
             }
@@ -2235,6 +2280,24 @@ async fn wait_for_execution_permit(
     .await
     .map_err(|_| execution_wait_timeout())?
     .map_err(|_| io::ErrorKind::NotConnected.into())
+}
+
+async fn wait_for_execution_permit_cancellable(
+    slots: Arc<Semaphore>,
+    deadline: Instant,
+    cancellation: Option<&crate::runtime::CancellationSignal>,
+) -> io::Result<OwnedSemaphorePermit> {
+    let Some(signal) = cancellation else {
+        return wait_for_execution_permit(slots, deadline).await;
+    };
+    if signal.is_cancelled() {
+        return Err(cancelled_before_dispatch());
+    }
+    tokio::select! {
+        biased;
+        () = signal.cancelled() => Err(cancelled_before_dispatch()),
+        permit = wait_for_execution_permit(slots, deadline) => permit,
+    }
 }
 
 impl LocalExecutionEndpoint {
@@ -5888,17 +5951,12 @@ sensitive_headers = { Authorization = "$DENIED_TOKEN" }
         peer.join().unwrap();
     }
 
-    #[tokio::test]
-    async fn expired_shared_deadline_skips_further_client_mcp_environment_requests() {
-        let (registry, session, endpoint, mut client, _workspace, _dir) =
-            admitted_endpoint(BTreeSet::from([Capability::Connection]));
-        let scope = scope_for(&registry, &session);
-        let server_id = crate::runtime::identity::McpServerId::new("slow");
-        let mut binding = crate::tools::mcp::McpServerBinding {
+    fn client_workspace_http_mcp_binding(token_env: &str) -> crate::tools::mcp::McpServerBinding {
+        crate::tools::mcp::McpServerBinding {
             credentials: crate::credentials::SourceCredentials {
                 headers: std::collections::BTreeMap::from([(
                     String::from("Authorization"),
-                    crate::credentials::EnvironmentReference::from_name(String::from("SLOW_TOKEN")),
+                    crate::credentials::EnvironmentReference::from_name(token_env.to_owned()),
                 )]),
                 client_owned: true,
                 workspace_source: true,
@@ -5911,7 +5969,16 @@ sensitive_headers = { Authorization = "$DENIED_TOKEN" }
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: std::collections::BTreeMap::new(),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_shared_deadline_skips_further_client_mcp_environment_requests() {
+        let (registry, session, endpoint, mut client, _workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([Capability::Connection]));
+        let scope = scope_for(&registry, &session);
+        let server_id = crate::runtime::identity::McpServerId::new("slow");
+        let mut binding = client_workspace_http_mcp_binding("SLOW_TOKEN");
         let expired = Instant::now()
             .checked_sub(Duration::from_millis(1))
             .unwrap();
@@ -5929,6 +5996,94 @@ sensitive_headers = { Authorization = "$DENIED_TOKEN" }
         wire_is_quiet(&mut client);
         assert!(!binding.credentials.needs_client_hydration());
         assert!(binding.credentials.resolve().is_err());
+        drop(endpoint);
+        drop(registry);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_mcp_environment_waiting_on_busy_channel_sends_zero_wire_requests() {
+        use base64::Engine;
+
+        let (registry, session, endpoint, mut client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+            ]));
+        let (busy_tx, busy_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let ClientRequest::ReadRange {
+                relative_path,
+                offset,
+                ..
+            } = read_record(&mut client).unwrap()
+            else {
+                panic!("expected busy ReadRange request");
+            };
+            assert_eq!(relative_path, Path::new("busy"));
+            busy_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            write_record(
+                &mut client,
+                &ClientReply::Range {
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
+                    offset,
+                    next_offset: None,
+                    metadata: FileStamp {
+                        size: DecimalU64::new(2),
+                        revision: "a".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
+                },
+            )
+            .unwrap();
+            answer_range(client, Path::new("after"))
+        });
+
+        let busy_endpoint = endpoint.clone();
+        let busy_path = workspace.join("busy");
+        let busy_read =
+            std::thread::spawn(move || busy_endpoint.read_range(&busy_path, 0, 16, None));
+        busy_rx.await.unwrap();
+
+        let initial_slots = endpoint.data_slots.available_permits();
+        let scope = scope_for(&registry, &session);
+        let server_id = crate::runtime::identity::McpServerId::new("busy");
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let hydration_cancel = cancellation.clone();
+        let hydration = tokio::spawn(async move {
+            let mut binding = client_workspace_http_mcp_binding("BUSY_TOKEN");
+            let deadline = Instant::now() + LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
+            crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                &server_id,
+                &mut binding,
+                &scope,
+                deadline,
+                &hydration_cancel,
+            )
+            .await
+        });
+
+        wait_data_slots(&endpoint, initial_slots - 1).await;
+        cancellation.cancel();
+        let completed = tokio::time::timeout(Duration::from_secs(1), hydration)
+            .await
+            .expect("cancelled hydration should not wait for busy channel")
+            .unwrap();
+        assert!(!completed);
+        wait_data_slots(&endpoint, initial_slots).await;
+
+        release_tx.send(()).unwrap();
+        busy_read.join().unwrap().unwrap();
+        let after_endpoint = endpoint.clone();
+        let after_path = workspace.join("after");
+        tokio::task::spawn_blocking(move || after_endpoint.read_range(&after_path, 0, 16, None))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut client = peer.join().unwrap();
+        wire_is_quiet(&mut client);
         drop(endpoint);
         drop(registry);
     }
