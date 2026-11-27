@@ -431,6 +431,15 @@ retained copy waits for that geometry when remounted. Plane changes reuse the
 admitted scene, viewport and existing outline resources, scheduling draws
 through the viewport's frame and fence.
 
+The renderer uses a plane outside admitted bounds while Section is off, so
+the first cut uses the same shader variant. During an edit, the viewport
+coalesces to the latest plane and briefly rechecks a busy fence between
+animation frames. The viewport still submits through one pending frame.
+Perspective zoom reuses an original-surface hit only along the same inward
+ray, with no newly visible interval before that hit. It computes safe travel
+from the current eye on each input. Visibility, section, framing, projection,
+viewport and geometry changes invalidate the hit.
+
 On Chromium 153 with SwiftShader, the transformed-assembly browser tests
 measured about 115 ms from first section activation to its display proxy.
 The maximum of 24 slider samples across delivery and Workbench was 55.3 ms.

@@ -1,3 +1,5 @@
+#include "step-transfer.hxx"
+
 #include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
@@ -87,6 +89,7 @@ int main(int argc, char** argv) {
         if (references.NbExternRefs() != 0) return 3;
         Handle(TDocStd_Document) document = new TDocStd_Document("BinXCAF");
         if (!step.Transfer(document)) throw std::runtime_error("Cannot transfer STEP source");
+        verifyStepTransfer(reader);
         const double transferMs = milliseconds(start);
 
         start = Clock::now();
@@ -97,6 +100,7 @@ int main(int argc, char** argv) {
             const TDF_Label& label = shapes.Value(index);
             const auto shape = XCAFDoc_ShapeTool::GetShape(label);
             if (shape.IsNull()) throw std::runtime_error("Missing STEP root shape");
+            if (!TopExp_Explorer(shape, TopAbs_FACE).More()) continue;
             Bnd_Box bounds;
             BRepBndLib::Add(shape, bounds, false);
             if (bounds.IsVoid()) throw std::runtime_error("Missing STEP root bounds");

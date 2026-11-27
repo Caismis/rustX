@@ -255,6 +255,16 @@ class Planning(unittest.TestCase):
 
 
 class AffectedSteps(unittest.TestCase):
+    def test_native_step_coverage_is_required_on_changes_to_its_boundaries(self):
+        for labels in ([], [v.PROMOTION_LABEL]):
+            with self.subTest(labels=labels):
+                for path in ("web-console/host/step-native/main.cpp", "web-console/host/workspace-preview.ts",
+                             "web-console/src/app/components/documents/geometry/viewport.ts",
+                             "web-console/test/e2e/native-step.spec.ts", ".github/workflows/ci.yml"):
+                    run = v.plan("pull_request", labels, modified(path))["run"]
+                    self.assertTrue(run["native-step"] and run["browser-prepare"], path)
+                self.assertFalse(v.plan("pull_request", labels, modified("web-console/src/presentation/a.tsx"))["run"]["native-step"])
+
     def test_fast_runs_a_heavy_contract_group_only_when_its_component_changed(self):
         steps = v.plan("pull_request", [], modified("src/durable/sqlite.rs", "README.md"))["steps"]
         self.assertEqual(steps, {"rust-fast:app-server": False,

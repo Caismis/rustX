@@ -3,6 +3,8 @@ import { instrument, resources } from './geometry-observation';
 import { isCadRuntimeRequest } from './geometry-requests';
 
 test('Linux native STEP and STP open as full-detail GLB in Workbench', async ({ page }) => {
+  if (process.env.RUSTX_REQUIRE_NATIVE_STEP === '1' && !process.env.RUSTX_NATIVE_STEP_EXECUTABLE)
+    throw new Error('The required real OCCT STEP helper is unavailable');
   test.skip(!process.env.RUSTX_NATIVE_STEP_EXECUTABLE, 'Set RUSTX_NATIVE_STEP_EXECUTABLE to the pinned Linux helper.');
   const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
   const wasm: string[] = [];
@@ -26,7 +28,12 @@ test('Linux native STEP and STP open as full-detail GLB in Workbench', async ({ 
     await expect.poll(async () => (await resources(page)).contexts).toBe(0);
     await workbench.getByRole('tab', { name: 'Files', exact: false }).click();
   }
-  await workbench.getByRole('button', { name: 'malformed.step', exact: true }).click();
-  await expect(page.locator('[data-workbench-file="malformed.step"]').getByRole('alert')).toContainText('Document parser failed');
+  for (const name of ['malformed.step', 'partial-model.step']) {
+    await workbench.getByRole('button', { name, exact: true }).click();
+    const file = page.locator(`[data-workbench-file="${name}"]`);
+    await expect(file.getByRole('alert')).toContainText('Document parser failed');
+    await expect(file.locator('canvas')).toHaveCount(0);
+    await workbench.getByRole('tab', { name: 'Files', exact: false }).click();
+  }
   expect(wasm).toEqual([]);
 });

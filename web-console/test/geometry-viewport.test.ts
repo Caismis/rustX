@@ -52,6 +52,60 @@ function mount(object = new Group(), saved?: Parameters<typeof mountGeometry>[3]
 }
 function draw() { while(microtasks.length)microtasks.shift()!();const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
 function move(control: any, x: number) { control.object.position.x = x; control.update(); }
+function focusedPerspective() {
+  const root = new Group(), large = new Mesh(new BoxGeometry(2, 2, 2)), small = new Mesh(new BoxGeometry(.2, .2, .2));
+  root.add(large, small);
+  const camera = { projection: 'perspective' as const, position: [0, 0, 3] as [number, number, number],
+    target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };
+  const f = mount(root, { copyId: 'copy', camera });
+  vi.spyOn(f.renderer.domElement, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 640, height: 480 } as DOMRect);
+  const wheel = (x = 320, y = 240) => f.renderer.domElement.dispatchEvent(new WheelEvent('wheel', { bubbles: true, clientX: x, clientY: y, deltaY: -200 }));
+  return { ...f, large, wheel };
+}
+
+it('keeps the newly framed minimum after the prior guarded event task', () => {
+  const f = focusedPerspective(), initial = f.control().minDistance;
+  f.wheel();
+  expect(f.control().minDistance).toBeGreaterThan(.9);
+  f.view.select('0.1'); f.view.focus();
+  const framed = f.control().minDistance;
+  expect(framed).toBeLessThan(initial);
+  vi.advanceTimersByTime(0);
+  expect(f.control().minDistance).toBe(framed);
+});
+
+it('keeps the persistent distance limits when projection replaces the controls', () => {
+  const f = focusedPerspective(), initial = f.control().minDistance;
+  f.wheel();
+  expect(f.control().minDistance).toBeGreaterThan(.9);
+  f.view.setProjection('orthographic');
+  expect(f.control().minDistance).toBe(initial);
+  vi.advanceTimersByTime(0);
+  expect(f.control().minDistance).toBe(initial);
+});
+
+it('reuses a surface anchor on the same inward ray and invalidates it when geometry visibility or the ray changes', () => {
+  const f = focusedPerspective(), raycast = vi.spyOn(f.large, 'raycast');
+  f.wheel();
+  expect(raycast).toHaveBeenCalledOnce();
+  f.control().object.position.z = 2;
+  f.control().update();
+  f.wheel();
+  expect(raycast).toHaveBeenCalledOnce();
+  expect(f.control().minDistance).toBeGreaterThan(.9);
+  f.wheel(340);
+  expect(raycast).toHaveBeenCalledTimes(2);
+  f.view.visibility('0.0', false);
+  f.wheel(340);
+  expect(raycast).toHaveBeenCalledTimes(2);
+  f.view.visibility('0.0', true);
+  f.wheel(340);
+  expect(raycast).toHaveBeenCalledTimes(3);
+  f.view.updateSection({ ...f.view.section, enabled: true, reversed: true });
+  f.wheel(340);
+  expect(raycast).toHaveBeenCalledTimes(4);
+});
+
 function tier(level: 0 | 1 = 0, x=0) {
   const value=modelScene({meshes:[0,2].map(offset=>({name:`Surface ${offset}`,positions:new Float32Array([x+offset,0,0,x+offset+1,0,0,x+offset,1,0]),groups:[]})),root:{name:'Assembly',meshes:[],children:[0,1].map(index=>({name:`Part ${index}`,meshes:[index],children:[]}))}});
   return {level,scene:value.scene,bounds:value.bounds,dispose:vi.fn(()=>disposeScene([value.scene]))};
@@ -68,6 +122,32 @@ it('mounts a hidden body without a frame, buffer allocation, timers or a replace
   expect(f.changed).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].camera).toEqual(camera);
   vi.advanceTimersByTime(L.refineDelayMs); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenLastCalledWith(800, 480, 1.5);
 });
+
+it('uses one clipping shader variant and submits the newest section after the active fence', () => {
+  const f = mount();
+  draw();
+  expect(f.renderer.clippingPlanes).toHaveLength(1);
+  expect(f.renderer.clippingPlanes[0].distanceToPoint(new Vector3(-L.coordinate, 0, 0))).toBeGreaterThan(0);
+  f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED);
+  f.view.updateSection({ ...f.view.section, enabled: true, offset: .1 });
+  draw();
+  f.view.updateSection({ ...f.view.section, offset: .2 });
+  draw();
+  expect(f.renderer.render).toHaveBeenCalledOnce();
+  expect(f.renderer.clippingPlanes).toHaveLength(1);
+  f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.ALREADY_SIGNALED);
+  vi.advanceTimersByTime(2);
+  expect(f.renderer.render).toHaveBeenCalledTimes(2);
+  expect(f.renderer.clippingPlanes[0].constant).toBeCloseTo(-.2, 5);
+  f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED);
+  f.view.updateSection({ ...f.view.section, offset: .25 });
+  draw();
+  f.view.setVisible(false);
+  vi.advanceTimersByTime(20);
+  expect(f.renderer.render).toHaveBeenCalledTimes(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('pauses pending GPU fence polling and refinement and resumes the retained renderer and pose', () => {
   const ready = vi.fn(), f = mount(undefined, undefined, { generated: true, onFirstGpuReady: ready });
   draw(); f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED); draw();

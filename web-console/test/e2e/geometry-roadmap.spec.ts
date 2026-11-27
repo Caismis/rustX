@@ -109,7 +109,9 @@ for (const entry of ['delivery', 'workspace']) test(`section clips transformed s
     const { first, samples, gpuSamples, stages } = (window as any).geometryLatency;
     return { activationMs: first, samples, gpuSamples, stages };
   });
-  await info.attach('section-timings', { body: JSON.stringify(timing, null, 2), contentType: 'application/json' });
+  const timingPath = info.outputPath('section-timings.json');
+  writeFileSync(timingPath, JSON.stringify(timing, null, 2));
+  await info.attach('section-timings', { path: timingPath, contentType: 'application/json' });
 });
 
 test('section settings follow the retained copy and reset after refresh', async ({ page }) => {
@@ -403,6 +405,30 @@ test('trusted perspective wheel and Ctrl-middle dolly stop before the original f
   await page.mouse.move(x, y);
   await page.mouse.wheel(0, 1200);
   await expect.poll(eyeZ).toBeGreaterThan(front + .1);
+});
+
+test('trusted inward wheel steps reuse the original surface hit on a dense mesh', async ({ page }, info) => {
+  await instrument(page);
+  await page.goto(`${origin}/test/fixtures/geometry.html`);
+  const { triangles } = await page.evaluate(() => (window as any).geometryContract.denseBox(240));
+  await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
+  await ready(page);
+  const canvas = page.locator('[data-geometry-format] canvas');
+  await canvas.press('Numpad1');
+  await canvas.press('Numpad5');
+  await refined(page);
+  await page.evaluate(() => (window as any).geometryContract.observeRaycasts());
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 8; i++) {
+    await page.mouse.wheel(0, -30);
+    await painted(page);
+  }
+  const samples = await page.evaluate(() => (window as any).geometryContract.raycastTimes() as number[]);
+  const timingPath = info.outputPath('zoom-raycasts.json');
+  writeFileSync(timingPath, JSON.stringify({ triangles, steps: 8, samples }));
+  await info.attach('zoom-raycasts', { path: timingPath, contentType: 'application/json' });
+  expect(samples).toHaveLength(1);
 });
 
 test('tracked pointers clear on cancellation and capture loss, including a drag returning to its origin', async ({ page }) => {

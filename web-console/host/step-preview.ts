@@ -73,15 +73,17 @@ export class NativeStepPreview {
     const timeout = new AbortController(), deadline = setTimeout(() => timeout.abort(new Error('parser_timeout')), this.timeoutMs);
     deadline.unref();
     let dir: string | undefined, fd: number | undefined, output: FilePreviewOperation | undefined, adopted = false;
-    const release = async () => {
+    const closeSource = () => {
+      if (fd === undefined) return;
+      try { closeSync(fd); }
+      catch { throw new WorkspaceHostError('Native STEP source descriptor did not retire', 'file_settlement_unknown'); }
+    };
+    const retireAsset = async () => {
       try { await output?.close(); }
       finally {
-        try { if (fd !== undefined) closeSync(fd); }
-        finally {
-          if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {
-            throw new WorkspaceHostError('Native STEP temporary asset did not retire', 'file_settlement_unknown');
-          });
-        }
+        if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {
+          throw new WorkspaceHostError('Native STEP temporary asset did not retire', 'file_settlement_unknown');
+        });
       }
     };
     try {
@@ -119,14 +121,22 @@ export class NativeStepPreview {
           return { ...page, version };
         },
         close: () => closing ??= (async () => {
-          try { if (!signal.aborted) await verify(); }
-          finally { await release(); }
+          try {
+            await retireAsset();
+            if (signal.aborted) throw new PreviewCancelled();
+            // Successful settlement witnesses the original source after all
+            // asynchronous retirement. Keep its descriptor until this check.
+            await verify();
+          } finally { closeSource(); }
         })(),
       };
     } finally {
       clearTimeout(deadline);
       try {
-        if (!adopted) await release().catch(error => { if (!(error instanceof PreviewCancelled)) throw error; });
+        if (!adopted) {
+          try { await retireAsset().catch(error => { if (!(error instanceof PreviewCancelled)) throw error; }); }
+          finally { closeSource(); }
+        }
       } finally { this.converting = false; }
     }
   }

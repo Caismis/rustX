@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,10 +14,32 @@ import { importGlb } from '../src/app/components/documents/geometry/glb';
 import { disposeScene, modelScene } from '../src/app/components/documents/geometry/scene-resources';
 import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import type { WorkbenchCall } from '../src/workspaces/workbench';
+import { stepRootCases } from './geometry-step-fixtures';
+
+const cleanup = vi.hoisted(() => ({ barrier: undefined as undefined | ((path: string) => Promise<void>) }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...fs,
+    rm: async (...args: Parameters<typeof fs.rm>) => {
+      const [path] = args;
+      if (typeof path === 'string' && path.split('/').at(-1)?.startsWith('rustx-step-preview-')) await cleanup.barrier?.(path);
+      return fs.rm(...args);
+    },
+  };
+});
+
+function latch() {
+  let release!: () => void;
+  const reached = new Promise<void>(resolve => { release = resolve; });
+  return { reached, release };
+}
 
 const signal = () => new AbortController().signal;
 const glb = await readFile(new URL('./fixtures/geometry/cube.glb', import.meta.url));
 const nativeExecutable = process.env.RUSTX_NATIVE_STEP_EXECUTABLE;
+if (process.env.RUSTX_REQUIRE_NATIVE_STEP === '1' && (process.platform !== 'linux' || !nativeExecutable))
+  throw new Error('The required real OCCT STEP helper is unavailable');
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'rustx-native-step-test-'));
@@ -95,6 +117,56 @@ describe.runIf(process.platform === 'linux')('Workbench native STEP carrier', ()
     } finally { await f.close(); }
   });
 
+  it.each(['source', 'authority'] as const)('rejects %s changes while the native preview asset retires', async change => {
+    const f = await fixture(), converter = new NativeStepPreview(f.config);
+    const entered = latch(), continueCleanup = latch();
+    const revoked = new Error('authorization_retired');
+    let authorized = true;
+    try {
+      const operation = await converter.open(f.root, 'model.stp', async () => { if (!authorized) throw revoked; }, signal());
+      cleanup.barrier = async () => { entered.release(); await continueCleanup.reached; };
+      const closing = operation.close();
+      await entered.reached;
+      if (change === 'source') {
+        const replacement = join(f.root, 'replacement.stp');
+        await writeFile(replacement, 'another STEP version');
+        await rename(replacement, f.source);
+      } else authorized = false;
+      continueCleanup.release();
+      if (change === 'source') await expect(closing).rejects.toMatchObject({ kind: 'source_changed' });
+      else await expect(closing).rejects.toBe(revoked);
+    } finally {
+      continueCleanup.release();
+      cleanup.barrier = undefined;
+      await f.close();
+    }
+  });
+
+  it('preserves settlement uncertainty if asset cleanup fails during cancellation', async () => {
+    const f = await fixture(), abort = new AbortController();
+    const entered = latch(), continueCleanup = latch();
+    let assetDirectory: string | undefined;
+    try {
+      const operation = await new NativeStepPreview(f.config).open(f.root, 'model.stp', async () => {}, abort.signal);
+      cleanup.barrier = async path => {
+        assetDirectory = path;
+        entered.release();
+        await continueCleanup.reached;
+        throw new Error('Asset cleanup failed');
+      };
+      const closing = operation.close();
+      await entered.reached;
+      abort.abort();
+      continueCleanup.release();
+      await expect(closing).rejects.toMatchObject({ kind: 'file_settlement_unknown' });
+    } finally {
+      continueCleanup.release();
+      cleanup.barrier = undefined;
+      if (assetDirectory) await rm(assetDirectory, { recursive: true, force: true });
+      await f.close();
+    }
+  });
+
   it('settles a running converter when the owning Product Host retires', async () => {
     const f = await fixture();
     const host = new LocalWorkspaceHost({ stepPreviewConverter: f.config, endpoint: 'ws://127.0.0.1:8080', roots: [{ id: 'root', cwd: f.root, displayName: 'Root' }], metadataFile: join(f.root, 'registry.json'), picker: false });
@@ -130,6 +202,25 @@ describe.runIf(process.platform === 'linux')('Workbench native STEP carrier', ()
   });
 });
 
+it.runIf(process.platform === 'linux' && !!nativeExecutable)('requires real OCCT transfer coverage for all declared STEP roots', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rustx-step-roots-'));
+  const cases = stepRootCases(await readFile(new URL('./fixtures/geometry/cube.step', import.meta.url), 'utf8'));
+  const converter = new NativeStepPreview({ executable: nativeExecutable!, threads: 1 });
+  async function write(name: string, next: string) {
+    await writeFile(join(root, name), next);
+    return name;
+  }
+  const source = (name: string) => readGeometrySource(active => converter.open(root, name, async () => {}, active), signal());
+  try {
+    const complete = await write('complete.step', cases.complete);
+    expect((await source(complete)).nativeStep?.roots).toBe(2);
+    const metadata = await write('metadata-only.step', cases.metadata);
+    expect((await source(metadata)).nativeStep?.roots).toBe(1);
+    const partial = await write('partial.step', cases.partial);
+    await expect(source(partial)).rejects.toThrow('parser_failure');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-detail bounds and triangle counts against the pinned WASM STEP path', async () => {
   const { importCad } = await import('../src/app/components/documents/geometry/cad');
   const module = await WebAssembly.compile(await readFile(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
@@ -149,7 +240,7 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-det
     return { triangles, occurrences: occurrences.sort(), palette: [...palette].sort() };
   };
   try {
-    for (const name of ['cube.step', 'cube-inch.step', 'mounting-bracket.step']) {
+    for (const name of ['cube.step', 'cube-inch.step', 'pole-sphere.step', 'mounting-bracket.step']) {
       const source = await readFile(new URL(`./fixtures/geometry/${name}`, import.meta.url));
       await writeFile(join(root, name), source);
       const wasm = modelScene(await importCad(Uint8Array.from(source), 'step', module));

@@ -27,7 +27,8 @@ preview owner and removed on retirement.
 
 The Host validates the original descriptor, secure path identity, source
 version and current authority before exposing the GLB, while transporting
-bounded ranges, and at final settlement. The browser uses the same geometry
+bounded ranges, and after output cleanup at final settlement. It retains
+the original descriptor until that final check. The browser uses the same geometry
 admission, render and copy lifecycle as other GLBs. OCCT XCAF transfers names,
 occurrences and colors. The native preview keeps color primitives under their
 owning occurrence for selection and isolation and charges each primitive to
@@ -35,6 +36,14 @@ the draw budget. Root meshing uses the browser CAD importer
 parameters of relative deflection 0.001 of the root's mean axis span and an
 angular deflection of 0.5 radians. The exporter writes meters with the viewer's
 Y-up presentation. Session-file delivery uses the existing browser path.
+
+Complete-model validation checks the transfer result for each declared STEP
+geometry root and reachable assembly product. The check follows STEP entity
+bindings independently of the XCAF free-shape count. A product with no
+geometry declaration or assembly members is metadata-only. Explicit
+lower-dimensional geometry still requires a successful transfer and does
+not enter the surface preview. Face-bearing results keep the per-face
+triangulation check before export.
 
 ## Build and package
 
@@ -67,6 +76,18 @@ Set `RUSTX_NATIVE_STEP_EXECUTABLE` to the built executable when running
 It opens both STEP and STP through the Workbench and checks the browser's
 GLB viewer and units. `test/native-step-preview.test.ts` covers the preview
 owner, physical child settlement and transport with a controlled converter.
+It also runs a real paired multi-root transfer test with a missing shape
+representation and verifies a 5 mm sphere with two degenerate pole edges
+against the pinned WASM path. The native Workbench test exercises the
+partial-transfer failure through the Product Host and browser.
+
+The Linux `Native STEP parity and Workbench acceptance` CI job is required
+when the converter, preview contracts, browser integration or their
+validation inputs change. It uses the existing prepared browser inputs.
+The dependency cache key includes the OCCT commit, lexer patch, recipe and
+runner toolchain. The job verifies the installed OCCT file manifest before
+linking the helper into the current checkout and requires the real native
+tests to execute.
 
 Use the [STEP browser benchmark](step-browser-benchmark.md) with
 `builds.lexer` pointing to the production build and
