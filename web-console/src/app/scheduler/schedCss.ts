@@ -11,7 +11,7 @@ export const schedCss = {
   zoneCombo: 'flex-[0_1_68%] min-w-0',
   pickerButton: 'border-0 bg-transparent [color:inherit] [font:inherit] text-[13px] px-[8px] py-[6px] rounded-[var(--dsw-radius-xl)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover)]',
   zoneInput: 'flex items-center [&_input]:w-full [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:[color:inherit] [&_input]:[font:inherit] [&_input]:text-[13px] [&_input]:text-right [&_input]:outline-offset-3 [&_input]:[@media(pointer:coarse)]:text-[16px] [&_button]:flex [&_button]:p-[4px] [&_button]:border-0 [&_button]:[color:inherit] [&_button]:bg-transparent',
-  zonePopup: 'z-[1500] w-[min(420px,calc(100vw-32px))] max-h-[320px] overflow-auto p-[4px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-specific-menu)] [color:var(--dsw-alias-label-primary)] shadow-[var(--dsw-elevation-prominent)]',
+  zonePopup: 'z-[1500] w-[min(420px,calc(100vw-32px))] max-h-[320px] overflow-auto p-[4px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-specific-menu)] [color:var(--dsw-alias-label-primary)] [box-shadow:var(--dsw-elevation-prominent)]',
   zoneList: 'outline-none',
   zoneOption: 'px-[12px] py-[7px] rounded-[var(--dsw-radius-sm)] text-[13px] cursor-pointer outline-none data-[focused]:bg-[var(--dsw-alias-interactive-bg-hover)] data-[selected]:bg-[var(--dsw-alias-interactive-bg-hover)]',
   taskTab: 'flex min-h-0 h-full [&>aside]:flex-1 [&>aside]:border-0',

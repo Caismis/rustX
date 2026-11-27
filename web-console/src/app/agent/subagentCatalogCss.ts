@@ -7,7 +7,7 @@ export const subagentCatalogCss = {
   switcherTitle: 'flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap',
   activitySlot: 'inline-flex flex-none items-center justify-center w-[14px] h-[14px]',
   triggerOpen: 'rotate-180',
-  menu: 'box-border flex flex-col w-[336px] max-w-[min(400px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-140px))] p-[4px] overflow-hidden rounded-[var(--dsw-radius-lg)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] before:content-[""] before:absolute before:-z-1 before:inset-0 before:rounded-[inherit] before:bg-[var(--dsw-specific-menu)] before:[backdrop-filter:var(--dsw-menu-backdrop-filter)] [&>[data-slot=popover-viewport]]:p-0',
+  menu: 'box-border flex flex-col w-[336px] max-w-[min(400px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-140px))] p-[4px] overflow-hidden rounded-[var(--dsw-radius-lg)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] [box-shadow:var(--dsw-elevation-prominent)] before:content-[""] before:absolute before:-z-1 before:inset-0 before:rounded-[inherit] before:bg-[var(--dsw-specific-menu)] before:[backdrop-filter:var(--dsw-menu-backdrop-filter)] [&>[data-slot=popover-viewport]]:p-0',
   menuBody: 'flex flex-col flex-1 min-h-0 overflow-auto [&>.sc-node]:ml-[-2px]',
   node: 'sc-node relative min-w-0',
   notice: 'my-[4px] mx-[8px] [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px] wrap-anywhere',

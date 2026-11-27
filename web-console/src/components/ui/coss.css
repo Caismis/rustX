@@ -314,6 +314,7 @@ body[data-ds-dark-theme] {
     background-color: transparent;
     background-image: none;
     border: 0 solid;
+    padding: 0;
   }
 }
 

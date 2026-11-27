@@ -6,7 +6,7 @@ export const modelSelectCss = {
   triggerIcon: '[display:var(--dsh-composer-model-icon-display,none)] flex-none',
   chevron: 'flex-none [color:var(--dsw-alias-label-caption)] transition-transform duration-120',
   chevronOpen: 'rotate-180',
-  menu: 'flex flex-col w-max min-w-[min(240px,calc(100vw-32px))] max-w-[min(420px,calc(100vw-32px))] max-h-[min(360px,calc(100vh-96px))] overflow-hidden p-[4px] border-0 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] [color:var(--dsw-alias-label-primary)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [&>[data-slot=popover-viewport]]:p-0',
+  menu: 'flex flex-col w-max min-w-[min(240px,calc(100vw-32px))] max-w-[min(420px,calc(100vw-32px))] max-h-[min(360px,calc(100vh-96px))] overflow-hidden p-[4px] border-0 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] [box-shadow:var(--dsw-elevation-prominent)] [color:var(--dsw-alias-label-primary)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [&>[data-slot=popover-viewport]]:p-0',
   status: 'p-[8px] [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]',
   empty: 'p-[8px] [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[18px]',
   error: 'flex items-start justify-between gap-[6px] mb-[3px] px-[7px] py-[6px] rounded-[var(--dsw-radius-md)] bg-[var(--dsw-alias-interactive-bg-hover-danger)] [color:var(--dsw-alias-state-error-primary)] text-[11px] leading-[16px]',

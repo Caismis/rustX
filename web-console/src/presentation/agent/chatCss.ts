@@ -17,7 +17,7 @@ export const chatCss = {
   openError: '[color:var(--dsw-alias-state-error-primary)] [font-size:var(--dsh-content-font-size-secondary,13px)] [line-height:calc(18px+var(--dsh-content-font-delta-secondary,0px))]',
   older: 'flex justify-center [&_button]:border-none [&_button]:rounded-[var(--dsw-radius-sm)] [&_button]:px-[12px] [&_button]:py-[4px] [&_button]:text-[12px] [&_button]:[color:var(--dsw-alias-label-secondary)] [&_button]:bg-[var(--dsw-alias-interactive-bg-hover-solid)] [&_button]:cursor-pointer [&_button:disabled]:cursor-default [&_button:disabled]:opacity-60',
   toBottomSlot: 'sticky bottom-[16px] z-8 h-0 flex justify-end pr-[max(0px,calc((100%-var(--dsh-chat-content-width))/2))] pointer-events-none [[data-conversation-scroll]_&]:bottom-[calc(var(--dsh-composer-height,152px)+16px)]',
-  toBottom: 'flex items-center justify-center w-[34px] h-[34px] mt-[-34px] p-0 border-0 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l3)] rounded-[100px] [corner-shape:round] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-button-floating-fill)] shadow-[var(--dsw-elevation-panel)] cursor-pointer pointer-events-auto hover:bg-[var(--dsw-alias-button-floating-hover)]',
+  toBottom: 'flex items-center justify-center w-[34px] h-[34px] mt-[-34px] p-0 border-0 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l3)] rounded-[100px] [corner-shape:round] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-button-floating-fill)] [box-shadow:var(--dsw-elevation-panel)] cursor-pointer pointer-events-auto hover:bg-[var(--dsw-alias-button-floating-hover)]',
   modalAction: 'min-w-[72px]',
   continuation: 'chat-continuation',
 };

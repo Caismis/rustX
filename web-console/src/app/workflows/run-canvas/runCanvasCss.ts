@@ -1,7 +1,7 @@
 export const runCanvasCss = {
   backdrop: 'fixed inset-0 z-80 flex items-stretch justify-center p-[16px] box-border bg-[color-mix(in_srgb,var(--dsw-alias-toast-bg)_54%,transparent)] max-[820px]:p-0',
   dialog: 'flex flex-col w-full max-w-[1380px] min-w-0 min-h-0',
-  dialogSurface: 'flex flex-col flex-1 w-full min-w-0 min-h-0 overflow-hidden border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-alias-bg-base)] [color:var(--dsw-alias-label-primary)] shadow-[var(--dsw-elevation-prominent)] max-[820px]:rounded-none',
+  dialogSurface: 'flex flex-col flex-1 w-full min-w-0 min-h-0 overflow-hidden border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-alias-bg-base)] [color:var(--dsw-alias-label-primary)] [box-shadow:var(--dsw-elevation-prominent)] max-[820px]:rounded-none',
   header: 'flex flex-wrap items-center justify-between gap-x-[14px] gap-y-[8px] px-[16px] py-[12px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l2)] bg-[var(--dsw-alias-bg-layer-1)]',
   titleGroup: 'flex flex-wrap items-center gap-[8px] min-w-0',
   titleCls: 'm-0 text-[15px] font-medium overflow-hidden text-ellipsis whitespace-nowrap',

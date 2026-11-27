@@ -1,7 +1,7 @@
 export const modalCss = {
   root: 'fixed inset-0 z-[1000] flex items-center justify-center p-[24px]',
   mask: 'overscroll-contain absolute inset-0 bg-[var(--dsw-alias-bg-mask-1)] [backdrop-filter:var(--dsw-mask-blur)]',
-  dialog: 'overscroll-contain relative z-1 flex flex-col gap-[20px] w-[min(380px,100%)] px-0 pb-[24px] overflow-hidden border-0 rounded-[24px] bg-[var(--dsw-alias-bg-layer-2)] shadow-[var(--dsw-elevation-prominent)] max-h-[calc(100dvh-48px)]',
+  dialog: 'overscroll-contain relative z-1 flex flex-col gap-[20px] w-[min(380px,100%)] px-0 pb-[24px] overflow-hidden border-0 rounded-[24px] bg-[var(--dsw-alias-bg-layer-2)] [box-shadow:var(--dsw-elevation-prominent)] max-h-[calc(100dvh-48px)]',
   content: 'flex flex-col w-full min-h-0 overflow-y-auto',
   header: 'flex flex-shrink-0 items-center justify-between gap-[8px] pt-[22px] pr-[14px] pb-[12px] pl-[24px]',
   titleCls: 'm-0 text-[16px] leading-[24px] font-medium [color:var(--dsw-alias-label-primary)]',
