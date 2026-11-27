@@ -14,6 +14,57 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
+// Scan reads repeat the same large SQLite schema initialization. Two stable OS
+// threads bound allocator arena high-water while preserving progress when one
+// native read remains physically active after its scan budget expires.
+#[derive(Clone)]
+pub(super) struct ScheduleScanReadLane {
+    sender: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+}
+impl ScheduleScanReadLane {
+    pub(super) fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        let receiver = Arc::new(Mutex::new(receiver));
+        for index in 0..2 {
+            let receiver = receiver.clone();
+            std::thread::Builder::new()
+                .name(format!("rustx-scan-read-{index}"))
+                .spawn(move || {
+                    loop {
+                        let job = {
+                            let receiver = receiver.lock().expect("scan read lane");
+                            receiver.recv()
+                        };
+                        match job {
+                            Ok(job) => job(),
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .expect("spawn Scheduler scan read lane");
+        }
+        Self { sender }
+    }
+    fn submit<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, RuntimeManagerError> + Send + 'static,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<T, RuntimeManagerError>>, RuntimeManagerError>
+    where
+        T: Send + 'static,
+    {
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        let job = Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                .unwrap_or_else(|_| Err(error("Scheduler scan read worker panicked")));
+            let _ = reply.send(result);
+        });
+        self.sender
+            .send(job)
+            .map_err(|_| error("Scheduler scan read worker is unavailable"))?;
+        Ok(receiver)
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct StorageFlight {
     pub(super) binding: ScheduleBinding,
@@ -209,6 +260,7 @@ impl SessionRuntimeManager {
         session: &SessionId,
         node: &SessionNodeId,
         operation: ScheduleOperation,
+        scan_lane: bool,
     ) -> Result<ScheduleOperationResult, RuntimeManagerError> {
         let permit = {
             let mut state = self.registry.0.lock().expect("registry mutex");
@@ -243,6 +295,8 @@ impl SessionRuntimeManager {
             };
             let clock = self.schedule_clock.clone();
             #[cfg(test)]
+            let runtime_handle = tokio::runtime::Handle::current();
+            #[cfg(test)]
             // Only explicitly registered read hooks belong in this path. Creating
             // the full per-target fixture here distorts native scale measurements.
             let probe = self
@@ -253,11 +307,11 @@ impl SessionRuntimeManager {
                 .probes
                 .get(&binding.conversation_id)
                 .cloned();
-            tokio::task::spawn_blocking(move || {
+            let work = move || {
                 let _permit = permit;
                 #[cfg(test)]
                 if let Some(probe) = &probe {
-                    tokio::runtime::Handle::current().block_on(probe.schedule_native_read.park());
+                    runtime_handle.block_on(probe.schedule_native_read.park());
                 }
                 scope.check().map_err(error)?;
                 let access = plan.open().map_err(error)?;
@@ -278,12 +332,18 @@ impl SessionRuntimeManager {
                         .pause_schedule_read_return
                         .swap(false, Ordering::SeqCst)
                 {
-                    tokio::runtime::Handle::current().block_on(probe.schedule_read_return.park());
+                    runtime_handle.block_on(probe.schedule_read_return.park());
                 }
                 result
-            })
-            .await
-            .map_err(error)?
+            };
+            if scan_lane {
+                self.schedule_scan_read_lane
+                    .submit(work)?
+                    .await
+                    .map_err(error)?
+            } else {
+                tokio::task::spawn_blocking(work).await.map_err(error)?
+            }
         };
         tokio::select! {biased;
             ()=self.schedule_stop.cancelled()=>Err(error("Scheduler admission is closed")),
@@ -340,6 +400,14 @@ impl SessionRuntimeManager {
         self.schedule_stop.cancel();
         self.schedule_changed.notify_one();
     }
+    pub(crate) async fn schedule_scan_summary(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<ScheduleOperationResult, RuntimeManagerError> {
+        self.schedule_read(session, node, ScheduleOperation::Summary, true)
+            .await
+    }
     fn schedule_commit_permit(
         &self,
         binding: &ScheduleBinding,
@@ -377,7 +445,7 @@ impl SessionRuntimeManager {
                 | ScheduleOperation::Summary
                 | ScheduleOperation::DuePage { .. }
         ) {
-            return self.schedule_read(session, node, operation).await;
+            return self.schedule_read(session, node, operation, false).await;
         }
         loop {
             let target = self

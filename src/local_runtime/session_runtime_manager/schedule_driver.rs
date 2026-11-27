@@ -118,11 +118,7 @@ impl SessionRuntimeManager {
         index: &mut HashMap<ConversationId, Indexed>,
     ) {
         let result = self
-            .schedule_operation(
-                &binding.session_id,
-                &binding.node_id,
-                ScheduleOperation::Summary,
-            )
+            .schedule_scan_summary(&binding.session_id, &binding.node_id)
             .await;
         let mut diagnostics = self
             .schedule_diagnostics
