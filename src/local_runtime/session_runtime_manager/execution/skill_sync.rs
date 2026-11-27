@@ -1102,16 +1102,17 @@ fn sync_locked(
     for marker in files {
         crate::package_io::check_cancelled(signal)?;
         flight.progressed();
-        let path = &marker.path;
-        let relative = path
+        let host_marker = &marker.path;
+        let relative = host_marker
             .strip_prefix(host_collection)
             .map_err(|_| io::ErrorKind::InvalidData)?;
-        let package_dir = path.file_name().is_some_and(|name| name == "SKILL.md");
-        let selected_marker = path
+        let filename = host_marker.file_name().ok_or(io::ErrorKind::InvalidData)?;
+        let package_dir = filename == "SKILL.md";
+        let selected_marker = host_marker
             .canonicalize()
             .map_err(SkillMarkerChanged::if_missing)?;
         let (source, source_name) =
-            marker_source(path, package_dir).map_err(SkillMarkerChanged::if_missing)?;
+            marker_source(host_marker, package_dir).map_err(SkillMarkerChanged::if_missing)?;
         marker.verify(&source, &source_name)?;
         let digest = if package_dir {
             marker_digest(&source, &source_name, signal).map_err(SkillMarkerChanged::if_missing)?
@@ -1161,8 +1162,7 @@ fn sync_locked(
                 if marker_digest(&source, &source_name, signal)
                     .map_err(SkillMarkerChanged::if_missing)?
                     != Some(expected)
-                    || marker
-                        .path
+                    || host_marker
                         .canonicalize()
                         .map_err(SkillMarkerChanged::if_missing)?
                         != selected_marker
@@ -1187,7 +1187,7 @@ fn sync_locked(
                 {
                     charge_retained(&mut total, bytes.get())?;
                     marker.verify(&source, &source_name)?;
-                    if path
+                    if host_marker
                         .canonicalize()
                         .map_err(SkillMarkerChanged::if_missing)?
                         != selected_marker
@@ -1196,9 +1196,7 @@ fn sync_locked(
                     }
                     mapped.insert(
                         relative.to_path_buf(),
-                        client_collection
-                            .join(package)
-                            .join(path.file_name().ok_or(io::ErrorKind::InvalidData)?),
+                        client_collection.join(package).join(filename),
                     );
                     continue;
                 }
@@ -1217,7 +1215,7 @@ fn sync_locked(
         let client_package = loop {
             crate::package_io::check_cancelled(signal)?;
             let version = versions.next().ok_or(io::ErrorKind::AlreadyExists)?;
-            let path = cache_path(authority, &version);
+            let client_path = cache_path(authority, &version);
             match connection
                 .user_skill_transfer_until(&Request::BeginPackage { version }, wire_deadline())?
             {
@@ -1245,7 +1243,7 @@ fn sync_locked(
                     connection,
                     &source,
                     Path::new(&source_name),
-                    Path::new(path.file_name().ok_or(io::ErrorKind::InvalidData)?),
+                    Path::new(filename),
                     &mut budget,
                 )?;
             }
@@ -1265,7 +1263,7 @@ fn sync_locked(
                 return Err(SkillMarkerChanged::io_error());
             }
             source.verify()?;
-            if path
+            if host_marker
                 .canonicalize()
                 .map_err(SkillMarkerChanged::if_missing)?
                 != selected_marker
@@ -1273,12 +1271,11 @@ fn sync_locked(
                 return Err(SkillMarkerChanged::io_error());
             }
             match connection.user_skill_transfer_until(&Request::Publish, wire_deadline())? {
-                Reply::Published { package } if package == path => break package,
+                Reply::Published { package } if package == client_path => break package,
                 Reply::VersionExists => {}
                 _ => return Err(io::ErrorKind::InvalidData.into()),
             }
         };
-        let filename = path.file_name().ok_or(io::ErrorKind::InvalidData)?;
         mapped.insert(
             relative.to_path_buf(),
             client_collection.join(client_package).join(filename),
