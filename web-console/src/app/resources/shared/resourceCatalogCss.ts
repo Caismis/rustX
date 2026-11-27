@@ -10,7 +10,7 @@ export const resourceCatalogCss = {
  availability: 'flex flex-wrap items-center justify-end gap-[6px]',
  skillPolicy: 'flex flex-wrap items-end gap-[12px] mb-[20px]',
  list: 'rc-list',
- catalog: '[font:inherit] max-[600px]:[&_.rc-title]:text-[24px] max-[600px]:[&_.rc-search]:w-full max-[600px]:[&_.rc-search]:ml-0 max-[600px]:[&_.rc-card]:p-[12px] max-[600px]:[&_.rc-card]:gap-[8px]',
+ catalog: 'max-[600px]:[&_.rc-title]:text-[24px] max-[600px]:[&_.rc-search]:w-full max-[600px]:[&_.rc-search]:ml-0 max-[600px]:[&_.rc-card]:p-[12px] max-[600px]:[&_.rc-card]:gap-[8px]',
  titleCls: 'rc-title',
  search: 'rc-search',
  card: 'rc-card',

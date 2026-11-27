@@ -2,7 +2,7 @@ export const workbenchFilesCss = {
  root: 'flex flex-auto flex-col h-full min-h-0 [color:var(--dsw-alias-label-primary)] text-[length:var(--dsh-content-font-size-secondary,13px)] leading-normal [--dsw-radius-md:8px] [--dsw-radius-sm:8px]',
  header: 'flex flex-none gap-[4px] items-center box-border h-[38px] pr-[6px] pl-[16px] [border-bottom:0.5px_solid_var(--dsw-alias-border-l3)]',
  path: 'mr-[12px]',
- body: '[font:inherit] flex-auto min-h-0 mr-[2px] pt-[8px] pb-[8px] pl-[8px] overflow-auto [scrollbar-gutter:stable] [&::-webkit-scrollbar-track]:m-[2px]',
+ body: 'flex-auto min-h-0 mr-[2px] pt-[8px] pb-[8px] pl-[8px] overflow-auto [scrollbar-gutter:stable] [&::-webkit-scrollbar-track]:m-[2px]',
  level: 'wf-level m-0 p-0 list-none [&_.wf-level]:pl-[18px]',
  item: 'm-0 p-0',
  row: '[font:inherit] flex gap-[6px] items-center w-full min-w-0 px-[10px] py-[5px] [color:inherit] text-left bg-transparent border-0 rounded-[var(--dsw-radius-md)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] aria-current:bg-[var(--dsw-alias-interactive-bg-hover-accent)] disabled:[color:var(--dsw-alias-label-tertiary)] disabled:cursor-default disabled:hover:bg-transparent',

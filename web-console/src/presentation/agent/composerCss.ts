@@ -19,5 +19,5 @@ export const composerCss = {
   add: 'grid place-items-center flex-none w-[28px] h-[28px] border-none rounded-full [corner-shape:round]! bg-[var(--dsw-specific-selector)] [color:var(--dsw-alias-label-primary)] cursor-pointer [transform:translateZ(0)] will-change-transform hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover-solid)] disabled:opacity-50 disabled:cursor-default [&>span]:flex',
   primary: 'grid place-items-center flex-none w-[34px] h-[34px] border-none rounded-full [corner-shape:round]! bg-[var(--dsw-alias-button-info-fill)] text-white cursor-pointer transition-colors duration-100 [transform:translateY(-2px)] will-change-transform hover:not-disabled:bg-[var(--dsw-alias-button-info-hover)] disabled:opacity-40 disabled:cursor-default data-[sending]:disabled:opacity-100 data-[sending]:disabled:cursor-progress data-[preparing]:disabled:opacity-100 data-[preparing]:disabled:cursor-progress [&>span]:flex',
   sendingSpinner: 'animate-[upload-spin_800ms_linear_infinite] motion-reduce:[animation-duration:2400ms]',
-  retry: '[font:inherit] ml-[8px] px-[8px] py-[1px] border border-current rounded-[4px] bg-transparent [color:inherit] text-[12px] cursor-pointer',
+  retry: 'ml-[8px] px-[8px] py-[1px] border border-current rounded-[4px] bg-transparent [color:inherit] text-[12px] cursor-pointer',
 };

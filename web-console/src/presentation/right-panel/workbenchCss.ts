@@ -12,7 +12,7 @@ export const workbenchCss = {
  notice: 'my-[8px] mx-[16px] [color:var(--dsw-alias-label-secondary)] text-[12px]',
  root: 'flex flex-col h-full min-h-0 [color:var(--dsw-alias-label-primary)] bg-transparent [--dsw-radius-xl:20px] [--dsw-radius-sm:8px] [&[hidden]]:hidden',
  body: 'h-full flex flex-col flex-1 min-h-0 min-w-0 overflow-auto',
- shortcut: '[font:inherit] inline-flex items-center gap-[3px] flex-none [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[16px] whitespace-nowrap [&_kbd]:inline-flex [&_kbd]:items-center [&_kbd]:justify-center [&_kbd]:[.wb-terminal-entry_&]:relative [.wb-terminal-entry_&]:pointer-events-none',
+ shortcut: 'inline-flex items-center gap-[3px] flex-none [color:var(--dsw-alias-label-tertiary)] text-[12px] leading-[16px] whitespace-nowrap [&_kbd]:inline-flex [&_kbd]:items-center [&_kbd]:justify-center [&_kbd]:[.wb-terminal-entry_&]:relative [.wb-terminal-entry_&]:pointer-events-none',
  terminalEntry: 'wb-terminal-entry relative overflow-hidden',
  launch: 'absolute inset-0 w-full h-full bg-transparent border-0 disabled:opacity-45 disabled:cursor-default',
  titleRow: 'flex gap-[4px] items-center [&>div]:pointer-events-auto',
