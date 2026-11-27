@@ -527,13 +527,20 @@ async fn headless_startup_server(
         lists: Arc::default(),
     };
     let handler = control.clone();
+    let listener = tokio::net::TcpListener::bind((
+        crate::tools::mcp::streamable_http::private_workspace_ip(),
+        0,
+    ))
+    .await
+    .unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let mut config = StreamableHttpServerConfig::default();
+    config.allowed_hosts = vec![listener.local_addr().unwrap().to_string()];
     let service = StreamableHttpService::<HeadlessStartupServer, LocalSessionManager>::new(
         move || Ok(handler.clone()),
         Arc::default(),
-        StreamableHttpServerConfig::default(),
+        config,
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
         axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
             .await

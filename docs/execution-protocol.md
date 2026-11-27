@@ -1144,7 +1144,7 @@ Recovery pins the reported root to the admitted Client instance. A local sibling
 remote Client and short-lived container each report the root in their own
 filesystem namespace. The Server publishes bound Skill locations under
 the Client-visible collection and Managed Python User locations under
-`<client-user-root>/.agents/tools`. It reads authoritative global Skill
+`<client-user-root>/.agents/tools`. It reads authoritative User Skill
 metadata from its own standing tree. Bound User Skill addresses retain a
 collection-relative name until projection, so a non-UTF-8 Host ancestor cannot
 invalidate a representable Client address.
@@ -1152,7 +1152,7 @@ invalidate a representable Client address.
 Read, Write, Edit, Grep and Glob accept Client absolute paths and
 Workspace-relative paths. The Client retains directory descriptors, rejects
 links and escaping relative components, and denies file-tool writes inside
-the official global Skill tree. Bash continues to use the Workspace as its
+the official User Skill tree. Bash continues to use the Workspace as its
 working directory and home. Bash may write to a shared standing root.
 Ordinary management file APIs retain their Workspace scope.
 

@@ -857,7 +857,14 @@ os.execv(sys.argv[2], sys.argv[2:])
         use crate::local_runtime::session_runtime_manager::StandaloneExecution;
         use crate::tools::mcp::{catalog::CatalogKind, test_sync::CloseProbe};
 
-        let fixture = HttpFixture::start(HttpFixtureControl::default()).await;
+        let fixture = HttpFixture::start_on(
+            (
+                crate::tools::mcp::streamable_http::private_workspace_ip(),
+                0,
+            ),
+            HttpFixtureControl::default(),
+        )
+        .await;
         let directory = tempfile::tempdir().unwrap();
         let owner = owner(directory.path());
         let workspace = directory.path().canonicalize().unwrap();

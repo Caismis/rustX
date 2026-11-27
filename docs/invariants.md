@@ -19,7 +19,7 @@
   Client environment values are scoped to the explicitly granted service,
   destination origin and variable.
 - Native file tools resolve paths in the Client filesystem and deny writes
-  to the official global Skill collection. Stdio starts and settles on that
+  to the official User Skill collection. Stdio starts and settles on that
   same Client. A lost mutation receipt retains its unknown outcome.
 
 ## Environment service ownership (#533)

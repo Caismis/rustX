@@ -3518,6 +3518,37 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
         let list_calls = mcp.list_tools_calls.clone();
         let catalog_reads = || list_calls.load(Ordering::Relaxed);
         let (mcp_runtime, mcp_workspace) = (runtime.clone(), workspace.clone());
+        let private_ip = nix::ifaddrs::getifaddrs()
+            .unwrap()
+            .filter(|interface| {
+                !interface
+                    .flags
+                    .contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK)
+            })
+            .filter_map(|interface| {
+                interface.address.and_then(|address| {
+                    address
+                        .as_sockaddr_in()
+                        .map(nix::sys::socket::SockaddrIn::ip)
+                })
+            })
+            .find(|ip| {
+                let [first, second, ..] = ip.octets();
+                let cgnat = first == 100 && (64..=127).contains(&second);
+                (ip.is_private() || cgnat)
+                    && !ip.is_loopback()
+                    && !ip.is_link_local()
+                    && !ip.is_unspecified()
+                    && first != 0
+                    && *ip != std::net::Ipv4Addr::new(100, 100, 100, 200)
+            })
+            .expect("a private non-loopback local interface is required for HTTP MCP fixtures");
+        let listener = tokio::net::TcpListener::bind((private_ip, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut mcp_config = StreamableHttpServerConfig::default().with_json_response(true);
+        mcp_config.allowed_hosts = vec![address.to_string()];
         let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
             move || {
                 assert!(
@@ -3527,10 +3558,8 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
                 Ok(mcp.clone())
             },
             std::sync::Arc::default(),
-            StreamableHttpServerConfig::default().with_json_response(true),
+            mcp_config,
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
         let (entered, mut first_request) = tokio::sync::watch::channel(false);
         let (allow, release) = tokio::sync::watch::channel(false);
         let slow = axum::Router::new()

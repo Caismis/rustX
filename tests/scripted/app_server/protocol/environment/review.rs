@@ -502,6 +502,19 @@ pub(crate) async fn catalog_credentials() {
                     let MethodResult::McpProbe { result } = response else {
                         panic!("catalog response")
                     };
+                    if !http && reference {
+                        assert_eq!(
+                            result.outcome,
+                            crate::local_runtime::mcp_probe::McpProbeOutcome::ConnectionFailed,
+                            "User stdio sensitive_env must fail rather than send Host credentials to Client"
+                        );
+                        assert!(result.page.is_none());
+                        assert!(
+                            !serde_json::to_string(&result).unwrap().contains(secret),
+                            "credential escaped http={http}, reference={reference}, kind={kind:?}"
+                        );
+                        continue;
+                    }
                     assert_eq!(
                         result.outcome,
                         crate::local_runtime::mcp_probe::McpProbeOutcome::Reachable,

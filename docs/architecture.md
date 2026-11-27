@@ -3066,7 +3066,7 @@ remains workspace-scoped. Every physical file-tool operation crosses the
 Session's Client boundary. Write and Edit bind a ticketed Client-side mutation
 claim — the logical path plus the `PreparedMutation` owner — *before*
 permission classification, and the executor consumes exactly one commit or
-abort decision. The Client permits reading its official global skill tree but
+abort decision. The Client permits reading its official User Skill tree but
 denies file-tool writes there and to an ancestor of that tree. `Workspace`
 remains the runtime/Bash cwd authority. `tools/locator.rs` resolves
 runtime-advertised managed-output paths for reads, while `ManagedToolOutput`

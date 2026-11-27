@@ -187,6 +187,16 @@ impl FixtureServer {
         Self::start_with_body(move |attempt, head, _body| responder(attempt, head)).await
     }
 
+    /// Starts a server bound to `bind`; `responder(attempt, request_head)` decides
+    /// the reply for each connection.
+    #[allow(dead_code)]
+    pub async fn start_on<F>(bind: impl tokio::net::ToSocketAddrs, responder: F) -> Self
+    where
+        F: Fn(u64, &str) -> FixtureReply + Send + Sync + 'static,
+    {
+        Self::start_with_body_on(bind, move |attempt, head, _body| responder(attempt, head)).await
+    }
+
     /// Starts a server whose responder also sees the request body, for
     /// conversations whose request ordering is nondeterministic (Issue #60:
     /// a subagent child runtime calls the same provider concurrently with
@@ -195,9 +205,16 @@ impl FixtureServer {
     where
         F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync + 'static,
     {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind fixture server");
+        Self::start_with_body_on("127.0.0.1:0", responder).await
+    }
+
+    /// Starts a server bound to `bind` whose responder also sees the request body.
+    #[allow(dead_code)]
+    pub async fn start_with_body_on<F>(bind: impl tokio::net::ToSocketAddrs, responder: F) -> Self
+    where
+        F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync + 'static,
+    {
+        let listener = TcpListener::bind(bind).await.expect("bind fixture server");
         let address = listener.local_addr().expect("local address");
         let attempts = Arc::new(AtomicU64::new(0));
         let request_bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -258,7 +275,7 @@ impl FixtureServer {
 
     /// The base URL pointing at this server.
     pub fn url(&self, prefix: &str) -> String {
-        format!("http://127.0.0.1:{}{}", self.address.port(), prefix)
+        format!("http://{}{}", self.address, prefix)
     }
 }
 

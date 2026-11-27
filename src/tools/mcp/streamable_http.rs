@@ -1162,14 +1162,15 @@ fn workspace_address_allowed(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr;
     match ip {
         IpAddr::V4(ip) => {
-            !ip.is_unspecified()
+            ip.octets()[0] != 0
+                && !ip.is_unspecified()
                 && !ip.is_loopback()
                 && !ip.is_link_local()
                 && ip != std::net::Ipv4Addr::new(100, 100, 100, 200)
         }
         IpAddr::V6(ip) => {
             if let Some(v4) = ip.to_ipv4_mapped() {
-                return v4.octets()[0] != 0 && workspace_address_allowed(IpAddr::V4(v4));
+                return workspace_address_allowed(IpAddr::V4(v4));
             }
             !ip.is_loopback()
                 && !ip.is_unspecified()
@@ -1582,6 +1583,35 @@ impl StreamableHttpClient for McpHttpClient {
 /// "the POST already finished" are three different proven states rather than
 /// three readings of the same missing record.
 #[cfg(test)]
+pub(crate) fn try_private_workspace_ip() -> Option<std::net::Ipv4Addr> {
+    nix::ifaddrs::getifaddrs()
+        .ok()?
+        .filter(|interface| {
+            !interface
+                .flags
+                .contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK)
+        })
+        .filter_map(|interface| {
+            interface.address.and_then(|address| {
+                address
+                    .as_sockaddr_in()
+                    .map(nix::sys::socket::SockaddrIn::ip)
+            })
+        })
+        .find(|ip| {
+            let [first, second, ..] = ip.octets();
+            let cgnat = first == 100 && (64..=127).contains(&second);
+            (ip.is_private() || cgnat) && workspace_address_allowed((*ip).into())
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn private_workspace_ip() -> std::net::Ipv4Addr {
+    try_private_workspace_ip()
+        .expect("a private non-loopback local interface is required for HTTP MCP fixtures")
+}
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
@@ -1590,21 +1620,7 @@ mod tests {
     use super::{LocalRequestTermination, McpHttpRequestOwnership, OutboundDispatch, RequestPhase};
 
     fn private_test_ip() -> Option<std::net::Ipv4Addr> {
-        nix::ifaddrs::getifaddrs()
-            .ok()?
-            .filter(|interface| {
-                !interface
-                    .flags
-                    .contains(nix::net::if_::InterfaceFlags::IFF_LOOPBACK)
-            })
-            .filter_map(|interface| {
-                interface.address.and_then(|address| {
-                    address
-                        .as_sockaddr_in()
-                        .map(nix::sys::socket::SockaddrIn::ip)
-                })
-            })
-            .find(|ip| ip.is_private() && !ip.is_loopback() && !ip.is_link_local())
+        super::try_private_workspace_ip()
     }
 
     #[test]
@@ -1613,6 +1629,7 @@ mod tests {
             "127.0.0.1",
             "127.2.3.4",
             "0.0.0.0",
+            "0.1.2.3",
             "169.254.169.254",
             "100.100.100.200",
             "::",
@@ -1648,6 +1665,7 @@ mod tests {
             "http://localhost/mcp",
             "http://127.0.0.1/mcp",
             "http://0.0.0.0/mcp",
+            "http://0.1.2.3/mcp",
             "http://[::1]/mcp",
             "http://[::]/mcp",
             "http://[::ffff:127.0.0.1]/mcp",

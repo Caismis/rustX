@@ -581,25 +581,40 @@ impl HttpFixture {
     ///
     /// Panics if the loopback listener cannot be bound.
     pub async fn start(control: HttpFixtureControl) -> Self {
+        Self::start_on("127.0.0.1:0", control).await
+    }
+
+    /// Binds `bind` first and serves the fixture on `/mcp`, permitting that host address.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the listener cannot be bound or its local address cannot be read.
+    pub async fn start_on(
+        bind: impl tokio::net::ToSocketAddrs,
+        control: HttpFixtureControl,
+    ) -> Self {
         use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService,
         };
 
+        let listener = tokio::net::TcpListener::bind(bind)
+            .await
+            .expect("fixture HTTP listener");
+        let address = listener.local_addr().expect("fixture HTTP address");
         let cancellation = tokio_util::sync::CancellationToken::new();
         let mut config = StreamableHttpServerConfig::default();
         config.cancellation_token = cancellation.child_token();
         config.sse_keep_alive = None;
+        if !address.ip().is_loopback() {
+            config.allowed_hosts = vec![address.to_string()];
+        }
         let handler = HttpFixtureServer::new(control.clone());
         let service = StreamableHttpService::<HttpFixtureServer, LocalSessionManager>::new(
             move || Ok(handler.clone()),
             Arc::default(),
             config,
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("fixture HTTP listener");
-        let address = listener.local_addr().expect("fixture HTTP address");
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, axum::Router::new().nest_service("/mcp", service)).await;
         });
