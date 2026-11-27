@@ -54,7 +54,9 @@ checkout. Build in Release with RapidJSON headers and the `TKXDESTEP` and
 `TKRWMesh` toolkits. CMake can resolve the required dependent toolkits from
 `BUILD_ADDITIONAL_TOOLKITS="TKXDESTEP TKRWMesh"` when the `BUILD_MODULE_*`
 options are off. Enable `USE_RAPIDJSON` and disable `USE_FREETYPE`, `USE_TBB`
-and `USE_OPENGL`. Configure the helper from the rustX checkout.
+and `USE_OPENGL`. The transitive `TKV3d` toolkit links X11 and libGL, which
+use the Linux X11 and OpenGL development packages. Configure the helper
+from the rustX checkout.
 
 ```sh
 cmake -S web-console/host/step-native -B /tmp/rustx-step-helper -G Ninja \

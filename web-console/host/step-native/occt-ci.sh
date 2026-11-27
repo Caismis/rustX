@@ -16,7 +16,8 @@ inputs() {
   printf 'Recipe %s\n' "$(sha256sum "$recipe" | cut -d ' ' -f 1)"
   printf 'C++ %s %s\n' "$(c++ -dumpmachine)" "$(c++ -dumpfullversion -dumpversion)"
   printf 'CMake %s\n' "$(cmake --version | sed -n '1p')"
-  dpkg-query --show --showformat='${Package} ${Version}\n' libc6-dev libx11-dev rapidjson-dev
+  # TKV3d links libGL through OCCT's X11 toolkit dependencies.
+  dpkg-query --show --showformat='${Package} ${Version}\n' libc6-dev libgl-dev libx11-dev rapidjson-dev
   grep -E '^(ID|VERSION_ID)=' /etc/os-release
 }
 

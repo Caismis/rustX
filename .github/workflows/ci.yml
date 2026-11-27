@@ -1446,11 +1446,11 @@ jobs:
       - name: Install OCCT build tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++ rapidjson-dev libx11-dev
+          sudo apt-get install -y cmake ninja-build g++ rapidjson-dev libgl-dev libx11-dev
       - name: Identify the immutable OCCT build inputs
         id: occt
         run: echo "key=$(bash web-console/host/step-native/occt-ci.sh key)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v5
+      - uses: actions/cache/restore@v5
         id: occt-cache
         with:
           path: ${{ runner.temp }}/native-step-occt
@@ -1468,6 +1468,11 @@ jobs:
           helper="$RUNNER_TEMP/native-step-helper/rustx-step-native"
           sha256sum "$helper"
           printf 'RUSTX_NATIVE_STEP_EXECUTABLE=%s\nLD_LIBRARY_PATH=%s\n' "$helper" "$prefix/lib" >> "$GITHUB_ENV"
+      - uses: actions/cache/save@v5
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/native-step-occt
+          key: linux-x64-native-step-occt-${{ steps.occt.outputs.key }}
       - name: Exercise the real converter, transfer coverage and WASM parity
         working-directory: web-console
         run: pnpm exec vitest run test/native-step-preview.test.ts --reporter=verbose
