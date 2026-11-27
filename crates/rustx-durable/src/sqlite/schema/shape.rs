@@ -20,6 +20,15 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 pub(super) const CANONICAL_SCHEMA_SHAPE_BLAKE3: &str =
     "3b46919f09ef3f513b1466350f3e5d8f9973978953e47e010b3ab54569244b24";
 
+fn validate_schema_text(bytes: &[u8], column: usize) -> Result<(), ConversationStoreError> {
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "sqlite_schema column {column} is not valid UTF-8"
+        )));
+    }
+    Ok(())
+}
+
 fn hash_schema_field(hasher: &mut blake3::Hasher, value: Option<&[u8]>) {
     if let Some(value) = value {
         hasher.update(&[1]);
@@ -56,6 +65,7 @@ pub(super) fn schema_shape_fingerprint(
                 );
                 return Err(crate::sqlite::sqlite_error(&error, error.to_string()));
             };
+            validate_schema_text(bytes, column)?;
             hash_schema_field(&mut hasher, Some(bytes));
         }
         let sql = row
@@ -63,7 +73,10 @@ pub(super) fn schema_shape_fingerprint(
             .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
         match sql {
             rusqlite::types::ValueRef::Null => hash_schema_field(&mut hasher, None),
-            rusqlite::types::ValueRef::Text(bytes) => hash_schema_field(&mut hasher, Some(bytes)),
+            rusqlite::types::ValueRef::Text(bytes) => {
+                validate_schema_text(bytes, 3)?;
+                hash_schema_field(&mut hasher, Some(bytes));
+            }
             value => {
                 let error = rusqlite::Error::InvalidColumnType(
                     3,
