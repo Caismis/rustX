@@ -17,10 +17,10 @@ const SIZE_GEOMETRY = {
 
 /** rustX design fills (figma): primary is the dark capsule, not coss blue. */
 const VARIANT_COLOR = {
-  primary: 'border-transparent! shadow-none! bg-(--dsw-alias-button-primary-fill)! text-(--dsw-alias-label-primary-foreground)! hover:bg-(--dsw-alias-button-primary-hover)!',
-  ghost: 'border-transparent! shadow-none! hover:bg-(--dsw-alias-interactive-bg-hover)! active:bg-(--dsw-alias-interactive-bg-active)!',
-  outline: 'shadow-none! bg-transparent! [border:0.5px_solid_var(--dsw-alias-border-l3)]! hover:bg-(--dsw-alias-interactive-bg-hover)!',
-  toolbar: 'border-transparent! shadow-none! bg-(--dsw-alias-button-tool-bar-fill)! hover:bg-(--dsw-alias-button-tool-bar-hover)!',
+  primary: 'border-transparent! [box-shadow:none]! bg-(--dsw-alias-button-primary-fill)! text-(--dsw-alias-label-primary-foreground)! hover:bg-(--dsw-alias-button-primary-hover)!',
+  ghost: 'border-transparent! [box-shadow:none]! hover:bg-(--dsw-alias-interactive-bg-hover)! active:bg-(--dsw-alias-interactive-bg-active)!',
+  outline: '[box-shadow:none]! bg-transparent! [border:0.5px_solid_var(--dsw-alias-border-l3)]! hover:bg-(--dsw-alias-interactive-bg-hover)!',
+  toolbar: 'border-transparent! [box-shadow:none]! bg-(--dsw-alias-button-tool-bar-fill)! hover:bg-(--dsw-alias-button-tool-bar-hover)!',
   danger: '',
   'danger-outline': '',
 } as const
