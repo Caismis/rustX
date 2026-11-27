@@ -316,6 +316,13 @@ body[data-ds-dark-theme] {
     border: 0 solid;
     padding: 0;
   }
+  button,
+  input,
+  optgroup,
+  select,
+  textarea {
+    font: inherit;
+  }
 }
 
 @utility session-line-areas-narrow {

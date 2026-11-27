@@ -17,85 +17,85 @@ const exact = (tx: Translate, value: TokenCount | null | undefined) => value == 
 
 /** Input buckets of one usage: uncached and cached when the provider split them. */
 function inputRows(tx: Translate, usage: ModelUsage) {
-  const cached = usage.details?.cached_input_tokens;
-  if (usage.input_tokens == null) return <><dt>{tx('agent:usage.input-total')}</dt><dd>{tx('agent:usage.not-reported')}</dd>{cached != null && <><dt>{tx('agent:usage.cache-read')}</dt><dd>{exact(tx, cached)}</dd></>}</>;
-  if (cached == null || BigInt(cached) > BigInt(usage.input_tokens)) return <><dt>{tx('agent:usage.input-total')}</dt><dd>{exact(tx, usage.input_tokens)}</dd></>;
-  return <>
-    <dt>{tx('agent:usage.input')}</dt><dd>{exact(tx, BigInt(usage.input_tokens) - BigInt(cached))}</dd>
-    <dt>{tx('agent:usage.cache-read')}</dt><dd>{exact(tx, cached)}</dd>
-  </>;
+ const cached = usage.details?.cached_input_tokens;
+ if (usage.input_tokens == null) return <><dt>{tx('agent:usage.input-total')}</dt><dd>{tx('agent:usage.not-reported')}</dd>{cached != null && <><dt>{tx('agent:usage.cache-read')}</dt><dd>{exact(tx, cached)}</dd></>}</>;
+ if (cached == null || BigInt(cached) > BigInt(usage.input_tokens)) return <><dt>{tx('agent:usage.input-total')}</dt><dd>{exact(tx, usage.input_tokens)}</dd></>;
+ return <>
+ <dt>{tx('agent:usage.input')}</dt><dd>{exact(tx, BigInt(usage.input_tokens) - BigInt(cached))}</dd>
+ <dt>{tx('agent:usage.cache-read')}</dt><dd>{exact(tx, cached)}</dd>
+ </>;
 }
 function cacheHit(usage: ModelUsage, decimalPlaces: 0 | 1) {
-  const cached = usage.details?.cached_input_tokens;
-  return usage.input_tokens == null || cached == null || BigInt(cached) > BigInt(usage.input_tokens) ? null : formatCacheHitPercent(cached, usage.input_tokens, decimalPlaces);
+ const cached = usage.details?.cached_input_tokens;
+ return usage.input_tokens == null || cached == null || BigInt(cached) > BigInt(usage.input_tokens) ? null : formatCacheHitPercent(cached, usage.input_tokens, decimalPlaces);
 }
 
 /** The completed Turn's usage pill and its accounting dialog. */
 export function TurnUsage({ usage, models }: { usage: ModelUsage; models: readonly string[] }) {
-  const tx = useTranslation();
-  const hit = cacheHit(usage, 1);
-  const reasoning = usage.details?.reasoning_tokens;
-  const consumed = tx('agent:usage.consumed', { total: count(tx, usage.total_tokens) });
-  // The narrow layout hides the words, so the name never rides on them.
-  return <StatDialog triggerClassName="inline-flex items-center gap-[4px] min-w-0 h-[28px] px-[8px] py-[6px] border-none rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-tertiary)] [font:inherit] text-[12px] tabular-nums leading-[24px] whitespace-nowrap cursor-pointer [&_svg]:w-[15px] [&_svg]:h-[15px] [&_svg]:flex-none aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] aria-expanded:[color:var(--dsw-alias-label-tertiary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-tertiary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2 max-[480px]:justify-center max-[480px]:w-[28px] max-[480px]:p-[6px]" label={consumed} title={tx('agent:usage.turn-title')}
-    trigger={<><IconDatabaseOutline16/><span className="min-w-0 overflow-hidden text-ellipsis max-[480px]:hidden">{consumed}</span></>}>
-    <StatHeading icon={<IconDatabaseOutline16/>} title={tx('agent:usage.turn-title')} value={exact(tx, usage.total_tokens)}/>
-    <dl className={statCss.details} data-turn-usage-details="">
-      {models.length > 0 && <><dt>{tx('agent:usage.model')}</dt><dd className={statCss.route}>{models.join(', ')}</dd></>}
-      {hit !== null && <><dt>{tx('agent:usage.cache-hit')}</dt><dd>{`${hit}%`}</dd></>}
-      {inputRows(tx, usage)}
-      <dt>{tx('agent:usage.output')}</dt>
-      <dd>{exact(tx, usage.output_tokens)}{reasoning != null && <span className={statCss.reasoning}>{tx('agent:usage.reasoning', { tokens: exact(tx, reasoning) })}</span>}</dd>
-    </dl>
-  </StatDialog>;
+ const tx = useTranslation();
+ const hit = cacheHit(usage, 1);
+ const reasoning = usage.details?.reasoning_tokens;
+ const consumed = tx('agent:usage.consumed', { total: count(tx, usage.total_tokens) });
+ // The narrow layout hides the words, so the name never rides on them.
+ return <StatDialog triggerClassName="inline-flex items-center gap-[4px] min-w-0 h-[28px] px-[8px] py-[6px] border-none rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-tertiary)] text-[12px] tabular-nums leading-[24px] whitespace-nowrap cursor-pointer [&_svg]:w-[15px] [&_svg]:h-[15px] [&_svg]:flex-none aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] aria-expanded:[color:var(--dsw-alias-label-tertiary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-tertiary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2 max-[480px]:justify-center max-[480px]:w-[28px] max-[480px]:p-[6px]" label={consumed} title={tx('agent:usage.turn-title')}
+ trigger={<><IconDatabaseOutline16/><span className="min-w-0 overflow-hidden text-ellipsis max-[480px]:hidden">{consumed}</span></>}>
+ <StatHeading icon={<IconDatabaseOutline16/>} title={tx('agent:usage.turn-title')} value={exact(tx, usage.total_tokens)}/>
+ <dl className={statCss.details} data-turn-usage-details="">
+ {models.length > 0 && <><dt>{tx('agent:usage.model')}</dt><dd className={statCss.route}>{models.join(', ')}</dd></>}
+ {hit !== null && <><dt>{tx('agent:usage.cache-hit')}</dt><dd>{`${hit}%`}</dd></>}
+ {inputRows(tx, usage)}
+ <dt>{tx('agent:usage.output')}</dt>
+ <dd>{exact(tx, usage.output_tokens)}{reasoning != null && <span className={statCss.reasoning}>{tx('agent:usage.reasoning', { tokens: exact(tx, reasoning) })}</span>}</dd>
+ </dl>
+ </StatDialog>;
 }
 
 function Joined({ first, second }: { first: string; second: string | null }) {
-  return second === null ? <>{first}</> : <>{first}<span className="mx-[6px]" aria-hidden="true">·</span>{second}</>;
+ return second === null ? <>{first}</> : <>{first}<span className="mx-[6px]" aria-hidden="true">·</span>{second}</>;
 }
 
 /** Turn and Step counts with whole-session speed, opening the time and speed dialog. */
 function ActivityPill({ statistics }: { statistics: ConversationStatistics }) {
-  const tx = useTranslation();
-  const steps = Number(statistics.steps);
-  if (!steps) return null;
-  const timing = statistics.timing;
-  const speed = timing?.output_tokens_per_second != null ? tx('agent:usage.tps', { tps: formatTokensPerSecond(timing.output_tokens_per_second) }) : null;
-  const counts = tx('agent:usage.counts', { turns: statistics.turns, steps: statistics.steps });
-  const model = timing?.model_ms ?? 0, tools = timing?.tool_ms ?? 0, ttft = timing?.mean_ttft_ms;
-  const content = <><IconGaugeOutline16/><span className="min-w-0 overflow-hidden text-ellipsis"><Joined first={counts} second={speed}/></span></>;
-  // Without one timed figure the dialog would be empty, so the pill stays a plain reading.
-  if (model <= 0 && tools <= 0 && ttft == null && speed === null) return <span className="inline-flex items-center gap-[6px] box-border max-w-full min-w-0 px-[8px] py-[1px] border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] [font:inherit] tabular-nums [line-height:inherit] whitespace-nowrap [&_svg]:w-[14px] [&_svg]:h-[14px] [&_svg]:flex-none [&:is(button)]:cursor-pointer [&:is(button)]:aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button)]:aria-expanded:[color:var(--dsw-alias-label-secondary)] [&:is(button):hover]:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button):hover]:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" data-composer-stat="activity">{content}</span>;
-  return <StatDialog triggerClassName="inline-flex items-center gap-[6px] box-border max-w-full min-w-0 px-[8px] py-[1px] border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] [font:inherit] tabular-nums [line-height:inherit] whitespace-nowrap [&_svg]:w-[14px] [&_svg]:h-[14px] [&_svg]:flex-none [&:is(button)]:cursor-pointer [&:is(button)]:aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button)]:aria-expanded:[color:var(--dsw-alias-label-secondary)] [&:is(button):hover]:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button):hover]:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" label={speed === null ? counts : `${counts} · ${speed}`} title={tx('agent:usage.session-title')} trigger={content}>
-    <StatHeading icon={<IconGaugeOutline16/>} title={tx('agent:usage.session-title')}/>
-    <dl className={statCss.details} data-session-stats-details="">
-      {model > 0 && <><dt>{tx('agent:usage.llm-time')}</dt><dd>{formatDuration(model, tx)}</dd></>}
-      {tools > 0 && <><dt>{tx('agent:usage.tool-time')}</dt><dd>{formatDuration(tools, tx)}</dd></>}
-      {ttft != null && <><dt>{tx('agent:usage.ttft')}</dt><dd>{formatDuration(ttft, tx)}</dd></>}
-      {speed !== null && <><dt>{tx('agent:usage.speed')}</dt><dd>{speed}</dd></>}
-    </dl>
-  </StatDialog>;
+ const tx = useTranslation();
+ const steps = Number(statistics.steps);
+ if (!steps) return null;
+ const timing = statistics.timing;
+ const speed = timing?.output_tokens_per_second != null ? tx('agent:usage.tps', { tps: formatTokensPerSecond(timing.output_tokens_per_second) }) : null;
+ const counts = tx('agent:usage.counts', { turns: statistics.turns, steps: statistics.steps });
+ const model = timing?.model_ms ?? 0, tools = timing?.tool_ms ?? 0, ttft = timing?.mean_ttft_ms;
+ const content = <><IconGaugeOutline16/><span className="min-w-0 overflow-hidden text-ellipsis"><Joined first={counts} second={speed}/></span></>;
+ // Without one timed figure the dialog would be empty, so the pill stays a plain reading.
+ if (model <= 0 && tools <= 0 && ttft == null && speed === null) return <span className="inline-flex items-center gap-[6px] box-border max-w-full min-w-0 px-[8px] py-[1px] border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] tabular-nums [line-height:inherit] whitespace-nowrap [&_svg]:w-[14px] [&_svg]:h-[14px] [&_svg]:flex-none [&:is(button)]:cursor-pointer [&:is(button)]:aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button)]:aria-expanded:[color:var(--dsw-alias-label-secondary)] [&:is(button):hover]:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button):hover]:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" data-composer-stat="activity">{content}</span>;
+ return <StatDialog triggerClassName="inline-flex items-center gap-[6px] box-border max-w-full min-w-0 px-[8px] py-[1px] border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] tabular-nums [line-height:inherit] whitespace-nowrap [&_svg]:w-[14px] [&_svg]:h-[14px] [&_svg]:flex-none [&:is(button)]:cursor-pointer [&:is(button)]:aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button)]:aria-expanded:[color:var(--dsw-alias-label-secondary)] [&:is(button):hover]:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button):hover]:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" label={speed === null ? counts : `${counts} · ${speed}`} title={tx('agent:usage.session-title')} trigger={content}>
+ <StatHeading icon={<IconGaugeOutline16/>} title={tx('agent:usage.session-title')}/>
+ <dl className={statCss.details} data-session-stats-details="">
+ {model > 0 && <><dt>{tx('agent:usage.llm-time')}</dt><dd>{formatDuration(model, tx)}</dd></>}
+ {tools > 0 && <><dt>{tx('agent:usage.tool-time')}</dt><dd>{formatDuration(tools, tx)}</dd></>}
+ {ttft != null && <><dt>{tx('agent:usage.ttft')}</dt><dd>{formatDuration(ttft, tx)}</dd></>}
+ {speed !== null && <><dt>{tx('agent:usage.speed')}</dt><dd>{speed}</dd></>}
+ </dl>
+ </StatDialog>;
 }
 
 /** Whole-conversation reported tokens and cache hit. */
 function UsagePill({ statistics }: { statistics: ConversationStatistics }) {
-  const tx = useTranslation();
-  const usage = statistics.reported_usage;
-  if (!usage || (usage.input_tokens != null && usage.output_tokens != null && BigInt(usage.input_tokens) === 0n && BigInt(usage.output_tokens) === 0n)) return null;
-  const hit = cacheHit(usage, 0);
-  const hitText = hit === null ? null : tx('agent:usage.cache-hit-percent', { percent: hit });
-  const total = count(tx, usage.total_tokens);
-  return <StatDialog triggerClassName="inline-flex items-center gap-[6px] box-border max-w-full min-w-0 px-[8px] py-[1px] border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] [font:inherit] tabular-nums [line-height:inherit] whitespace-nowrap [&_svg]:w-[14px] [&_svg]:h-[14px] [&_svg]:flex-none [&:is(button)]:cursor-pointer [&:is(button)]:aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button)]:aria-expanded:[color:var(--dsw-alias-label-secondary)] [&:is(button):hover]:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button):hover]:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" label={hitText === null ? total : `${total} · ${hitText}`} title={tx('agent:usage.usage-title')}
-    trigger={<><IconDatabaseOutline16/><span className="min-w-0 overflow-hidden text-ellipsis"><Joined first={total} second={hitText}/></span></>}>
-    <StatHeading icon={<IconDatabaseOutline16/>} title={tx('agent:usage.usage-title')} value={exact(tx, usage.total_tokens)}/>
-    <dl className={statCss.details} data-session-stats-usage="">
-      {hit !== null && <><dt>{tx('agent:usage.cache-hit')}</dt><dd>{`${hit}%`}</dd></>}
-      {inputRows(tx, usage)}
-      <dt>{tx('agent:usage.output')}</dt><dd>{exact(tx, usage.output_tokens)}</dd>
-      {/* Coverage is explicit: requests without a usage report are missing, not zero. */}
-      {statistics.requests_with_usage !== statistics.model_requests && <><dt>{tx('agent:usage.reports')}</dt><dd>{`${statistics.requests_with_usage}/${statistics.model_requests}`}</dd></>}
-    </dl>
-  </StatDialog>;
+ const tx = useTranslation();
+ const usage = statistics.reported_usage;
+ if (!usage || (usage.input_tokens != null && usage.output_tokens != null && BigInt(usage.input_tokens) === 0n && BigInt(usage.output_tokens) === 0n)) return null;
+ const hit = cacheHit(usage, 0);
+ const hitText = hit === null ? null : tx('agent:usage.cache-hit-percent', { percent: hit });
+ const total = count(tx, usage.total_tokens);
+ return <StatDialog triggerClassName="inline-flex items-center gap-[6px] box-border max-w-full min-w-0 px-[8px] py-[1px] border-none rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-tertiary)] tabular-nums [line-height:inherit] whitespace-nowrap [&_svg]:w-[14px] [&_svg]:h-[14px] [&_svg]:flex-none [&:is(button)]:cursor-pointer [&:is(button)]:aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button)]:aria-expanded:[color:var(--dsw-alias-label-secondary)] [&:is(button):hover]:bg-[var(--dsw-alias-interactive-bg-hover)] [&:is(button):hover]:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" label={hitText === null ? total : `${total} · ${hitText}`} title={tx('agent:usage.usage-title')}
+ trigger={<><IconDatabaseOutline16/><span className="min-w-0 overflow-hidden text-ellipsis"><Joined first={total} second={hitText}/></span></>}>
+ <StatHeading icon={<IconDatabaseOutline16/>} title={tx('agent:usage.usage-title')} value={exact(tx, usage.total_tokens)}/>
+ <dl className={statCss.details} data-session-stats-usage="">
+ {hit !== null && <><dt>{tx('agent:usage.cache-hit')}</dt><dd>{`${hit}%`}</dd></>}
+ {inputRows(tx, usage)}
+ <dt>{tx('agent:usage.output')}</dt><dd>{exact(tx, usage.output_tokens)}</dd>
+ {/* Coverage is explicit: requests without a usage report are missing, not zero. */}
+ {statistics.requests_with_usage !== statistics.model_requests && <><dt>{tx('agent:usage.reports')}</dt><dd>{`${statistics.requests_with_usage}/${statistics.model_requests}`}</dd></>}
+ </dl>
+ </StatDialog>;
 }
 
 /** Ring geometry: 14px viewBox, 2px stroke. */
@@ -104,53 +104,53 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 /** Splits the localized occupancy sentence so each locale keeps its word order. */
 const READING_SLOT = '\u0000';
 const ROWS = [
-  { key: 'system_tokens', label: 'agent:usage.context-system', color: '[--meter-tint:var(--dsw-static-neutral-bluish-400)]' },
-  { key: 'tool_tokens', label: 'agent:usage.context-tools', color: '[--meter-tint:rgb(167,139,250)]' },
-  { key: 'message_tokens', label: 'agent:usage.context-messages', color: '[--meter-tint:var(--dsw-static-blue-450)]' },
+ { key: 'system_tokens', label: 'agent:usage.context-system', color: '[--meter-tint:var(--dsw-static-neutral-bluish-400)]' },
+ { key: 'tool_tokens', label: 'agent:usage.context-tools', color: '[--meter-tint:rgb(167,139,250)]' },
+ { key: 'message_tokens', label: 'agent:usage.context-messages', color: '[--meter-tint:var(--dsw-static-blue-450)]' },
 ] as const;
 
 /** Latest native request reading or committed compacted-context estimate. */
 function ContextMeter({ occupancy }: { occupancy: RuntimeClientContextOccupancy }) {
-  const tx = useTranslation();
-  const capacity = BigInt(occupancy.context_window_tokens), input = BigInt(occupancy.input_tokens);
-  if (capacity <= 0n) return null;
-  const percent = Number(input >= capacity ? 100n : (input * 200n + capacity) / (capacity * 2n));
-  const reading = `${percent}%`;
-  const [before = '', after = ''] = tx('agent:usage.context-aria', { percent: READING_SLOT }).split(READING_SLOT).map(part => part.trim());
-  const breakdown = occupancy.breakdown;
-  const parts = BigInt(breakdown.system_tokens) + BigInt(breakdown.tool_tokens) + BigInt(breakdown.message_tokens);
-  // Native reading owns the percent; heuristic composition proportions its parts.
-  const segments = (parts === 0n ? [{ key: 'total', color: undefined, width: percent }]
-    : ROWS.map(row => ({ key: row.key, color: row.color, width: Number(BigInt(percent) * BigInt(breakdown[row.key]) * 10_000n / parts) / 10_000 }))).filter(part => part.width > 0);
-  return <StatDialog triggerClassName="inline-flex items-center gap-[6px] flex-none px-[8px] py-[1px] border-none rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-tertiary)] [font:inherit] text-[13px] tabular-nums leading-[20px] whitespace-nowrap cursor-pointer aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] aria-expanded:[color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" label={tx('agent:usage.context-aria', { percent: reading })} title={tx('agent:usage.context-used')} panelClassName="box-border w-[min(264px,calc(100vw-24px))] p-[12px] border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-specific-menu)] [backdrop-filter:blur(40px)_saturate(150%)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] text-[12px] leading-[20px] [color:var(--dsw-alias-label-secondary)] cursor-default outline-none"
-    trigger={<><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-      <circle className="fill-none [stroke:var(--dsw-alias-border-l3)] stroke-2" cx="7" cy="7" r={RADIUS}/>
-      <circle className="fill-none [stroke:var(--dsw-alias-label-tertiary)] stroke-2 [stroke-linecap:round]" cx="7" cy="7" r={RADIUS} strokeDasharray={`${CIRCUMFERENCE * percent / 100} ${CIRCUMFERENCE}`} transform="rotate(-90 7 7)"/>
-    </svg><span>{reading}</span></>}>
-    <div className="flex items-center gap-[6px]">
-      <span className="[color:var(--dsw-alias-label-tertiary)] empty:hidden">{before}</span>
-      <span className="font-medium [color:var(--dsw-alias-label-primary)]">{reading}</span>
-      <span className="[color:var(--dsw-alias-label-tertiary)] empty:hidden">{after}</span>
-      {/* Native provenance marks a rebuilt-context estimate; provider readings remain exact. */}
-      <span className="ml-auto font-medium tabular-nums [color:var(--dsw-alias-label-primary)]" data-occupancy-figures="">{`${occupancy.estimated ? '~' : ''}${formatTokens(occupancy.input_tokens, tx)} / ${formatTokens(occupancy.context_window_tokens, tx)}`}</span>
-    </div>
-    <div className="flex gap-[1px] mt-[10px] mb-[12px] h-[4px] rounded-full [corner-shape:round] bg-[var(--dsw-alias-interactive-bg-hover)] overflow-hidden">{segments.map(segment => <div key={segment.key} className={segment.color ? `flex-none min-w-[2px] h-full rounded-[var(--dsw-radius-xs)] bg-(--meter-tint,var(--dsw-alias-label-tertiary)) ${segment.color}` : "flex-none min-w-[2px] h-full rounded-[var(--dsw-radius-xs)] bg-(--meter-tint,var(--dsw-alias-label-tertiary))"} style={{ width: `${segment.width}%` }}/>)}</div>
-    <dl className="mt-[6px] mb-0">
-      {ROWS.map(row => <div key={row.key} className="flex items-center justify-between gap-[12px] py-[2px] [&_dt]:[color:var(--dsw-alias-label-secondary)] [&_dd]:m-0 [&_dd]:tabular-nums [&_dd]:[color:var(--dsw-alias-label-primary)]">
-        <dt><span className={`inline-block mr-[6px] w-[8px] h-[8px] rounded-[var(--dsw-radius-xs)] bg-(--meter-tint) align-baseline ${row.color}`} aria-hidden="true"/>{tx(row.label)}</dt>
-        <dd>{`~${formatTokens(breakdown[row.key], tx)}`}</dd>
-      </div>)}
-    </dl>
-  </StatDialog>;
+ const tx = useTranslation();
+ const capacity = BigInt(occupancy.context_window_tokens), input = BigInt(occupancy.input_tokens);
+ if (capacity <= 0n) return null;
+ const percent = Number(input >= capacity ? 100n : (input * 200n + capacity) / (capacity * 2n));
+ const reading = `${percent}%`;
+ const [before = '', after = ''] = tx('agent:usage.context-aria', { percent: READING_SLOT }).split(READING_SLOT).map(part => part.trim());
+ const breakdown = occupancy.breakdown;
+ const parts = BigInt(breakdown.system_tokens) + BigInt(breakdown.tool_tokens) + BigInt(breakdown.message_tokens);
+ // Native reading owns the percent; heuristic composition proportions its parts.
+ const segments = (parts === 0n ? [{ key: 'total', color: undefined, width: percent }]
+ : ROWS.map(row => ({ key: row.key, color: row.color, width: Number(BigInt(percent) * BigInt(breakdown[row.key]) * 10_000n / parts) / 10_000 }))).filter(part => part.width > 0);
+ return <StatDialog triggerClassName="inline-flex items-center gap-[6px] flex-none px-[8px] py-[1px] border-none rounded-[var(--dsw-radius-sm)] bg-transparent [color:var(--dsw-alias-label-tertiary)] text-[13px] tabular-nums leading-[20px] whitespace-nowrap cursor-pointer aria-expanded:bg-[var(--dsw-alias-interactive-bg-hover)] aria-expanded:[color:var(--dsw-alias-label-secondary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-secondary)] focus-visible:[outline:2px_solid_var(--dsw-alias-button-info-fill)] focus-visible:outline-offset-2" label={tx('agent:usage.context-aria', { percent: reading })} title={tx('agent:usage.context-used')} panelClassName="box-border w-[min(264px,calc(100vw-24px))] p-[12px] border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-specific-menu)] [backdrop-filter:blur(40px)_saturate(150%)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] text-[12px] leading-[20px] [color:var(--dsw-alias-label-secondary)] cursor-default outline-none"
+ trigger={<><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+ <circle className="fill-none [stroke:var(--dsw-alias-border-l3)] stroke-2" cx="7" cy="7" r={RADIUS}/>
+ <circle className="fill-none [stroke:var(--dsw-alias-label-tertiary)] stroke-2 [stroke-linecap:round]" cx="7" cy="7" r={RADIUS} strokeDasharray={`${CIRCUMFERENCE * percent / 100} ${CIRCUMFERENCE}`} transform="rotate(-90 7 7)"/>
+ </svg><span>{reading}</span></>}>
+ <div className="flex items-center gap-[6px]">
+ <span className="[color:var(--dsw-alias-label-tertiary)] empty:hidden">{before}</span>
+ <span className="font-medium [color:var(--dsw-alias-label-primary)]">{reading}</span>
+ <span className="[color:var(--dsw-alias-label-tertiary)] empty:hidden">{after}</span>
+ {/* Native provenance marks a rebuilt-context estimate; provider readings remain exact. */}
+ <span className="ml-auto font-medium tabular-nums [color:var(--dsw-alias-label-primary)]" data-occupancy-figures="">{`${occupancy.estimated ? '~' : ''}${formatTokens(occupancy.input_tokens, tx)} / ${formatTokens(occupancy.context_window_tokens, tx)}`}</span>
+ </div>
+ <div className="flex gap-[1px] mt-[10px] mb-[12px] h-[4px] rounded-full [corner-shape:round] bg-[var(--dsw-alias-interactive-bg-hover)] overflow-hidden">{segments.map(segment => <div key={segment.key} className={segment.color ? `flex-none min-w-[2px] h-full rounded-[var(--dsw-radius-xs)] bg-(--meter-tint,var(--dsw-alias-label-tertiary)) ${segment.color}` : "flex-none min-w-[2px] h-full rounded-[var(--dsw-radius-xs)] bg-(--meter-tint,var(--dsw-alias-label-tertiary))"} style={{ width: `${segment.width}%` }}/>)}</div>
+ <dl className="mt-[6px] mb-0">
+ {ROWS.map(row => <div key={row.key} className="flex items-center justify-between gap-[12px] py-[2px] [&_dt]:[color:var(--dsw-alias-label-secondary)] [&_dd]:m-0 [&_dd]:tabular-nums [&_dd]:[color:var(--dsw-alias-label-primary)]">
+ <dt><span className={`inline-block mr-[6px] w-[8px] h-[8px] rounded-[var(--dsw-radius-xs)] bg-(--meter-tint) align-baseline ${row.color}`} aria-hidden="true"/>{tx(row.label)}</dt>
+ <dd>{`~${formatTokens(breakdown[row.key], tx)}`}</dd>
+ </div>)}
+ </dl>
+ </StatDialog>;
 }
 
 /** The composer dock: native whole-conversation totals and current context reading. */
 export function ConversationStats({ statistics, occupancy }: { statistics?: ConversationStatistics | null; occupancy?: RuntimeClientContextOccupancy | null }) {
-  const tx = useTranslation();
-  if (!statistics && !occupancy) return null;
-  return <div className="flex items-center justify-center gap-[12px] min-w-0 max-w-full box-border px-[8px] py-[4px] text-[12px] leading-[20px] empty:hidden" aria-label={tx('agent:usage.session-title')} data-composer-dock="">
-    {statistics && <ActivityPill statistics={statistics}/>}
-    {statistics && <UsagePill statistics={statistics}/>}
-    {occupancy && <ContextMeter occupancy={occupancy}/>}
-  </div>;
+ const tx = useTranslation();
+ if (!statistics && !occupancy) return null;
+ return <div className="flex items-center justify-center gap-[12px] min-w-0 max-w-full box-border px-[8px] py-[4px] text-[12px] leading-[20px] empty:hidden" aria-label={tx('agent:usage.session-title')} data-composer-dock="">
+ {statistics && <ActivityPill statistics={statistics}/>}
+ {statistics && <UsagePill statistics={statistics}/>}
+ {occupancy && <ContextMeter occupancy={occupancy}/>}
+ </div>;
 }

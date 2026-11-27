@@ -464,7 +464,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ccd87b73d71702e3eeeafd28439d5a4fc8ccc327def6964c11ba6adc2d90677e"
+      "local_sha256": "4bb78c6e4c64b832787d969094c71acf831a4701e2cb03b0dd30ecfee6e3ed17"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -488,7 +488,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "0593627f96d129b3b9be3a9c82561ae53494c7a63ec3791c546935370aa33223"
+      "local_sha256": "31e5aedc1ca44d276683e521b3a6bf2f9d26aa5167d1ce1439c7d0714fb125af"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -1066,7 +1066,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "5af4e243e8179aa564fa04f8f38ed44d2a0f5395ddff1d671ab512f41efc8636",
+      "local_sha256": "714b5da80177db7cf06a173c3bc9c59dab9aabb76f4ea71cea1dab7a70b848d7",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-approval/src/client/ApprovalCard.tsx",
@@ -1295,7 +1295,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b5db856fccbea6211a909964b7832db841795246bdac4f931c22b93928ed8ac0"
+      "local_sha256": "c5e5fa844efee6a395c84e01f2b2c0930e8c394ab3f65a7a493eb8159164d313"
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.tsx",
@@ -1422,7 +1422,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a988d1b65487cc0a1e9570363448f3d860d6782993ccb585c4ab4b6cf77d1a76"
+      "local_sha256": "ead48d1cb3e8d0e361080a242b5f272333f63cddfbfe2377c509ff18c2539c2e"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
@@ -2042,7 +2042,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "81e2d12514aa5be3c8b2bd245b80dc2e29f8892580a56a3cfec9e3339a5cb87c",
+      "local_sha256": "e6a84707ae4d784c48fcbfb61b17ecd6b91ef81996f7c68021678df19617cba9",
       "classification": "B",
       "additional_sources": [
         {
@@ -2632,7 +2632,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "ca170d93fd5b9c4cda7c67cb57b8c17899a998f0cf3a8c64c8e12d3b1b3fbbb1",
+      "local_sha256": "17acb70c823c7a16604c05cb4f483139b34c91ef2d932792f439bd83d70c0b7c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx",
@@ -2701,7 +2701,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "2052ef7683a55acc04928ea20391f1e76dc7957d5226ae0794542e2835604bcb"
+      "local_sha256": "52b022389a58a3a52156c6ff56b94b06edfd9492fbbaffd8d1c6fe3e429118a4"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2724,7 +2724,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "b7758a5ead5586db405d2c6c916167bafc80c4546c13845eed748679733d30c9"
+      "local_sha256": "86e0c37c21d9814b1cd11464ae7d74fe0489feb0525dc3c887c70bb37d0e553a"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -2746,7 +2746,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "ceedd7f4e4d5670fa1c99d10d3099bd4258e80920f376862a73a947f24eb73e1"
+      "local_sha256": "e32e5fce9344a7a7cc6de8af9e03317ab50d5e0ec73e125235cba2848d811391"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3178,7 +3178,7 @@
         "Harness scroll ownership",
         "Total-sized virtualizer measurement cache"
       ],
-      "local_sha256": "942c4ca40bc536cd22a81e4c2756ebe5b8af4ce2d41a0fd2f83b3e1088be01c8"
+      "local_sha256": "a25a4b72d6b6c857904de0c4463ffffcb543297ff0b998f1553f68f6a3d0670c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",
@@ -3254,7 +3254,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c7fa4f39abbfa325ef91c4d7c18afe37e27533906be7099796562618035237e5"
+      "local_sha256": "57af76ad5294f330d8275c9715a3b7ebfa02f80bb4bdbe5a7c5767d4cc6e9488"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/stat-dialog.ts",
@@ -3302,7 +3302,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "f8bf71a0a9ffd76d7d4c9029f2358d54f9de03dff35c03ec36a026f576ea6496"
+      "local_sha256": "1ed8786e6aec2b8e3344d17d2ff1eaf54808811a850a4ab9b8555714f5bd0444"
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",
@@ -4874,7 +4874,7 @@
         "Harness Host preference storage and Cordis slots"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "0aff608d2c2e97f0b30ab80d1e7c631e104b84dce8d6a112de36380444e45439",
+      "local_sha256": "02e624b1517439517b27c97566646cccfbb0c132541134697fbc73d874e2f3fa",
       "classification": "A"
     },
     {
@@ -5038,7 +5038,7 @@
           "upstream_sha256": "b8d0a19dc208af7f8f44459adba9afe648cd3c398d75917ccfaf2f8c730cfe74"
         }
       ],
-      "local_sha256": "2481425c91a268995eef2a55ce569b1f5551449f071ab121eaab46632e6a12fe"
+      "local_sha256": "5f35ad906c81bfa00f978fe439786acc35b63f93a882a9050bf459888f8aa21f"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -5231,7 +5231,7 @@
         "Harness tool execution models",
         "File navigation and recursive detail grouping"
       ],
-      "local_sha256": "5a4e7da948d5ef3eed332611e851cccb2ae48590a42a69c2be778728909dab4a"
+      "local_sha256": "f01a8e8b9a0e0b14321cdee5ccea98af7f7ae04539a37a1d1a96372e8bd6d5de"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -5259,7 +5259,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "778aeb23bb59a9734ba0ec42181b2749569812c89257b9fdcee58559c936ebe1",
+      "local_sha256": "7a0a2a01e6e5c2746f03d9fbcdfcc72f2535936990c42dd7cbd4b235fad9efbe",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",
@@ -5373,7 +5373,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "b15980be46e3e38e7703a8c0350b651e52c94a2f430060051798f23a386606dc"
+      "local_sha256": "6ed49925b09fd7ab413b55fbaf30f1b59d950f7be999544760dfbc204edddd65"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -5523,7 +5523,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "1ba6507044028c705ce8e057472d38a74f1182a5a57aa9a272238a365f8a826a"
+      "local_sha256": "47e7899aa1c6f8be56d97b6897adff390c876adb1c36f1f18a424ed28f3187ad"
     },
     {
       "upstream": "packages/client/ui-subagent/src/client/SubagentReadOnlyComposer.tsx",
@@ -5759,7 +5759,7 @@
       "destination": "web-console/src/presentation/attachments/ChangedFiles.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
-      "local_sha256": "b17ca07465872f4d040f6796442383df280f5d3ac23c03d0177251ea8152d1b6",
+      "local_sha256": "749d5c24465dbbe1820cf8873700070ff7498eb3384f2af652d4c03ba0ee6f61",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
       "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
@@ -5827,7 +5827,7 @@
         "clsx"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "90c9943f4c4cba1333ff34e05c26ed2843c0d4051af927976f409da0282eeb34"
+      "local_sha256": "01fd47731d8db150cdab666c0b662304903b657e10e59e28b1cf782dc0d772bd"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6132,7 +6132,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "a36e44e53ee86ea5bad9e609d5c7de0ec5e156d16faab4a2537dbb63d15be872"
+      "local_sha256": "def1c77dff71c9c8bd542da8c619fe27def977d8406bda7571dc5fccc83630ca"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -6464,7 +6464,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "da76e87ace7d0ef6fdda934ed48887eb973cf9b2340e859641903273596811c7"
+      "local_sha256": "39bc14310aec4bea20103a4f330a7cc4e16e8ec5874c93345c6ebf4a4cf191aa"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/recent-views.ts",

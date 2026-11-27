@@ -4,10 +4,10 @@ import clsx from 'clsx'
 import { FoldToggle } from './FoldToggle.tsx'
 import { writeClipboard } from './clipboard.ts'
 import {
-  grammarLoadCount,
-  highlightLines,
-  subscribeGrammarLoaded,
-  type HighlightSpan,
+ grammarLoadCount,
+ highlightLines,
+ subscribeGrammarLoaded,
+ type HighlightSpan,
 } from '../markdown/highlight.ts'
 import { useViewportHighlighting } from '../markdown/useViewportHighlighting.ts'
 
@@ -20,42 +20,42 @@ export const DEFAULT_READ_MAX_LINES = 16
 
 /** One line of the read window: its file line number and its text (no trailing newline). */
 export interface ReadBlockLine {
-  /** 1-based line number in the file (a window past an offset keeps the file's own numbering). */
-  number?: number
-  /** The line's text, already truncated to the read tool's per-line cap. */
-  text: string
+ /** 1-based line number in the file (a window past an offset keeps the file's own numbering). */
+ number?: number
+ /** The line's text, already truncated to the read tool's per-line cap. */
+ text: string
 }
 
 export interface ReadBlockProps {
-  /** Banner label (the file path, or a tool-supplied replacement title); omitted draws no label. */
-  label?: string | undefined
-  /** The returned window's lines, in file order, each keeping its file line number. */
-  lines: readonly ReadBlockLine[]
-  /** Localized chrome supplied by the owning render site. */
-  labels: ReadBlockLabels
-  /** Exact total line count in the file, for the "showing N of M" note when the read is a window. */
-  totalLines?: number
-  /** Grammar hint (a file-extension-derived language id); unknown or absent = plain monospace. */
-  lang?: string | undefined
-  /** Height cap in content lines before the middle collapses (default {@link DEFAULT_READ_MAX_LINES}). */
-  maxLines?: number | undefined
-  /** Extra class merged onto the wrapper (callers position; this component draws). */
-  className?: string | undefined
+ /** Banner label (the file path, or a tool-supplied replacement title); omitted draws no label. */
+ label?: string | undefined
+ /** The returned window's lines, in file order, each keeping its file line number. */
+ lines: readonly ReadBlockLine[]
+ /** Localized chrome supplied by the owning render site. */
+ labels: ReadBlockLabels
+ /** Exact total line count in the file, for the "showing N of M" note when the read is a window. */
+ totalLines?: number
+ /** Grammar hint (a file-extension-derived language id); unknown or absent = plain monospace. */
+ lang?: string | undefined
+ /** Height cap in content lines before the middle collapses (default {@link DEFAULT_READ_MAX_LINES}). */
+ maxLines?: number | undefined
+ /** Extra class merged onto the wrapper (callers position; this component draws). */
+ className?: string | undefined
 }
 
 /** Localized chrome for {@link ReadBlock}. */
 export interface ReadBlockLabels {
-  window: (shown: number, total: number) => string
-  copy: string
-  copied: string
-  collapseAria: string
-  expandAria: (hidden: number) => string
-  collapse: string
-  expand: (hidden: number) => string
+ window: (shown: number, total: number) => string
+ copy: string
+ copied: string
+ collapseAria: string
+ expandAria: (hidden: number) => string
+ collapse: string
+ expand: (hidden: number) => string
 }
 
 function renderSpans(spans: readonly HighlightSpan[]) {
-  return spans.map((span, index) => <span key={index} style={span.style}>{span.text}</span>)
+ return spans.map((span, index) => <span key={index} style={span.style}>{span.text}</span>)
 }
 
 /**
@@ -65,90 +65,90 @@ function renderSpans(spans: readonly HighlightSpan[]) {
  * @returns the read block element.
  */
 export function ReadBlock({
-  label,
-  labels,
-  lines,
-  totalLines,
-  lang,
-  maxLines = DEFAULT_READ_MAX_LINES,
-  className,
+ label,
+ labels,
+ lines,
+ totalLines,
+ lang,
+ maxLines = DEFAULT_READ_MAX_LINES,
+ className,
 }: ReadBlockProps) {
-  const rootRef = useRef<HTMLDivElement>(null)
-  const highlighting = useViewportHighlighting(rootRef, lang)
-  // Whole-window highlighting preserves multiline grammar context; copy uses
-  // the same text without gutter or banner chrome.
-  const raw = useMemo(() => lines.map(line => line.text).join('\n'), [lines])
-  // Re-render when a lazy grammar finishes loading, so a read card that showed
-  // plain text while its language's grammar imported picks up highlighting. The
-  // snapshot value is opaque; only its change across renders drives the memo.
-  const loaded = useSyncExternalStore(subscribeGrammarLoaded, grammarLoadCount, grammarLoadCount)
-  const highlighted = useMemo(
-    () => highlighting ? highlightLines(raw, lang) : undefined,
-    [highlighting, raw, lang, loaded],
-  )
-  const [expanded, setExpanded] = useState(false)
-  const [copied, setCopied] = useState(false)
+ const rootRef = useRef<HTMLDivElement>(null)
+ const highlighting = useViewportHighlighting(rootRef, lang)
+ // Whole-window highlighting preserves multiline grammar context; copy uses
+ // the same text without gutter or banner chrome.
+ const raw = useMemo(() => lines.map(line => line.text).join('\n'), [lines])
+ // Re-render when a lazy grammar finishes loading, so a read card that showed
+ // plain text while its language's grammar imported picks up highlighting. The
+ // snapshot value is opaque; only its change across renders drives the memo.
+ const loaded = useSyncExternalStore(subscribeGrammarLoaded, grammarLoadCount, grammarLoadCount)
+ const highlighted = useMemo(
+ () => highlighting ? highlightLines(raw, lang) : undefined,
+ [highlighting, raw, lang, loaded],
+ )
+ const [expanded, setExpanded] = useState(false)
+ const [copied, setCopied] = useState(false)
 
-  const onCopy = useCallback(() => {
-    if (copied) return
-    void writeClipboard(raw).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      window.setTimeout(() => { setCopied(false) }, 1000)
-    })
-  }, [copied, raw])
+ const onCopy = useCallback(() => {
+ if (copied) return
+ void writeClipboard(raw).then((ok) => {
+ if (!ok) return
+ setCopied(true)
+ window.setTimeout(() => { setCopied(false) }, 1000)
+ })
+ }, [copied, raw])
 
-  const onToggle = useCallback(() => { setExpanded(value => !value) }, [])
+ const onToggle = useCallback(() => { setExpanded(value => !value) }, [])
 
-  const hidden = lines.length - maxLines
-  const capped = hidden > 0 && !expanded
-  const headLines = Math.ceil(maxLines / 2)
-  const tailLines = maxLines - headLines
-  // A read is a window when its returned lines are fewer than the file's total;
-  // the note states that so a reader is not misled that the file ends here.
-  const windowed = totalLines !== undefined && lines.length < totalLines
+ const hidden = lines.length - maxLines
+ const capped = hidden > 0 && !expanded
+ const headLines = Math.ceil(maxLines / 2)
+ const tailLines = maxLines - headLines
+ // A read is a window when its returned lines are fewer than the file's total;
+ // the note states that so a reader is not misled that the file ends here.
+ const windowed = totalLines !== undefined && lines.length < totalLines
 
-  const rows = (slice: readonly (readonly [ReadBlockLine, readonly HighlightSpan[] | undefined])[]) =>
-    slice.map(([line, spans], index) => (
-      <div key={line.number ?? index} className="flex min-h-[var(--dsl-read-line-height)] leading-[var(--dsl-read-line-height)] whitespace-pre">
-        {line.number !== undefined && <span className="flex-none w-[var(--dsl-read-gutter)] pr-[14px] text-right [color:var(--dsw-alias-label-tertiary)] select-none" aria-hidden>{line.number}</span>}
-        <span className="[color:var(--dsw-alias-label-primary)]">{spans === undefined ? line.text : renderSpans(spans)}</span>
-      </div>
-    ))
+ const rows = (slice: readonly (readonly [ReadBlockLine, readonly HighlightSpan[] | undefined])[]) =>
+ slice.map(([line, spans], index) => (
+ <div key={line.number ?? index} className="flex min-h-[var(--dsl-read-line-height)] leading-[var(--dsl-read-line-height)] whitespace-pre">
+ {line.number !== undefined && <span className="flex-none w-[var(--dsl-read-gutter)] pr-[14px] text-right [color:var(--dsw-alias-label-tertiary)] select-none" aria-hidden>{line.number}</span>}
+ <span className="[color:var(--dsw-alias-label-primary)]">{spans === undefined ? line.text : renderSpans(spans)}</span>
+ </div>
+ ))
 
-  const paired = lines.map((line, index): readonly [ReadBlockLine, readonly HighlightSpan[] | undefined] =>
-    [line, highlighted?.[index]])
+ const paired = lines.map((line, index): readonly [ReadBlockLine, readonly HighlightSpan[] | undefined] =>
+ [line, highlighted?.[index]])
 
-  return (
-    <div ref={rootRef} className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-read-radius:12px] [--dsl-read-line-height:22px] [--dsl-read-gutter:48px]', className)} data-read="">
-      <div className="flex justify-between items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]">
-        <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-primary)] [font-family:var(--ds-font-family-code),monospace] text-[12px] leading-[18px]">{label ?? ''}</div>
-        <div className="flex items-center shrink-0 gap-[12px]">
-          {windowed && (
-            <span className="[color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)]">{labels.window(lines.length, totalLines!)}</span>
-          )}
-          <span className="[color:var(--dsw-alias-label-tertiary)] [font-family:var(--ds-font-family-code),monospace] text-[12px] leading-[18px]">{lang ?? ''}</span>
-          {/* Empty files omit Copy to avoid replacing the clipboard with an empty string. */}
-          {lines.length > 0 && (
-            <button type="button" className="bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
-              {copied ? labels.copied : labels.copy}
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="px-0 py-[12px] [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
-        {rows(capped ? paired.slice(0, headLines) : paired)}
-        {hidden > 0 && (
-          <FoldToggle
-            className="block w-full pt-0 pr-0 pb-0 pl-[var(--dsl-read-gutter)] border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]"
-            expanded={expanded}
-            hidden={hidden}
-            labels={labels}
-            onToggle={onToggle}
-          />
-        )}
-        {capped && rows(paired.slice(paired.length - tailLines))}
-      </div>
-    </div>
-  )
+ return (
+ <div ref={rootRef} className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-read-radius:12px] [--dsl-read-line-height:22px] [--dsl-read-gutter:48px]', className)} data-read="">
+ <div className="flex justify-between items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]">
+ <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-primary)] [font-family:var(--ds-font-family-code),monospace] text-[12px] leading-[18px]">{label ?? ''}</div>
+ <div className="flex items-center shrink-0 gap-[12px]">
+ {windowed && (
+ <span className="[color:var(--dsw-alias-label-tertiary)] [font:var(--dsw-font-xs-13)]">{labels.window(lines.length, totalLines!)}</span>
+ )}
+ <span className="[color:var(--dsw-alias-label-tertiary)] [font-family:var(--ds-font-family-code),monospace] text-[12px] leading-[18px]">{lang ?? ''}</span>
+ {/* Empty files omit Copy to avoid replacing the clipboard with an empty string. */}
+ {lines.length > 0 && (
+ <button type="button" className="bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
+ {copied ? labels.copied : labels.copy}
+ </button>
+ )}
+ </div>
+ </div>
+ <div className="px-0 py-[12px] [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
+ {rows(capped ? paired.slice(0, headLines) : paired)}
+ {hidden > 0 && (
+ <FoldToggle
+ className="block w-full pt-0 pr-0 pb-0 pl-[var(--dsl-read-gutter)] border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer text-left hover:[color:var(--dsw-alias-label-secondary)]"
+ expanded={expanded}
+ hidden={hidden}
+ labels={labels}
+ onToggle={onToggle}
+ />
+ )}
+ {capped && rows(paired.slice(paired.length - tailLines))}
+ </div>
+ </div>
+ )
 }

@@ -14,64 +14,64 @@ export const DEFAULT_SEARCH_MAX_LINES = 16
 
 /** One matched line inside a {@link SearchFileGroup}: its 1-based line number and text. */
 export interface SearchBlockLineMatch {
-  /** 1-based line number of the match within its file. */
-  lineNumber: number
-  /** The matched line text, as the tool surfaced it. */
-  line: string
+ /** 1-based line number of the match within its file. */
+ lineNumber: number
+ /** The matched line text, as the tool surfaced it. */
+ line: string
 }
 
 /** One file's grouped matches, in first-seen file order. */
 export interface SearchFileGroup {
-  /** The file the matches belong to (the display path). */
-  path: string
-  /** The file's matched lines, in output order. */
-  matches: SearchBlockLineMatch[]
+ /** The file the matches belong to (the display path). */
+ path: string
+ /** The file's matched lines, in output order. */
+ matches: SearchBlockLineMatch[]
 }
 
 /** Fields both search shapes carry (the render site positions; this component draws). */
 interface SearchBlockCommon {
-  /** Localized chrome supplied by the owning render site. */
-  labels: SearchBlockLabels
-  /**
-   * Whether the tool capped the inline result: the shape carries only the
-   * retained results, not every result the search found. The banner summary
-   * folds the pre-cap `total` in (`显示 X / 共 N …`) so the card never presents a
-   * capped result as complete.
-   */
-  truncated: boolean
-  /** Total results the search found before capping (equals the retained count when not `truncated`). */
-  total: number
-  /** Height cap in rows before the middle collapses (default {@link DEFAULT_SEARCH_MAX_LINES}). */
-  maxLines?: number | undefined
-  /** Extra class merged onto the wrapper. */
-  className?: string | undefined
+ /** Localized chrome supplied by the owning render site. */
+ labels: SearchBlockLabels
+ /**
+ * Whether the tool capped the inline result: the shape carries only the
+ * retained results, not every result the search found. The banner summary
+ * folds the pre-cap `total` in (`显示 X / 共 N …`) so the card never presents a
+ * capped result as complete.
+ */
+ truncated: boolean
+ /** Total results the search found before capping (equals the retained count when not `truncated`). */
+ total: number
+ /** Height cap in rows before the middle collapses (default {@link DEFAULT_SEARCH_MAX_LINES}). */
+ maxLines?: number | undefined
+ /** Extra class merged onto the wrapper. */
+ className?: string | undefined
 }
 
 /** Localized chrome for {@link SearchBlock}. */
 export interface SearchBlockLabels {
-  pathsSummary: (shown: number, total: number, truncated: boolean) => string
-  matchesSummary: (shown: number, total: number, files: number, truncated: boolean) => string
-  copy: string
-  copied: string
-  noResults: string
-  collapseAria: string
-  expandAria: (hidden: number) => string
-  collapse: string
-  expand: (hidden: number) => string
+ pathsSummary: (shown: number, total: number, truncated: boolean) => string
+ matchesSummary: (shown: number, total: number, files: number, truncated: boolean) => string
+ copy: string
+ copied: string
+ noResults: string
+ collapseAria: string
+ expandAria: (hidden: number) => string
+ collapse: string
+ expand: (hidden: number) => string
 }
 
 /** Props for the grouped-matches (`grep`) shape. */
 export interface SearchMatchesBlockProps extends SearchBlockCommon {
-  kind: 'matches'
-  /** Matched lines grouped by file, in first-seen file order. */
-  files: SearchFileGroup[]
+ kind: 'matches'
+ /** Matched lines grouped by file, in first-seen file order. */
+ files: SearchFileGroup[]
 }
 
 /** Props for the flat-path (`glob`) shape. */
 export interface SearchPathsBlockProps extends SearchBlockCommon {
-  kind: 'paths'
-  /** The discovered paths, in the tool's result order (the retained page when `truncated`). */
-  paths: string[]
+ kind: 'paths'
+ /** The discovered paths, in the tool's result order (the retained page when `truncated`). */
+ paths: string[]
 }
 
 /** {@link SearchBlock} props: one card, two `kind`-discriminated shapes. */
@@ -85,9 +85,9 @@ export type SearchBlockProps = SearchMatchesBlockProps | SearchPathsBlockProps
  * match line or a path does.
  */
 type SearchRow =
-  | { type: 'file'; path: string; count: number; index: number; collapsed: boolean }
-  | { type: 'match'; lineNumber: number; line: string; key: string; fileIndex: number }
-  | { type: 'path'; path: string }
+ | { type: 'file'; path: string; count: number; index: number; collapsed: boolean }
+ | { type: 'match'; lineNumber: number; line: string; key: string; fileIndex: number }
+ | { type: 'path'; path: string }
 
 /**
  * The plain-text form the copy control writes: the whole structured result
@@ -97,10 +97,10 @@ type SearchRow =
  * @returns the copyable text, or the empty string for an empty result.
  */
 function copyText(props: SearchBlockProps): string {
-  if (props.kind === 'paths') return props.paths.join('\n')
-  return props.files
-    .map(file => [file.path, ...file.matches.map(m => `${m.lineNumber}: ${m.line}`)].join('\n'))
-    .join('\n\n')
+ if (props.kind === 'paths') return props.paths.join('\n')
+ return props.files
+ .map(file => [file.path, ...file.matches.map(m => `${m.lineNumber}: ${m.line}`)].join('\n'))
+ .join('\n\n')
 }
 
 /**
@@ -111,9 +111,9 @@ function copyText(props: SearchBlockProps): string {
  * @returns the retained result count.
  */
 function shownCount(props: SearchBlockProps): number {
-  return props.kind === 'paths'
-    ? props.paths.length
-    : props.files.reduce((sum, file) => sum + file.matches.length, 0)
+ return props.kind === 'paths'
+ ? props.paths.length
+ : props.files.reduce((sum, file) => sum + file.matches.length, 0)
 }
 
 /**
@@ -129,9 +129,9 @@ function shownCount(props: SearchBlockProps): number {
  * @returns the summary text.
  */
 function summaryText(props: SearchBlockProps, shown: number, truncated: boolean, total: number): string {
-  return props.kind === 'paths'
-    ? props.labels.pathsSummary(shown, total, truncated)
-    : props.labels.matchesSummary(shown, total, props.files.length, truncated)
+ return props.kind === 'paths'
+ ? props.labels.pathsSummary(shown, total, truncated)
+ : props.labels.matchesSummary(shown, total, props.files.length, truncated)
 }
 
 /**
@@ -142,17 +142,17 @@ function summaryText(props: SearchBlockProps, shown: number, truncated: boolean,
  * @returns the flattened rows in output order.
  */
 function toRows(props: SearchBlockProps, collapsed: ReadonlySet<number>): SearchRow[] {
-  if (props.kind === 'paths') return props.paths.map((path): SearchRow => ({ type: 'path', path }))
-  const rows: SearchRow[] = []
-  props.files.forEach((file, index) => {
-    const isCollapsed = collapsed.has(index)
-    rows.push({ type: 'file', path: file.path, count: file.matches.length, index, collapsed: isCollapsed })
-    if (isCollapsed) return
-    for (const match of file.matches) {
-      rows.push({ type: 'match', lineNumber: match.lineNumber, line: match.line, key: `${index}:${match.lineNumber}`, fileIndex: index })
-    }
-  })
-  return rows
+ if (props.kind === 'paths') return props.paths.map((path): SearchRow => ({ type: 'path', path }))
+ const rows: SearchRow[] = []
+ props.files.forEach((file, index) => {
+ const isCollapsed = collapsed.has(index)
+ rows.push({ type: 'file', path: file.path, count: file.matches.length, index, collapsed: isCollapsed })
+ if (isCollapsed) return
+ for (const match of file.matches) {
+ rows.push({ type: 'match', lineNumber: match.lineNumber, line: match.line, key: `${index}:${match.lineNumber}`, fileIndex: index })
+ }
+ })
+ return rows
 }
 
 /**
@@ -163,11 +163,11 @@ function toRows(props: SearchBlockProps, collapsed: ReadonlySet<number>): Search
  * @returns the key.
  */
 function rowKey(row: SearchRow): string {
-  switch (row.type) {
-    case 'match': return `match:${row.key}`
-    case 'file': return `file:${row.index}`
-    case 'path': return `path:${row.path}`
-  }
+ switch (row.type) {
+ case 'match': return `match:${row.key}`
+ case 'file': return `file:${row.index}`
+ case 'path': return `path:${row.path}`
+ }
 }
 
 /**
@@ -176,124 +176,124 @@ function rowKey(row: SearchRow): string {
  * @returns the search block element.
  */
 export function SearchBlock(props: SearchBlockProps) {
-  const { truncated, total, maxLines = DEFAULT_SEARCH_MAX_LINES, className } = props
-  const [expanded, setExpanded] = useState(false)
-  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set())
+ const { truncated, total, maxLines = DEFAULT_SEARCH_MAX_LINES, className } = props
+ const [expanded, setExpanded] = useState(false)
+ const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set())
 
-  // `props` is a fresh object each render, so memoizing on it never hits; the
-  // flatten is cheap, so it runs inline keyed on the collapse set instead.
-  const rows = toRows(props, collapsed)
-  const shown = shownCount(props)
-  const empty = rows.length === 0
-  const { copied, onCopy } = useCopyFeedback(copyText(props))
+ // `props` is a fresh object each render, so memoizing on it never hits; the
+ // flatten is cheap, so it runs inline keyed on the collapse set instead.
+ const rows = toRows(props, collapsed)
+ const shown = shownCount(props)
+ const empty = rows.length === 0
+ const { copied, onCopy } = useCopyFeedback(copyText(props))
 
-  const onToggle = useCallback(() => { setExpanded(value => !value) }, [])
+ const onToggle = useCallback(() => { setExpanded(value => !value) }, [])
 
-  const toggleFile = useCallback((index: number) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(index)) next.delete(index)
-      else next.add(index)
-      return next
-    })
-  }, [])
+ const toggleFile = useCallback((index: number) => {
+ setCollapsed((prev) => {
+ const next = new Set(prev)
+ if (next.has(index)) next.delete(index)
+ else next.add(index)
+ return next
+ })
+ }, [])
 
-  const { hidden, capped, headLines, tailLines } = headTailCap(rows.length, maxLines, expanded)
-  const head = capped ? rows.slice(0, headLines) : rows
-  const naturalTail = capped ? rows.slice(rows.length - tailLines) : []
-  // When the tail slice begins inside a file's matches, its own header sits
-  // above the cut and is not shown, so those rows could not be attributed to a
-  // file. Restore the owning header at the top of the tail — unless the head
-  // slice already carries it (a single large file), where it would duplicate.
-  const tailLead = naturalTail[0]
-  const tailHeader = tailLead?.type === 'match'
-    && !head.some(row => row.type === 'file' && row.index === tailLead.fileIndex)
-    ? rows.find((row): row is Extract<SearchRow, { type: 'file' }> =>
-      row.type === 'file' && row.index === tailLead.fileIndex)
-    : undefined
-  // The restored header is itself a row. Left extra it would push the card to
-  // maxLines + 1 and overstate `hidden` by one, so it consumes a tail slot: drop
-  // the tail's first row (the match whose header this is) for it. Visible rows
-  // hold at maxLines and `hidden` stays exact; the dropped match joins the
-  // hidden middle.
-  const tail = tailHeader === undefined ? naturalTail : naturalTail.slice(1)
+ const { hidden, capped, headLines, tailLines } = headTailCap(rows.length, maxLines, expanded)
+ const head = capped ? rows.slice(0, headLines) : rows
+ const naturalTail = capped ? rows.slice(rows.length - tailLines) : []
+ // When the tail slice begins inside a file's matches, its own header sits
+ // above the cut and is not shown, so those rows could not be attributed to a
+ // file. Restore the owning header at the top of the tail — unless the head
+ // slice already carries it (a single large file), where it would duplicate.
+ const tailLead = naturalTail[0]
+ const tailHeader = tailLead?.type === 'match'
+ && !head.some(row => row.type === 'file' && row.index === tailLead.fileIndex)
+ ? rows.find((row): row is Extract<SearchRow, { type: 'file' }> =>
+ row.type === 'file' && row.index === tailLead.fileIndex)
+ : undefined
+ // The restored header is itself a row. Left extra it would push the card to
+ // maxLines + 1 and overstate `hidden` by one, so it consumes a tail slot: drop
+ // the tail's first row (the match whose header this is) for it. Visible rows
+ // hold at maxLines and `hidden` stays exact; the dropped match joins the
+ // hidden middle.
+ const tail = tailHeader === undefined ? naturalTail : naturalTail.slice(1)
 
-  const renderRow = (row: SearchRow): ReactNode => {
-    if (row.type === 'path') return <div className="min-h-[var(--dsl-search-line-height)] pl-[14px] whitespace-pre">{row.path}</div>
-    if (row.type === 'match') {
-      return (
-        <div className="min-h-[var(--dsl-search-line-height)] pl-[14px] whitespace-pre">
-          <span className="[color:var(--dsw-alias-label-tertiary)]">{row.lineNumber}: </span>
-          {row.line}
-        </div>
-      )
-    }
-    return (
-      <button
-        type="button"
-        className="flex items-baseline gap-[8px] w-full min-h-[var(--dsl-search-line-height)] px-[14px] py-0 border-none bg-transparent cursor-pointer [font:inherit] text-left"
-        aria-expanded={!row.collapsed}
-        onClick={() => { toggleFile(row.index) }}
-      >
-        <span className="min-w-0 font-semibold [color:var(--dsw-alias-label-primary)] whitespace-pre">{row.path}</span>
-        <span className="flex-none [color:var(--dsw-alias-label-tertiary)]">{row.count}</span>
-      </button>
-    )
-  }
+ const renderRow = (row: SearchRow): ReactNode => {
+ if (row.type === 'path') return <div className="min-h-[var(--dsl-search-line-height)] pl-[14px] whitespace-pre">{row.path}</div>
+ if (row.type === 'match') {
+ return (
+ <div className="min-h-[var(--dsl-search-line-height)] pl-[14px] whitespace-pre">
+ <span className="[color:var(--dsw-alias-label-tertiary)]">{row.lineNumber}: </span>
+ {row.line}
+ </div>
+ )
+ }
+ return (
+ <button
+ type="button"
+ className="flex items-baseline gap-[8px] w-full min-h-[var(--dsl-search-line-height)] px-[14px] py-0 border-none bg-transparent cursor-pointer text-left"
+ aria-expanded={!row.collapsed}
+ onClick={() => { toggleFile(row.index) }}
+ >
+ <span className="min-w-0 font-semibold [color:var(--dsw-alias-label-primary)] whitespace-pre">{row.path}</span>
+ <span className="flex-none [color:var(--dsw-alias-label-tertiary)]">{row.count}</span>
+ </button>
+ )
+ }
 
-  return (
-    <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-search-radius:12px] [--dsl-search-line-height:22px]', className)} data-search={props.kind}>
-      <div className="flex items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]">
-        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font:var(--dsw-font-xs-13)] [color:var(--dsw-alias-label-secondary)]">{summaryText(props, shown, truncated, total)}</span>
-        {!empty && (
-          <button type="button" className="flex-none bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
-            {copied ? props.labels.copied : props.labels.copy}
-          </button>
-        )}
-      </div>
-      {empty
-        ? <div className="px-[14px] py-[12px] [font:var(--dsw-font-markdown-code-block)] [color:var(--dsw-alias-label-tertiary)]">{props.labels.noResults}</div>
-        : (
-          <div className="pt-[8px] pr-[14px] pb-[12px] pl-0 [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
-            {head.map(row => (
-              <div key={rowKey(row)}>{renderRow(row)}</div>
-            ))}
-            {hidden > 0 && (
-              <button
-                type="button"
-                className="block w-full px-[14px] py-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]"
-                aria-expanded={expanded}
-                aria-label={expanded ? props.labels.collapseAria : props.labels.expandAria(hidden)}
-                onClick={onToggle}
-              >
-                {expanded ? props.labels.collapse : props.labels.expand(hidden)}
-              </button>
-            )}
-            {tailHeader !== undefined && (
-              <div key={`tailHeader:${rowKey(tailHeader)}`}>{renderRow(tailHeader)}</div>
-            )}
-            {tail.map(row => (
-              <div key={rowKey(row)}>{renderRow(row)}</div>
-            ))}
-          </div>
-        )}
-    </div>
-  )
+ return (
+ <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-search-radius:12px] [--dsl-search-line-height:22px]', className)} data-search={props.kind}>
+ <div className="flex items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]">
+ <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font:var(--dsw-font-xs-13)] [color:var(--dsw-alias-label-secondary)]">{summaryText(props, shown, truncated, total)}</span>
+ {!empty && (
+ <button type="button" className="flex-none bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>
+ {copied ? props.labels.copied : props.labels.copy}
+ </button>
+ )}
+ </div>
+ {empty
+ ? <div className="px-[14px] py-[12px] [font:var(--dsw-font-markdown-code-block)] [color:var(--dsw-alias-label-tertiary)]">{props.labels.noResults}</div>
+ : (
+ <div className="pt-[8px] pr-[14px] pb-[12px] pl-0 [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">
+ {head.map(row => (
+ <div key={rowKey(row)}>{renderRow(row)}</div>
+ ))}
+ {hidden > 0 && (
+ <button
+ type="button"
+ className="block w-full px-[14px] py-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer text-left hover:[color:var(--dsw-alias-label-secondary)]"
+ aria-expanded={expanded}
+ aria-label={expanded ? props.labels.collapseAria : props.labels.expandAria(hidden)}
+ onClick={onToggle}
+ >
+ {expanded ? props.labels.collapse : props.labels.expand(hidden)}
+ </button>
+ )}
+ {tailHeader !== undefined && (
+ <div key={`tailHeader:${rowKey(tailHeader)}`}>{renderRow(tailHeader)}</div>
+ )}
+ {tail.map(row => (
+ <div key={rowKey(row)}>{renderRow(row)}</div>
+ ))}
+ </div>
+ )}
+ </div>
+ )
 }
 
 /** The native result is opaque text, not Harness's structured search metadata.
  * Preserve it verbatim; never infer paths, matches, counts or file coordinates. */
 export function SearchTextBlock({ text, label, truncated, className }: { text: string; label: string; truncated: boolean; className?: string }) {
-  const tx = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-  const { copied, onCopy } = useCopyFeedback(text);
-  const lines = text.split('\n');
-  const { hidden, capped, headLines, tailLines } = headTailCap(lines.length, 8, expanded);
-  return <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-search-radius:12px] [--dsl-search-line-height:22px]', className)} data-search="opaque">
-    <div className="flex items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]"><span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font:var(--dsw-font-xs-13)] [color:var(--dsw-alias-label-secondary)]">{label}{truncated ? tx('common:search-block.bounded-output') : ''}</span><button type="button" className="flex-none bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>{copied ? tx('common:search-block.copied') : tx('common:search-block.copy')}</button></div>
-    <div className="pt-[8px] pr-[14px] pb-[12px] pl-0 [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">{(capped ? lines.slice(0, headLines) : lines).map((line, index) => <div key={index}>{line}</div>)}
-      {hidden > 0 && <button type="button" className="block w-full px-[14px] py-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer [font:inherit] text-left hover:[color:var(--dsw-alias-label-secondary)]" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? tx('common:search-block.collapse') : tx('common:search-block.show-value-more-lines', { p0: hidden })}</button>}
-      {capped && lines.slice(-tailLines).map((line, index) => <div key={`tail:${index}`}>{line}</div>)}
-    </div>
-  </div>;
+ const tx = useTranslation();
+ const [expanded, setExpanded] = useState(false);
+ const { copied, onCopy } = useCopyFeedback(text);
+ const lines = text.split('\n');
+ const { hidden, capped, headLines, tailLines } = headTailCap(lines.length, 8, expanded);
+ return <div className={clsx('relative mx-0 my-[16px] [color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-markdown-code-block)] rounded-[12px] [--dsl-search-radius:12px] [--dsl-search-line-height:22px]', className)} data-search="opaque">
+ <div className="flex items-center gap-[12px] px-[14px] py-[9px] bg-[var(--dsw-alias-markdown-code-block-banner)] rounded-t-[12px]"><span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [font:var(--dsw-font-xs-13)] [color:var(--dsw-alias-label-secondary)]">{label}{truncated ? tx('common:search-block.bounded-output') : ''}</span><button type="button" className="flex-none bg-transparent border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)]" onClick={onCopy}>{copied ? tx('common:search-block.copied') : tx('common:search-block.copy')}</button></div>
+ <div className="pt-[8px] pr-[14px] pb-[12px] pl-0 [font:var(--dsw-font-markdown-code-block)] overflow-x-auto overflow-y-hidden">{(capped ? lines.slice(0, headLines) : lines).map((line, index) => <div key={index}>{line}</div>)}
+ {hidden > 0 && <button type="button" className="block w-full px-[14px] py-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer text-left hover:[color:var(--dsw-alias-label-secondary)]" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? tx('common:search-block.collapse') : tx('common:search-block.show-value-more-lines', { p0: hidden })}</button>}
+ {capped && lines.slice(-tailLines).map((line, index) => <div key={`tail:${index}`}>{line}</div>)}
+ </div>
+ </div>;
 }
