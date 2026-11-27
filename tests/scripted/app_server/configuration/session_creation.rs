@@ -3714,45 +3714,32 @@ async fn python_watch_fallback(fail_configuration_read: bool) {
             assert!(endpoint.control().unwrap().same_pair(&watch_owner));
             let failed = settled(&fixture, 0).await;
             assert!(matches!(failed.units[&ApplyUnit::Capabilities], UnitApplication::Failed { .. }));
-            let mut resume = resume;
+            // The real watcher exercised the initial selective fallback.
+            // Stop its clock before driving the recovery calls so no other
+            // watch pass can consume a fault meant for a specific recheck.
+            stop.cancel();
+            resume.send(()).unwrap();
+            watch.await.unwrap().unwrap();
+            let recheck = || {
+                let manager = fixture.manager.clone();
+                let id = id.clone();
+                let endpoint = endpoint.clone();
+                let watch_owner = watch_owner.clone();
+                let incomplete = std::collections::BTreeSet::from([incomplete_source.clone()]);
+                tokio::task::spawn_blocking(move || {
+                    manager.observe_incomplete_bound_python(&id, &endpoint, watch_owner, &incomplete)
+                })
+            };
             for round in 1..=2 {
-                // Drive the periodic check against a real data exchange. The
-                // clock only selects the due tick; IPC runs in real time.
-                tokio::time::pause();
-                let (rechecked, next_check) = tokio::sync::oneshot::channel();
-                let (next_resume, park) = std::sync::mpsc::channel();
-                let (started, started_read) = tokio::sync::oneshot::channel();
-                let (go, allow_read) = std::sync::mpsc::channel();
-                fixture.manager.configuration.test_hooks.insert("before_bound_source_read", move || {
-                    started.send(()).unwrap();
-                    let _ = allow_read.recv();
-                });
-                fixture.manager.configuration.test_hooks.insert("bound_python_fallback_checked", move || {
-                    rechecked.send(()).unwrap();
-                    let _ = park.recv();
-                });
-                tokio::time::advance(std::time::Duration::from_secs(5)).await;
-                resume.send(()).unwrap();
-                started_read.await.unwrap();
-                tokio::time::resume();
                 fail_next_read.send(round).unwrap();
-                go.send(()).unwrap();
-                assert_eq!(read_observation.recv().await.unwrap(), round);
-                next_check.await.unwrap();
+                assert!(!recheck().await.unwrap());
+                assert_eq!(read_observation.try_recv().unwrap(), round);
                 let view = fixture.manager.configuration_application(id).unwrap();
                 assert_eq!(view, failed);
                 assert_eq!(digest(&runtime.runtime_resources(), &incomplete_source), initial_incomplete);
-                resume = next_resume;
             }
             fail_next_read.send(0).unwrap();
-            let (rechecked, next_check) = tokio::sync::oneshot::channel();
-            fixture.manager.configuration.test_hooks.insert("bound_python_fallback_checked", move || {
-                rechecked.send(()).unwrap();
-            });
-            resume.send(()).unwrap();
-            next_check.await.unwrap();
-            stop.cancel();
-            watch.await.unwrap().unwrap();
+            assert!(recheck().await.unwrap());
             let adopted = applied(&fixture, 0).await;
             assert_eq!(adopted.units[&ApplyUnit::Capabilities], UnitApplication::Applied);
             assert_eq!(digest(&runtime.runtime_resources(), &incomplete_source), captured);
