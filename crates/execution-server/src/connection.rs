@@ -597,7 +597,10 @@ impl LocalConnection {
                 | Request::AbortPackage,
                 ClientReply::UserSkills(Reply::Accepted),
             )
-            | (Request::Publish, ClientReply::UserSkills(Reply::VersionExists))
+            | (
+                Request::BeginPackage { .. } | Request::Publish,
+                ClientReply::UserSkills(Reply::VersionExists),
+            )
             | (Request::EndSync, ClientReply::UserSkills(Reply::SyncEnded))
             | (_, ClientReply::Error { .. }) => true,
             _ => false,

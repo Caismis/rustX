@@ -17,9 +17,10 @@ use rustix::fs::{AtFlags, Mode, OFlags};
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::save::Sha256Hex;
 use rustx_execution_protocol::skills::{
-    COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER, COLLECTION_PROOF_MARKER_CONTENT,
-    EntryIdentity, MAX_DIGEST_BYTES, MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES, MAX_SYNC_BYTES,
-    PackageIdentity, Probe, Reply, Request, valid_identity_packages,
+    CACHE_DIRECTORY, CACHE_LOCK, COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER,
+    COLLECTION_PROOF_MARKER_CONTENT, EntryIdentity, MAX_DIGEST_BYTES, MAX_PACKAGE_ENTRIES,
+    MAX_SKILL_BYTES, MAX_SYNC_BYTES, PackageIdentity, Probe, Reply, Request,
+    valid_identity_packages,
 };
 use rustx_execution_protocol::{DecimalU64, MAX_RAW_CHUNK_BYTES};
 use rustx_execution_server::LocalConnection;
@@ -787,9 +788,6 @@ fn sync_packages(
     }) {
         return result;
     }
-    if result.is_err() {
-        connection.user_skill_transfer_until(&Request::AbortPackage, wire_deadline())?;
-    }
     let ended = connection.user_skill_transfer_until(&Request::EndSync, wire_deadline());
     match (result, ended) {
         (Ok(paths), Ok(Reply::SyncEnded)) => Ok(paths),
@@ -841,11 +839,10 @@ fn sync_locked(
             hash.update(connection.admission().instance.as_str().as_bytes());
             hash.update(format!("{marker_stamp:?}").as_bytes());
         }
-        let mut version = String::from(Sha256Hex::from_digest(hash.finalize().into()));
+        let version = String::from(Sha256Hex::from_digest(hash.finalize().into()));
         let fallback = String::from(Sha256Hex::of(
             format!("{version}:{}", connection.admission().instance.as_str()).as_bytes(),
         ));
-        let mut client_package = cache_path(authority, &version);
         if let Some(expected) = digest {
             let mut cached = None;
             for candidate in [&version, &fallback] {
@@ -891,7 +888,9 @@ fn sync_locked(
                 },
                 wire_deadline(),
             ) {
-                Ok(Reply::Retained { package, bytes }) if package == client_package => {
+                Ok(Reply::Retained { package, bytes })
+                    if package == cache_path(authority, &version) =>
+                {
                     charge_retained(&mut total, bytes.get())?;
                     if file_stamp(&source.file(Path::new(&source_name))?.metadata()?)
                         != marker_stamp
@@ -915,14 +914,24 @@ fn sync_locked(
                 _ => return Err(io::ErrorKind::InvalidData.into()),
             }
         }
-        loop {
-            expect_accepted(
-                connection,
-                &Request::BeginPackage {
-                    version: version.clone(),
-                },
-                wire_deadline(),
-            )?;
+        // A cached version with a different digest can still be leased by
+        // another Session. Find a free key before spending the copy budget.
+        let mut versions = [version, fallback]
+            .into_iter()
+            .chain(std::iter::once_with(|| {
+                String::from(Sha256Hex::of(uuid::Uuid::new_v4().as_bytes()))
+            }));
+        let client_package = loop {
+            crate::package_io::check_cancelled(signal)?;
+            let version = versions.next().ok_or(io::ErrorKind::AlreadyExists)?;
+            let path = cache_path(authority, &version);
+            match connection
+                .user_skill_transfer_until(&Request::BeginPackage { version }, wire_deadline())?
+            {
+                Reply::Accepted => {}
+                Reply::VersionExists => continue,
+                _ => return Err(io::ErrorKind::InvalidData.into()),
+            }
             let mut budget = CopyBudget {
                 bytes: 0,
                 entries: 0,
@@ -931,7 +940,13 @@ fn sync_locked(
                 flight,
             };
             if package_dir {
-                copy_directory(connection, &source, Path::new(""), &mut budget)?;
+                copy_directory(
+                    connection,
+                    &source,
+                    Path::new(""),
+                    relative == Path::new("SKILL.md"),
+                    &mut budget,
+                )?;
             } else {
                 copy_file(
                     connection,
@@ -961,20 +976,11 @@ fn sync_locked(
                 ));
             }
             match connection.user_skill_transfer_until(&Request::Publish, wire_deadline())? {
-                Reply::Published { package } if package == client_package => break,
-                Reply::VersionExists => {
-                    // Never replace a published version: a different Session
-                    // may still hold its paths. Use a fresh immutable version.
-                    version = if version == fallback {
-                        String::from(Sha256Hex::of(uuid::Uuid::new_v4().as_bytes()))
-                    } else {
-                        fallback.clone()
-                    };
-                    client_package = cache_path(authority, &version);
-                }
+                Reply::Published { package } if package == path => break package,
+                Reply::VersionExists => {}
                 _ => return Err(io::ErrorKind::InvalidData.into()),
             }
-        }
+        };
         let filename = marker.file_name().ok_or(io::ErrorKind::InvalidData)?;
         mapped.insert(
             relative.to_path_buf(),
@@ -985,7 +991,7 @@ fn sync_locked(
 }
 
 fn cache_path(authority: &str, version: &str) -> PathBuf {
-    PathBuf::from(".rustx-sync")
+    PathBuf::from(CACHE_DIRECTORY)
         .join(authority)
         .join(version)
         .join("data")
@@ -1118,12 +1124,23 @@ fn copy_directory(
     connection: &mut LocalConnection,
     source: &PackageDirectory,
     relative: &Path,
+    collection_root: bool,
     budget: &mut CopyBudget<'_>,
 ) -> io::Result<()> {
+    const COLLECTION_STATE: [&str; 3] = [CACHE_DIRECTORY, CACHE_LOCK, COLLECTION_PROOF_DIRECTORY];
     if relative.components().count() > rustx_execution_protocol::skills::MAX_PACKAGE_DEPTH {
         return Err(io::ErrorKind::FileTooLarge.into());
     }
-    for child in source.names(MAX_PACKAGE_ENTRIES.saturating_sub(budget.entries))? {
+    let limit = MAX_PACKAGE_ENTRIES.saturating_sub(budget.entries)
+        + usize::from(collection_root) * COLLECTION_STATE.len();
+    for child in source.names(limit)? {
+        if collection_root
+            && child
+                .to_str()
+                .is_some_and(|name| COLLECTION_STATE.contains(&name))
+        {
+            continue;
+        }
         budget.entry()?;
         let child_relative = relative.join(&child);
         let metadata = source_entry(source, &child)?;
@@ -1139,7 +1156,7 @@ fn copy_directory(
             if child_dir.entry_metadata(Path::new(""))? != metadata {
                 return Err(io::ErrorKind::InvalidData.into());
             }
-            copy_directory(connection, &child_dir, &child_relative, budget)?;
+            copy_directory(connection, &child_dir, &child_relative, false, budget)?;
         } else if metadata.is_file {
             copy_file(connection, source, &child, &child_relative, budget)?;
         } else {

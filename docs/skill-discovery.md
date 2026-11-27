@@ -114,6 +114,8 @@ attachment subtree has a different mount view; this is an intentional
 performance tradeoff. A missing or different digest causes a whole
 package copy. Copies stream regular files and directories with a 512 MiB
 per-package and 1 GiB per-bind payload cap; executable files remain executable.
+When `SKILL.md` is at the collection root, the copy excludes rustX's reserved
+cache, cache lock, and identity probe directory.
 A collection-level link to a package directory is resolved and pinned; links
 inside a package and special files are refused. Neither hardlinks nor writable
 bind mounts are used. A User can exclude a
@@ -121,7 +123,7 @@ legitimately oversized package by adding its path to the User collection's
 `.ignore` file; the same discovery ignore rules then omit it from both sync
 and the catalog. Standalone root Markdown Skills are copied as individual files.
 
-File tools deny writes into the official global Skill tree, whether it is the
+File tools deny writes into the official User Skill tree, whether it is the
 shared standing root or the synced cache. Bash can still modify a shared
 standing root; this residual risk is accepted. The Client cache is not a
 second authoring authority. Unknown transfer outcomes are not retried as
@@ -189,9 +191,9 @@ in its admission budget, including hidden entries, so their creation/removal
 also invalidates source discovery. Hidden subtrees remain unobserved and package
 assets remain outside configuration scanning.
 
-The definition version ignores body and asset edits. In a bound session a
-changed `SKILL.md` produces a new Client cache path even when frontmatter is
-unchanged; an attachment-only edit can remain cached until `SKILL.md` changes.
+The definition version ignores body and asset edits. On a separate Client
+filesystem, a changed `SKILL.md` produces a new cache path even when frontmatter
+is unchanged. An attachment-only edit can remain cached until `SKILL.md` changes.
 Changes outside
 the Root/admitted Named Agent/Workflow Skill selection closure do not prepare
 Session capabilities. The inert discovery catalog still publishes at the same

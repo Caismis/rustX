@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -16,13 +17,12 @@ use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags};
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::MAX_RAW_CHUNK_BYTES;
 use rustx_execution_protocol::skills::{
-    MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES, MAX_SYNC_BYTES, Reply, Request, valid_cache_id,
-    valid_package_path,
+    CACHE_DIRECTORY as CACHE, CACHE_LOCK, MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES, MAX_SYNC_BYTES,
+    Reply, Request, valid_cache_id, valid_package_path,
 };
 
 use super::mutation::Arbitration;
 
-const CACHE: &str = ".rustx-sync";
 const MARKER: &str = ".rustx-owned";
 const MARKER_CONTENT: &[u8] = b"rustx user skill cache v1\n";
 const VERSION_MARKER: &str = ".version";
@@ -102,8 +102,7 @@ impl Transfer {
                 Ok(Reply::Accepted)
             }
             Request::EndSync => {
-                self.abort()?;
-                self.sync = None;
+                self.lane_lost()?;
                 Ok(Reply::SyncEnded)
             }
             _ => Err(io::ErrorKind::InvalidInput.into()),
@@ -132,7 +131,7 @@ impl Transfer {
         // Never truncate or unlink an existing file at this reserved name.
         let initializer = File::from(rustix::fs::openat(
             skills.descriptor(),
-            ".rustx-sync-lock",
+            CACHE_LOCK,
             OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::from_raw_mode(0o600),
         )?);
@@ -190,6 +189,12 @@ impl Transfer {
         if sync.stage.is_some() || !valid_cache_id(version) {
             return Err(io::ErrorKind::InvalidInput.into());
         }
+        sync.owner.verify()?;
+        match rustix::fs::statat(sync.owner.descriptor(), version, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => return Ok(Reply::VersionExists),
+            Err(rustix::io::Errno::NOENT) => {}
+            Err(error) => return Err(error.into()),
+        }
         let mut random = [0u8; 16];
         getrandom::fill(&mut random).map_err(io::Error::other)?;
         let mut name = String::from(".stage-");
@@ -197,7 +202,6 @@ impl Transfer {
             use std::fmt::Write as _;
             write!(&mut name, "{byte:02x}").expect("writing to String");
         }
-        sync.owner.verify()?;
         rustix::fs::mkdirat(
             sync.owner.descriptor(),
             name.as_str(),
@@ -327,14 +331,14 @@ impl Transfer {
         {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        pending.file.write_all(&bytes)?;
+        pending.file.write_all_at(&bytes, offset)?;
         pending.received += bytes.len() as u64;
         Ok(Reply::Accepted)
     }
 
     fn end_file(&mut self) -> io::Result<Reply> {
         let stage = self.stage()?;
-        let pending = stage.file.take().ok_or(io::ErrorKind::InvalidInput)?;
+        let pending = stage.file.as_ref().ok_or(io::ErrorKind::InvalidInput)?;
         if pending.received != pending.length {
             return Err(io::ErrorKind::InvalidData.into());
         }
@@ -342,6 +346,7 @@ impl Transfer {
             &pending.file,
             Mode::from_raw_mode(if pending.executable { 0o700 } else { 0o600 }),
         )?;
+        stage.file = None;
         Ok(Reply::Accepted)
     }
 
@@ -372,6 +377,7 @@ impl Transfer {
         match moved {
             Ok(()) => {
                 let stage = sync.stage.take().expect("stage is present");
+                sync.retained.insert(stage.version.clone());
                 self.leases
                     .insert((sync.authority.clone(), stage.version.clone()), stage.lease);
                 Ok(Reply::Published {
@@ -1126,6 +1132,11 @@ mod tests {
             .unwrap(),
             Reply::Retained { .. }
         ));
+        assert_eq!(
+            second.begin_package(&version('e')).unwrap(),
+            Reply::VersionExists
+        );
+        assert!(second.sync.as_ref().unwrap().stage.is_none());
         drop(second);
         let lease = fs::OpenOptions::new()
             .read(true)
@@ -1141,6 +1152,65 @@ mod tests {
     }
 
     #[test]
+    fn a_file_remains_pending_until_its_declared_bytes_have_arrived() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let arbitration = Arbitration::new();
+        let mut transfer = Transfer::default();
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        transfer
+            .begin_sync(&root, &collection, &authority())
+            .unwrap();
+        transfer.begin_package(&version('b')).unwrap();
+        transfer
+            .begin_file(Path::new("SKILL.md"), 2, false)
+            .unwrap();
+        transfer.chunk(0, "YQ==").unwrap();
+        assert_eq!(
+            transfer.end_file().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            transfer.publish(&arbitration).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        transfer.chunk(1, "Yg==").unwrap();
+        transfer.end_file().unwrap();
+        let Reply::Published { package } = transfer.publish(&arbitration).unwrap() else {
+            panic!("completed stage must publish");
+        };
+        assert_eq!(
+            fs::read(collection.join(package).join("SKILL.md")).unwrap(),
+            b"ab"
+        );
+    }
+
+    #[test]
+    fn ending_sync_releases_the_lock_when_stage_cleanup_fails() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let arbitration = Arbitration::new();
+        let mut transfer = Transfer::default();
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        let authority = authority();
+        transfer.begin_sync(&root, &collection, &authority).unwrap();
+        transfer.begin_package(&version('b')).unwrap();
+        let owner = collection.join(CACHE).join(&authority);
+        let moved = home.path().join("moved-owner");
+        fs::rename(&owner, &moved).unwrap();
+        assert!(
+            transfer
+                .dispatch(&root, &collection, &Request::EndSync, &arbitration)
+                .is_err()
+        );
+        fs::rename(moved, owner).unwrap();
+        assert_eq!(
+            transfer.begin_sync(&root, &collection, &authority).unwrap(),
+            Reply::SyncStarted
+        );
+    }
+
+    #[test]
     fn transfer_resolves_local_home_and_product_aliases_without_following_cache_links() {
         use std::os::unix::fs::symlink;
         let temporary = tempfile::tempdir().unwrap();
@@ -1151,18 +1221,17 @@ mod tests {
         fs::create_dir(&product).unwrap();
         symlink(&home, &home_alias).unwrap();
         symlink(&product, home.join("rustx")).unwrap();
-        let mut transfer = Transfer::default();
         let arbitration = Arbitration::new();
+        let mut skills = super::super::skills::UserSkills::from_home(Some(home_alias));
         assert_eq!(
-            call(
-                &mut transfer,
-                &home_alias.join("rustx"),
-                &arbitration,
-                Request::BeginSync {
-                    authority: authority()
-                }
-            )
-            .unwrap(),
+            skills
+                .dispatch(
+                    &Request::BeginSync {
+                        authority: authority()
+                    },
+                    &arbitration,
+                )
+                .unwrap(),
             Reply::SyncStarted
         );
         assert!(
@@ -1171,8 +1240,9 @@ mod tests {
                 .join(authority())
                 .is_dir()
         );
-        transfer.lane_lost().unwrap();
+        skills.lane_lost().unwrap();
 
+        let mut transfer = Transfer::default();
         let alternate_root = temporary.path().join("alternate-product");
         let collection_target = temporary.path().join("collection-target");
         fs::create_dir_all(alternate_root.join(".agents")).unwrap();

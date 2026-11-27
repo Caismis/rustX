@@ -42,4 +42,3 @@ if ! "$harness" "$selector" --exact --ignored --list | grep -Fx "$selector: test
     exit 1
 fi
 RUSTX_MOUNT_VIEW_PROOF=1 "$harness" "$selector" --exact --ignored --nocapture
-

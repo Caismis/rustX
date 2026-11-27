@@ -20,7 +20,7 @@
 5. Watch notifications are bounded hints, with exact incarnation retirement and explicit reread requirements. Configuration remains owned by native revisions, source authority and safe automatic application; admitted Attempts retain their frozen context.
 6. Provider/App Server secrets are not implicitly inherited by commands or read back through management projections. See [the complete contract](app-server/environment-services.md).
 
-## Session-bound global Skill ownership
+## Session-bound User Skill ownership
 
 The Host standing User root owns Skill definitions. Each admitted Client
 receives a complete package at a readable location before the bound catalog

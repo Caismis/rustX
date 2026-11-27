@@ -213,6 +213,56 @@ async fn collection_overlay_is_copied_even_when_product_root_is_shared() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn collection_root_package_copies_attachments_without_sync_state() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let collection = fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory
+            .join("rustx/.agents/skills");
+        std::fs::create_dir_all(collection.join(".rustx-sync")).unwrap();
+        std::fs::create_dir(collection.join(".rustx-sync-proof")).unwrap();
+        std::fs::write(collection.join(".rustx-sync-lock"), []).unwrap();
+        std::fs::write(
+            collection.join(".rustx-sync/other-version"),
+            "another cached skill",
+        )
+        .unwrap();
+        std::fs::write(
+            collection.join("SKILL.md"),
+            "---\nname: guide\ndescription: Host guide\n---\n",
+        )
+        .unwrap();
+        std::fs::write(collection.join("attachment"), "Host attachment").unwrap();
+
+        let physical = tempfile::tempdir_in("/dev/shm").unwrap();
+        let mount = tempfile::tempdir().unwrap();
+        let launcher = launcher(mount.path(), physical.path(), "rustx/.agents/skills", None);
+        let mut client = fixture.start_execution_via(0, Some(&launcher)).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let location = catalog_path(&fixture);
+        let relative = location.strip_prefix(collection).unwrap();
+        let marker = physical.path().join(relative);
+        let package = marker.parent().unwrap();
+        assert!(marker.is_file());
+        assert_eq!(
+            std::fs::read_to_string(package.join("attachment")).unwrap(),
+            "Host attachment"
+        );
+        for name in [".rustx-sync", ".rustx-sync-lock", ".rustx-sync-proof"] {
+            assert!(!package.join(name).exists());
+        }
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
 async fn package_overlay_is_copied_even_when_collection_is_shared() {
     assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
     Box::pin(bounded(async {

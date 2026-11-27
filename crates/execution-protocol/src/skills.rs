@@ -29,6 +29,10 @@ pub const MAX_IDENTITY_PACKAGES: usize = 256;
 pub const MAX_IDENTITY_PATH_BYTES: usize = 64 * 1024;
 /// Maximum aggregate normal path components in one identity inquiry.
 pub const MAX_IDENTITY_COMPONENTS: usize = 4096;
+/// Reserved directory for synced versions in a Client's User Skill collection.
+pub const CACHE_DIRECTORY: &str = ".rustx-sync";
+/// Reserved lock for initializing the cache and its authority directories.
+pub const CACHE_LOCK: &str = ".rustx-sync-lock";
 /// Reserved hidden directory used only for fresh collection identity probes.
 pub const COLLECTION_PROOF_DIRECTORY: &str = ".rustx-sync-proof";
 /// Ownership marker within the reserved proof directory.
@@ -126,7 +130,7 @@ pub enum Request {
     Digest { package: PathBuf },
     /// Enter one authority's owned cache and acquire its nonblocking sync lock.
     BeginSync { authority: String },
-    /// Start a fresh private package staging directory, named by an opaque key.
+    /// Start a private stage if the opaque version key is still available.
     BeginPackage { version: String },
     /// Pin an existing immutable version for the lifetime of this Client.
     Retain { version: String },
