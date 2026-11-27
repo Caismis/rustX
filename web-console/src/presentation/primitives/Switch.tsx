@@ -3,7 +3,20 @@
 // `label` is required and has no default, so a render site cannot ship the
 // control without an accessible name.
 
+import clsx from 'clsx'
 import { Switch as CossSwitch } from '@/components/ui/switch'
+
+/** rustX design geometry (figma): track 36×20 r10 padding 2, thumb 16px
+ * translating 16px when on; track/thumb colors ride the brand tokens.
+ * coss geometry is smaller and its checked translate is lost to a calc()
+ * missing the spaces CSS requires around `-`, so the design lands here as
+ * important overrides on the root plus descendant rules for the thumb. */
+const DESIGN = clsx(
+  'w-9! h-5! p-[2px]! rounded-[10px]! [corner-shape:round]',
+  'data-checked:bg-(--dsw-alias-brand-primary)! data-unchecked:bg-(--dsw-alias-border-l3)!',
+  '[&_[data-slot=switch-thumb]]:size-4! [&_[data-slot=switch-thumb]]:rounded-full! [&_[data-slot=switch-thumb]]:bg-(--dsw-alias-label-primary-foreground)! [&_[data-slot=switch-thumb]]:shadow-none!',
+  '[&_[data-slot=switch-thumb][data-checked]]:translate-x-4!',
+)
 
 /**
  * Render a toggle switch.
@@ -31,7 +44,7 @@ export function Switch({ checked, onChange, label, disabled = false, title, clas
       aria-label={label}
       title={title}
       disabled={disabled}
-      className={className}
+      className={clsx(DESIGN, className)}
     />
   )
 }

@@ -1842,10 +1842,11 @@
       "treatment": "Direct controlled accessible Switch; caller owns only a local native CFG3 draft.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "9f0f6db0de338793711b4333e87dcd2b82d06d8ad43aa362eb67efc63573ccb1",
-      "local_sha256": "3630b0de9703931f7b0d30e46d680e98fad1c95a0eba37510874f25e17bf83b8",
+      "local_sha256": "bc795cf00380f7995b69c18ba005bef196105913191851e425ded6a518ec77a5",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
-        "@/components/ui/switch"
+        "@/components/ui/switch",
+        "clsx"
       ],
       "excluded_dependencies": [
         "Host filesystem ownership",
