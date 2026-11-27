@@ -148,6 +148,19 @@ it('uses one clipping shader variant and submits the newest section after the ac
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it('keeps a settled drawing buffer for plane-only edits within the moving pixel budget', () => {
+  const f = mount();
+  draw();
+  vi.advanceTimersByTime(L.refineDelayMs);
+  draw();
+  const bufferUpdates = f.renderer.setDrawingBufferSize.mock.calls.length;
+  f.view.updateSection({ ...f.view.section, enabled: true, offset: .1 });
+  draw();
+  expect(f.renderer.domElement.dataset.geometryQuality).toBe('complete');
+  expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledTimes(bufferUpdates);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('pauses pending GPU fence polling and refinement and resumes the retained renderer and pose', () => {
   const ready = vi.fn(), f = mount(undefined, undefined, { generated: true, onFirstGpuReady: ready });
   draw(); f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED); draw();

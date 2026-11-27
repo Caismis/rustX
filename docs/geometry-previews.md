@@ -434,17 +434,20 @@ through the viewport's frame and fence.
 The renderer uses a plane outside admitted bounds while Section is off, so
 the first cut uses the same shader variant. During an edit, the viewport
 coalesces to the latest plane and briefly rechecks a busy fence between
-animation frames. The viewport still submits through one pending frame.
+animation frames. A plane-only edit within the moving pixel budget reuses
+its current drawing buffer. The viewport still submits through one pending frame.
 Perspective zoom reuses an original-surface hit only along the same inward
 ray, with no newly visible interval before that hit. It computes safe travel
 from the current eye on each input. Visibility, section, framing, projection,
 viewport and geometry changes invalidate the hit.
 
 On Chromium 153 with SwiftShader, the transformed-assembly browser tests
-measured about 115 ms from first section activation to its display proxy.
-The maximum of 24 slider samples across delivery and Workbench was 55.3 ms.
-These software-rendered results exceed the 50 ms interaction target. The
-reference hardware matrix remains open.
+measured a first-activation maximum of 35.5 ms across six opens. The maximum
+of 72 slider samples across delivery and Workbench was also 35.5 ms. The
+paired baseline maxima were 146.1 ms for activation and 56.1 ms for slider
+input. The dense 691,200-triangle fixture did one original-surface raycast
+in eight trusted inward wheel steps. The reference hardware matrix remains
+open.
 
 See [#551](https://github.com/Caismis/rustX/issues/551).
 

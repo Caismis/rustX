@@ -175,11 +175,13 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (disposed || !visible || interacting || !moving || backgroundPending) return;
     refinement = setTimeout(() => { refinement = undefined; if (!disposed) { moving = false; render(); } }, L.refineDelayMs);
   };
-  const renderMoving = (urgent = false) => {
-    moving = true; canvas.dataset.geometryQuality = options?.provisional ? 'preview' : 'interactive'; refine();
-    if (!urgent) { render(); return; }
+  const renderInput = () => {
     if (inputDrawQueued) return; inputDrawQueued = true;
     queueMicrotask(() => { inputDrawQueued = false; if (disposed || !visible) return; cancelAnimationFrame(frame); frame = 0; draw(); });
+  };
+  const renderMoving = (urgent = false) => {
+    moving = true; canvas.dataset.geometryQuality = options?.provisional ? 'preview' : 'interactive'; refine();
+    if (urgent) renderInput(); else render();
   };
   let tinted: Object3D | undefined;
   const updateHighlight = () => {
@@ -248,7 +250,12 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (value) section.set(value); else section.reset();
     renderer.clippingPlanes = section.value.enabled ? section.planes : uncutPlanes;
     sectionDrawDeadline = performance.now() + 16;
-    updateHighlight(); renderMoving(true); emit();
+    updateHighlight();
+    // A plane-only edit within the moving pixel budget needs neither a
+    // buffer reallocation nor a second full-resolution refinement frame.
+    if (viewportWidth * viewportHeight * viewportRatio ** 2 <= L.movingPixels) renderInput();
+    else renderMoving(true);
+    emit();
   };
   const visibility = (id: string, visible: boolean) => {
     if (!structure.visibility(id, visible)) return;
