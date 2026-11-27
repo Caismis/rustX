@@ -14,5 +14,5 @@ export const menuCss = {
   selectedFill: 'bg-[var(--dsw-alias-interactive-bg-hover)]!',
   danger: 'mn-danger [color:var(--dsw-alias-state-error-primary)] hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover-danger)] focus-visible:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover-danger)] focus-visible:not-disabled:outline-none',
   labelCls: 'px-[10px] py-[8px] text-[12px] leading-[16px] [color:var(--dsw-alias-label-tertiary)] [.mn-dense_&]:py-[4px] [.mn-compact_&]:px-[7px] [.mn-compact_&]:py-[4px] [.mn-compact_&]:text-[11px] [.mn-compact_&]:leading-[16px]',
-  separator: 'h-[0.5px] my-[4px] mx-[2px] bg-[var(--dsw-alias-border-l1)] [.mn-compact_&]:m-[2px]',
+  separator: '[font:inherit] h-[0.5px] my-[4px] mx-[2px] bg-[var(--dsw-alias-border-l1)] [.mn-compact_&]:m-[2px]',
 };

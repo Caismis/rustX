@@ -11,6 +11,6 @@ export const terminalBlockCss = {
  copyButton: 'flex-none sticky top-0 bg-[var(--dsw-alias-markdown-code-block)] border-none p-0 m-0 [color:var(--dsw-alias-label-secondary)] cursor-pointer [font:var(--dsw-font-xs-13)] [line-height:var(--dsl-terminal-line-height)]',
  output: 'max-h-(--dsl-terminal-output-max-height,none) pt-[12px] pr-[14px] pb-[12px] pl-0 [font:var(--dsl-terminal-font)] overflow-auto [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-clip-padding [&::-webkit-scrollbar-thumb]:rounded-[6px] [&::-webkit-scrollbar-track]:m-[6px]',
  line: 'min-h-(--dsl-terminal-line-height) whitespace-(--dsl-terminal-line-whitespace,pre) wrap-anywhere',
- expand: 'block w-full p-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer text-left hover:[color:var(--dsw-alias-label-secondary)]',
+ expand: '[font:inherit] block w-full p-0 border-none bg-transparent [color:var(--dsw-alias-label-tertiary)] cursor-pointer text-left hover:[color:var(--dsw-alias-label-secondary)]',
  empty: 'pt-[12px] pr-[14px] pb-[12px] pl-0 [font:var(--dsl-terminal-font)] [color:var(--dsw-alias-label-tertiary)]',
 };

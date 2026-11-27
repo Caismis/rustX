@@ -2,7 +2,7 @@ export const heroShellCss = {
  root: 'flex items-center justify-center h-full min-w-0 px-[24px]',
  stack: 'flex flex-col items-stretch gap-[12px] w-full max-w-[var(--dsh-composer-card-max-width)] overflow-visible',
  headline: 'flex flex-wrap gap-x-[10px] gap-y-[12px] items-center justify-center text-[26px] leading-[32px] font-medium [color:var(--dsw-alias-label-primary)]',
- titleGroup: 'm-0 [font-family:inherit] [font-size:inherit] [font-weight:inherit] [line-height:inherit] flex flex-wrap justify-center items-center gap-x-[7px] gap-y-[4px] min-w-0',
+ titleGroup: '[font:inherit] m-0 [font-family:inherit] [font-size:inherit] [font-weight:inherit] [line-height:inherit] flex flex-wrap justify-center items-center gap-x-[7px] gap-y-[4px] min-w-0',
  previewBadge: 'self-start mt-[2px] pt-[1px] px-[7px] pb-0 [border:0.5px_solid_var(--dsw-alias-interactive-bg-hover)] rounded-[24px] bg-[var(--dsw-alias-state-business-tertiary)] [color:var(--dsw-alias-label-primary-bluish)] [font-family:var(--ds-font-family-code)] text-[12px] leading-[18px] font-medium whitespace-nowrap',
  fishHitbox: 'group/fish inline-flex flex-none items-center justify-center',
  fish: 'block overflow-visible [transform-origin:50%_60%] [color:var(--dsw-alias-label-primary)] group-hover/fish:animate-[hero-fish-swim_1.6s_ease-in-out_infinite] motion-reduce:group-hover/fish:animate-none',

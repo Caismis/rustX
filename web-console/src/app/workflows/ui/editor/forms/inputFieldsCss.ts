@@ -4,7 +4,7 @@ export const inputFieldsCss = {
  list: 'flex flex-col gap-[4px] m-0 p-0 list-none',
  row: 'group/ifrow flex items-center gap-[6px] min-h-[34px] pr-[4px] [border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-2)] [&[draggable=true]]:cursor-grab',
  dragging: 'opacity-50',
- rowMain: 'flex flex-1 items-center gap-[5px] min-w-0 min-h-[32px] pl-[10px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:inherit] text-left cursor-pointer focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:-outline-offset-1',
+ rowMain: '[font:inherit] flex flex-1 items-center gap-[5px] min-w-0 min-h-[32px] pl-[10px] border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:inherit] text-left cursor-pointer focus-visible:[outline:2px_solid_var(--dsw-alias-state-business-primary)] focus-visible:-outline-offset-1',
  variable: 'flex-none [font-family:var(--ds-font-family-code)] text-[10.5px] [color:var(--dsw-alias-state-business-primary)]',
  name: 'flex-none max-w-[50%] overflow-hidden text-[12.5px] font-medium [color:var(--dsw-alias-label-primary)] text-ellipsis whitespace-nowrap',
  dot: 'flex-none [color:var(--dsw-alias-label-caption)]',
