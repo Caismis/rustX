@@ -8,17 +8,19 @@ import clsx from 'clsx'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentProps, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, Ref, RefObject } from 'react'
 import { useDialogPortal, useOverlayActive } from './DialogSurface'
+import { Menu as MenuPrimitive } from '@base-ui/react/menu'
 import {
   Menu as CossMenu,
   MenuGroup,
   MenuGroupLabel,
-  MenuItem as CossMenuItem,
   MenuPopup,
   MenuSeparator,
   MenuSub,
   MenuSubPopup,
-  MenuSubTrigger,
 } from '@/components/ui/menu'
+
+const CossMenuItem = MenuPrimitive.Item
+const MenuSubTrigger = MenuPrimitive.SubmenuTrigger
 import { IconCheckOutline16 } from './icons/index.tsx'
 import { menuCss } from './menuCss';
 
@@ -168,7 +170,6 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
 }) {
   const ownership = useContext(SubmenuOwnershipContext)
   const [submenuOpen, setSubmenuOpen] = useState(false)
-  const [subPopupElement, setSubPopupElement] = useState<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLDivElement | null>(null)
   const suppressFocusOpen = useRef(false)
   // Hover-opened submenus are presentation, not a press target: the first
@@ -211,26 +212,54 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
   useEffect(() => {
     if (!submenuOpen) return undefined
     const trigger = triggerRef.current
-    const positioner = subPopupElement?.closest<HTMLElement>('[data-slot="menu-positioner"]')
-    if (!positioner) return undefined
+    if (!trigger) return undefined
     let closing = false
-    // Base UI's hide middleware reports every all-zero anchor rect as hidden,
-    // so the signal is only truthful where layout measurement exists at all.
+    // Base UI does not wire floating-ui's hide middleware, so anchor clipping
+    // is detected directly: overflow clipping removes intersection and the
+    // submenu closes once its row scrolls out of view.
     const measurable = document.documentElement.getBoundingClientRect().width > 0
     const settle = () => {
-      if (closing || !measurable || !positioner.hasAttribute('data-anchor-hidden')) return
+      if (closing || !measurable) return
       closing = true
       ownership.release(entry.id)
       // The keyboard lands on the parent list before the closing surface
       // unmounts, so it never falls through to the document.
-      trigger?.closest<HTMLElement>('[data-slot="menu-popup"]')?.focus({ preventScroll: true })
+      trigger.closest<HTMLElement>('[data-slot="menu-popup"]')?.focus({ preventScroll: true })
       flushSync(() => setSubmenuOpen(false))
     }
-    settle()
-    const observer = new MutationObserver(settle)
-    observer.observe(positioner, { attributes: true, attributeFilter: ['data-anchor-hidden'] })
-    return () => observer.disconnect()
-  }, [submenuOpen, ownership, entry.id, subPopupElement])
+    // Clipping must close the surface in the same frame the clip happens:
+    // scroll events run before the frame's paint (and before any rAF
+    // observer), so the measurement is taken synchronously in capture phase.
+    const clipped = () => {
+      const row = trigger.getBoundingClientRect()
+      let scope = trigger.parentElement
+      while (scope) {
+        const style = getComputedStyle(scope)
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && scope.scrollHeight > scope.clientHeight) {
+          const clip = scope.getBoundingClientRect()
+          if (row.bottom <= clip.top || row.top >= clip.bottom) return true
+        }
+        scope = scope.parentElement
+      }
+      const viewport = document.documentElement.getBoundingClientRect()
+      return row.bottom <= viewport.top || row.top >= viewport.bottom
+    }
+    const check = () => { if (!closing && measurable && clipped()) settle() }
+    window.addEventListener('scroll', check, true)
+    window.addEventListener('resize', check)
+    const observer = new IntersectionObserver((entries) => {
+      for (const record of entries) {
+        if (record.intersectionRatio === 0 && !record.isIntersecting) settle()
+      }
+    }, { threshold: 0 })
+    observer.observe(trigger)
+    check()
+    return () => {
+      window.removeEventListener('scroll', check, true)
+      window.removeEventListener('resize', check)
+      observer.disconnect()
+    }
+  }, [submenuOpen, ownership, entry.id])
 
   const content = <>
     {entry.icon !== undefined && <span className={menuCss.itemIcon}>{entry.icon}</span>}
@@ -321,13 +350,13 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
     >
       {content}
     </MenuSubTrigger>
-    <MenuSubPopup ref={node => { node?.removeAttribute('tabindex'); setSubPopupElement(node) }} className={menuCss.submenu} align="end" alignOffset={-4} sideOffset={10} collisionPadding={12} style={{ visibility: submenuOpen ? undefined : 'hidden' }} onPointerEnter={cancelHoverClose} onPointerLeave={armHoverClose} onKeyDownCapture={navigateRows}>
+    <MenuSubPopup ref={node => node?.removeAttribute('tabindex')} className={menuCss.submenu} align="end" alignOffset={-4} sideOffset={10} collisionPadding={12} style={{ visibility: submenuOpen ? undefined : 'hidden' }} onPointerEnter={cancelHoverClose} onPointerLeave={armHoverClose} onKeyDownCapture={navigateRows}>
       {entry.submenu?.map(item => {
         const control = itemControl(item, press, select)
         return <CossMenuItem
           key={item.id}
           className={clsx(menuCss.item, item.danger && menuCss.danger, selected(item.id) && (selection === 'fill' ? menuCss.selectedFill : menuCss.selected))}
-          variant={item.danger ? 'destructive' : 'default'}
+          data-variant={item.danger ? 'destructive' : undefined}
           closeOnClick={false}
           data-menu-item-id={item.id}
           aria-current={selected(item.id) ? 'true' : undefined}
@@ -356,7 +385,7 @@ function renderRows(entries: readonly MenuEntry[], selected: (id: string) => boo
     return <CossMenuItem
       key={entry.id}
       className={clsx(menuCss.item, entry.danger && menuCss.danger, selected(entry.id) && (selection === 'fill' ? menuCss.selectedFill : menuCss.selected))}
-      variant={entry.danger ? 'destructive' : 'default'}
+      data-variant={entry.danger ? 'destructive' : undefined}
       closeOnClick={false}
       data-menu-item-id={entry.id}
       data-selected={selection === 'fill' && selected(entry.id) || undefined}

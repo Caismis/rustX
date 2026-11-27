@@ -213,7 +213,7 @@ export const editorCss = {
   branchConditionRow: 'relative flex items-start gap-[4px] w-full',
   branchConditionControls: 'flex-1 min-w-0 rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-interactive-bg-hover-solid)] overflow-hidden',
   branchConditionTop: 'flex items-center min-h-[34px] px-[4px] py-[3px] [&>.ed-refpicker]:flex-1 [&>.ed-refpicker]:min-w-0 [&>.ed-refpicker]:m-0 [&_.ed-reftrigger]:w-full [&_.ed-reftrigger]:min-h-[27px] [&_.ed-reftrigger]:text-left',
-  branchVariableTrigger: 'ed-bvartrigger px-[4px] border-0 bg-transparent',
+  branchVariableTrigger: 'ed-bvartrigger [&.ed-bvartrigger]:px-[4px] [&.ed-bvartrigger]:py-0 [&.ed-bvartrigger]:border-0 [&.ed-bvartrigger]:bg-transparent',
   branchVariableToken: 'ed-bvartoken inline-flex items-center max-w-full gap-[4px] px-[6px] py-[4px] rounded-[var(--dsw-radius-sm)] bg-[var(--dsw-alias-bg-layer-1)] whitespace-nowrap overflow-hidden text-ellipsis [&_b]:flex-shrink-0 [&_b]:max-w-[65%] [&_b]:inline-flex [&_b]:items-center [&_b]:gap-[3px] [&_b]:min-w-0 [&_b]:[color:var(--dsw-alias-state-business-primary)] [&_b]:overflow-hidden [&_b]:text-ellipsis [&_b]:whitespace-nowrap [&_b]:font-medium',
   branchVariableSource: 'overflow-hidden text-ellipsis whitespace-nowrap',
   branchVariableSlash: '[color:var(--dsw-alias-label-tertiary)]',
