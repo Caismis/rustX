@@ -729,3 +729,77 @@ async fn subagent_receives_parent_hydrated_client_workspace_http_mcp_credentials
     drop(admitted);
     peer.join().unwrap();
 }
+
+#[cfg(feature = "mcp-fixture")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subagent_prepare_cancels_promptly_while_client_withholds_mcp_environment() {
+    use rustx_execution_protocol::transport::{read_record, write_record};
+    use rustx_execution_protocol::{Capability, ClientReply, ClientRequest};
+    use std::collections::BTreeSet;
+
+    let dir = tempfile::tempdir().expect("lab");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let canonical_workspace = workspace.canonicalize().expect("canonical workspace");
+
+    let (admitted, mut client): (
+        crate::local_runtime::session_runtime_manager::AdmittedTestExecution,
+        _,
+    ) = crate::local_runtime::session_runtime_manager::admitted_scope_for_workspace(
+        &canonical_workspace,
+        BTreeSet::from([Capability::Connection]),
+    );
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel::<()>();
+    let seen_tx = std::sync::Mutex::new(Some(seen_tx));
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let peer = std::thread::spawn(move || {
+        while let Ok(request) = read_record::<ClientRequest>(&mut client) {
+            let reply = match request {
+                ClientRequest::Ping => ClientReply::Pong,
+                ClientRequest::McpEnvironment(_) => {
+                    if let Some(sender) = seen_tx.lock().unwrap().take() {
+                        let _ = sender.send(());
+                    }
+                    let _ = release_rx.recv();
+                    break;
+                }
+                other => panic!("unexpected client request: {other:?}"),
+            };
+            write_record(&mut client, &reply).expect("write reply");
+        }
+    });
+
+    let registry = workspace_http_subagent_registry(
+        dir.path(),
+        canonical_workspace,
+        admitted.session.clone(),
+        admitted.scope.clone(),
+    );
+    let spec = workspace_http_subagent_spec(String::from("http://192.0.2.1:9/mcp"));
+    let attempt_cancellation = CancellationSignal::new();
+    let prepare = tokio::spawn({
+        let registry = registry.clone();
+        let cancellation = attempt_cancellation.clone();
+        async move { registry.prepare(&spec, &cancellation).await }
+    });
+
+    seen_rx.await.expect("McpEnvironment RPC entered wire");
+    let cancel_started = std::time::Instant::now();
+    attempt_cancellation.cancel();
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), prepare)
+        .await
+        .expect("cancellation must settle well before the 5s RPC budget")
+        .expect("prepare task must not panic");
+    assert!(
+        matches!(outcome, Err(SubagentStartError::Cancelled)),
+        "expected Cancelled, got {}",
+        outcome.map_or_else(|error| error.to_string(), |_| String::from("prepared"))
+    );
+    assert!(cancel_started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(registry.all_snapshots(), Vec::new());
+
+    drop(release_tx);
+    drop(registry);
+    drop(admitted);
+    peer.join().unwrap();
+}

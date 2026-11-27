@@ -3197,8 +3197,14 @@ exec /usr/bin/bwrap --die-with-parent --ro-bind / / --dev /dev --tmpfs "${{4%/*}
             service: "inventory".into(), origin: origin.clone(),
             names: std::collections::BTreeSet::from(["RUSTX_612_CLIENT_TOKEN".into()]),
         };
-        let granted = tokio::task::spawn_blocking(move || endpoint.mcp_environment(&grant_request))
-            .await.unwrap().unwrap_or_else(|error| panic!("Client grant failed: {:?}", error.kind()));
+        let deadline = std::time::Instant::now()
+            + crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
+        let granted = tokio::task::spawn_blocking(move || {
+            endpoint.mcp_environment_by(&grant_request, deadline)
+        })
+        .await
+        .unwrap()
+        .unwrap_or_else(|error| panic!("Client grant failed: {:?}", error.kind()));
         assert!(granted.len() == 1 && granted.get("RUSTX_612_CLIENT_TOKEN") == Some(&sentinel));
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;

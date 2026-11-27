@@ -842,11 +842,14 @@ impl LocalExecutionEndpoint {
             .ok_or_else(|| io::ErrorKind::NotConnected.into())
     }
 
-    pub(crate) fn mcp_environment(
+    pub(crate) const MCP_ENVIRONMENT_BUDGET: std::time::Duration =
+        std::time::Duration::from_secs(5);
+
+    pub(crate) fn mcp_environment_by(
         &self,
         request: &rustx_execution_protocol::mcp_environment::Request,
+        deadline: Instant,
     ) -> io::Result<std::collections::BTreeMap<String, String>> {
-        let deadline = Instant::now() + std::time::Duration::from_secs(5);
         self.with_bounded_data_connection(deadline, |connection| {
             connection.mcp_environment(request, deadline)
         })
@@ -5748,6 +5751,78 @@ selected = "all"
         .unwrap()
     }
 
+    async fn assert_selective_mcp_hydration(
+        mut bindings: crate::tools::mcp::McpServerBindings,
+        bound_workspace: &crate::tools::Workspace,
+        requested_services: &std::sync::Mutex<Vec<String>>,
+    ) {
+        let selected_id = crate::runtime::identity::McpServerId::new("selected");
+        let unselected_id = crate::runtime::identity::McpServerId::new("unselected");
+        let denied_id = crate::runtime::identity::McpServerId::new("denied");
+        let mut selected = bindings.remove(&selected_id).unwrap();
+        let unselected = bindings.remove(&unselected_id).unwrap();
+        let mut denied = bindings.remove(&denied_id).unwrap();
+        assert!(selected.credentials.client_owned);
+        assert!(unselected.credentials.client_owned);
+        assert!(selected.credentials.resolve().is_err());
+        assert!(unselected.credentials.resolve().is_err());
+
+        let no_cancel = crate::runtime::CancellationSignal::new();
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &selected_id,
+                &mut selected,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &selected_id,
+                &mut selected,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert_eq!(
+            *requested_services.lock().unwrap(),
+            vec![String::from("selected")],
+            "only the prepared selected service triggers one McpEnvironment RPC; unselected triggers zero"
+        );
+        assert_eq!(
+            selected.credentials.resolve().unwrap().headers["Authorization"].expose(),
+            "Bearer client-selected-secret"
+        );
+        assert!(unselected.credentials.resolve().is_err());
+
+        // Missing or denied Client grants mark the binding hydrated so follow-up steps never re-ask.
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &denied_id,
+                &mut denied,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &denied_id,
+                &mut denied,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert_eq!(
+            *requested_services.lock().unwrap(),
+            vec![String::from("selected"), String::from("denied")]
+        );
+        assert!(denied.credentials.resolve().is_err());
+    }
+
     #[tokio::test]
     async fn unselected_workspace_mcp_triggers_zero_client_environment_requests() {
         let root = tempfile::tempdir().unwrap();
@@ -5798,58 +5873,64 @@ sensitive_headers = { Authorization = "$DENIED_TOKEN" }
             "configuration capture must trigger zero Client McpEnvironment RPCs"
         );
 
-        let mut bindings = prospective.config.mcp_bindings().unwrap();
-        let selected_id = crate::runtime::identity::McpServerId::new("selected");
-        let unselected_id = crate::runtime::identity::McpServerId::new("unselected");
-        let denied_id = crate::runtime::identity::McpServerId::new("denied");
-        let mut selected = bindings.remove(&selected_id).unwrap();
-        let unselected = bindings.remove(&unselected_id).unwrap();
-        let mut denied = bindings.remove(&denied_id).unwrap();
-        assert!(selected.credentials.client_owned);
-        assert!(unselected.credentials.client_owned);
-        assert!(selected.credentials.resolve().is_err());
-        assert!(unselected.credentials.resolve().is_err());
-
         let bound_workspace =
             crate::tools::Workspace::for_session(&workspace, scope_for(&registry, &session))
                 .unwrap();
-        crate::tools::mcp::hydrate_client_credentials(
-            &selected_id,
-            &mut selected,
+        assert_selective_mcp_hydration(
+            prospective.config.mcp_bindings().unwrap(),
             &bound_workspace,
+            &requested_services,
         )
         .await;
-        crate::tools::mcp::hydrate_client_credentials(
-            &selected_id,
-            &mut selected,
-            &bound_workspace,
-        )
-        .await;
-        assert_eq!(
-            *requested_services.lock().unwrap(),
-            vec![String::from("selected")],
-            "only the prepared selected service triggers one McpEnvironment RPC; unselected triggers zero"
-        );
-        assert_eq!(
-            selected.credentials.resolve().unwrap().headers["Authorization"].expose(),
-            "Bearer client-selected-secret"
-        );
-        assert!(unselected.credentials.resolve().is_err());
-
-        // Missing or denied Client grants mark the binding hydrated so follow-up steps never re-ask.
-        crate::tools::mcp::hydrate_client_credentials(&denied_id, &mut denied, &bound_workspace)
-            .await;
-        crate::tools::mcp::hydrate_client_credentials(&denied_id, &mut denied, &bound_workspace)
-            .await;
-        assert_eq!(
-            *requested_services.lock().unwrap(),
-            vec![String::from("selected"), String::from("denied")]
-        );
-        assert!(denied.credentials.resolve().is_err());
 
         drop(endpoint);
         drop(registry);
         peer.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn expired_shared_deadline_skips_further_client_mcp_environment_requests() {
+        let (registry, session, endpoint, mut client, _workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([Capability::Connection]));
+        let scope = scope_for(&registry, &session);
+        let server_id = crate::runtime::identity::McpServerId::new("slow");
+        let mut binding = crate::tools::mcp::McpServerBinding {
+            credentials: crate::credentials::SourceCredentials {
+                headers: std::collections::BTreeMap::from([(
+                    String::from("Authorization"),
+                    crate::credentials::EnvironmentReference::from_name(String::from("SLOW_TOKEN")),
+                )]),
+                client_owned: true,
+                workspace_source: true,
+                ..Default::default()
+            },
+            transport: crate::tools::mcp::McpTransportConfig::StreamableHttp {
+                endpoint: String::from("http://workspace-fixture.invalid/mcp"),
+                headers: std::collections::BTreeMap::new(),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
+        };
+        let expired = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        let no_cancel = crate::runtime::CancellationSignal::new();
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                &server_id,
+                &mut binding,
+                &scope,
+                expired,
+                &no_cancel,
+            )
+            .await
+        );
+        wire_is_quiet(&mut client);
+        assert!(!binding.credentials.needs_client_hydration());
+        assert!(binding.credentials.resolve().is_err());
+        drop(endpoint);
+        drop(registry);
     }
 
     /// The shared data budget and the single writer permit are per

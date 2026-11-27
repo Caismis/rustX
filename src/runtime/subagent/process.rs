@@ -704,18 +704,24 @@ pub(crate) async fn spawn_staged(
         .resolved
         .model
         .export_process_credentials(&mut credentials);
+    let hydration_deadline = std::time::Instant::now()
+        + crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
     for (source_id, binding) in &mut wire_spec.resolved.materialization.sources {
         if let crate::capabilities::ToolSourceId::Mcp(server_id) = source_id
             && let Some(scope) = execution_scope.as_ref()
+            && !crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                server_id,
+                binding,
+                scope,
+                hydration_deadline,
+                preparation_cancellation,
+            )
+            .await
         {
-            if preparation_cancellation.is_cancelled() {
-                return Err(discard_unstaged_resources(
-                    runtime_root,
-                    SpawnError::Cancelled,
-                ));
-            }
-            crate::tools::mcp::hydrate_client_credentials_with_scope(server_id, binding, scope)
-                .await;
+            return Err(discard_unstaged_resources(
+                runtime_root,
+                SpawnError::Cancelled,
+            ));
         }
         binding
             .credentials

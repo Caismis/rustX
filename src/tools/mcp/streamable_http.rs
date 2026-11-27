@@ -2820,6 +2820,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn workspace_http_reexec_proof_rejects_zero_tests_run() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let proof_path = dir.path().join("proof.marker");
+        let empty_output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.00s\n\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        assert!(
+            super::workspace_http::verify_reexec_proof(
+                "target::exact_test",
+                &empty_output,
+                &proof_path
+            )
+            .is_err()
+        );
+
+        std::fs::write(&proof_path, "target::exact_test").unwrap();
+        assert!(
+            super::workspace_http::verify_reexec_proof(
+                "target::exact_test",
+                &empty_output,
+                &proof_path
+            )
+            .is_err()
+        );
+
+        let passed_output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"\nrunning 1 test\ntest target::exact_test ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.10s\n\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        assert!(
+            super::workspace_http::verify_reexec_proof(
+                "target::exact_test",
+                &passed_output,
+                &proof_path
+            )
+            .is_ok()
+        );
+    }
+
     /// A borrow-free way to call [`super::McpRequestAdmission::terminate`]
     /// through a shared reference in an iterator chain.
     trait McpRequestAdmissionExt {

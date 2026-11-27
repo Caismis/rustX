@@ -45,14 +45,79 @@ pub(crate) enum WorkspaceHttpFixtureIp {
 }
 
 #[allow(dead_code)]
+const WORKSPACE_HTTP_PROOF_FILE_ENV: &str = "RUSTX_WORKSPACE_HTTP_PROOF_FILE";
+
+#[allow(dead_code)]
+struct ProofFileCleanup(std::path::PathBuf);
+
+#[allow(dead_code)]
+impl ProofFileCleanup {
+    fn new(test_name: &str) -> Self {
+        static NEXT_PROOF_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let sanitized: String = test_name
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .take(48)
+            .collect();
+        let seq = NEXT_PROOF_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "rustx-workspace-http-proof-{}-{seq}-{sanitized}.marker",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&path);
+        Self(path)
+    }
+}
+
+impl Drop for ProofFileCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn verify_reexec_proof(
+    exact_test_name: &str,
+    output: &std::process::Output,
+    proof_path: &std::path::Path,
+) -> Result<(), String> {
+    if !output.status.success() {
+        return Err(format!("child exited with {}", output.status));
+    }
+    let marker = std::fs::read_to_string(proof_path).map_err(|error| {
+        format!(
+            "target test `{exact_test_name}` did not write execution proof at {}: {error}",
+            proof_path.display()
+        )
+    })?;
+    if marker != exact_test_name {
+        return Err(format!(
+            "execution proof mismatch: expected `{exact_test_name}`, recorded `{marker}`"
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.contains("test result: ok. 1 passed;") {
+        return Err(format!(
+            "expected `test result: ok. 1 passed;` in child libtest output for `{exact_test_name}`"
+        ));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(crate) fn ensure_private_ipv4_or_reexec(exact_test_name: &str) -> WorkspaceHttpFixtureIp {
     if let Some(ip) = select_private_ipv4() {
+        if let Some(proof_file) = std::env::var_os(WORKSPACE_HTTP_PROOF_FILE_ENV) {
+            std::fs::write(&proof_file, exact_test_name)
+                .expect("write workspace HTTP fixture execution proof");
+        }
         return WorkspaceHttpFixtureIp::Ready(ip);
     }
 
     #[cfg(target_os = "linux")]
     if std::env::var_os("RUSTX_WORKSPACE_HTTP_REEXEC").is_none() {
         let exe = std::env::current_exe().expect("current test executable");
+        let proof_file = ProofFileCleanup::new(exact_test_name);
         let mut command = std::process::Command::new("unshare");
         command.args([
             "-Urn",
@@ -62,22 +127,22 @@ pub(crate) fn ensure_private_ipv4_or_reexec(exact_test_name: &str) -> WorkspaceH
             "--",
         ]);
         command
+            .env(WORKSPACE_HTTP_PROOF_FILE_ENV, &proof_file.0)
             .arg(exe)
             .args(["--exact", exact_test_name, "--test-threads=1"]);
         if std::env::args().any(|arg| arg == "--ignored") {
             command.arg("--ignored");
         }
         match command.output() {
-            Ok(output) if output.status.success() => {
-                return WorkspaceHttpFixtureIp::DelegatedToIsolatedNetns;
-            }
             Ok(output) => {
-                panic!(
-                    "re-executing `{exact_test_name}` inside a disposable unshare -Urn fixture netns failed with {}:\nstdout:\n{}\nstderr:\n{}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                );
+                if let Err(reason) = verify_reexec_proof(exact_test_name, &output, &proof_file.0) {
+                    panic!(
+                        "re-executing `{exact_test_name}` inside a disposable unshare -Urn fixture netns failed verification ({reason}):\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr),
+                    );
+                }
+                return WorkspaceHttpFixtureIp::DelegatedToIsolatedNetns;
             }
             Err(error) => {
                 panic!(

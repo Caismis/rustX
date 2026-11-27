@@ -178,7 +178,7 @@ use crate::tools::limits::bounded_text_preview;
 use crate::tools::types::ToolInvocationPolicy;
 
 pub(crate) use connect::{
-    OwnedConnect, hydrate_client_credentials, hydrate_client_credentials_with_scope,
+    OwnedConnect, hydrate_client_credentials, hydrate_client_credentials_with_scope_until,
 };
 pub(crate) use connection::McpConnection;
 pub use executor::{

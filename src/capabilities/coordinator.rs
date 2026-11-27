@@ -1616,13 +1616,15 @@ impl CapabilityCoordinator {
                 let cancellation = &cancellation;
                 async move {
                     let owner = &self.inner.mcp_owner;
-                    if !cancellation.is_cancelled() {
-                        crate::tools::mcp::hydrate_client_credentials(
-                            &server_id,
-                            &mut binding,
-                            &owner.workspace,
-                        )
-                        .await;
+                    if !crate::tools::mcp::hydrate_client_credentials(
+                        &server_id,
+                        &mut binding,
+                        &owner.workspace,
+                        cancellation,
+                    )
+                    .await
+                    {
+                        return (server_id, Err("MCP preparation was cancelled".into()));
                     }
                     let key = startup_live_mcp.and_then(|required| {
                         let key = crate::tools::mcp::declaration_cache::DeclarationKey::for_source(

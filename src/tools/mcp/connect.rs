@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rmcp::ClientServiceExt;
 use rmcp::model::ProtocolVersion;
@@ -86,35 +87,48 @@ impl<'a> OwnedConnect<'a> {
 
 /// Hydrates Session-bound Client environment grants only when a service is actually
 /// prepared or connected. Unselected Workspace HTTP services never contact the Client.
+///
+/// Returns `false` if `cancellation` fired before or while waiting for the Client reply.
 pub(crate) async fn hydrate_client_credentials(
     server_id: &McpServerId,
     binding: &mut McpServerBinding,
     workspace: &Workspace,
-) {
+    cancellation: &CancellationSignal,
+) -> bool {
     let Some(scope) = workspace.execution_scope() else {
-        return;
+        return !cancellation.is_cancelled();
     };
-    hydrate_client_credentials_with_scope(server_id, binding, scope).await;
+    let deadline = Instant::now()
+        + crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
+    hydrate_client_credentials_with_scope_until(server_id, binding, scope, deadline, cancellation)
+        .await
 }
 
 /// Hydrates Session-bound Client environment grants using an explicit
-/// [`SessionExecutionScope`], e.g. when preparing an admitted Subagent child.
-pub(crate) async fn hydrate_client_credentials_with_scope(
+/// [`SessionExecutionScope`] under a shared `deadline` and `cancellation` signal.
+///
+/// Returns `false` if `cancellation` fired before or during the RPC.
+pub(crate) async fn hydrate_client_credentials_with_scope_until(
     server_id: &McpServerId,
     binding: &mut McpServerBinding,
     scope: &crate::local_runtime::session_runtime_manager::SessionExecutionScope,
-) {
+    deadline: Instant,
+    cancellation: &CancellationSignal,
+) -> bool {
+    if cancellation.is_cancelled() {
+        return false;
+    }
     if !binding.credentials.needs_client_hydration() {
-        return;
+        return true;
     }
     let McpTransportConfig::StreamableHttp { endpoint: url, .. } = &binding.transport else {
-        return;
+        return true;
     };
     let Ok(endpoint) = scope.endpoint() else {
-        return;
+        return true;
     };
     let Ok(parsed) = url::Url::parse(url) else {
-        return;
+        return true;
     };
     let request = rustx_execution_protocol::mcp_environment::Request {
         service: server_id.to_string(),
@@ -122,15 +136,29 @@ pub(crate) async fn hydrate_client_credentials_with_scope(
         names: binding.credentials.client_environment_names(),
     };
     if request.names.is_empty() {
-        return;
+        return true;
     }
-    let hydration = tokio::task::spawn_blocking(move || endpoint.mcp_environment(&request)).await;
+    if Instant::now() >= deadline {
+        binding.credentials.mark_client_hydrated();
+        return true;
+    }
+    let mut task =
+        tokio::task::spawn_blocking(move || endpoint.mcp_environment_by(&request, deadline));
+    let hydration = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => {
+            task.abort();
+            return false;
+        }
+        result = &mut task => result,
+    };
     binding.credentials.mark_client_hydrated();
     if let Ok(Ok(values)) = hydration {
         binding
             .credentials
             .capture(crate::credentials::CredentialSnapshot::new(values));
     }
+    true
 }
 
 impl McpServerRuntime {
@@ -191,9 +219,13 @@ impl McpServerRuntime {
             crate::local_runtime::static_effects::Effect::Connect,
         );
         let mut binding = request.binding.clone();
-        if !request.cancellation.is_cancelled() {
-            hydrate_client_credentials(request.server_id, &mut binding, request.workspace).await;
-        }
+        let _ = hydrate_client_credentials(
+            request.server_id,
+            &mut binding,
+            request.workspace,
+            &request.cancellation,
+        )
+        .await;
         let binding = binding.with_connection_redactions(request.server_id);
         let request = OwnedConnect {
             binding: &binding,
