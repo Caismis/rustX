@@ -19,7 +19,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
  * tokens here are important-ified to win over the coss base. */
 const GROUP_DESIGN = 'h-8 min-h-0! gap-[6px]! rounded-[8px]! px-[8px] shadow-none! before:hidden! has-focus-visible:ring-0! text-[14px]! sm:text-[14px]!'
 const ADDON_DESIGN = 'order-first! w-4! h-4! p-0! gap-0! [color:var(--dsw-alias-label-tertiary)]! [&_svg]:size-4! [&_svg]:opacity-100! [&_svg]:mx-0!'
-const INPUT_DESIGN = 'h-auto! py-0! px-0! text-[14px]! leading-[22px]! [color:var(--dsw-alias-label-primary)]! placeholder:[color:var(--dsw-alias-label-dimmed)] sm:h-auto! sm:leading-[22px]!'
+const INPUT_DESIGN = 'h-auto! py-px! px-0! text-[14px]! leading-[22px]! [color:var(--dsw-alias-label-primary)]! placeholder:[color:var(--dsw-alias-label-dimmed)] sm:h-auto! sm:leading-[22px]!'
 
 export const Input = forwardRef<HTMLInputElement, {
   icon?: ReactNode
