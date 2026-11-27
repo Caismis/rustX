@@ -2,11 +2,11 @@
   "schema": 114,
   "optimized": true,
   "iterations": 1000,
-  "full_native_read_ms_per_open": 2.6646945239999997,
-  "initialization_ms_per_open": 1.434049116,
-  "complete_schema_ms_per_open": 0.3409835,
-  "identity_ms_per_open": 0.01143998,
-  "owner_summary_close_ms_per_open": 0.837742133,
+  "full_native_read_ms_per_open": 2.6619626309999997,
+  "initialization_ms_per_open": 1.4517610859999999,
+  "complete_schema_ms_per_open": 0.362022091,
+  "identity_ms_per_open": 0.011719093,
+  "owner_summary_close_ms_per_open": 0.867452622,
   "schema_select_compilations_per_open": 4,
   "method": "fresh read-only connections to one warm native historical database; authorizer counts SELECT compilation only in split schema validation; diagnostic excludes manager/allocation/driver and is not the scale gate"
 }

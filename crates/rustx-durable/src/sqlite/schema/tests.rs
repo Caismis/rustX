@@ -23,6 +23,23 @@ fn canonical_schema_shape_fingerprint_matches_created_schema() {
 }
 
 #[test]
+fn schema_fingerprint_rejects_non_utf8_schema_text() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    create_schema(&mut connection).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA writable_schema=ON;
+             UPDATE sqlite_schema SET sql=CAST(x'ff' AS TEXT) WHERE name='rustx_store';
+             PRAGMA writable_schema=OFF;",
+        )
+        .unwrap();
+    assert!(matches!(
+        schema_shape_fingerprint(&connection),
+        Err(ConversationStoreError::IncompatibleSchema(detail)) if detail.contains("UTF-8")
+    ));
+}
+
+#[test]
 fn frontier_schema_rejects_fake_primary_index_and_damaged_goal_index() {
     for damage in ["partial", "descending", "missing_goal", "wrong_goal"] {
         let directory = tempfile::tempdir().unwrap();
