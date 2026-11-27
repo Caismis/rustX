@@ -178,13 +178,10 @@ body {
   --dsw-alias-border-l3: rgba(0, 0, 0, 0.12);
   --dsw-alias-switch-thumb: var(--dsw-static-neutral-bluish-00);
   --dsw-alias-border-l4: rgba(0, 0, 0, 0.16);
-  --dsw-alias-brand-primary-invert: var(--dsw-static-neutral-bluish-00);
+  --dsw-alias-brand-primary-invert: var(--dsw-static-neutral-bluish-1000);
   --dsw-alias-brand-primary-new-colorprimary-new-color: rgb(65, 118, 230);
-  /* Filled primary controls sit one step darker than state-business-primary
-     (deepseek-500) so white label text keeps 4.5:1 contrast — deepseek-500
-     itself measures 4.23 and fails the axe color-contrast rule. */
-  --dsw-alias-brand-primary: rgb(52, 98, 213);
-  --dsw-alias-brand-text: var(--dsw-static-deepseek-600);
+  --dsw-alias-brand-primary: var(--dsw-static-neutral-bluish-1000);
+  --dsw-alias-brand-text: var(--dsw-static-neutral-bluish-1000);
   --dsw-alias-button-contrast-fill: var(--dsw-static-neutral-bluish-700);
   --dsw-alias-button-elevated-fill: var(--dsw-static-neutral-bluish-00);
   --dsw-alias-button-floating-fill: var(--dsw-static-neutral-bluish-00);
@@ -196,7 +193,7 @@ body {
   --dsw-alias-button-info-hover: var(--dsw-static-deepseek-400);
   --dsw-alias-button-primary-dimmed: var(--dsw-static-neutral-bluish-100);
   --dsw-alias-button-primary-fill: var(--dsw-alias-brand-primary);
-  --dsw-alias-button-primary-hover: var(--dsw-static-deepseek-500);
+  --dsw-alias-button-primary-hover: var(--dsw-static-neutral-bluish-750);
   --dsw-alias-button-tool-bar-fill-invisible: rgba(31, 31, 31, 0.36);
   --dsw-alias-button-tool-bar-fill: rgba(84, 85, 87, 0.5);
   --dsw-alias-button-tool-bar-hover: rgba(84, 85, 87, 0.6);
@@ -283,10 +280,10 @@ body[data-ds-dark-theme] {
   --dsw-alias-border-l3: rgba(255, 255, 255, 0.16);
   --dsw-alias-switch-thumb: var(--dsw-static-neutral-bluish-400);
   --dsw-alias-border-l4: rgba(255, 255, 255, 0.2);
-  --dsw-alias-brand-primary-invert: var(--dsw-static-neutral-bluish-00);
+  --dsw-alias-brand-primary-invert: var(--dsw-static-neutral-bluish-50);
   --dsw-alias-brand-primary-new-colorprimary-new-color: var(--dsw-static-deepseek-450);
-  --dsw-alias-brand-primary: rgb(52, 98, 213);
-  --dsw-alias-brand-text: var(--dsw-static-deepseek-400);
+  --dsw-alias-brand-primary: var(--dsw-static-neutral-bluish-50);
+  --dsw-alias-brand-text: var(--dsw-static-neutral-bluish-50);
   --dsw-alias-button-contrast-fill: var(--dsw-static-neutral-bluish-50);
   --dsw-alias-button-elevated-fill: var(--dsw-static-neutral-bluish-750);
   --dsw-alias-button-floating-fill: var(--dsw-static-neutral-bluish-850);
@@ -298,7 +295,7 @@ body[data-ds-dark-theme] {
   --dsw-alias-button-info-hover: var(--dsw-static-deepseek-500);
   --dsw-alias-button-primary-dimmed: var(--dsw-static-neutral-bluish-750);
   --dsw-alias-button-primary-fill: var(--dsw-alias-brand-primary);
-  --dsw-alias-button-primary-hover: var(--dsw-static-deepseek-500);
+  --dsw-alias-button-primary-hover: var(--dsw-static-neutral-bluish-100);
   --dsw-alias-button-tool-bar-fill-invisible: rgba(31, 31, 31, 0.36);
   --dsw-alias-button-tool-bar-fill: rgba(84, 85, 87, 0.5);
   --dsw-alias-button-tool-bar-hover: rgba(84, 85, 87, 0.6);
@@ -313,9 +310,7 @@ body[data-ds-dark-theme] {
   --dsw-alias-label-dimmed: var(--dsw-static-neutral-bluish-750);
   --dsw-alias-label-primary-bluish: var(--dsw-static-neutral-bluish-50);
   --dsw-alias-label-primary-dimmed: var(--dsw-static-neutral-bluish-100);
-  /* With the blue (deepseek-600) brand fill, text and marks on primary
-     surfaces stay white — dark text would fall to 3.5:1. */
-  --dsw-alias-label-primary-foreground: var(--dsw-static-neutral-bluish-00);
+  --dsw-alias-label-primary-foreground: var(--dsw-static-neutral-bluish-1000);
   --dsw-alias-label-primary-inverted: var(--dsw-static-neutral-bluish-800);
   --dsw-alias-label-primary: var(--dsw-static-neutral-bluish-50);
   --dsw-alias-label-secondary: var(--dsw-static-neutral-bluish-300);

@@ -1422,7 +1422,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ead48d1cb3e8d0e361080a242b5f272333f63cddfbfe2377c509ff18c2539c2e"
+      "local_sha256": "0e4dd4867a973bd72d013e8e802536603ed1e1923c774791fb0749fa0ef94323"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
@@ -1616,6 +1616,7 @@
       "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371",
       "retained_dependencies": [
         "@/components/ui/button",
+        "clsx",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1626,7 +1627,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "004723c207214f019b643700cf8012f2cdd89f096213dcb1b9b4a93236b17ffd",
+      "local_sha256": "77721d6493e9400a12c11848fc7c1b29b7e390c6240d00785fe69002b7854c56",
       "classification": "A"
     },
     {
@@ -2103,7 +2104,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "bd724268533ab8af0d6c62cd153ab5da5cad0cdda0fcc270b0a278bc4d99cc2a",
+      "local_sha256": "d42b0d0f4e5960ee54138b877261237bdd7af2805333ff3a4b6c1608b29ea7ce",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
