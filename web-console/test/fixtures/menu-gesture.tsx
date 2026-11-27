@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CardMenu } from '../../src/presentation/catalog/CardMenu';
+import '../../src/components/ui/coss.css';
+import '../../src/presentation/theme/base.css';
+import '../../src/presentation/theme/gradient-shadow-text.css';
+import '../../src/presentation/theme/design-platform.css';
+import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 
 function Harness() {
