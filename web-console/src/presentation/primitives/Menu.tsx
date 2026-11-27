@@ -247,17 +247,20 @@ function SubmenuRow({ entry, parentOpen, selected, select, selection, press }: {
     const check = () => { if (!closing && measurable && clipped()) settle() }
     window.addEventListener('scroll', check, true)
     window.addEventListener('resize', check)
-    const observer = new IntersectionObserver((entries) => {
-      for (const record of entries) {
-        if (record.intersectionRatio === 0 && !record.isIntersecting) settle()
-      }
-    }, { threshold: 0 })
-    observer.observe(trigger)
+    let observer: IntersectionObserver | undefined
+    if (typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver((entries) => {
+        for (const record of entries) {
+          if (record.intersectionRatio === 0 && !record.isIntersecting) settle()
+        }
+      }, { threshold: 0 })
+      observer.observe(trigger)
+    }
     check()
     return () => {
       window.removeEventListener('scroll', check, true)
       window.removeEventListener('resize', check)
-      observer.disconnect()
+      observer?.disconnect()
     }
   }, [submenuOpen, ownership, entry.id])
 
