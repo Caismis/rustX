@@ -1747,6 +1747,7 @@
         "./icons/index.tsx",
         "./menuCss",
         "@/components/ui/menu",
+        "@base-ui/react/menu",
         "clsx",
         "react",
         "react-dom"
@@ -1759,7 +1760,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9e0e7c2b946548693da93c4cfe63b693bc543a716ead9107bbf58150b39c52d4",
+      "local_sha256": "0b1632da61ba7d412836504a440eadbb9bcac5f0dd2a70f15caf6d2aea61f293",
       "classification": "B",
       "additional_sources": [
         {
