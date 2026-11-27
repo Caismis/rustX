@@ -15,7 +15,7 @@ export function ApprovalTakeover({ title, description, detail, status, disabled,
  <div className="flex flex-col gap-[6px] box-border max-h-[var(--dsh-composer-text-max-height)] overflow-y-auto pt-[12px] px-[16px] pb-0" data-approval-scroll tabIndex={0} role="group" aria-label={tx('interactions:approval-takeover.approval-details')}>
  <div className="[color:var(--dsw-alias-label-primary)] text-[15px] font-medium leading-[24px]">{title}</div>
  {description && <p className="m-0 [color:var(--dsw-alias-label-secondary)] text-[13px] leading-[20px]">{description}</p>}
- <div className="[color:var(--dsw-alias-label-tertiary)] [font-family:var(--ds-font-family-code),monospace] text-[13px] leading-[20px] break-all [&>pre]:m-0 [&>pre]:[&>pre]:max-h-none [&>pre]:overflow-visible">{detail}</div>
+ <div className="[color:var(--dsw-alias-label-tertiary)] [font-family:var(--ds-font-family-code),monospace] text-[13px] leading-[20px] break-all [&>pre]:m-0 [&>pre]:[font-family:inherit] [&>pre]:[font-size:inherit] [&>pre]:[font-weight:inherit] [&>pre]:[line-height:inherit] [&>pre]:max-h-none [&>pre]:overflow-visible">{detail}</div>
  </div>
  <div className="flex justify-end gap-[8px] px-[16px] py-[14px]">
  <Button variant="outline" className="hover:not-disabled:bg-[var(--dsw-alias-interactive-bg-hover-danger)]! hover:not-disabled:[color:var(--dsw-alias-state-error-primary)]! hover:not-disabled:border-transparent!" disabled={disabled} onClick={onDeny}>{tx('interactions:approval-takeover.deny')}</Button>

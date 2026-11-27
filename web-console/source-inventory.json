@@ -1066,7 +1066,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "714b5da80177db7cf06a173c3bc9c59dab9aabb76f4ea71cea1dab7a70b848d7",
+      "local_sha256": "87db83cb2f87dd4a18d1b0a22e27321a0d56fc1c6d9224128becabfe3aa1c791",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-approval/src/client/ApprovalCard.tsx",
