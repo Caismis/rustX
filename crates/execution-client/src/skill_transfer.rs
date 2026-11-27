@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    fn transfer_resolves_local_home_and_product_aliases_without_following_cache_links() {
+    fn transfer_resolves_local_home_and_product_aliases() {
         use std::os::unix::fs::symlink;
         let temporary = tempfile::tempdir().unwrap();
         let base = temporary.path().canonicalize().unwrap();
@@ -1249,8 +1249,15 @@ mod tests {
                 .is_dir()
         );
         skills.lane_lost().unwrap();
-        let mut transfer = Transfer::default();
+    }
 
+    #[test]
+    fn transfer_resolves_collection_and_agents_aliases() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let arbitration = Arbitration::new();
+        let mut transfer = Transfer::default();
         let alternate_root = base.join("alternate-product");
         let collection_target = base.join("collection-target");
         fs::create_dir_all(alternate_root.join(".agents")).unwrap();
@@ -1300,7 +1307,15 @@ mod tests {
                 .is_dir()
         );
         transfer.lane_lost().unwrap();
+    }
 
+    #[test]
+    fn transfer_refuses_symlinked_cache_directory() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let arbitration = Arbitration::new();
+        let mut transfer = Transfer::default();
         let unowned = base.join("unowned");
         fs::create_dir(&unowned).unwrap();
         let linked = base.join("linked-product");
