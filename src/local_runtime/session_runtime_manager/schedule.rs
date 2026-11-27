@@ -14,37 +14,47 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
-// Scan reads repeat the same large SQLite schema initialization. Two stable OS
-// threads bound allocator arena high-water while preserving progress when one
-// native read remains physically active after its scan budget expires.
+// Scan reads repeat the same large SQLite schema initialization. Keep ordinary
+// scan reads on one stable OS thread for allocator and cache locality; a backup
+// thread preserves progress when a native read remains physically active after
+// its scan budget expires.
 #[derive(Clone)]
 pub(super) struct ScheduleScanReadLane {
-    sender: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+    primary: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+    backup: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+    primary_active: Arc<std::sync::atomic::AtomicBool>,
 }
 impl ScheduleScanReadLane {
     pub(super) fn new() -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
-        let receiver = Arc::new(Mutex::new(receiver));
-        for index in 0..2 {
-            let receiver = receiver.clone();
+        type ScanJob = Box<dyn FnOnce() + Send>;
+        fn spawn(
+            index: usize,
+            active: Option<Arc<std::sync::atomic::AtomicBool>>,
+        ) -> std::sync::mpsc::Sender<ScanJob> {
+            let (sender, receiver) = std::sync::mpsc::channel::<ScanJob>();
             std::thread::Builder::new()
                 .name(format!("rustx-scan-read-{index}"))
                 .spawn(move || {
-                    loop {
-                        let job = {
-                            let receiver = receiver.lock().expect("scan read lane");
-                            receiver.recv()
-                        };
-                        match job {
-                            Ok(job) => job(),
-                            Err(_) => break,
+                    while let Ok(job) = receiver.recv() {
+                        job();
+                        if let Some(active) = &active {
+                            active.store(false, std::sync::atomic::Ordering::SeqCst);
                         }
                     }
                 })
                 .expect("spawn Scheduler scan read lane");
+            sender
         }
-        Self { sender }
+        let primary_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let primary = spawn(0, Some(primary_active.clone()));
+        let backup = spawn(1, None);
+        Self {
+            primary,
+            backup,
+            primary_active,
+        }
     }
+
     fn submit<T>(
         &self,
         work: impl FnOnce() -> Result<T, RuntimeManagerError> + Send + 'static,
@@ -58,8 +68,15 @@ impl ScheduleScanReadLane {
                 .unwrap_or_else(|_| Err(error("Scheduler scan read worker panicked")));
             let _ = reply.send(result);
         });
-        self.sender
-            .send(job)
+        let lane = if self
+            .primary_active
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            &self.backup
+        } else {
+            &self.primary
+        };
+        lane.send(job)
             .map_err(|_| error("Scheduler scan read worker is unavailable"))?;
         Ok(receiver)
     }
