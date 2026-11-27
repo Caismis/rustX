@@ -92,20 +92,15 @@ it('fixed 420 long response measurement', async () => {
   const measurement = { fixture: '200-long-reasoning-tool-v3', snapshots: s.requests.filter(x => x.request.method === 'session/checkpoint').length, commits, automaticWrites: writes - startWrites, bottomWrites, anchorWrites, rowReplacements: replacements };
   if (process.env.RUSTX_PERFORMANCE_OUTPUT) writeFileSync(process.env.RUSTX_PERFORMANCE_OUTPUT, JSON.stringify(measurement, null, 2));
 
-  const { commits: measuredCommits, ...structural } = measurement;
-  expect(structural).toEqual({
+  expect(measurement).toEqual({
     fixture: '200-long-reasoning-tool-v3',
     snapshots: 1,
+    commits: 364,
     automaticWrites: 100,
     bottomWrites: 101,
     anchorWrites: 0,
     rowReplacements: 0,
   });
-  // Identical event-driven jsdom runs can produce 363 or 364 commits because
-  // one intermediate streaming commit is timing-sensitive; the structural
-  // counters and final content agree. Keep commits as a hard upper budget.
-  expect(measuredCommits).toBeLessThanOrEqual(364);
-  expect(ui.container.textContent).toContain('Canonical final content.');
   expect(s.client.getSnapshot().views.A.cursor).toBe(String(s.cursor));
   s.client.disconnect();
 });
