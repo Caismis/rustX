@@ -248,7 +248,7 @@ export const editorCss = {
   promptInputExpanded: 'ed-promptinput-x min-h-[calc(20lh+4px)] max-h-none',
   promptInputCompact: 'ed-promptinput-c min-h-[calc(1lh+4px)] max-h-[calc(8lh+4px)]',
   promptPlaceholder: 'absolute top-[2px] left-0 [color:var(--dsw-alias-label-tertiary)] text-[13px] leading-[1.7] pointer-events-none select-none',
-  promptVariable: 'inline-block mx-[1px] align-middle [&_.ed-refpicker]:m-0 [&_.ed-reftrigger]:w-auto [&_.ed-reftrigger]:min-h-[22px] [&_.ed-reftrigger]:px-[2px] [&_.ed-reftrigger]:border-0 [&_.ed-reftrigger]:bg-transparent [&_.ed-bvartoken]:px-[5px] [&_.ed-bvartoken]:py-[1px] [&_.ed-bvartoken]:text-[12px] [&_.ed-bvartoken]:leading-[18px]',
+  promptVariable: 'inline-block mx-[1px] align-middle [&_.ed-refpicker]:m-0 [&_.ed-reftrigger]:w-auto [&_.ed-reftrigger]:min-h-[22px] [&_.ed-reftrigger]:py-0 [&_.ed-reftrigger]:px-[2px] [&_.ed-reftrigger]:border-0 [&_.ed-reftrigger]:bg-transparent [&_.ed-bvartoken]:px-[5px] [&_.ed-bvartoken]:py-[1px] [&_.ed-bvartoken]:text-[12px] [&_.ed-bvartoken]:leading-[18px]',
   promptVariableIcon: '[font-family:var(--ds-font-family-code)] text-[11px] font-medium',
   promptRole: 'inline-flex items-center gap-[2px] h-[22px] px-[4px] ml-[-4px] border-0 rounded-[var(--dsw-radius-xs)] bg-transparent [color:var(--dsw-alias-label-secondary)] font-inherit text-[11px] font-medium tracking-[.02em] cursor-pointer data-[popup-open]:bg-[var(--dsw-alias-interactive-bg-hover)] [@media(hover:hover)]:hover:bg-[var(--dsw-alias-interactive-bg-hover)] [&_svg]:w-[12px] [&_svg]:h-[12px]',
   promptRoleFixed: 'text-[11px] font-medium tracking-[.02em] [color:var(--dsw-alias-label-secondary)]',
