@@ -1150,6 +1150,8 @@ impl SqliteConversationStore {
         configure_connection(&mut *store.lock()?, false)?;
         Ok(store.with_lifecycle(lifecycle))
     }
+    /// Opens an existing store solely for bounded schedule read operations.
+    /// The connection is SQLite read-only and does not install write observers.
     pub fn open_schedule_reader(
         conversation_id: ConversationId,
         path: &Path,
@@ -1255,7 +1257,11 @@ impl SqliteConversationStore {
         if let Some(scope) = scope {
             scope.check()?;
         }
-        Self::from_validated_connection(conversation_id, connection)
+        if scope.is_some() {
+            Self::from_validated_schedule_reader(conversation_id, connection)
+        } else {
+            Self::from_validated_connection(conversation_id, connection)
+        }
     }
     /// Creates an in-memory store for tests and headless ephemeral runs.
     ///
@@ -1285,6 +1291,37 @@ impl SqliteConversationStore {
         bind_identity(&mut connection, &conversation_id)?;
         Self::from_validated_connection(conversation_id, connection)
     }
+    fn from_validated_schedule_reader(
+        conversation_id: ConversationId,
+        connection: Connection,
+    ) -> Result<Self, ConversationStoreError> {
+        // Schedule probes are read-only, short-lived and closed after one bounded
+        // header operation. Write capture and invalidation observers cannot be
+        // used through SQLite's read-only connection, so do not install them.
+        connection.set_prepared_statement_cache_capacity(256);
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .map_err(|error| storage(format!("configure stable SQLite plans: {error}")))?;
+        Ok(Self::from_connection_owner(
+            conversation_id,
+            Arc::new(ConnectionOwner {
+                available: Mutex::new(ConnectionSlot::new(connection)),
+                manifest: manifest::Owner::uninstalled(),
+                append_validation: append_validation::Owner::uninstalled(),
+                response: observation_response::Owner::uninstalled(),
+                event_guard: event_insert::Guard::uninstalled(),
+                transaction_writes: Arc::new(AtomicBool::new(false)),
+                wake: Condvar::new(),
+                poisoned: AtomicBool::new(false),
+                lease_generation: AtomicU64::new(0),
+                active_interrupt: Mutex::new(None),
+            }),
+        ))
+    }
+
     pub fn from_validated_connection(
         conversation_id: ConversationId,
         connection: Connection,

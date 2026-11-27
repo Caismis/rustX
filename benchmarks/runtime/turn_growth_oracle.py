@@ -3,6 +3,7 @@ import json
 
 PROMPT, RESPONSE = 'turn growth', 'ok'
 TOOL_TEXT = 'fixed tool result'
+PERMISSION_REMINDER = '<system-reminder>\nExecution permission mode: plan. All selected tools remain visible. Native reads and approved bookkeeping are allowed; Write/Edit may change only workspace-root PLAN.md; Bash must be proven read-only. Other defaults require elevation_reason for human approval.\n</system-reminder>'
 MUTATION_COMMAND = "printf 'in-turn\\n' > growth-modified.txt\nprintf 'created\\n' > turn-created.txt\nrm turn-deleted.txt\ncat fixture.txt"
 
 
@@ -39,6 +40,8 @@ def verify_request(body, index, kind, mutations=False):
     expected = []
     for turn in range(current + 1):
         expected.append(('user', PROMPT))
+        if turn == 0:
+            expected.append(('user', PERMISSION_REMINDER))
         if kind == 'tool' and (turn < current or index % 2):
             expected.extend([('call', tool_call(turn, mutations)), ('tool', tool_call(turn, mutations)[0])])
         if turn < current:
