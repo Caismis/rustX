@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use base64::Engine as _;
 use rustix::fs::{AtFlags, Mode, OFlags};
-use rustx_confined_fs::PackageDirectory;
+use rustx_confined_fs::{FileMetadata, PackageDirectory};
 use rustx_execution_protocol::save::Sha256Hex;
 use rustx_execution_protocol::skills::{
     CACHE_DIRECTORY, CACHE_LOCK, COLLECTION_PROOF_DIRECTORY, COLLECTION_PROOF_MARKER,
@@ -27,6 +27,7 @@ use rustx_execution_server::LocalConnection;
 use sha2::{Digest, Sha256};
 
 use super::LocalExecutionEndpoint;
+use crate::skills::package::SkillMarkerChanged;
 
 struct ProbeFile<'a> {
     root: &'a PackageDirectory,
@@ -43,6 +44,23 @@ struct SharedRoot {
 enum CandidateIdentity {
     Package(PathBuf, PackageIdentity),
     Standalone(String, EntryIdentity),
+}
+
+struct CapturedMarker {
+    path: PathBuf,
+    revision: FileMetadata,
+}
+
+impl CapturedMarker {
+    fn verify(&self, source: &PackageDirectory, name: &std::ffi::OsStr) -> io::Result<()> {
+        let actual = source
+            .entry_metadata(Path::new(name))
+            .map_err(SkillMarkerChanged::if_missing)?;
+        if actual != self.revision {
+            return Err(SkillMarkerChanged::io_error());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -345,7 +363,7 @@ fn regular_file_identity(
 fn host_candidate_identities(
     collection: &PackageDirectory,
     root: &Path,
-    files: &[PathBuf],
+    files: &[CapturedMarker],
     signal: &crate::runtime::CancellationSignal,
     deadline: Instant,
 ) -> io::Result<Vec<Option<CandidateIdentity>>> {
@@ -356,6 +374,7 @@ fn host_candidate_identities(
             return Err(io::ErrorKind::TimedOut.into());
         }
         let relative = marker
+            .path
             .strip_prefix(root)
             .map_err(|_| io::ErrorKind::InvalidData)?;
         let identity = if relative.file_name().is_some_and(|name| name == "SKILL.md") {
@@ -391,6 +410,18 @@ fn host_candidate_identities(
 }
 
 impl LocalExecutionEndpoint {
+    #[cfg(test)]
+    pub(crate) fn after_user_skill_capture(&self, hook: impl FnOnce() + Send + 'static) {
+        let was_empty = self
+            .test_hooks
+            .lock()
+            .unwrap()
+            .after_user_skill_capture
+            .replace(Box::new(hook))
+            .is_none();
+        assert!(was_empty);
+    }
+
     fn inspect_skill_collection(
         &self,
         probe: Option<String>,
@@ -418,7 +449,7 @@ impl LocalExecutionEndpoint {
         client_collection: &Path,
         client_identity: Option<&EntryIdentity>,
         root_proof: &SharedRoot,
-        files: &[PathBuf],
+        files: &[CapturedMarker],
         signal: &crate::runtime::CancellationSignal,
         deadline: Instant,
     ) -> io::Result<Vec<bool>> {
@@ -654,7 +685,16 @@ impl LocalExecutionEndpoint {
         let sync = self
             .user_skill_flights
             .run(host_home, signal, deadline, |flight| {
-                self.sync_user_skills_owned(host_home, signal, deadline, flight)
+                loop {
+                    crate::package_io::check_cancelled(signal)?;
+                    if Instant::now() >= deadline {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    match self.sync_user_skills_owned(host_home, signal, deadline, flight) {
+                        Err(error) if SkillMarkerChanged::matches(&error) => {}
+                        result => return result,
+                    }
+                }
             })?;
         Ok((sync.collection, sync.paths, sync.capture))
     }
@@ -672,6 +712,18 @@ impl LocalExecutionEndpoint {
     ) -> io::Result<UserSkillSync> {
         let host_collection = host_home.join("rustx/.agents/skills");
         let capture = crate::skills::package::capture_user_skills(&host_collection, signal)?;
+        #[cfg(test)]
+        {
+            let hook = self
+                .test_hooks
+                .lock()
+                .unwrap()
+                .after_user_skill_capture
+                .take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         flight.progressed();
         let client_root = self.user_root.get().cloned().ok_or_else(|| {
             io::Error::new(
@@ -680,7 +732,10 @@ impl LocalExecutionEndpoint {
             )
         })?;
         let inert_collection = client_root.join(".agents/skills");
-        let found: Vec<_> = capture.candidates().collect();
+        let found: Vec<_> = capture
+            .candidates()
+            .map(|(path, revision)| (path.to_path_buf(), revision.cloned()))
+            .collect();
         if found.is_empty() {
             return Ok(UserSkillSync {
                 collection: inert_collection,
@@ -691,19 +746,18 @@ impl LocalExecutionEndpoint {
         let host_collection = match host_collection.canonicalize() {
             Ok(root) => root,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(UserSkillSync {
-                    collection: inert_collection,
-                    paths: BTreeMap::new(),
-                    capture,
-                });
+                return Err(SkillMarkerChanged::io_error());
             }
             Err(error) => return Err(error),
         };
         let mut invalid_relative = Vec::new();
         let mut valid_files = Vec::new();
-        for (marker, valid) in found {
-            if valid {
-                valid_files.push(marker);
+        for (marker, revision) in found {
+            if let Some(revision) = revision {
+                valid_files.push(CapturedMarker {
+                    path: marker,
+                    revision,
+                });
             } else {
                 let relative = marker
                     .strip_prefix(&host_collection)
@@ -754,7 +808,15 @@ impl LocalExecutionEndpoint {
         let mut to_copy = Vec::new();
         for (marker, is_shared) in valid_files.into_iter().zip(shared) {
             if is_shared {
+                let package = marker
+                    .path
+                    .file_name()
+                    .is_some_and(|name| name == "SKILL.md");
+                let (source, name) =
+                    marker_source(&marker.path, package).map_err(SkillMarkerChanged::if_missing)?;
+                marker.verify(&source, &name)?;
                 let relative = marker
+                    .path
                     .strip_prefix(&host_collection)
                     .map_err(|_| io::ErrorKind::InvalidData)?;
                 paths.insert(relative.to_owned(), client_collection.join(relative));
@@ -924,7 +986,7 @@ fn sync_packages(
     authority: &str,
     host_collection: &Path,
     client_collection: &Path,
-    files: &[PathBuf],
+    files: &[CapturedMarker],
     signal: &crate::runtime::CancellationSignal,
     deadline: Instant,
     flight: &SyncFlight,
@@ -981,7 +1043,7 @@ fn sync_locked(
     authority: &str,
     host_collection: &Path,
     client_collection: &Path,
-    files: &[PathBuf],
+    files: &[CapturedMarker],
     signal: &crate::runtime::CancellationSignal,
     flight: &SyncFlight,
 ) -> io::Result<BTreeMap<PathBuf, PathBuf>> {
@@ -990,19 +1052,23 @@ fn sync_locked(
     for marker in files {
         crate::package_io::check_cancelled(signal)?;
         flight.progressed();
-        let relative = marker
+        let path = &marker.path;
+        let relative = path
             .strip_prefix(host_collection)
             .map_err(|_| io::ErrorKind::InvalidData)?;
-        let package_dir = marker.file_name().is_some_and(|name| name == "SKILL.md");
-        let selected_marker = marker.canonicalize()?;
-        let (source, source_name) = marker_source(marker, package_dir)?;
+        let package_dir = path.file_name().is_some_and(|name| name == "SKILL.md");
+        let selected_marker = path
+            .canonicalize()
+            .map_err(SkillMarkerChanged::if_missing)?;
+        let (source, source_name) =
+            marker_source(path, package_dir).map_err(SkillMarkerChanged::if_missing)?;
+        marker.verify(&source, &source_name)?;
         let digest = if package_dir {
-            marker_digest(&source, &source_name, signal)?
+            marker_digest(&source, &source_name, signal).map_err(SkillMarkerChanged::if_missing)?
         } else {
             None
         };
-        let before = source.file(Path::new(&source_name))?.metadata()?;
-        let marker_stamp = file_stamp(&before);
+        marker.verify(&source, &source_name)?;
         let mut hash = Sha256::new();
         hash.update(b"rustx user skill version v1\0");
         hash.update(relative.as_os_str().as_bytes());
@@ -1013,7 +1079,7 @@ fn sync_locked(
             // same staged path for repeated captures in this one binding,
             // while every new Client bind copies it again.
             hash.update(connection.admission().instance.as_str().as_bytes());
-            hash.update(format!("{marker_stamp:?}").as_bytes());
+            hash.update(marker.revision.revision.as_bytes());
         }
         let version = String::from(Sha256Hex::from_digest(hash.finalize().into()));
         let fallback = String::from(Sha256Hex::of(
@@ -1041,15 +1107,17 @@ fn sync_locked(
                 }
             }
             if let Some(path) = cached {
-                if marker_digest(&source, &source_name, signal)? != Some(expected)
-                    || file_stamp(&source.file(Path::new(&source_name))?.metadata()?)
-                        != marker_stamp
-                    || marker.canonicalize()? != selected_marker
+                marker.verify(&source, &source_name)?;
+                if marker_digest(&source, &source_name, signal)
+                    .map_err(SkillMarkerChanged::if_missing)?
+                    != Some(expected)
+                    || marker
+                        .path
+                        .canonicalize()
+                        .map_err(SkillMarkerChanged::if_missing)?
+                        != selected_marker
                 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Skill marker changed during inquiry",
-                    ));
+                    return Err(SkillMarkerChanged::io_error());
                 }
                 mapped.insert(
                     relative.to_path_buf(),
@@ -1068,20 +1136,19 @@ fn sync_locked(
                     if package == cache_path(authority, &version) =>
                 {
                     charge_retained(&mut total, bytes.get())?;
-                    if file_stamp(&source.file(Path::new(&source_name))?.metadata()?)
-                        != marker_stamp
-                        || marker.canonicalize()? != selected_marker
+                    marker.verify(&source, &source_name)?;
+                    if path
+                        .canonicalize()
+                        .map_err(SkillMarkerChanged::if_missing)?
+                        != selected_marker
                     {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Skill marker changed during inquiry",
-                        ));
+                        return Err(SkillMarkerChanged::io_error());
                     }
                     mapped.insert(
                         relative.to_path_buf(),
                         client_collection
                             .join(package)
-                            .join(marker.file_name().ok_or(io::ErrorKind::InvalidData)?),
+                            .join(path.file_name().ok_or(io::ErrorKind::InvalidData)?),
                     );
                     continue;
                 }
@@ -1128,28 +1195,25 @@ fn sync_locked(
                     connection,
                     &source,
                     Path::new(&source_name),
-                    Path::new(marker.file_name().ok_or(io::ErrorKind::InvalidData)?),
+                    Path::new(path.file_name().ok_or(io::ErrorKind::InvalidData)?),
                     &mut budget,
                 )?;
             }
-            if digest.is_some() && marker_digest(&source, &source_name, signal)? != digest {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Skill marker changed during copy",
-                ));
-            }
-            if file_stamp(&source.file(Path::new(&source_name))?.metadata()?) != marker_stamp {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Skill marker changed during copy",
-                ));
+            marker.verify(&source, &source_name)?;
+            if digest.is_some()
+                && marker_digest(&source, &source_name, signal)
+                    .map_err(SkillMarkerChanged::if_missing)?
+                    != digest
+            {
+                return Err(SkillMarkerChanged::io_error());
             }
             source.verify()?;
-            if marker.canonicalize()? != selected_marker {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Skill source changed during copy",
-                ));
+            if path
+                .canonicalize()
+                .map_err(SkillMarkerChanged::if_missing)?
+                != selected_marker
+            {
+                return Err(SkillMarkerChanged::io_error());
             }
             match connection.user_skill_transfer_until(&Request::Publish, wire_deadline())? {
                 Reply::Published { package } if package == path => break package,
@@ -1157,7 +1221,7 @@ fn sync_locked(
                 _ => return Err(io::ErrorKind::InvalidData.into()),
             }
         };
-        let filename = marker.file_name().ok_or(io::ErrorKind::InvalidData)?;
+        let filename = path.file_name().ok_or(io::ErrorKind::InvalidData)?;
         mapped.insert(
             relative.to_path_buf(),
             client_collection.join(client_package).join(filename),
@@ -1212,7 +1276,7 @@ fn marker_digest(
     let mut file = source.file(Path::new(name))?;
     let entry = source.entry_metadata(Path::new(name))?;
     if rustx_confined_fs::FileMetadata::of(&file)? != entry {
-        return Err(io::ErrorKind::InvalidData.into());
+        return Err(SkillMarkerChanged::io_error());
     }
     let before = file.metadata()?;
     if !before.is_file() {
@@ -1245,10 +1309,7 @@ fn marker_digest(
         || file_stamp(&before) != file_stamp(&after)
         || source.entry_metadata(Path::new(name))? != entry
     {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "skill marker changed during inquiry",
-        ));
+        return Err(SkillMarkerChanged::io_error());
     }
     Ok(Some(Sha256Hex::from_digest(digest.finalize().into())))
 }

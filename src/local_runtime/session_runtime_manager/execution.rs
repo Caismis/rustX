@@ -176,6 +176,7 @@ impl Drop for ClientStartupOwner<'_> {
 #[derive(Default)]
 struct ExecutionTestHooks {
     expire_bash_capture_query: bool,
+    after_user_skill_capture: Option<Box<dyn FnOnce() + Send>>,
     local_startup: Option<super::super::configuration::ConfigurationHooks>,
     before_settlement_cleanup: Option<(
         tokio::sync::oneshot::Sender<()>,

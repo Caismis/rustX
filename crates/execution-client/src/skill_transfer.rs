@@ -25,6 +25,7 @@ use super::mutation::Arbitration;
 
 const MARKER: &str = ".rustx-owned";
 const MARKER_CONTENT: &[u8] = b"rustx user skill cache v1\n";
+const AUTHORITY_LOCK: &str = ".lock";
 const VERSION_MARKER: &str = ".version";
 const LEASE: &str = ".lease";
 const SIZE: &str = ".bytes";
@@ -144,34 +145,11 @@ impl Transfer {
             Err(error) => return Err(error.into()),
         }
         let cache = ensure_owned(&skills, OsStr::new(CACHE))?;
-        let names = cache.names(MAX_CACHE_AUTHORITIES * 2 + 1)?;
-        let mut owners = 0;
-        let mut present = false;
-        for name in names {
-            if let Some(text) = name.to_str().filter(|name| valid_cache_id(name)) {
-                owners += 1;
-                present |= text == authority;
-            }
-        }
-        if !present && owners >= MAX_CACHE_AUTHORITIES {
-            return Err(io::Error::new(
-                io::ErrorKind::FileTooLarge,
-                "User Skill cache authority limit reached",
-            ));
-        }
+        make_authority_room(&cache, authority)?;
         let owner = ensure_owned(&cache, OsStr::new(authority))?;
-        owner.verify()?;
-        let lock = File::from(rustix::fs::openat(
-            owner.descriptor(),
-            ".lock",
-            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        )?);
-        match rustix::fs::flock(&lock, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => {}
-            Err(rustix::io::Errno::AGAIN) => return Ok(Reply::Busy),
-            Err(error) => return Err(error.into()),
-        }
+        let Some(lock) = lock_authority(&owner)? else {
+            return Ok(Reply::Busy);
+        };
         cleanup_stages(&owner)?;
         self.sync = Some(Sync {
             authority: authority.to_owned(),
@@ -532,6 +510,102 @@ fn version_size(directory: &PackageDirectory) -> io::Result<u64> {
     Ok(size)
 }
 
+fn lock_authority(owner: &PackageDirectory) -> io::Result<Option<File>> {
+    owner.verify()?;
+    let file = File::from(rustix::fs::openat(
+        owner.descriptor(),
+        AUTHORITY_LOCK,
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )?);
+    if !file.metadata()?.is_file() {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    match rustix::fs::flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(Some(file)),
+        Err(rustix::io::Errno::AGAIN) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+// The collection initializer stays locked through eviction and new-owner
+// creation. A resumed sync cannot reopen an authority while it is retired.
+fn make_authority_room(cache: &PackageDirectory, requested: &str) -> io::Result<()> {
+    let owners: Vec<_> = cache
+        .names(MAX_CACHE_AUTHORITIES * 2 + 1)?
+        .into_iter()
+        .filter(|name| name.to_str().is_some_and(valid_cache_id))
+        .collect();
+    let mut remaining = owners.len();
+    if remaining < MAX_CACHE_AUTHORITIES || owners.iter().any(|name| name == OsStr::new(requested))
+    {
+        return Ok(());
+    }
+    for name in owners {
+        remaining -= usize::from(retire_inactive_authority(cache, name.as_os_str())?);
+        if remaining < MAX_CACHE_AUTHORITIES {
+            return Ok(());
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        "live or unowned User Skill authorities exhaust the cache bound",
+    ))
+}
+
+fn retire_inactive_authority(cache: &PackageDirectory, name: &OsStr) -> io::Result<bool> {
+    let Ok(owner) = cache.child(name) else {
+        return Ok(false);
+    };
+    if verify_marker(&owner, MARKER).is_err() {
+        return Ok(false);
+    }
+    let Some(_lock) = lock_authority(&owner)? else {
+        return Ok(false);
+    };
+    let mut children = Vec::new();
+    for child in owner.names(MAX_CACHE_VERSIONS * 2 + 4)? {
+        let Some(text) = child.to_str() else {
+            return Ok(false);
+        };
+        if matches!(text, MARKER | AUTHORITY_LOCK) {
+            continue;
+        }
+        let version = valid_cache_id(text);
+        if !version && !stage_name(text) {
+            return Ok(false);
+        }
+        let Ok(directory) = owner.child(child.as_os_str()) else {
+            return Ok(false);
+        };
+        if verify_marker(&directory, VERSION_MARKER).is_err() {
+            return Ok(false);
+        }
+        if version {
+            let Ok(lease) = open_existing(&directory, LEASE) else {
+                return Ok(false);
+            };
+            // Retain and Publish both require the authority lock. Until we
+            // drop it, a version that has no lease cannot acquire one.
+            match rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive) {
+                Ok(()) => {}
+                Err(rustix::io::Errno::AGAIN) => return Ok(false),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        children.push(child);
+    }
+    for child in children {
+        remove_tree(&owner, child.as_os_str(), &mut (MAX_PACKAGE_ENTRIES + 5))?;
+    }
+    owner.verify()?;
+    rustix::fs::unlinkat(owner.descriptor(), AUTHORITY_LOCK, AtFlags::empty())?;
+    rustix::fs::unlinkat(owner.descriptor(), MARKER, AtFlags::empty())?;
+    cache.verify()?;
+    rustix::fs::unlinkat(cache.descriptor(), name, AtFlags::REMOVEDIR)?;
+    Ok(true)
+}
+
 /// Evict oldest unleased versions when an incoming package would exceed the
 /// per-authority retention bound. Metadata reads are shallow and bounded.
 fn prune(owner: &PackageDirectory, incoming: u64) -> io::Result<()> {
@@ -579,14 +653,7 @@ fn prune(owner: &PackageDirectory, incoming: u64) -> io::Result<()> {
 fn cleanup_stages(owner: &PackageDirectory) -> io::Result<()> {
     for name in owner.names(MAX_CACHE_VERSIONS * 2 + 4)? {
         let Some(text) = name.to_str() else { continue };
-        let Some(suffix) = text.strip_prefix(".stage-") else {
-            continue;
-        };
-        if suffix.len() != 32
-            || !suffix
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !stage_name(text) {
             continue;
         }
         let stage = owner.child(name.as_os_str())?;
@@ -594,6 +661,15 @@ fn cleanup_stages(owner: &PackageDirectory) -> io::Result<()> {
         remove_tree(owner, name.as_os_str(), &mut (MAX_PACKAGE_ENTRIES + 5))?;
     }
     Ok(())
+}
+
+fn stage_name(name: &str) -> bool {
+    name.strip_prefix(".stage-").is_some_and(|suffix| {
+        suffix.len() == 32
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn remove_tree(parent: &PackageDirectory, name: &OsStr, remaining: &mut usize) -> io::Result<()> {
@@ -676,6 +752,79 @@ mod tests {
     ) -> io::Result<Reply> {
         let collection = super::super::skills::UserSkills::collection_path(root)?;
         transfer.dispatch(root, &collection, &request, arbitration)
+    }
+
+    #[test]
+    fn authority_limit_reclaims_inactive_owners_and_preserves_live_versions() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap().join("rustx");
+        let arbitration = Arbitration::new();
+        let begin = |transfer: &mut Transfer, authority| {
+            call(
+                transfer,
+                &root,
+                &arbitration,
+                Request::BeginSync { authority },
+            )
+            .unwrap()
+        };
+        let authority = |index: usize| format!("{index:064x}");
+        let bytes = b"live instructions";
+        let mut reader = Transfer::default();
+        assert_eq!(begin(&mut reader, authority(0)), Reply::SyncStarted);
+        let published = [
+            Request::BeginPackage {
+                version: version('a'),
+            },
+            Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(bytes.len() as u64),
+                executable: false,
+            },
+            Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+            Request::EndFile,
+        ];
+        for request in published {
+            assert_eq!(
+                call(&mut reader, &root, &arbitration, request).unwrap(),
+                Reply::Accepted
+            );
+        }
+        let Reply::Published { package } =
+            call(&mut reader, &root, &arbitration, Request::Publish).unwrap()
+        else {
+            panic!("expected a published version");
+        };
+        reader.lane_lost().unwrap();
+
+        let mut active = Transfer::default();
+        assert_eq!(begin(&mut active, authority(1)), Reply::SyncStarted);
+        let mut inactive = Transfer::default();
+        for index in 2..MAX_CACHE_AUTHORITIES {
+            assert_eq!(begin(&mut inactive, authority(index)), Reply::SyncStarted);
+            inactive.lane_lost().unwrap();
+        }
+        assert_eq!(
+            begin(&mut inactive, authority(MAX_CACHE_AUTHORITIES)),
+            Reply::SyncStarted
+        );
+        let collection = root.join(".agents/skills");
+        assert_eq!(
+            fs::read(collection.join(package).join("SKILL.md")).unwrap(),
+            bytes
+        );
+        let cache = collection.join(CACHE);
+        assert!(cache.join(authority(1)).is_dir());
+        assert_eq!(
+            fs::read_dir(cache)
+                .unwrap()
+                .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
+                .count(),
+            MAX_CACHE_AUTHORITIES
+        );
     }
 
     #[test]

@@ -28,6 +28,7 @@ mod locations;
 use std::collections::BTreeMap;
 use std::io;
 
+use rustx_confined_fs::{FileMetadata, PackageDirectory};
 use rustx_execution_protocol::EntryKind;
 
 use super::tree::{Client, Native, SkillTree, SkillWatchObservation};
@@ -302,6 +303,7 @@ struct Candidate {
     offered: PathBuf,
     canonical: PathBuf,
     package: Option<SkillPackage>,
+    marker_revision: Option<FileMetadata>,
     bound: bool,
 }
 
@@ -314,11 +316,63 @@ pub(crate) struct UserSkillCapture {
 }
 
 impl UserSkillCapture {
-    pub(crate) fn candidates(&self) -> impl Iterator<Item = (PathBuf, bool)> + '_ {
-        self.candidates
-            .iter()
-            .map(|candidate| (candidate.offered.clone(), candidate.package.is_some()))
+    pub(crate) fn candidates(&self) -> impl Iterator<Item = (&Path, Option<&FileMetadata>)> + '_ {
+        self.candidates.iter().map(|candidate| {
+            (
+                candidate.offered.as_path(),
+                candidate.marker_revision.as_ref(),
+            )
+        })
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("User Skill marker changed during capture")]
+pub(crate) struct SkillMarkerChanged;
+
+impl SkillMarkerChanged {
+    pub(crate) fn io_error() -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, Self)
+    }
+
+    pub(crate) fn matches(error: &io::Error) -> bool {
+        error.get_ref().is_some_and(|cause| cause.is::<Self>())
+    }
+
+    pub(crate) fn if_missing(error: io::Error) -> io::Error {
+        if error.kind() == io::ErrorKind::NotFound {
+            Self::io_error()
+        } else {
+            error
+        }
+    }
+}
+
+fn bound_user_frontmatter(
+    canonical: &Path,
+    signal: &crate::runtime::CancellationSignal,
+) -> io::Result<(Vec<u8>, Option<FileMetadata>)> {
+    use super::frontmatter::{BUFFER_BYTES, prefix};
+    let parent = canonical.parent().ok_or(io::ErrorKind::InvalidData)?;
+    let name = Path::new(canonical.file_name().ok_or(io::ErrorKind::InvalidData)?);
+    let directory = PackageDirectory::open(parent).map_err(SkillMarkerChanged::if_missing)?;
+    let file = directory
+        .file(name)
+        .map_err(SkillMarkerChanged::if_missing)?;
+    let opened = FileMetadata::of(&file)?;
+    let header = prefix(
+        &mut io::BufReader::with_capacity(BUFFER_BYTES, &file),
+        signal,
+    );
+    if FileMetadata::of(&file)? != opened
+        || directory
+            .entry_metadata(name)
+            .map_err(SkillMarkerChanged::if_missing)?
+            != opened
+    {
+        return Err(SkillMarkerChanged::io_error());
+    }
+    Ok((header?.0, Some(opened)))
 }
 
 impl SkillDiscovery {
@@ -716,14 +770,29 @@ fn collect_automatic_source(
         };
         let location = logical.display().to_string();
         let location_for_tools = if bound { &canonical } else { logical };
-        let result = match tree.frontmatter(&canonical, cancellation) {
-            Ok(header) => discover_package(
-                location_for_tools,
-                &canonical,
-                &fallback_name,
-                source,
-                &header,
-            ),
+        let mut marker_revision = None;
+        let inspected = if view == CollectionView::BoundUser {
+            bound_user_frontmatter(&canonical, cancellation)
+        } else {
+            tree.frontmatter(&canonical, cancellation)
+                .map(|header| (header, None))
+        };
+        let result = match inspected {
+            Ok((header, revision)) => {
+                let result = discover_package(
+                    location_for_tools,
+                    &canonical,
+                    &fallback_name,
+                    source,
+                    &header,
+                );
+                if result.is_ok() {
+                    marker_revision = revision;
+                }
+                result
+            }
+            Err(error) if SkillMarkerChanged::matches(&error) => return Err(error),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
             Err(error) if bound && error.kind() != io::ErrorKind::InvalidData => return Err(error),
             Err(error) => Err(SkillPackageError::MalformedFrontmatter {
                 directory: fallback_name.clone(),
@@ -762,6 +831,7 @@ fn collect_automatic_source(
             offered: file,
             canonical,
             package,
+            marker_revision,
             bound,
         });
     }

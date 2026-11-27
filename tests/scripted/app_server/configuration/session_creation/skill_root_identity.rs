@@ -67,6 +67,75 @@ fn catalog_path(fixture: &Fixture) -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn user_skill_atomic_save_between_capture_and_transfer_refreshes_the_catalog() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let home = fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory
+            .clone();
+        let package = write_skill(&home);
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let client_home = base.join("client-home");
+        std::fs::create_dir(&client_home).unwrap();
+        let binary = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        std::os::unix::fs::symlink(binary, base.join("client-real")).unwrap();
+        let program = base.join("launch");
+        std::fs::write(
+            &program,
+            r#"#!/bin/sh
+set -eu
+base=${0%/*}
+export HOME="$base/client-home"
+exec "$base/client-real" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut client = fixture.start_execution_via(0, Some(&program)).await;
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let (captured, capture_ready) = tokio::sync::oneshot::channel();
+        let (resume, new_marker_ready) = std::sync::mpsc::channel();
+        endpoint.after_user_skill_capture(move || {
+            captured.send(()).unwrap();
+            new_marker_ready.recv().unwrap();
+        });
+        let capture = tokio::task::spawn_blocking(move || {
+            crate::skills::SkillDiscovery::user(&home).discover_bound(&endpoint)
+        });
+        capture_ready.await.unwrap();
+        let replacement =
+            "---\nname: guide\ndescription: Revised guide\n---\nRevised instructions\n";
+        let next_marker = package.join("next-marker");
+        std::fs::write(&next_marker, replacement).unwrap();
+        std::fs::rename(&next_marker, package.join("SKILL.md")).unwrap();
+        resume.send(()).unwrap();
+
+        let catalog = capture.await.unwrap().unwrap();
+        let skill = catalog
+            .packages
+            .iter()
+            .find(|skill| skill.name() == "guide")
+            .unwrap();
+        assert_eq!(skill.description(), "Revised guide");
+        let published = Path::new(skill.location());
+        assert!(published.starts_with(client_home.join("rustx/.agents/skills/.rustx-sync")));
+        assert_eq!(std::fs::read_to_string(published).unwrap(), replacement);
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn symlinked_home_with_no_collection_still_binds() {
     Box::pin(bounded(async {
         let fixture = Fixture::with_user_root_alias(false).await;
