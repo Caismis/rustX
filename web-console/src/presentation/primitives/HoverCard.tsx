@@ -291,7 +291,10 @@ export function HoverCard({
           sideOffset={VIEWPORT_MARGIN}
           collisionPadding={VIEWPORT_MARGIN}
           className={clsx(
-            previewAnchor ? 'p-0 overflow-hidden' : 'w-[244px] px-4 py-3 overflow-auto',
+            'border-0! before:hidden',
+            previewAnchor
+              ? 'p-0 overflow-hidden rounded-[var(--dsw-radius-lg)]! bg-[var(--dsw-alias-bg-layer-1)]! [box-shadow:var(--dsw-elevation-panel)]!'
+              : 'w-[244px] px-4 py-3 overflow-auto rounded-[12px]! bg-[#2C2C2E]! [box-shadow:var(--dsw-shadow-lv3)]!',
             copyable && 'cursor-pointer focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2',
             copied && 'flex items-center justify-center',
           )}
