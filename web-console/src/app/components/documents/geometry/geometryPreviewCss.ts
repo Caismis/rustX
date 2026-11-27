@@ -12,7 +12,7 @@ export const geometryPreviewCss = {
   footer: 'flex flex-none items-center gap-[12px] min-w-0 min-h-[30px] px-[12px] [border-top:0.5px_solid_var(--dsw-alias-border-l3)] bg-[var(--dsw-alias-bg-base)]',
   rail: 'absolute z-5 flex flex-col items-center gap-[2px] p-[2px] [border:0.5px_solid_var(--dsw-alias-border-l2)] rounded-[8px] bg-[var(--dsw-alias-bg-layer-1)] shadow-[0_12px_16px_-4px_rgb(16_24_40/8%)] top-[16px] start-[16px]',
   control: 'flex items-center justify-center w-[32px] h-[32px] p-0 border-0 rounded-[6px] bg-none [color:var(--dsw-alias-label-tertiary)] cursor-pointer hover:bg-[var(--dsw-alias-interactive-bg-hover)] focus-visible:[outline:2px_solid_var(--dsw-alias-label-primary)] focus-visible:-outline-offset-2 disabled:opacity-40 disabled:cursor-default',
-  controlActive: 'bg-[var(--dsw-alias-interactive-bg-active)] [color:var(--dsw-alias-state-business-primary)] [.gp-footer_&]:bg-[var(--dsw-alias-interactive-bg-active)]! [.gp-footer_&]:[color:var(--dsw-alias-state-business-primary)]!',
+  controlActive: 'gp-controlActive bg-[var(--dsw-alias-interactive-bg-active)] [color:var(--dsw-alias-state-business-primary)] [.gp-footer_&]:bg-[var(--dsw-alias-interactive-bg-active)]! [.gp-footer_&]:[color:var(--dsw-alias-state-business-primary)]!',
   divider: 'flex-none w-[14px] h-[0.5px] my-[4px] bg-[var(--dsw-alias-border-l3)]',
   count: 'ms-[8px] [color:var(--dsw-alias-label-tertiary)] text-[12px] font-normal tabular-nums',
   metadata: 'flex-1 min-w-0 m-0 overflow-hidden text-ellipsis whitespace-nowrap [color:var(--dsw-alias-label-secondary)] tabular-nums',
