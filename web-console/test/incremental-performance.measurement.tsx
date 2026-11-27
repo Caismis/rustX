@@ -101,9 +101,9 @@ it('fixed 420 long response measurement', async () => {
     anchorWrites: 0,
     rowReplacements: 0,
   });
-  // React may legitimately batch one intermediate streaming commit in this
-  // event-driven jsdom harness. Keep commits as a hard upper budget and use
-  // the exact structural counters plus final content as correctness evidence.
+  // Identical event-driven jsdom runs can produce 363 or 364 commits because
+  // one intermediate streaming commit is timing-sensitive; the structural
+  // counters and final content agree. Keep commits as a hard upper budget.
   expect(measuredCommits).toBeLessThanOrEqual(364);
   expect(ui.container.textContent).toContain('Canonical final content.');
   expect(s.client.getSnapshot().views.A.cursor).toBe(String(s.cursor));
