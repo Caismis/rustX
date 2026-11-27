@@ -138,7 +138,7 @@ export function AttachmentRail<T extends AttachmentRailItem>({ items, labels, re
       {edges.left && (
         <button
           type="button"
-          className={clsx('absolute top-1/2 z-[2] grid place-items-center w-[24px] h-[24px] p-0 border-0 rounded-full [corner-shape:round] bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-panel)] cursor-pointer -translate-y-1/2 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] hover:bg-[var(--dsw-alias-interactive-bg-hover-solid)] left-[4px]')}
+          className={clsx('absolute top-1/2 z-[2] grid place-items-center w-[24px] h-[24px] p-0 border-0 rounded-full [corner-shape:round]! bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-panel)] cursor-pointer -translate-y-1/2 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] hover:bg-[var(--dsw-alias-interactive-bg-hover-solid)] left-[4px]')}
           aria-label={labels.scrollLeft}
           onClick={() => { page(-1) }}
         >
@@ -159,7 +159,7 @@ export function AttachmentRail<T extends AttachmentRailItem>({ items, labels, re
       {edges.right && (
         <button
           type="button"
-          className={clsx('absolute top-1/2 z-[2] grid place-items-center w-[24px] h-[24px] p-0 border-0 rounded-full [corner-shape:round] bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-panel)] cursor-pointer -translate-y-1/2 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] hover:bg-[var(--dsw-alias-interactive-bg-hover-solid)] right-[4px]')}
+          className={clsx('absolute top-1/2 z-[2] grid place-items-center w-[24px] h-[24px] p-0 border-0 rounded-full [corner-shape:round]! bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-secondary)] shadow-[var(--dsw-elevation-panel)] cursor-pointer -translate-y-1/2 [--dsw-elevation-stroke-color:var(--dsw-alias-border-l2-darkmode-thin)] hover:bg-[var(--dsw-alias-interactive-bg-hover-solid)] right-[4px]')}
           aria-label={labels.scrollRight}
           onClick={() => { page(1) }}
         >

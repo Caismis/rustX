@@ -432,7 +432,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d167fc0a7cb4b46e6a65bb6536d4c2752e450e5d0c4911b08c610f6a82dfb173"
+      "local_sha256": "164943cfaeb9ad3dcb952411c834010ea50fdec537279e84ba85494d317a28ff"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -464,7 +464,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4bb78c6e4c64b832787d969094c71acf831a4701e2cb03b0dd30ecfee6e3ed17"
+      "local_sha256": "d71d7f1f9d978d5eba415ed06d7bfd2eda63560cd80d93d50419c3d3cb77eb27"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -1066,7 +1066,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "87db83cb2f87dd4a18d1b0a22e27321a0d56fc1c6d9224128becabfe3aa1c791",
+      "local_sha256": "9279fb76f7d9593b61dbec3403060afa774129ac392f6401702eb1e63d011732",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-approval/src/client/ApprovalCard.tsx",
@@ -1314,7 +1314,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e027076e27caf0e99521fababc98a4d1a8295d23acfe7df2fb645c4cf3beacfb",
+      "local_sha256": "d3228ea9812c4f47aa810288d03d3dfd860fe9b565dfa90cf70397d99c59f008",
       "classification": "A"
     },
     {
@@ -1833,7 +1833,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "a94956e0555409c58a29f22d67734035daa39d00f2549c5661600a1c33135061",
+      "local_sha256": "26c6e82c2fb45aa49458a80f40b413e57288288f20aba78909b522d79a85fff4",
       "classification": "A"
     },
     {
@@ -1842,7 +1842,7 @@
       "treatment": "Direct controlled accessible Switch; caller owns only a local native CFG3 draft.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "9f0f6db0de338793711b4333e87dcd2b82d06d8ad43aa362eb67efc63573ccb1",
-      "local_sha256": "85b7471ddabdc530bc74c9650b6e66dd4d8b084ee04759084a3ef1052b580d30",
+      "local_sha256": "1b5f89be20da8e8378632669dadb0e81d04cd724266ab7284759f46920c748b9",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "@/components/ui/switch",
@@ -1996,7 +1996,7 @@
       "retained_dependencies": [
         "react"
       ],
-      "local_sha256": "24984f9b5e0ba8e76a4df647b7521cdfb2c052bebe3e72e52da006ac4e6b23bb",
+      "local_sha256": "d04c7ba41c2c2a8857530c36139e03d005173bef763c448795a0a53c09da0652",
       "classification": "B"
     },
     {
@@ -3304,7 +3304,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "1ed8786e6aec2b8e3344d17d2ff1eaf54808811a850a4ab9b8555714f5bd0444"
+      "local_sha256": "c87c5d4fc3832a0ed1fa1e8a1b8777cd468ace87fa76b481ebe6cfe894479d5b"
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",
@@ -5323,7 +5323,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "53b2b3df35478cdb5fcf99839ea649e4b96d1715352e93233e08d72cc7959173"
+      "local_sha256": "9feaf184a301142aa4b6b228af85661aa08bcbcafd5c2cc6f2b59984458feffe"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -5357,7 +5357,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "4203d9ce0f2dd300dcd98d20936895ffdbfce70c81028f3d8eb7f1beadeda180"
+      "local_sha256": "174ee3a7fb467be36de18a6dee353f7cff86192e921862b5115550480fe81cf6"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -5375,7 +5375,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "6ed49925b09fd7ab413b55fbaf30f1b59d950f7be999544760dfbc204edddd65"
+      "local_sha256": "b28491e64f8a09bc5017785cca34a43422efc653997629f100f44f15cc63b191"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -5409,7 +5409,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "ac0b29829493c317bc0851896d153c9f235bbe75ac834d8953ddd1a35b85d5b4"
+      "local_sha256": "e4d697786f82041cabae619ccef15a729d09d6e1b2778d2d59d29a12c5b87e69"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

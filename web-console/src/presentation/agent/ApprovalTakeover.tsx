@@ -11,7 +11,7 @@ export function ApprovalTakeover({ title, description, detail, status, disabled,
  const tx = useTranslation();
  return <section className="flex flex-col items-center px-[calc(var(--dsh-composer-side-clearance)+16px)] pt-[8px] pb-[12px]" aria-label={tx('interactions:approval-takeover.approval')}>
  <div className="overflow-hidden w-full max-w-[var(--dsh-chat-content-width)] [border:1px_solid_var(--dsw-alias-state-warn-secondary)] rounded-[var(--dsw-radius-xl)] bg-[var(--dsw-specific-input-major)] shadow-[var(--dsw-shadow-lv2)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)]">
- <div className="flex items-center gap-[8px] px-[16px] py-[10px] bg-[var(--dsw-alias-state-warn-tertiary)] [color:var(--dsw-alias-state-warn-primary)] text-[13px] leading-[18px]"><span className="w-[8px] h-[8px] rounded-full [corner-shape:round] bg-[var(--dsw-alias-state-warn-primary)]" />{status}</div>
+ <div className="flex items-center gap-[8px] px-[16px] py-[10px] bg-[var(--dsw-alias-state-warn-tertiary)] [color:var(--dsw-alias-state-warn-primary)] text-[13px] leading-[18px]"><span className="w-[8px] h-[8px] rounded-full [corner-shape:round]! bg-[var(--dsw-alias-state-warn-primary)]" />{status}</div>
  <div className="flex flex-col gap-[6px] box-border max-h-[var(--dsh-composer-text-max-height)] overflow-y-auto pt-[12px] px-[16px] pb-0" data-approval-scroll tabIndex={0} role="group" aria-label={tx('interactions:approval-takeover.approval-details')}>
  <div className="[color:var(--dsw-alias-label-primary)] text-[15px] font-medium leading-[24px]">{title}</div>
  {description && <p className="m-0 [color:var(--dsw-alias-label-secondary)] text-[13px] leading-[20px]">{description}</p>}

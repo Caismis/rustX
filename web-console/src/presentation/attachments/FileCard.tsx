@@ -49,7 +49,7 @@ export function FileCard({
  >
  <span className="inline-flex flex-none items-center justify-center w-[28px] h-[28px]" aria-hidden>
  {state === 'uploading'
- ? <span className="w-[20px] h-[20px] [border:2px_solid_currentColor] [border-top-color:transparent] rounded-full [corner-shape:round] animate-upload-spin" />
+ ? <span className="w-[20px] h-[20px] [border:2px_solid_currentColor] [border-top-color:transparent] rounded-full [corner-shape:round]! animate-upload-spin" />
  : <FileTypeIcon path={name} />}
  </span>
  {retryable
@@ -67,7 +67,7 @@ export function FileCard({
  )}
  {onRemove && <button
  type="button"
- className={state === 'error' ? 'absolute top-[6px] right-[6px] inline-flex items-center justify-center w-[18px] h-[18px] p-0 border-none rounded-full [corner-shape:round] bg-[var(--dsw-alias-button-contrast-fill,rgba(0,0,0,0.72))] [color:var(--dsw-alias-label-primary-inverted,#fff)] opacity-0 cursor-pointer transition-opacity duration-200 motion-reduce:transition-none group-hover/filecard:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 opacity-100! bg-[var(--dsw-alias-state-error-primary,#d54941)]! [color:#fff]!' : 'absolute top-[6px] right-[6px] inline-flex items-center justify-center w-[18px] h-[18px] p-0 border-none rounded-full [corner-shape:round] bg-[var(--dsw-alias-button-contrast-fill,rgba(0,0,0,0.72))] [color:var(--dsw-alias-label-primary-inverted,#fff)] opacity-0 cursor-pointer transition-opacity duration-200 motion-reduce:transition-none group-hover/filecard:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100'}
+ className={state === 'error' ? 'absolute top-[6px] right-[6px] inline-flex items-center justify-center w-[18px] h-[18px] p-0 border-none rounded-full [corner-shape:round]! bg-[var(--dsw-alias-button-contrast-fill,rgba(0,0,0,0.72))] [color:var(--dsw-alias-label-primary-inverted,#fff)] opacity-0 cursor-pointer transition-opacity duration-200 motion-reduce:transition-none group-hover/filecard:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 opacity-100! bg-[var(--dsw-alias-state-error-primary,#d54941)]! [color:#fff]!' : 'absolute top-[6px] right-[6px] inline-flex items-center justify-center w-[18px] h-[18px] p-0 border-none rounded-full [corner-shape:round]! bg-[var(--dsw-alias-button-contrast-fill,rgba(0,0,0,0.72))] [color:var(--dsw-alias-label-primary-inverted,#fff)] opacity-0 cursor-pointer transition-opacity duration-200 motion-reduce:transition-none group-hover/filecard:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100'}
  aria-label={labels.remove}
  onClick={onRemove}
  >

@@ -27,7 +27,7 @@ export function ImageLightbox({ src, alt, labels, onClose }: {
     initialFocus={() => closeRef.current ?? false}>
     <div className="absolute inset-0 bg-[var(--dsw-alias-bg-mask-1)] [backdrop-filter:var(--dsw-mask-blur)]" aria-hidden="true" onMouseDown={onClose} />
     <img className="relative max-w-[min(100%,1600px)] max-h-full object-contain rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-specific-input-major)] border-0 shadow-[var(--dsw-elevation-prominent)]" src={src} alt={alt} />
-    <button ref={closeRef} type="button" data-lightbox-close="" className="absolute top-[20px] right-[20px] z-[1] grid place-items-center w-[36px] h-[36px] [border:0.5px_solid_var(--dsw-alias-border-l2-darkmode-thin)] rounded-full [corner-shape:round] bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-primary)] cursor-pointer focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:outline-offset-[3px]" aria-label={labels.close} onClick={onClose}>
+    <button ref={closeRef} type="button" data-lightbox-close="" className="absolute top-[20px] right-[20px] z-[1] grid place-items-center w-[36px] h-[36px] [border:0.5px_solid_var(--dsw-alias-border-l2-darkmode-thin)] rounded-full [corner-shape:round]! bg-[var(--dsw-specific-input-major)] [color:var(--dsw-alias-label-primary)] cursor-pointer focus-visible:[outline:var(--dsw-focus-ring-width)_solid_var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))] focus-visible:outline-offset-[3px]" aria-label={labels.close} onClick={onClose}>
       <IconCloseOutline16 size={16} />
     </button>
   </DialogSurface>

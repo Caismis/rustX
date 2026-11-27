@@ -12,7 +12,7 @@ import { Switch as CossSwitch } from '@/components/ui/switch'
  * missing the spaces CSS requires around `-`, so the design lands here as
  * important overrides on the root plus descendant rules for the thumb. */
 const DESIGN = clsx(
-  'w-9! h-5! p-[2px]! rounded-[10px]! [corner-shape:round]',
+  'w-9! h-5! p-[2px]! rounded-[10px]! [corner-shape:round]!',
   'data-checked:bg-(--dsw-alias-brand-primary)! data-unchecked:bg-(--dsw-alias-border-l3)!',
   '[&_[data-slot=switch-thumb]]:size-4! [&_[data-slot=switch-thumb]]:rounded-full! [&_[data-slot=switch-thumb]]:[corner-shape:round]! [&_[data-slot=switch-thumb]]:bg-(--dsw-alias-label-primary-foreground)! [&_[data-slot=switch-thumb]]:shadow-none!',
   '[&_[data-slot=switch-thumb][data-checked]]:translate-x-4!',

@@ -74,7 +74,7 @@ function IconGrid({ value, onChange }: { value: string; onChange: (icon: string)
  placeholder={tx('workflows:icon.search')} aria-label={tx('workflows:icon.search')} />
  <div className="flex flex-wrap gap-[4px]" role="group" aria-label={tx('workflows:icon.categories')}>
  {chips.map(id => <button key={id} type="button" aria-pressed={!search && id === category}
- className={clsx('px-[9px] py-[3px] border-[0.5px] [border-color:var(--dsw-alias-border-l3)] rounded-full [corner-shape:round] bg-transparent [color:var(--dsw-alias-label-secondary)] text-[12px] cursor-pointer hover:[color:var(--dsw-alias-label-primary)] focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1', !search && id === category && '[border-color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-label-primary)] [color:var(--dsw-alias-bg-layer-2)] hover:[color:var(--dsw-alias-bg-layer-2)]')}
+ className={clsx('px-[9px] py-[3px] border-[0.5px] [border-color:var(--dsw-alias-border-l3)] rounded-full [corner-shape:round]! bg-transparent [color:var(--dsw-alias-label-secondary)] text-[12px] cursor-pointer hover:[color:var(--dsw-alias-label-primary)] focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1', !search && id === category && '[border-color:var(--dsw-alias-label-primary)] bg-[var(--dsw-alias-label-primary)] [color:var(--dsw-alias-bg-layer-2)] hover:[color:var(--dsw-alias-bg-layer-2)]')}
  onClick={() => { setCategory(id); setQuery(''); }}>{tx(`workflows:icon.category.${id}`)}</button>)}
  </div>
  {!set ? <p className="m-0 py-[12px] px-0 text-center text-[12px] [color:var(--dsw-alias-label-tertiary)]" role="status">{tx('workflows:icon.loading')}</p>

@@ -92,7 +92,7 @@ export const taskManagerCss = {
   saveFooter: 'flex flex-shrink-0 items-center justify-end gap-[8px] px-(--detail-gutter) py-[20px] [border-top:0.5px_solid_var(--dsw-alias-border-l4)] bg-[var(--dsw-alias-bg-base)] [&>button]:h-[32px] [&>button]:text-[13px] [&>:last-child]:mr-[-8px]',
   saveNotice: 'mr-auto [color:var(--dsw-alias-label-tertiary)] text-[12px] max-[760px]:hidden',
   saveFailure: 'flex-shrink-0 m-0 pt-[12px] px-(--detail-gutter) bg-[var(--dsw-alias-bg-base)] [color:var(--dsw-alias-state-error-primary)] text-[12px] leading-[1.6]',
-  linkedSession: 'flex flex-[0_1_auto] max-w-full items-center gap-[6px] min-w-0 h-[28px] px-[8px] border-0 rounded-full [corner-shape:round] text-left focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1',
+  linkedSession: 'flex flex-[0_1_auto] max-w-full items-center gap-[6px] min-w-0 h-[28px] px-[8px] border-0 rounded-full [corner-shape:round]! text-left focus-visible:outline-2 focus-visible:outline-[var(--dsw-alias-state-business-primary)] focus-visible:outline-offset-1',
   detailNotice: 'flex-shrink-0 m-0 px-(--detail-gutter) pb-[6px] [color:var(--dsw-alias-label-secondary)] text-[12px] wrap-anywhere bg-[var(--dsw-alias-bg-base)]',
   linkedSessionLabel: 'flex-shrink-0 [color:var(--dsw-alias-label-secondary)] text-[13px]',
   linkedSessionTarget: 'flex items-center justify-end gap-[4px] min-w-0 overflow-hidden',

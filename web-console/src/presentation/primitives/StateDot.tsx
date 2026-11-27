@@ -29,7 +29,7 @@ export function StateDot({ state, size = 10, className }: {
   const positioned = className !== undefined && /\b(absolute|fixed|sticky|relative)\b/.test(className)
   return (
     <span
-      className={clsx(!positioned && 'relative', 'inline-block flex-none data-[state=done]:[color:var(--dsw-alias-state-success-primary)] data-[state=warning]:[color:var(--dsw-alias-state-warn-primary)] data-[state=error]:[color:var(--dsw-alias-state-error-primary)] data-[state=idle]:[color:var(--dsw-alias-label-tertiary)] before:content-[""] before:absolute before:inset-0 before:rounded-[50%] before:[corner-shape:round] before:bg-current before:opacity-10 after:content-[""] after:absolute after:inset-[20%] after:rounded-[50%] after:[corner-shape:round] after:bg-current', className)}
+      className={clsx(!positioned && 'relative', 'inline-block flex-none data-[state=done]:[color:var(--dsw-alias-state-success-primary)] data-[state=warning]:[color:var(--dsw-alias-state-warn-primary)] data-[state=error]:[color:var(--dsw-alias-state-error-primary)] data-[state=idle]:[color:var(--dsw-alias-label-tertiary)] before:content-[""] before:absolute before:inset-0 before:rounded-[50%] before:[corner-shape:round]! before:bg-current before:opacity-10 after:content-[""] after:absolute after:inset-[20%] after:rounded-[50%] after:[corner-shape:round]! after:bg-current', className)}
       data-state={state}
       style={{ width: size, height: size }}
       aria-hidden="true"
