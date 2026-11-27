@@ -118,9 +118,9 @@ pub fn private_authority(
             .model
             .export_process_credentials(&mut credentials);
         for binding in authority.resolved.materialization.sources.values_mut() {
-            if binding.credentials.client_owned {
-                binding.credentials.omit_client_values_from_journal();
-            } else {
+            // Client references remain intact. Their values and hydration state
+            // are runtime-only, so a restored Agent must recheck the Client grant.
+            if !binding.credentials.client_owned {
                 binding
                     .credentials
                     .export_process_credentials(&mut credentials);

@@ -3,6 +3,71 @@ use crate::credentials::SourceCredentials;
 use rmcp::model::ErrorData;
 use rmcp::service::ServiceError;
 
+pub(super) fn bearer_token(value: &str) -> Option<&str> {
+    let mut parts = value.split_ascii_whitespace();
+    if !parts.next()?.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
+    parts.next()
+}
+
+pub(super) fn peer_json_matches(
+    value: &serde_json::Value,
+    matches: &impl Fn(&str) -> bool,
+) -> bool {
+    match value {
+        serde_json::Value::String(text) => matches(text),
+        serde_json::Value::Object(entries) => entries
+            .iter()
+            .any(|(key, value)| matches(key) || peer_json_matches(value, matches)),
+        serde_json::Value::Array(entries) => entries
+            .iter()
+            .any(|value| peer_json_matches(value, matches)),
+        serde_json::Value::Number(number) => matches(&number.to_string()),
+        serde_json::Value::Bool(value) => matches(if *value { "true" } else { "false" }),
+        serde_json::Value::Null => matches("null"),
+    }
+}
+
+pub(super) fn check_tool_client_grants(
+    tool: &super::CanonicalMcpTool,
+    credentials: &SourceCredentials,
+) -> Result<(), super::McpError> {
+    if !credentials.client_owned {
+        return Ok(());
+    }
+    let grants = credentials
+        .resolve()
+        .map_err(super::McpError::Configuration)?;
+    if grants.headers.is_empty() && grants.templates.is_empty() {
+        return Ok(());
+    }
+    let contains_grant = |text: &str| {
+        grants
+            .headers
+            .values()
+            .chain(grants.templates.values())
+            .any(|value| {
+                let value = value.expose();
+                text.contains(value)
+                    || bearer_token(value).is_some_and(|token| text.contains(token))
+            })
+    };
+    if contains_grant(&tool.name)
+        || contains_grant(&tool.description)
+        || peer_json_matches(&tool.input_schema, &contains_grant)
+        || tool
+            .output_schema
+            .as_ref()
+            .is_some_and(|schema| peer_json_matches(schema, &contains_grant))
+    {
+        return Err(super::McpError::Discovery(
+            "MCP tool declaration contains a Client credential".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn peer_json(value: &mut serde_json::Value, credentials: &SourceCredentials) {
     match value {
         serde_json::Value::String(text) => *text = credentials.redact(text),

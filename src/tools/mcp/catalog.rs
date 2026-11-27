@@ -144,6 +144,7 @@ impl McpServerRuntime {
             if let Some(schema) = &mut tool.output_schema {
                 super::diagnostics::peer_json(schema, &self.credentials);
             }
+            super::diagnostics::check_tool_client_grants(tool, &self.credentials)?;
         }
         for resource in &mut page.resources {
             resource.uri = self.credentials.redact(&resource.uri);

@@ -141,9 +141,6 @@ pub struct SourceCredentials {
     /// The winning definition originated in the Workspace document.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) workspace_source: bool,
-    /// A session-bound Client grant was deliberately omitted from durable escrow.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub(crate) client_grant_lost: bool,
     /// Variables used in workspace HTTP endpoint and header templates.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) templates: BTreeMap<String, EnvironmentReference>,
@@ -169,7 +166,6 @@ impl PartialEq for SourceCredentials {
             && self.headers == other.headers
             && self.client_owned == other.client_owned
             && self.workspace_source == other.workspace_source
-            && self.client_grant_lost == other.client_grant_lost
             && self.templates == other.templates
             && self.captured == other.captured
             && self.literal_redactions == other.literal_redactions
@@ -213,7 +209,6 @@ impl SourceCredentials {
 
     pub(crate) fn needs_client_hydration(&self) -> bool {
         self.client_owned
-            && !self.client_grant_lost
             && self.client_hydration == ClientHydrationState::Unhydrated
             && self
                 .templates
@@ -226,24 +221,6 @@ impl SourceCredentials {
         self.client_hydration = ClientHydrationState::Hydrated;
     }
 
-    /// A Client grant is session-bound and cannot be escrowed in the Host journal.
-    pub(crate) fn omit_client_values_from_journal(&mut self) {
-        if !self.client_owned {
-            return;
-        }
-        self.client_grant_lost =
-            !self.environment.is_empty() || !self.headers.is_empty() || !self.templates.is_empty();
-        for (index, reference) in self
-            .environment
-            .values_mut()
-            .chain(self.headers.values_mut())
-            .chain(self.templates.values_mut())
-            .enumerate()
-        {
-            reference.0 = format!("RUSTX_CLIENT_VALUE_NOT_ESCROWED_{index}");
-        }
-        self.capture(CredentialSnapshot::default());
-    }
     /// Capture the immutable environment for a newly admitted child instance.
     pub fn capture_from(&mut self, environment: &dyn CredentialEnvironment) {
         self.capture(environment.snapshot());
@@ -292,9 +269,6 @@ impl SourceCredentials {
     pub(crate) fn resolve(&self) -> Result<&ResolvedSourceCredentials, String> {
         self.resolved
             .get_or_init(|| {
-                if self.client_grant_lost {
-                    return Err("Client MCP environment grant is unavailable".to_owned());
-                }
                 let resolve = |refs: &BTreeMap<String, EnvironmentReference>| {
                     refs.iter()
                         .map(|(key, reference)| {
@@ -359,41 +333,53 @@ mod tests {
     const SENTINEL: &str = "CFG233_SENTINEL_NEVER_PROJECT_8b94";
 
     #[test]
-    fn client_http_templates_are_bounded_to_references_and_never_escrowed() {
+    fn client_http_credentials_round_trip_as_references_for_fresh_authorization() {
         assert_eq!(
             referenced_environment_names("Bearer $TOKEN and $OTHER/$TOKEN"),
             BTreeSet::from(["OTHER".into(), "TOKEN".into()])
         );
         let mut credentials = SourceCredentials {
             client_owned: true,
+            headers: BTreeMap::from([(
+                "X-Token".into(),
+                EnvironmentReference::from_name("HEADER_TOKEN".into()),
+            )]),
             templates: BTreeMap::from([(
                 "TOKEN".into(),
                 EnvironmentReference::from_name("TOKEN".into()),
             )]),
             ..Default::default()
         };
-        credentials.capture(CredentialSnapshot::new([("TOKEN".into(), SENTINEL.into())]));
+        credentials.capture(CredentialSnapshot::new([
+            ("TOKEN".into(), SENTINEL.into()),
+            ("HEADER_TOKEN".into(), SENTINEL.into()),
+        ]));
+        credentials.mark_client_hydrated();
         assert_eq!(
             credentials.interpolate("Bearer $TOKEN").unwrap(),
             format!("Bearer {SENTINEL}")
         );
         assert!(!format!("{credentials:?}").contains(SENTINEL));
-        assert!(
-            !serde_json::to_string(&credentials)
-                .unwrap()
-                .contains(SENTINEL)
-        );
-        credentials.omit_client_values_from_journal();
-        assert!(credentials.interpolate("Bearer $TOKEN").is_err());
         let wire = serde_json::to_string(&credentials).unwrap();
+        assert!(!wire.contains(SENTINEL));
         let mut restored: SourceCredentials = serde_json::from_str(&wire).unwrap();
-        restored.capture(CredentialSnapshot::new([(
-            "RUSTX_CLIENT_VALUE_NOT_ESCROWED_0".into(),
-            "host-value".into(),
-        )]));
+        assert!(restored.needs_client_hydration());
+        assert!(restored.resolve().is_err());
         assert_eq!(
-            restored.resolve().unwrap_err(),
-            "Client MCP environment grant is unavailable"
+            restored.client_environment_names(),
+            BTreeSet::from(["HEADER_TOKEN".into(), "TOKEN".into()])
+        );
+        restored.capture(CredentialSnapshot::new([
+            ("TOKEN".into(), "new-template-value".into()),
+            ("HEADER_TOKEN".into(), "new-header-value".into()),
+        ]));
+        assert_eq!(
+            restored.interpolate("Bearer $TOKEN").unwrap(),
+            "Bearer new-template-value"
+        );
+        assert_eq!(
+            restored.resolve().unwrap().headers["X-Token"].expose(),
+            "new-header-value"
         );
     }
 

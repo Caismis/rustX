@@ -210,26 +210,13 @@ fn cacheable(
     catalog: &McpDiscoveryOutcome,
     credentials: &crate::credentials::SourceCredentials,
 ) -> Option<McpDiscoveryOutcome> {
-    fn contains_secret(
-        value: &serde_json::Value,
-        credentials: &crate::credentials::SourceCredentials,
-    ) -> bool {
-        match value {
-            serde_json::Value::String(text) => credentials.redact(text) != *text,
-            serde_json::Value::Object(entries) => entries.iter().any(|(key, value)| {
-                credentials.redact(key) != *key || contains_secret(value, credentials)
-            }),
-            serde_json::Value::Array(entries) => entries
-                .iter()
-                .any(|value| contains_secret(value, credentials)),
-            _ => false,
-        }
-    }
     let mut budget = MAX_DECLARATION_BYTES;
     for tool in &catalog.tools {
         let declaration = serde_json::to_value(tool).ok()?;
         budget = budget.checked_sub(serde_json::to_vec(&declaration).ok()?.len())?;
-        if contains_secret(&declaration, credentials) {
+        if super::diagnostics::peer_json_matches(&declaration, &|text| {
+            credentials.redact(text) != text
+        }) {
             return None;
         }
     }

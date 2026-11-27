@@ -638,6 +638,36 @@ fn workspace_http_subagent_registry(
 }
 
 #[cfg(feature = "mcp-fixture")]
+fn restore_workspace_http_subagent_spec(endpoint: String) -> SubagentStartSpec {
+    use crate::credentials::CredentialSnapshot;
+
+    let mut spec = workspace_http_subagent_spec(endpoint);
+    let previous_grant = "previous-client-grant-for-this-test";
+    for binding in spec.authority.resolved.materialization.sources.values_mut() {
+        let names = binding.credentials.client_environment_names();
+        binding.credentials.capture(CredentialSnapshot::new(
+            names.into_iter().map(|name| (name, previous_grant.into())),
+        ));
+        binding.credentials.mark_client_hydrated();
+    }
+    let saved = crate::runtime::inbound::private_authority(Some(&spec.authority)).unwrap();
+    assert!(!saved.authority.to_string().contains(previous_grant));
+    assert!(
+        saved
+            .credentials
+            .iter()
+            .all(|(_, value)| value != previous_grant)
+    );
+    spec.authority = serde_json::from_value(saved.authority).expect("restored Agent authority");
+    spec.authority
+        .resolved
+        .model
+        .restore_admitted_credentials(&CredentialSnapshot::new(saved.credentials))
+        .expect("restore escrowed provider credentials");
+    spec
+}
+
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn subagent_receives_parent_hydrated_client_workspace_http_mcp_credentials() {
     use rustx_execution_protocol::Capability;
@@ -693,7 +723,7 @@ async fn subagent_receives_parent_hydrated_client_workspace_http_mcp_credentials
         admitted.scope.clone(),
     );
 
-    let spec = workspace_http_subagent_spec(format!("{origin}/mcp"));
+    let spec = restore_workspace_http_subagent_spec(format!("{origin}/mcp"));
     let prepared = tokio::time::timeout(
         LIVENESS,
         registry.prepare(&spec, &CancellationSignal::new()),

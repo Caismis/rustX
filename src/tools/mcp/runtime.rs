@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use rmcp::model::ProtocolVersion;
 use rmcp::service::{RoleClient, RunningService};
 
+use crate::credentials::SourceCredentials;
 use crate::runtime::identity::McpServerId;
 use rustx_process_supervisor::interactive_process::SupervisedInteractiveProcess;
 
@@ -58,7 +59,11 @@ struct CatalogPages {
 }
 
 impl CatalogPages {
-    fn push(&mut self, page: rmcp::model::ListToolsResult) -> Result<Option<String>, McpError> {
+    fn push(
+        &mut self,
+        page: rmcp::model::ListToolsResult,
+        credentials: &SourceCredentials,
+    ) -> Result<Option<String>, McpError> {
         if self.tools.len().saturating_add(page.tools.len()) > MAX_TOOL_CATALOG_ENTRIES {
             return Err(McpError::Discovery(
                 "MCP tool catalog exceeds its entry limit".into(),
@@ -66,6 +71,9 @@ impl CatalogPages {
         }
         for tool in page.tools {
             let canonical = CanonicalMcpTool::try_from(tool)?;
+            // A live declaration is used for discovery and exact invocation
+            // identity. Reject it before publication instead of rewriting it.
+            super::diagnostics::check_tool_client_grants(&canonical, credentials)?;
             let bytes = serde_json::to_vec(&canonical)
                 .map_err(|_| McpError::Discovery("cannot encode MCP tool declaration".into()))?;
             self.bytes = self.bytes.saturating_add(bytes.len());
@@ -373,7 +381,7 @@ impl McpServerRuntime {
                     ));
                 }
             };
-            cursor = catalog.push(page)?;
+            cursor = catalog.push(page, &self.credentials)?;
             if cursor.is_none() {
                 return Ok(catalog.finish());
             }
@@ -418,7 +426,7 @@ impl McpServerRuntime {
                 }
                 McpError::Discovery(diagnostic)
             })?;
-            cursor = catalog.push(page)?;
+            cursor = catalog.push(page, &self.credentials)?;
             if cursor.is_none() {
                 return Ok(catalog.finish());
             }
@@ -620,4 +628,63 @@ fn protocol_violation_call_diagnostic(server_id: &McpServerId, violation: &str) 
         "MCP protocol violation: server '{server_id}' emitted a structurally invalid stdio \
          message ({violation}); this connection generation is poisoned and cannot serve calls"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::{CredentialSnapshot, EnvironmentReference};
+    use serde_json::json;
+
+    #[test]
+    fn live_catalog_rejects_declarations_containing_client_grants() {
+        let mut credentials = SourceCredentials {
+            client_owned: true,
+            headers: std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                EnvironmentReference::from_name("HEADER_TOKEN".into()),
+            )]),
+            templates: std::collections::BTreeMap::from([(
+                "NUMBER_TOKEN".into(),
+                EnvironmentReference::from_name("NUMBER_TOKEN".into()),
+            )]),
+            ..Default::default()
+        };
+        credentials.capture(CredentialSnapshot::new([
+            ("HEADER_TOKEN".into(), "bEaReR protected-marker".into()),
+            ("NUMBER_TOKEN".into(), "841093".into()),
+        ]));
+        let declaration = json!({
+            "name": "inventory",
+            "description": "List inventory",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {"type": "object"},
+        });
+        let page = |tool| serde_json::from_value(json!({"tools": [tool]})).unwrap();
+        let mut clean = CatalogPages::default();
+        clean.push(page(declaration.clone()), &credentials).unwrap();
+        assert_eq!(clean.finish()[0].name, "inventory");
+
+        for (field, value) in [
+            ("name", json!("protected-marker")),
+            ("description", json!("Header: bEaReR protected-marker")),
+            (
+                "inputSchema",
+                json!({"type": "object", "properties": {"protected-marker": {}}}),
+            ),
+            (
+                "outputSchema",
+                json!({"type": "object", "properties": {"count": {"const": 841_093}}}),
+            ),
+        ] {
+            let mut declaration = declaration.clone();
+            declaration[field] = value;
+            let mut catalog = CatalogPages::default();
+            assert!(matches!(
+                catalog.push(page(declaration), &credentials),
+                Err(McpError::Discovery(message)) if message == "MCP tool declaration contains a Client credential"
+            ));
+            assert_eq!(catalog.finish(), Vec::new());
+        }
+    }
 }

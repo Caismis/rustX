@@ -723,6 +723,10 @@ environment references and never splice across resource shadowing:
   `sensitive_headers` from the Host credential snapshot. Workspace-scoped HTTP
   services resolve referenced `$VAR` and `sensitive_headers` only from explicit
   Client `--mcp-env SERVICE ORIGIN NAME` grants when the service is prepared.
+  A restored Agent requests fresh grants for its frozen service, origin and
+  variable references. Credential values remain outside durable storage.
+  Live tool discovery rejects declarations containing these granted values
+  before publishing them to a model or the Workflow tool catalog.
 
 Discovery captures definitions and inert Python package bytes. Root selection
 produces finite Root demand. Merely listing a named Agent creates no demand for
