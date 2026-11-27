@@ -1,0 +1,13 @@
+.root { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; font-size: 12px; padding-block: 8px; }
+.facts { margin: 0; display: grid; gap: 6px; }
+.facts > div { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(0, 2fr); gap: 8px; }
+.facts dt { color: var(--dsw-alias-label-secondary); }
+.facts dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+.select { display: flex; flex-direction: column; gap: 4px; }
+.select select { width: 100%; min-width: 0; color: inherit; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 6px; font: inherit; }
+.select select:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
+.requests { display: flex; flex-direction: column; gap: 12px; }
+.request { border-top: 1px solid var(--dsw-alias-border-l2); padding-block: 8px; }
+.request h4 { font: inherit; font-weight: 600; margin: 0 0 8px; }
+.checkpoint { padding-block: 4px; overflow-wrap: anywhere; }
+.checkpoint summary { cursor: pointer; }

@@ -77,7 +77,8 @@ export type PreferenceChange =
   /** One background card, addressed by its `ToolExecutionId`. */
   | { type: "expand_background"; executionId: ToolExecutionId }
   /** One pending interaction card, addressed by its full routed identity. */
-  | { type: "expand_interaction"; interaction: InteractionRef };
+  | { type: "expand_interaction"; interaction: InteractionRef }
+  | { type: "expand_compaction"; checkpointId?: string };
 
 /**
  * A bulk expansion target.
@@ -150,6 +151,9 @@ export function expandPreference(argument: string): CommandOutcome {
     return { kind: "preference", preference: { type: "expand", target: argument } };
   }
   const [head, ...rest] = argument.split(/\s+/);
+  if (head === "compaction") {
+    return { kind: "preference", preference: { type: "expand_compaction", checkpointId: rest.join(" ") || undefined } };
+  }
   if (head === "job") {
     const executionId = rest.join(" ");
     if (executionId.length === 0) {

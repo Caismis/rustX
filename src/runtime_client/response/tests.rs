@@ -257,6 +257,8 @@ fn start_request_with_window(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 messages: history.messages.clone(),
@@ -655,6 +657,7 @@ fn context_measurement_survives_pending_and_failed_compaction() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
     );
     let pending = crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())

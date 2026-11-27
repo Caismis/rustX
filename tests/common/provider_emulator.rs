@@ -223,7 +223,21 @@ impl ProviderEmulator {
     ///
     /// Panics when the gate is never reached within the deadlock timeout.
     pub async fn await_gate(&self, name: &str) -> serde_json::Value {
-        self.await_observation("gate_reached", Some(name)).await
+        self.await_gate_with_timeout(name, AWAIT_TIMEOUT).await
+    }
+
+    /// Wait for a gate after a bounded, unusually large fixture preparation.
+    /// This changes only the control barrier, never the native request policy.
+    ///
+    /// # Panics
+    /// The provider is unreachable or the gate is not reached within `timeout`.
+    pub async fn await_gate_with_timeout(
+        &self,
+        name: &str,
+        timeout: Duration,
+    ) -> serde_json::Value {
+        self.await_observation("gate_reached", Some(name), timeout)
+            .await
     }
 
     /// Blocks until the provider observes the client closing the connection.
@@ -232,14 +246,20 @@ impl ProviderEmulator {
     ///
     /// Panics when no disconnect is observed within the deadlock timeout.
     pub async fn await_client_disconnect(&self) -> serde_json::Value {
-        self.await_observation("client_disconnected", None).await
+        self.await_observation("client_disconnected", None, AWAIT_TIMEOUT)
+            .await
     }
 
-    async fn await_observation(&self, kind: &str, name: Option<&str>) -> serde_json::Value {
+    async fn await_observation(
+        &self,
+        kind: &str,
+        name: Option<&str>,
+        timeout: Duration,
+    ) -> serde_json::Value {
         let url = format!(
             "{}/__control/observations/await?kind={kind}&timeoutMs={}{}",
             self.base_url(),
-            AWAIT_TIMEOUT.as_millis(),
+            timeout.as_millis(),
             name.map_or_default(|name| format!("&name={name}")),
         );
         let response = self.client.get(&url).send().await.expect("control request");
@@ -353,6 +373,57 @@ impl ProviderEmulator {
             let _ = child.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
+    }
+
+    /// Stop an intentionally interrupted adaptive scenario after every
+    /// actually matched response settled. This is not normal completion: the
+    /// scenario must remain incomplete and the provider must report its
+    /// expected nonzero exit. Any mismatch or unfinished response still fails.
+    pub async fn finish_expected_partial(mut self) -> serde_json::Value {
+        let report: serde_json::Value = self
+            .client
+            .post(format!("{}/__control/shutdown", self.base_url()))
+            .send()
+            .await
+            .expect("control request")
+            .json()
+            .await
+            .expect("control JSON");
+        let child = self.child.take().expect("the child is taken once");
+        let status = tokio::time::timeout(AWAIT_TIMEOUT, child.wait_with_output())
+            .await
+            .expect("the provider emulator exited in time")
+            .expect("wait for the provider emulator");
+        assert_eq!(report["scenario"], self.scenario);
+        assert_eq!(
+            report["complete"], false,
+            "the crash prefix is intentionally incomplete"
+        );
+        assert_eq!(report["ok"], false);
+        assert!(
+            report["requestCount"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert_eq!(report["stepsMatched"], report["requestCount"]);
+        assert_eq!(report["stepsSettled"], report["requestCount"]);
+        assert!(
+            report["failures"].as_array().is_some_and(Vec::is_empty),
+            "{report}"
+        );
+        assert!(
+            report["unsettledSteps"]
+                .as_array()
+                .is_some_and(Vec::is_empty),
+            "{report}"
+        );
+        assert_eq!(
+            status.status.code(),
+            Some(1),
+            "unexpected provider exit: {:?}",
+            status.status
+        );
+        report
     }
 }
 

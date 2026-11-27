@@ -21,6 +21,8 @@ pub fn freeze_native_input(store: &SqliteConversationStore, snapshot: &mut Reque
     let request = rustx_types::model::types::ModelRequest {
         response_schema: None,
         response_byte_limit: None,
+        prompt_fallback_authorization:
+            rustx_types::model::types::PromptFallbackAuthorization::default(),
         continuation_source: None,
         images: snapshot.images.clone(),
         invocation: snapshot.invocation.clone(),
@@ -86,11 +88,13 @@ fn select_fixed_seed(store: &SqliteConversationStore) {
             call_sources: vec![],
             result_call: None,
         }],
+        prefix_coverage: None,
         summary_metadata: None,
         summary_generation: None,
     };
     store
         .commit_projection(ProjectionCommitInput {
+            prefix_proof: None,
             grant: CancellationSignal::new()
                 .authorize_compaction_commit(operation_id.clone())
                 .unwrap(),

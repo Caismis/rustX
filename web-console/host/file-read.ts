@@ -1,7 +1,7 @@
 import { sameSessionFile } from '../shared/session-file-identity.ts';
 /** Node-only native seam. Never imported by browser code or its protocol log. */
 import type { DeliveryBytes, DeliveryRead } from '../src/workspaces/host.ts';
-import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v80.ts';
+import type { AttachmentTarget, RpcError } from '../../protocol/app-server/v82.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import { FILE_PREVIEW_LIMITS, PreviewCancelled, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 

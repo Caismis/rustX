@@ -106,9 +106,11 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
-    const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
+    const chunked = scenario === 'chunked_compaction';
+    const { compactionCatalog, compactionModelFields } = await import('../../../test-support/compaction-client-fixture.mts');
+    const primaryModel = chunked ? 'chat-model' : ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
     const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
-    const catalog = `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
+    const catalog = chunked ? compactionCatalog(providerUrl, 'RUSTX_CONSOLE_FIXTURE_KEY') : `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
       [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
@@ -132,15 +134,13 @@ timezone = "UTC"
     // Ask proofs and permission-mode UI stay on Plan so elevation_reason can
     // publish Allow once. Lifecycle fixtures that mutate without a browser Ask
     // use Full Access (root here and/or Workspace rustx.toml below).
-    // Root approval_mode must precede any [context] table header.
-    const rootApprovalMode = ['web_composer_context', 'web_chat_history'].includes(scenario)
+    const rootApprovalMode = (chunked || ['web_composer_context', 'web_chat_history'].includes(scenario))
       ? 'full_access'
       : 'plan';
     // The reading fixture builds real text-only history, with no Tool calls.
     // Omit its unused Tool setup; retain all 300 durable Attempts and gates.
-    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ${scenario === 'web_reading_surface' ? '[]' : '["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]'}\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
-    writeSettings();
-    if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');
+    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ${scenario === 'web_reading_surface' ? '[]' : '["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]'}\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
+    writeSettings(primaryModel, chunked ? compactionModelFields : '');
     // Automatically repairable sources (#464): the App Server repairs the User
     // document at startup and Workspace A before its first Session resolves.
     if (scenario === 'web_config_repair') {
@@ -196,7 +196,7 @@ timezone = "UTC"
       if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
     };
     return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
-      gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
+      gate: (name: string, timeoutMs = 30_000) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=${timeoutMs}`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
       async restartApp() {

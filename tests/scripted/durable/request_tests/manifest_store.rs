@@ -29,6 +29,7 @@ pub(super) fn selected_snapshot(
     );
     snapshot.history_cut = history.cut.clone();
     let request = ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         continuation_source: None,

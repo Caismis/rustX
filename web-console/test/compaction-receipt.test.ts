@@ -1,12 +1,260 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v80';
-import { Server, snapshot } from './fixture';
+import { createElement } from 'react';
+import { act, cleanup, render } from '@testing-library/react';
+import type { RuntimeClientCompactionOperation, RuntimeClientCompactionView } from '../../protocol/app-server/v82';
+import { RpcFailure } from '../src/client/errors';
+import { compactionPresentation, ContextSeat } from '../src/app/agent/ContextSeat';
+import { Server, snapshot, projectionHead } from './fixture';
 
 let server: Server;
-afterEach(() => server?.client.disconnect());
+afterEach(() => { cleanup(); server?.client.disconnect(); });
 const receipt = (generation: string): RuntimeClientCompactionView => ({
+  operation_id: `compaction-operation-${generation}`,
   generation, checkpoint_id:`conv_8498648a-66ba-716f-8243-8cf147533e5${generation}`, activation_id:generation,
   tokens_before:{input_tokens:'8400',source:'estimated'}, estimated_tokens_after:'1900',
+});
+
+function operation(id: string, generation: string, phase: RuntimeClientCompactionOperation['status']['phase']): RuntimeClientCompactionOperation {
+  return { live: false, status: { operation_id: id, admission_generation: generation, phase, accepted_fragments: 0,
+    diagnostic: phase === 'failed' ? `${id} diagnostic` : null, triggering_attempt_id: null, waiting_attempt_id: null } };
+}
+
+it('removes an older failure at the chat frontier when a retained later operation committed', async () => {
+  server = new Server();
+  const failed = operation('earlier', '1', 'failed');
+  const committed = operation('later', '2', 'committed');
+  const context = { compaction_in_progress: false, compaction_count: 1, projection_head: projectionHead(),
+    compaction_operations: [failed, committed] };
+  server.snapshots.set('A', { ...snapshot(), context });
+  await server.attached('A');
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  expect(view.container.querySelector('[data-compaction-operation]')).toBeNull();
+  expect(server.client.getSnapshot().views.A.snapshot?.context?.compaction_operations).toEqual([failed, committed]);
+});
+
+it.each(['failed', 'generating'] as const)('dismisses a previously observed %s notice after manual compaction', async phase => {
+  server = new Server();
+  await server.attached('A');
+  const previous = operation('earlier', '1', phase);
+  const context = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [previous] };
+  await server.update('A', { ...snapshot(), context });
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  expect(view.container.querySelector('[data-compaction-operation="earlier"]')).toBeTruthy();
+  const next = { ...context, compaction_count: 1, projection_head: projectionHead() };
+  await act(async () => { await server.update('A', { ...snapshot(), context: next }); });
+  expect(view.container.querySelector('[data-compaction-operation="earlier"]')).toBeNull();
+  expect(server.client.getSnapshot().views.A.snapshot?.context?.compaction_operations).toEqual([previous]);
+});
+
+it('keeps a failure first seen when reconnect reveals a checkpoint of unknown relative order', async () => {
+  server = new Server();
+  await server.attached('A');
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  const failure = operation('unseen', '2', 'failed');
+  await act(async () => {
+    await server.client.disconnect();
+    server.snapshots.set('A', { ...snapshot(), context: { compaction_in_progress: false, compaction_count: 1,
+      projection_head: projectionHead(), compaction_operations: [failure] } });
+    server.handlers.set('session/subscribe', () => {
+      server.handlers.delete('session/subscribe');
+      throw new RpcFailure({ code: -32000, message: 'History advanced while disconnected', data: { kind: 'resync_required' } });
+    });
+    await server.connect();
+    await server.client.waitForAttachment('A', () => true);
+  });
+  expect(view.container.querySelector('[data-compaction-operation="unseen"]')).toBeTruthy();
+});
+
+it('retains earlier dismissals through successive checkpoints and preserves newly seen failures', async () => {
+  server = new Server();
+  const old = operation('old', '1', 'failed'), unknown = operation('unknown', '2', 'failed'), newer = operation('newer', '3', 'failed');
+  const base = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [old] };
+  server.snapshots.set('A', { ...snapshot(), context: base });
+  await server.attached('A');
+  const view = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  const first = { ...base, compaction_count: 1, projection_head: { ...projectionHead(), activation_id: '1' }, compaction_operations: [old, unknown] };
+  await act(async () => { await server.update('A', { ...snapshot(), context: first }); });
+  expect(view.container.querySelector('[data-compaction-operation="old"]')).toBeNull();
+  expect(view.container.querySelector('[data-compaction-operation="unknown"]')).toBeTruthy();
+  const second = { ...first, compaction_count: 2, projection_head: { ...projectionHead(), activation_id: '2' }, compaction_operations: [old, unknown, newer] };
+  await act(async () => { await server.update('A', { ...snapshot(), context: second }); });
+  expect(view.container.querySelector('[data-compaction-operation="old"]')).toBeNull();
+  expect(view.container.querySelector('[data-compaction-operation="unknown"]')).toBeNull();
+  expect(view.container.querySelector('[data-compaction-operation="newer"]')).toBeTruthy();
+});
+
+it('retains dismissal across a seat remount and branch round trip while showing a first-seen failure', async () => {
+  server = new Server();
+  await server.attached('A');
+  const originalNode = server.client.getSnapshot().views.A.nodeId!;
+  const seat = () => createElement(ContextSeat, { client: server.client, sessionId: 'A' });
+  const earlier = operation('earlier', '1', 'failed');
+  const context = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [earlier] };
+  await server.update('A', { ...snapshot(), context });
+  const view = render(seat());
+  expect(view.container.querySelector('[data-compaction-operation="earlier"]')).toBeTruthy();
+  const checkpoint = { ...context, compaction_count: 1, projection_head: projectionHead() };
+  await act(async () => { await server.update('A', { ...snapshot(), context: checkpoint }); });
+  expect(view.container.querySelector('[data-compaction-operation="earlier"]')).toBeNull();
+  view.unmount();
+
+  const unknown = operation('unknown-order', '2', 'failed');
+  const branch = { ...snapshot('branch-B'), context };
+  server.nodeSnapshots.set('branch-B-node', branch);
+  await server.client.switchNode('A', 'branch-B-node');
+  await server.client.attach('A', 'branch-B-node');
+  await server.client.waitForAttachment('A', () => true);
+  expect(server.client.getSnapshot().views.A.snapshot?.conversation_id).toBe(branch.conversation_id);
+  const other = render(seat());
+  expect(other.container.querySelector('[data-compaction-operation="earlier"]')).toBeTruthy();
+  other.unmount();
+  await server.client.switchNode('A', originalNode);
+  await server.client.release('A');
+  server.snapshots.set('A', { ...snapshot(), context: { ...checkpoint, compaction_operations: [earlier, unknown] } });
+  await server.client.attach('A', originalNode);
+  await server.client.waitForAttachment('A', () => true);
+  const reopened = render(seat());
+  expect(reopened.container.querySelector('[data-compaction-operation="earlier"]')).toBeNull();
+  expect(reopened.container.querySelector('[data-compaction-operation="unknown-order"]')).toBeTruthy();
+  expect(server.client.getSnapshot().views.A.snapshot?.context?.compaction_operations).toEqual([earlier, unknown]);
+});
+
+it('accepts a correlated skipped response without inventing a checkpoint', async () => {
+  server = new Server();
+  await server.attached('A');
+  server.handlers.set('context/compact', () => ({ type: 'context_compaction_skipped' }));
+  server.held.add('context/compact');
+  expect(server.client.compact('A')).toBe(true);
+  const request = await server.waitFor('context/compact', 1);
+  const finished = new Promise<void>(resolve => {
+    const stop = server.client.subscribe(() => {
+      if (server.client.getSnapshot().views.A.compactionRequest?.status === 'skipped') { stop(); resolve(); }
+    });
+  });
+  server.reply(request); await finished;
+  const view = server.client.getSnapshot().views.A;
+  expect(view.compactionRequest?.receipt).toBeUndefined();
+  expect(view.snapshot?.context?.latest_compaction).toBeUndefined();
+  expect(compactionPresentation(view.snapshot?.context, view.compactionRequest)).toEqual({ state: 'skipped' });
+  const presentation = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  expect(presentation.container.textContent).toContain('No eligible history to compact');
+  expect(presentation.container.querySelector('[data-compaction-marker]')).toBeNull();
+  expect(server.client.getSnapshot().connection).toBe('connected');
+  expect(server.client.compact('A')).toBe(true);
+});
+
+it('reconciles a lost skipped response only from the matching native request', async () => {
+  server = new Server();
+  await server.attached('A');
+  server.held.add('context/compact');
+  expect(server.client.compact('A')).toBe(true);
+  await server.waitFor('context/compact', 1);
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await server.client.disconnect();
+  const skipped = { compaction_count: 0, compaction_in_progress: false,
+    manual_compaction: { request_id: 'other-request', released: true, skipped: true, cancelled: false, error: null } };
+  server.snapshots.set('A', { ...snapshot(), context: skipped });
+  await server.connect();
+  await server.client.waitForAttachment('A', () => true);
+  expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('uncertain');
+  expect(server.client.getSnapshot().uncertain.some(item => item.compactionRequestId === requestId)).toBe(true);
+  await server.update('A', { ...snapshot(), context: { ...skipped,
+    manual_compaction: { ...skipped.manual_compaction, request_id: requestId } } });
+  const view = server.client.getSnapshot().views.A;
+  expect(view.compactionRequest?.status).toBe('skipped');
+  expect(view.compactionRequest?.receipt).toBeUndefined();
+  expect(view.snapshot?.context?.latest_compaction).toBeUndefined();
+  expect(server.client.getSnapshot().uncertain.some(item => item.compactionRequestId === requestId)).toBe(false);
+});
+
+it('reconciles a lost cancellation only from the matching released native request', async () => {
+  server = new Server();
+  await server.attached('A');
+  server.held.add('context/compact');
+  expect(server.client.compact('A')).toBe(true);
+  await server.waitFor('context/compact', 1);
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await server.client.disconnect();
+  const cancelled = { compaction_count: 0, compaction_in_progress: false,
+    manual_compaction: { request_id: 'other-request', released: true, skipped: false, cancelled: true, error: null } };
+  server.snapshots.set('A', { ...snapshot(), context: cancelled });
+  await server.connect();
+  await server.client.waitForAttachment('A', () => true);
+  expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('uncertain');
+  expect(server.client.getSnapshot().uncertain.some(item => item.compactionRequestId === requestId)).toBe(true);
+  await server.update('A', { ...snapshot(), context: { ...cancelled,
+    manual_compaction: { ...cancelled.manual_compaction, request_id: requestId } } });
+  const view = server.client.getSnapshot().views.A;
+  expect(view.compactionRequest?.status).toBe('cancelled');
+  expect(view.compactionRequest?.receipt).toBeUndefined();
+  expect(view.snapshot?.context?.latest_compaction).toBeUndefined();
+  expect(server.client.getSnapshot().uncertain.some(item => item.compactionRequestId === requestId)).toBe(false);
+  const presentation = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  expect(presentation.container.textContent).toContain('Compaction cancelled');
+  expect(presentation.container.querySelector('[data-compaction-marker]')).toBeNull();
+  expect(server.client.compact('A')).toBe(true);
+});
+
+it.each((['skipped', 'cancelled'] as const).flatMap(status =>
+  [false, true].flatMap(reconnect => [false, true].map(newerCommit => ({ status, reconnect, newerCommit }))),
+))('reconciles $status presentation (reconnect=$reconnect, newerCommit=$newerCommit)', async ({ status, reconnect, newerCommit }) => {
+  server = new Server();
+  await server.attached('A');
+  server.held.add('context/compact');
+  expect(server.client.compact('A')).toBe(true);
+  await server.waitFor('context/compact', 1);
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await server.update('A', { ...snapshot(), context: { compaction_count: 0, compaction_in_progress: false,
+    manual_compaction: { request_id: requestId, released: true, skipped: status === 'skipped', cancelled: status === 'cancelled', error: null } } });
+  expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe(status);
+
+  // An idle snapshot passes through real client reconciliation. No running
+  // notification arrives to clear the earlier terminal request.
+  const generation = server.client.getSnapshot().generation;
+  const latest = newerCommit ? receipt('1') : undefined;
+  const next = { ...snapshot(), context: { compaction_count: newerCommit ? 1 : 0,
+    compaction_in_progress: false, latest_compaction: latest,
+    projection_head: latest ? { ...projectionHead(), checkpoint_id: latest.checkpoint_id, activation_id: latest.activation_id } : undefined } };
+  if (reconnect) {
+    await server.client.disconnect();
+    server.snapshots.set('A', next);
+    server.handlers.set('session/subscribe', () => {
+      server.handlers.delete('session/subscribe');
+      throw new RpcFailure({ code: -32000, message: 'History advanced while disconnected', data: { kind: 'resync_required' } });
+    });
+    await server.connect();
+    await server.client.waitForAttachment('A', () => true);
+    expect(server.client.getSnapshot().generation).toBeGreaterThan(generation);
+  } else {
+    await server.update('A', next);
+    expect(server.client.getSnapshot().generation).toBe(generation);
+  }
+  const view = server.client.getSnapshot().views.A;
+  expect(view.compactionRequest?.status).toBe(status);
+  expect(view.compactionRequest?.generation).toBe(generation);
+  expect(view.snapshot?.context?.compaction_count).toBe(newerCommit ? 1 : 0);
+  expect(view.snapshot?.context?.projection_head).toEqual(next.context.projection_head);
+  expect(view.compactionRequest?.receipt).toBeUndefined();
+  expect(view.snapshot?.context?.latest_compaction).toEqual(latest);
+  expect(compactionPresentation(view.snapshot?.context, view.compactionRequest)).toEqual({ state: newerCommit ? 'succeeded' : status });
+  const presentation = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  const terminalText = status === 'skipped' ? 'No eligible history to compact' : 'Compaction cancelled';
+  if (newerCommit) expect(presentation.container.textContent).not.toContain(terminalText);
+  else expect(presentation.container.textContent).toContain(terminalText);
+  expect(presentation.container.querySelector('[data-compaction-marker]')).toBeNull();
+  presentation.unmount();
+});
+
+it('still rejects a skipped discriminator for an unrelated request', async () => {
+  server = new Server();
+  await server.attached('A');
+  server.held.add('session/list');
+  const next = server.requests.filter(row => row.request.method === 'session/list').length + 1;
+  const pending = server.client.request({ method: 'session/list', params: { offset: 0, limit: 32, query: null } }, 'sessions');
+  const request = await server.waitFor('session/list', next);
+  server.socket.success(request, { type: 'context_compaction_skipped' });
+  await expect(pending).rejects.toThrow();
+  expect(server.client.getSnapshot().connection).not.toBe('connected');
 });
 
 it.each([false,true])('exact compaction receipt is retained independently of newer published context (unavailable=%s)', async unavailable => {

@@ -67,6 +67,7 @@ struct ExitedObligation {
 pub(crate) struct AuxiliaryScope {
     pub(super) authority: super::authority::AuxiliaryAuthority,
     pub(super) cancellation: CancellationSignal,
+    pub(super) compaction_operation: Option<crate::runtime::identity::CompactionOperationId>,
     state: Mutex<ScopeState>,
     changed: Notify,
 }
@@ -307,6 +308,7 @@ impl AuxiliaryExecutor {
         Arc::new(AuxiliaryScope {
             authority: budget.authority(),
             cancellation: cancellation.child(),
+            compaction_operation: Some(budget.operation_id().clone()),
             state: Mutex::default(),
             changed: Notify::new(),
         })
@@ -325,6 +327,7 @@ impl AuxiliaryExecutor {
                 start_limit.min(super::authority::CALL_START_LIMIT),
             ),
             cancellation: cancellation.child(),
+            compaction_operation: None,
             state: Mutex::default(),
             changed: Notify::new(),
         })
@@ -376,7 +379,7 @@ impl AuxiliaryExecutor {
         &self,
         scope: &Arc<AuxiliaryScope>,
     ) -> Result<AuxiliaryReservation, ContextError> {
-        self.reserve_class(scope, true)
+        self.reserve_class(scope, scope.authority.uses_protected_capacity())
     }
 
     pub(crate) fn reserve_general(
@@ -417,7 +420,7 @@ impl AuxiliaryExecutor {
                             .cancellation
                             .with_active(|| {
                                 scope.authority.check(&scope.cancellation)?;
-                                if !scope.authority.has_remaining_start() {
+                                if !scope.authority.can_reserve_call() {
                                     return Err(ContextError::new(ContextErrorKind::CompactionBudgetExceeded, "auxiliary operation exhausted its physical request allowance"));
                                 }
                                 let mut parent = lock(&scope.state);

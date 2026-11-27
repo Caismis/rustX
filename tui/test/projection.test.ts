@@ -1,3 +1,4 @@
+import { compactionNotice } from '../src/ui/components/status.ts';
 import { checkpointSnapshot, foldRuntimeEvent } from '../../protocol/app-server/projection.ts';
 import { checkpoint } from './support/fixtures.ts';
 import { nativeInteraction } from './support/fixtures.ts';
@@ -463,7 +464,10 @@ describe("presentation projection", () => {
         context: {
           compaction_in_progress: false,
           compaction_count: 2,
+          compaction_operations: [{ live: false, status: { operation_id: 'previous-failure', admission_generation: '1', phase: 'failed',
+            accepted_fragments: 0, diagnostic: 'previous failure', triggering_attempt_id: null, waiting_attempt_id: null } }],
           latest_compaction: {
+            operation_id: "compaction-operation-2",
             generation: "2",
             checkpoint_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd",
             activation_id: "7",
@@ -474,6 +478,9 @@ describe("presentation projection", () => {
       },
     ]);
 
+    assert.match(compactionNotice(state)!, /previous failure/);
+    const reopened = replaceFromSnapshot(snapshot({ context: state.context }), state.cursor);
+    assert.match(compactionNotice(reopened)!, /previous failure/);
     assert.equal(state.context.compaction_count, 2);
     assert.equal(state.context.latest_compaction?.generation, "2");
     assert.equal(
@@ -483,6 +490,80 @@ describe("presentation projection", () => {
       ).context.latest_compaction?.tokens_before.source,
       "estimated",
     );
+  });
+
+  for (const type of ['context_compacted', 'checkpoint_advanced'] as const) {
+    it(`dismisses a previously observed inactive summary on ${type}`, () => {
+      const inactive = { live: false, status: { operation_id: 'inactive', admission_generation: '1', phase: 'generating' as const,
+        accepted_fragments: 0, diagnostic: null, triggering_attempt_id: null, waiting_attempt_id: null } };
+      const before = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [inactive] };
+      const state = replaceFromSnapshot(snapshot({ context: before }), runtimeCursor(1));
+      assert.match(compactionNotice(state)!, /no longer active/);
+      const context = { ...before, compaction_count: 1, latest_compaction: {
+        operation_id: 'manual', generation: '1', checkpoint_id: 'new-checkpoint', activation_id: '1',
+        tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10',
+      } };
+      const cursor = runtimeCursor(2);
+      const event: RuntimeClientEvent = type === 'context_compacted' ? { type, context }
+        : { type, transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) };
+      const next = reduce(state, { cursor, event });
+      assert.equal(compactionNotice(next), undefined);
+      assert.deepEqual(next.context.compaction_operations, [inactive]);
+    });
+  }
+
+  it('preserves a failure first seen with a checkpoint of unknown relative order', () => {
+    const context = { compaction_in_progress: false, compaction_count: 1, latest_compaction: {
+      operation_id: 'manual', generation: '1', checkpoint_id: 'new-checkpoint', activation_id: '1',
+      tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10',
+    }, compaction_operations: [{ live: false, status: { operation_id: 'unseen', admission_generation: '2', phase: 'failed' as const,
+      accepted_fragments: 0, diagnostic: 'unseen summary failure', triggering_attempt_id: null, waiting_attempt_id: null } }] };
+    const cursor = runtimeCursor(1);
+    const next = reduce(initial(), { cursor, event: { type: 'checkpoint_advanced', transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) } });
+    assert.match(compactionNotice(next)!, /unseen summary failure/);
+  });
+
+  it('preserves a first-seen failure for either checkpoint event and on cold attach', () => {
+    const failed = { live: false, status: { operation_id: 'old', admission_generation: '1', phase: 'failed' as const,
+      accepted_fragments: 0, diagnostic: 'unknown order', triggering_attempt_id: null, waiting_attempt_id: null } };
+    const context = { compaction_in_progress: false, compaction_count: 1, latest_compaction: {
+      operation_id: 'manual', generation: '1', checkpoint_id: 'new-checkpoint', activation_id: '1',
+      tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10',
+    }, compaction_operations: [failed] };
+    assert.match(compactionNotice(replaceFromSnapshot(snapshot({ context }), runtimeCursor(1)))!, /unknown order/);
+    for (const type of ['context_compacted', 'checkpoint_advanced'] as const) {
+      const cursor = runtimeCursor(1);
+      const event: RuntimeClientEvent = type === 'context_compacted' ? { type, context }
+        : { type, transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context }), cursor) };
+      assert.match(compactionNotice(reduce(initial(), { cursor, event }))!, /unknown order/);
+    }
+  });
+
+  it('retains dismissals across checkpoint repairs and preserves newer and unknown failures', () => {
+    const operation = (id: string, generation: string, phase: 'failed' | 'committed' = 'failed') => ({
+      live: false, status: { operation_id: id, admission_generation: generation, phase, accepted_fragments: 0,
+        diagnostic: phase === 'failed' ? `${id} failure` : null, triggering_attempt_id: null, waiting_attempt_id: null },
+    });
+    const head = (activation: string) => ({ operation_id: `manual-${activation}`, generation: activation,
+      checkpoint_id: `checkpoint-${activation}`, activation_id: activation,
+      tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10' });
+    const old = operation('old', '1'), unknown = operation('unknown', '2'), newer = operation('newer', '3');
+    const base = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [old] };
+    let state = replaceFromSnapshot(snapshot({ context: base }), runtimeCursor(1));
+    const first = { ...base, compaction_count: 1, latest_compaction: head('1'), compaction_operations: [old, unknown] };
+    state = replaceFromSnapshot(snapshot({ context: first }), runtimeCursor(2), state);
+    assert.match(compactionNotice(state)!, /unknown failure/);
+    const second = { ...first, compaction_count: 2, latest_compaction: head('2'), compaction_operations: [old, unknown, newer] };
+    const cursor = runtimeCursor(3);
+    state = reduce(state, { cursor, event: { type: 'checkpoint_advanced', transition: 'checkpoint', checkpoint: checkpoint(snapshot({ context: second }), cursor) } });
+    assert.match(compactionNotice(state)!, /newer failure/);
+    state = replaceFromSnapshot(snapshot({ context: second }), runtimeCursor(4), state);
+    assert.match(compactionNotice(state)!, /newer failure/);
+    const afterCommit = { ...second, compaction_operations: [old, unknown, operation('committed', '3', 'committed'), operation('latest', '4')] };
+    const cold = replaceFromSnapshot(snapshot({ context: afterCommit }), runtimeCursor(5));
+    assert.match(compactionNotice(cold)!, /latest failure/);
+    const onlyOld = replaceFromSnapshot(snapshot({ context: { ...afterCommit, compaction_operations: afterCommit.compaction_operations.slice(0, 3) } }), runtimeCursor(5));
+    assert.equal(compactionNotice(onlyOld), undefined);
   });
 
   it("rebuilds a mid-stream assistant message from the snapshot alone", () => {
@@ -1351,7 +1432,7 @@ it('T14 T19 canonical Tool result commitment is separate from execution-terminal
 it('T14 T17 native Trace read-domain head remains in the locally Applied checkpoint', () => {
   const initial = snapshot();
   const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
-  const trace: import('../../protocol/app-server/v80.ts').TracePage = {records: [{
+  const trace: import('../../protocol/app-server/v82.ts').TracePage = {records: [{
     id: 'request:J1', position: 'native-trace-1', kind: 'request', state: 'running', fields: [], collections: [],
     location: {attempt_id: 'attempt-1', step_id: 'turn-1'}, timing: {started_at: '2026-01-01T00:00:00Z'},
     calls: [], attachments: [], has_detail: true, truncated: false,
@@ -1365,7 +1446,7 @@ it('T14 T17 native Trace read-domain head remains in the locally Applied checkpo
 it('T14 T19 deferred publication settlement retains source facts without settling execution', () => {
   const initial = snapshot({attempt: attemptView({attempt_id:'attempt-1'})});
   const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
-  const sourceCut: import('../../protocol/app-server/v80.ts').ObservationReadCut = {
+  const sourceCut: import('../../protocol/app-server/v82.ts').ObservationReadCut = {
     read: {conversation_id: initial.conversation_id, journal:'0', transcript:'1', mutation_revision:'0', ledger_through:'0', surface_revision:'0', transcript_total:'1', pending_through:'0', pending_total:'0'},
     ledger_through:'0', transcript_total:'1', surface_revision:'0', inherited_through:'0',
   };

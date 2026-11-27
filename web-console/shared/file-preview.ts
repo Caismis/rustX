@@ -64,7 +64,7 @@ export interface NativeStepPreviewTiming {
 export interface FilePreviewOperation {
   readonly version: string;
   readonly bytes: number;
-  readonly file?: import('../../protocol/app-server/v80.ts').SessionFileReference;
+  readonly file?: import('../../protocol/app-server/v82.ts').SessionFileReference;
   /** Workbench-only, full-detail GLB generated from the bound STEP source. */
   readonly nativeStep?: NativeStepPreviewTiming;
   /** Pages remain provisional until close validates the complete source. */

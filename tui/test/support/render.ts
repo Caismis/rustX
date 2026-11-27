@@ -7,6 +7,7 @@
  */
 
 import { replaceFromSnapshot } from "../../src/presentation/projection.ts";
+import { banded } from '../../src/ui/components/transcript-block.ts';
 import type { PresentationState } from "../../src/presentation/state.ts";
 import type { RuntimeClientSnapshot } from "../../src/protocol/app-server.ts";
 import {
@@ -37,6 +38,7 @@ export function prefs(
 
 /** The plain text of one rendered block. */
 export function blockText(block: TranscriptBlock): string {
+  if (block.kind === 'compaction') return banded(block).render(80).map(plainText).join('\n');
   return plainText(block.kind === "markdown" ? block.markdown : block.text);
 }
 

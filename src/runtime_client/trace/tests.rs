@@ -261,6 +261,8 @@ fn commit_request(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 continuation_source: snapshot.continuation_source.clone(),
@@ -1229,6 +1231,76 @@ fn the_terminal_vocabulary_does_not_infer_missing_outcomes() {
     );
 }
 
+/// Non-checkpoint terminals keep their outcome and operation identity after reopen.
+#[test]
+fn cancelled_and_skipped_compactions_survive_cold_trace_reconstruction() {
+    use crate::runtime::identity::CompactionOperationId;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("conversation.sqlite");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    let cancelled = CompactionOperationId::new("cancelled-compaction");
+    let skipped = CompactionOperationId::new("skipped-compaction");
+    append(
+        &store,
+        E::CompactionStarted {
+            operation_id: cancelled.clone(),
+            mode: crate::context::operation::CompactionMode::Manual,
+        },
+        1,
+    );
+    append(
+        &store,
+        E::CompactionStarted {
+            operation_id: skipped.clone(),
+            mode: crate::context::operation::CompactionMode::Manual,
+        },
+        2,
+    );
+    append(
+        &store,
+        E::CompactionCancelled {
+            operation_id: cancelled,
+        },
+        3,
+    );
+    append(
+        &store,
+        E::CompactionSkipped {
+            operation_id: skipped,
+        },
+        4,
+    );
+
+    let check = |store: &SqliteConversationStore| {
+        let records = page(store).records;
+        let compactions: Vec<_> = records
+            .iter()
+            .filter(|r| r.kind == TraceKind::Compaction)
+            .collect();
+        assert_eq!(compactions.len(), 2);
+        for (record, outcome, end, duration) in [
+            (compactions[0], TraceState::Cancelled, 3, 2000),
+            (compactions[1], TraceState::Skipped, 4, 2000),
+        ] {
+            assert_eq!(record.state, outcome);
+            assert_eq!(record.timing.ended_at, Some(timestamp(end)));
+            assert_eq!(record.timing.duration_ms, Some(duration));
+            assert!(record.preview.is_none());
+            assert_eq!(
+                detail_of(store, &record.id).projected_messages,
+                [] as [crate::observation::trace::TraceRequestMessage; 0]
+            );
+        }
+    };
+    check(&store);
+    drop(store);
+    let reopened = SqliteConversationStore::open(id, &path).unwrap();
+    check(&reopened);
+}
+
 /// Each native operation retains its own Started/terminal correlation even
 /// when many later compactions appear in the durable Journal.
 #[test]
@@ -1241,6 +1313,7 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
                 operation_id: crate::runtime::identity::CompactionOperationId::new(format!(
                     "fixture-compaction-{index}"
                 )),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
             index * 2,
         );
@@ -3442,6 +3515,7 @@ fn compaction_and_request_only_input_never_become_context_facts() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
         5,
     );
@@ -5312,6 +5386,7 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
     assert_eq!(child.presentation_frontier().unwrap(), 0);
 }
 
+mod compaction_tests;
 mod frozen_tests;
 mod header_tests;
 mod inspection_tests;

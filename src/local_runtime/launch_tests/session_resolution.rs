@@ -140,6 +140,26 @@ fn explicit_session_model_is_whole_state_and_beats_current_defaults() {
 }
 
 #[test]
+fn session_override_rejects_a_model_without_compaction_headroom() {
+    let fixture = Fixture::new();
+    fixture.project(json!({"models": {"host/tight": {
+        "provider": "host", "id": "tight", "context_window": 4096, "max_output_tokens": 4095,
+        "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]}
+    }}}));
+    let (manager, mut input) = fixture.request.session_input(&fixture.host).unwrap();
+    input.model = Some(SessionModelConfig::of(
+        ModelRef::parse("host/tight").unwrap(),
+    ));
+    let error = manager.resolve_session(&input).map(|_| ()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("primary window cannot accommodate"),
+        "{error}"
+    );
+}
+
+#[test]
 fn invalid_sources_and_disabled_external_sources_have_zero_effects() {
     let f = Fixture::new();
     let (manager, input) = f.request.session_input(&f.host).unwrap();
@@ -375,7 +395,7 @@ fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice(
         model: ModelRef::parse("host/two").unwrap(),
         profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: serde_json::Map::default(),
-        max_output_tokens: Some(512),
+        max_output_tokens: None,
     };
     for selected in [
         model,

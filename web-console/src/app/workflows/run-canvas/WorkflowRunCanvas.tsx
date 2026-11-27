@@ -17,7 +17,7 @@ import type {
   WorkflowRunView,
   WorkflowRunId,
   WorkflowTraceNode,
-} from '../../../../../protocol/app-server/v80';
+} from '../../../../../protocol/app-server/v82';
 import { workflowKey } from '../../../bindings/workflow-children';
 import { checkpointReadCutKey } from '../../../../../protocol/app-server/content-identity';
 import { traceInspectionHead, type TraceFieldReader } from '../../../client/trace';

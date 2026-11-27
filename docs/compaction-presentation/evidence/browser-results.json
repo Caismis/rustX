@@ -1,0 +1,84 @@
+{
+  "discovered": 640,
+  "executed": 640,
+  "duplicate_executions": 0,
+  "full_shards": [
+    {
+      "shard": 1,
+      "startTime": "2026-11-06T08:40:59.647Z",
+      "duration": 1709177.339,
+      "expected": 342,
+      "skipped": 0,
+      "unexpected": 4,
+      "flaky": 0
+    },
+    {
+      "shard": 2,
+      "startTime": "2026-11-06T08:40:59.647Z",
+      "duration": 1225436.94,
+      "expected": 280,
+      "skipped": 0,
+      "unexpected": 14,
+      "flaky": 0
+    }
+  ],
+  "followups": [
+    {
+      "scope": "Unchanged assertions: isolated uploads and lost acknowledgement",
+      "startTime": "2026-11-06T09:15:18.547Z",
+      "duration": 34620.676999999996,
+      "expected": 3,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    {
+      "scope": "Normal strict Trajectory and compaction acceptance after reviewed reference changes",
+      "startTime": "2026-11-06T09:16:28.931Z",
+      "duration": 197788.78399999999,
+      "expected": 73,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    }
+  ],
+  "unresolved": [
+    {
+      "file": "artifact-document.spec.ts",
+      "title": "artifact-document.spec.ts › real immutable Artifact crosses private binary derivation and rejects late attachment publication"
+    },
+    {
+      "file": "documents.spec.ts",
+      "title": "documents.spec.ts › real authorized advanced documents, isolated hostile HTML and original downloads"
+    },
+    {
+      "file": "preview-workspace.spec.ts",
+      "title": "preview-workspace.spec.ts › bounded preview workspace keeps exact occurrences, two live PDFs, keyboard geometry and detached reading"
+    },
+    {
+      "file": "workbench-office-view.spec.ts",
+      "title": "workbench-office-view.spec.ts › Office uses Harness continuous pages and floating zoom (en-dark-1440)"
+    },
+    {
+      "file": "workbench-office-view.spec.ts",
+      "title": "workbench-office-view.spec.ts › Office uses Harness continuous pages and floating zoom (zh-light-1440)"
+    },
+    {
+      "file": "workbench-office-view.spec.ts",
+      "title": "workbench-office-view.spec.ts › Office uses Harness continuous pages and floating zoom (zh-dark-390)"
+    },
+    {
+      "file": "workbench-office-view.spec.ts",
+      "title": "workbench-office-view.spec.ts › Office uses Harness continuous pages and floating zoom (en-light-390)"
+    },
+    {
+      "file": "workbench-office.spec.ts",
+      "title": "workbench-office.spec.ts › Office sidebar renders hyperlinks and printer settings, with localized retry (en)"
+    },
+    {
+      "file": "workbench-office.spec.ts",
+      "title": "workbench-office.spec.ts › Office sidebar renders hyperlinks and printer settings, with localized retry (zh)"
+    }
+  ],
+  "interpretation": "Full runs include failures. Follow-up checks resolve the intended reference changes and three runtime/browser timing failures; the nine remaining document conversions require unavailable host sandbox prerequisites. This is not a successful remote FULL CI result."
+}

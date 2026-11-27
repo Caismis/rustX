@@ -28,7 +28,7 @@ pub struct FreshInboundOpportunity {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PostToolBatchOpportunity;
+pub struct PostToolBatchOpportunity {}
 
 /// Closed typed presentation vocabulary; it carries no execution authority.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,4 +47,28 @@ pub struct ContributionStart {
     pub emissions: Vec<ContributionEmission>,
     pub opportunities: ContributionOpportunities,
     pub post_tool_batch_anchor: Option<TranscriptCursor>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_tool_opportunity_preserves_presence_through_json() {
+        for post_tool_batch in [None, Some(PostToolBatchOpportunity {})] {
+            let opportunities = ContributionOpportunities {
+                fresh_inbound: None,
+                post_tool_batch,
+            };
+            let json = serde_json::to_value(&opportunities).unwrap();
+            assert_eq!(
+                json["post_tool_batch"].is_object(),
+                post_tool_batch.is_some()
+            );
+            assert_eq!(
+                serde_json::from_value::<ContributionOpportunities>(json).unwrap(),
+                opportunities
+            );
+        }
+    }
 }

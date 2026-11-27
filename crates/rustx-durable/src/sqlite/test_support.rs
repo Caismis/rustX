@@ -166,6 +166,8 @@ pub fn freeze_test_input(
         .freeze_input(
             store.conversation_id(),
             &ModelRequest {
+                prompt_fallback_authorization:
+                    rustx_types::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 continuation_source: None,
@@ -839,6 +841,8 @@ pub fn append_completed_turns(
         );
         let history = store.projected_history().unwrap();
         let request = rustx_types::model::types::ModelRequest {
+            prompt_fallback_authorization:
+                rustx_types::model::types::PromptFallbackAuthorization::default(),
             response_schema: None,
             response_byte_limit: None,
             continuation_source: None,
@@ -1058,6 +1062,8 @@ pub fn simple_request(
     };
     use rustx_types::runtime::identity::MessageId;
     rustx_types::model::types::ModelRequest {
+        prompt_fallback_authorization:
+            rustx_types::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         continuation_source: None,
@@ -1170,6 +1176,7 @@ pub fn checkpoint_fixture(
         items.push(item);
     }
     CheckpointCandidate {
+        prefix_coverage: None,
         checkpoint_id,
         expected_head: history.cut.checkpoint_id,
         read_cut: store.compaction_resource_cut().unwrap(),
@@ -1193,6 +1200,7 @@ pub fn checkpoint_commit_fixture(
     ));
     let signal = rustx_types::runtime::cancellation::CancellationSignal::new();
     crate::projection::ProjectionCommitInput {
+        prefix_proof: None,
         grant: signal
             .authorize_compaction_commit(operation_id.clone())
             .unwrap(),

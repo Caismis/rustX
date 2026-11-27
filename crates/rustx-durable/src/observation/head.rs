@@ -28,6 +28,8 @@ pub struct RuntimeClientProjectionHeadView {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientCompactionView {
+    /// Stable native operation that installed this checkpoint.
+    pub operation_id: rustx_types::runtime::identity::CompactionOperationId,
     /// The local committed projection generation.
     pub generation: u64,
     /// The independently durable checkpoint identity.

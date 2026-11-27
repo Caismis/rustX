@@ -1,7 +1,7 @@
 import { validateObservationCut } from '../../../protocol/app-server/observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, TRACE_REFRESH_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
-import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v82';
 import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OperationAdmission, SessionView } from './contracts';
@@ -208,6 +208,7 @@ export class TraceReads {
       if(!current()||!owns()||cut.conversation_id!==target.conversation_id||cut.activation_id!=null)throw new Error('Trace field source was replaced.');
     };
     const reader:TraceFieldReader={
+      scope:JSON.stringify([this.port.state().authorityId,this.port.state().generation,target]),
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'conversation/checkpointValueRead',params:{target,agent_id:null,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Trace content source changed.');return this.port.readContent(target,undefined,reference,offset,()=>current()&&owns());},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns());valid(cut,owns);return result.page;},
@@ -221,6 +222,7 @@ export class TraceReads {
       if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
     };
     const reader:TraceFieldReader = {
+      scope:JSON.stringify([this.port.state().authorityId,this.port.state().generation,id,node,conversation]),
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/traceValueRead',params:{session_id:id,node_id:node,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation)throw new Error('Historical Trace content source changed.');return (await this.port.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);return (await this.port.request({method:'session/tracePage',params:{session_id:id,node_id:node,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns())).page;},

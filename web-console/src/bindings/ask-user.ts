@@ -1,5 +1,5 @@
 import { parseModelToolCall } from '../../../protocol/app-server/model-tool-call';
-import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v80';
+import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v82';
 import type { QuestionRowView } from '../presentation/agent/QuestionRow';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

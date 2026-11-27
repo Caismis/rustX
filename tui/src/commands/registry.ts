@@ -98,6 +98,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/compact",
     description: "Manually compact canonical conversation context while the runtime is idle.",
+    argumentHint: "[instructions]",
   },
   {
     name: "/debug",
@@ -113,9 +114,9 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/expand",
     description:
-      "Expand or collapse foreground tool, background execution, and pending interaction detail. Purely visual: nothing is re-executed or re-fetched.",
+      "Expand or collapse tool, background execution, interaction, or committed summary detail. Purely visual: nothing is re-executed or re-fetched.",
     argumentHint:
-      "[latest|all|none|<tool-call-id>|job <job-id>|interaction <conversation-id>::<interaction-id>]",
+      "[latest|all|none|compaction [checkpoint-id]|<tool-call-id>|job <job-id>|interaction <conversation-id>::<interaction-id>]",
   },
   {
     name: "/cancel",

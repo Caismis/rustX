@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CanonicalContentLocator, SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
+import type { CanonicalContentLocator, SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v82';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { readMessageBlocks } from './message-blocks';
 import { observationSourceIdentity, useObservationSource } from './ObservationSource';

@@ -63,7 +63,9 @@ fn selected_paths(
 ) -> Option<&'static [&'static str]> {
     use rustx_types::events::types::RuntimeEvent as Event;
     match event {
-        Event::AttemptStarted { .. }
+        Event::CompactionChunkAccepted { .. }
+        | Event::CompactionOperationUpdated { .. }
+        | Event::AttemptStarted { .. }
         | Event::AttemptTimedOut { .. }
         | Event::TurnStarted
         | Event::TurnCompleted
@@ -221,6 +223,7 @@ fn tool_status(status: &rustx_types::tools::types::ToolExecutionStatus) -> serde
 fn model_error(error: &rustx_types::model::error::ModelError) -> serde_json::Value {
     serde_json::json!({"kind":error.kind,"message":prefix(&error.message),"retry_disposition":error.retry_disposition,"retry_after_ms":error.retry_after_ms.map(|value|value.to_string()),"provider_code":error.provider_code.as_deref().map(prefix),"context_overflow":crate::observation::bounded::structural_value(&error.context_overflow),"malformed_tool_proposal":crate::observation::bounded::structural_value(&error.malformed_tool_proposal),"timeout_phase":error.timeout_phase,"generation":crate::observation::bounded::structural_value(&error.generation)})
 }
+#[allow(clippy::too_many_lines)] // Closed mapping of original terminal and compaction lifecycle evidence.
 fn terminal_fields(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
@@ -270,7 +273,14 @@ fn terminal_fields(
         Event::ToolExecutionCompleted { result, .. } => {
             value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::observation::bounded::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
         }
-        Event::ToolExecutionFailed { error, .. } | Event::CompactionFailed { error, .. } => {
+        Event::CompactionFailed {
+            error,
+            operation_id,
+        } => {
+            value["operation_id"] = serde_json::json!(operation_id);
+            value["error"] = serde_json::json!(prefix(error));
+        }
+        Event::ToolExecutionFailed { error, .. } => {
             value["error"] = serde_json::json!(prefix(error));
         }
         Event::WorkflowFailed {
@@ -294,6 +304,27 @@ fn terminal_fields(
         }
         Event::BackgroundTerminalPublished { state, .. } => {
             value["state"] = serde_json::json!(state);
+        }
+        Event::CompactionChunkAccepted {
+            operation_id,
+            accepted_fragments,
+            source_ranges,
+            generation,
+        } => {
+            value["operation_id"] = serde_json::json!(operation_id);
+            value["accepted_fragments"] = serde_json::json!(accepted_fragments);
+            value["source_ranges"] = serde_json::json!(source_ranges);
+            value["generation"] = serde_json::json!(generation);
+        }
+        Event::CompactionStarted { operation_id, mode } => {
+            value["operation_id"] = serde_json::json!(operation_id);
+            value["mode"] = serde_json::json!(mode);
+        }
+        Event::CompactionOperationUpdated { status } => {
+            value["status"] = serde_json::json!(status);
+        }
+        Event::CompactionSkipped { operation_id } | Event::CompactionCancelled { operation_id } => {
+            value["operation_id"] = serde_json::json!(operation_id);
         }
         Event::CompactionCompleted {
             generation,

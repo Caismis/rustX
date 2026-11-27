@@ -714,7 +714,7 @@ impl ConversationRuntime {
         // context policy. Validating here (and again in `model_set`) is what
         // makes the per-attempt context runtime construction infallible at
         // admission, where there is no caller left to report to.
-        validate_model_context(&config.context.policy, &config.model)
+        validate_model_context(&config.model)
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
         // The durable store is composed once by the tool runtime's
         // `ConversationStoreBinding`. The runtime receives the full handle
@@ -854,9 +854,17 @@ impl ConversationRuntime {
                 });
             }
         };
-        // The hot read model is hydrated from the durable head on first use,
-        // which is always **after** reconciliation, so it reflects the
-        // repaired canonical structure rather than the crash-time one.
+        if let Err(error) = super::compaction_observation::reconcile_compaction_restart(
+            store.as_ref(),
+            clock.as_ref(),
+        ) {
+            config.capability.release_conversation_runtime_claim();
+            config.tool_runtime.release_conversation_runtime_claim();
+            return Err(ConversationRuntimeError::Storage(format!(
+                "independent compaction restart reconciliation failed: {error}"
+            )));
+        }
+        // The hot read model is hydrated from the reconciled durable head on first use.
 
         let (
             last_permission_reminder_mode,
@@ -1047,7 +1055,6 @@ impl ConversationRuntime {
             crate::runtime::auxiliary::external::ExternalAuxiliaryParts {
                 conversation_id: conversation_id.clone(),
                 store: store.clone(),
-                policy: config.context.policy,
                 estimator: config.context.estimator.clone(),
                 tool_runtime: config.tool_runtime.clone(),
                 executor: auxiliary.clone(),
@@ -1088,6 +1095,7 @@ impl ConversationRuntime {
             auxiliary_executor: auxiliary,
             scheduled_executor,
             host_task: Mutex::new(None),
+            async_compaction: Mutex::new(None),
             recovery,
             executor,
             state,

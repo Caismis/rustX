@@ -1054,8 +1054,8 @@ available. Settings renders native per-unit state without inferring field impact
 
 Agent edits Root identity, description, instructions and project guidance.
 Tools & Permissions edits approval, Native Tools, Tool-source selection, Skill
-visibility, the delegation allowlists and per-Tool/MCP policies. Advanced edits
-context, model and Tool deadlines, environment and child capacity. App Server
+visibility, the delegation allowlists and MCP permission modes. Advanced edits
+model and Tool deadlines, environment and child capacity. App Server
 process policy is User-only. Native classification distinguishes hot fields from restart fields;
 the source projection retains desired and actual process bindings across reopening.
 Reverting desired to actual clears restart state through native authority.

@@ -1,6 +1,6 @@
 import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, acceptOlderTranscriptPage, extendTranscriptWindow, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptCoverageComplete, transcriptCoverageTarget, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
 import { transcriptWindowReady } from './history-policy';
-import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v80';
+import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v82';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OutlinePagingIntent, SessionView } from './contracts';
 

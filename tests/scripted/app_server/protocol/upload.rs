@@ -536,6 +536,9 @@ async fn binary_carrier_rejects_bad_lengths_reuse_expiry_and_paths_before_alloca
                 }
             );
             assert!(tokio_tungstenite::connect_async(request()).await.is_err());
+            // Settlement removes the upload route. Its actor holds the capacity
+            // permit until exit, before the next independent fixture can use it.
+            f.host.uploads().settle_actors().await;
         }
         let MethodResult::UploadPrepared { transfer } = call(
             &connection,

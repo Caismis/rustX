@@ -9,7 +9,7 @@ import type { Translate } from '../../locale/translation';
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
 import { trajectoryItems, isInspectable, type TrajectoryProjection } from './layout';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v80';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v82';
 
 /** Horizontal projection of the overview's domain: equal-width operations, or
  * recorded durations with idle time compressed, the two Harness exposes. */
@@ -88,7 +88,7 @@ function isError(record: TraceRecord): boolean {
  */
 function label(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'request') return tx('trajectory:kind.assistant');
-  if (record.kind === 'compaction') return tx('trajectory:kind.compacted');
+  if (record.kind === 'compaction') return tx('trajectory:copy.compaction');
   return tx(`trajectory:kind.${record.kind}`);
 }
 

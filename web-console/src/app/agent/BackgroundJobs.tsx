@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-jobs JobsSection.tsx; see PROVENANCE.md. */
 import { useEffect, useState } from 'react';
-import type { RuntimeClientJob, TraceRecord } from '../../../../protocol/app-server/v80';
+import type { RuntimeClientJob, TraceRecord } from '../../../../protocol/app-server/v82';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';

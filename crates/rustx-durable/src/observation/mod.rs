@@ -30,9 +30,9 @@ pub mod turn;
 
 pub use crate::trace::{
     RequestReadSummary, TraceAdoptionClass, TraceAdoptionPage, TraceBootstrapFact,
-    TraceCanonicalSummary, TraceFactData, TraceFactHeader, TraceFactKind, TraceFactQuery,
-    TraceFactScope, TraceRequestContextPage, TraceRequestPredecessorHeader, TraceTerminalClass,
-    TraceTerminalHeader, TraceToolProposalSummary,
+    TraceCanonicalSummary, TraceCompactionCallIds, TraceFactData, TraceFactHeader, TraceFactKind,
+    TraceFactQuery, TraceFactScope, TraceRequestContextPage, TraceRequestPredecessorHeader,
+    TraceTerminalClass, TraceTerminalHeader, TraceToolProposalSummary,
 };
 
 pub const HEADER_PAGE_MAX: usize = 32;

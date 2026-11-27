@@ -148,7 +148,6 @@ impl std::error::Error for SubagentNameError {}
 pub struct InheritedExecutionPolicy {
     pub model_timeout: crate::model::deadline::ModelTimeoutPolicy,
     pub tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy,
-    pub context: crate::context::engine::SessionContextPolicy,
 }
 
 /// Maximum bytes of a subagent terminal result message before it is rejected.

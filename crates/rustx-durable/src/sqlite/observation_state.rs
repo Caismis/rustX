@@ -173,6 +173,32 @@ pub fn todo_head(
     }
 }
 
+/// Resolve the immutable native admission at a bounded Journal cut.
+pub(super) fn compaction_start_mode(
+    connection: &Connection,
+    operation_id: &rustx_types::runtime::identity::CompactionOperationId,
+    before: u64,
+) -> Result<rustx_types::context::operation::CompactionMode, ConversationStoreError> {
+    let value: Option<Option<String>> = connection
+        .query_row(
+            "SELECT CASE WHEN length(CAST(json_extract(event_json,'$.event.mode') AS BLOB))<=16 THEN json_extract(event_json,'$.event.mode') END FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_started' AND sequence<?2 ORDER BY sequence ASC LIMIT 1",
+            params![operation_id.as_str(), before],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
+    let mode = value.flatten().ok_or_else(|| {
+        ConversationStoreError::InvalidReference("compaction start mode unavailable".into())
+    })?;
+    serde_json::from_value(serde_json::Value::String(mode)).map_err(|_| {
+        ConversationStoreError::InvalidReference("invalid compaction start mode".into())
+    })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the closed event-to-observation mapping together"
+)]
 pub fn event(
     connection: &Connection,
     event: &rustx_types::events::types::RuntimeEventEnvelope,
@@ -181,6 +207,10 @@ pub fn event(
     if matches!(
         event.event,
         RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionOperationUpdated { .. }
+            | RuntimeEvent::CompactionChunkAccepted { .. }
+            | RuntimeEvent::CompactionSkipped { .. }
+            | RuntimeEvent::CompactionCancelled { .. }
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
     ) {
@@ -199,6 +229,23 @@ pub fn event(
                 )
                 .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
         }
+        RuntimeEvent::CompactionStarted { operation_id, mode }
+            if *mode != rustx_types::context::operation::CompactionMode::Proactive =>
+        {
+            let value = rustx_types::context::operation::RuntimeClientCompactionProgress {
+                operation_id: operation_id.clone(),
+                mode: *mode,
+                accepted_fragments: 0,
+                source_ranges: Vec::new(),
+                generation: None,
+            };
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({"compaction_progress": value}),
+            )?;
+        }
         RuntimeEvent::CompactionStarted { .. } => {
             super::observation_request::index_state(
                 connection,
@@ -207,10 +254,58 @@ pub fn event(
                 &serde_json::json!({}),
             )?;
         }
+        RuntimeEvent::CompactionOperationUpdated { status } => {
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({"compaction_operation": status}),
+            )?;
+        }
+        RuntimeEvent::CompactionChunkAccepted {
+            operation_id,
+            accepted_fragments,
+            source_ranges,
+            generation,
+        } => {
+            let mode = compaction_start_mode(connection, operation_id, event.sequence)?;
+            if mode == rustx_types::context::operation::CompactionMode::Proactive {
+                super::observation_request::index_state(
+                    connection,
+                    "observation_context",
+                    &format!("context/{}", event.sequence),
+                    &serde_json::json!({}),
+                )?;
+                return Ok(());
+            }
+            let value = rustx_types::context::operation::RuntimeClientCompactionProgress {
+                operation_id: operation_id.clone(),
+                mode,
+                accepted_fragments: *accepted_fragments,
+                source_ranges: source_ranges.clone(),
+                generation: generation.clone(),
+            };
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({"compaction_progress": value}),
+            )?;
+        }
+        RuntimeEvent::CompactionSkipped { .. } | RuntimeEvent::CompactionCancelled { .. } => {
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({"compaction_progress": null}),
+            )?;
+        }
         RuntimeEvent::CompactionFailed { error, .. } => {
             #[derive(serde::Serialize, schemars::JsonSchema)]
             struct Diagnostic<'a> {
                 compaction_error: &'a str,
+                compaction_progress:
+                    Option<rustx_types::context::operation::RuntimeClientCompactionProgress>,
             }
             super::observation_request::index_state(
                 connection,
@@ -218,6 +313,7 @@ pub fn event(
                 &format!("context/{}", event.sequence),
                 &Diagnostic {
                     compaction_error: error,
+                    compaction_progress: None,
                 },
             )?;
         }
@@ -226,10 +322,13 @@ pub fn event(
             struct Diagnostic<'a> {
                 latest_compaction: crate::observation::head::RuntimeClientCompactionView,
                 occupancy: &'a Option<rustx_types::context::occupancy::ContextOccupancy>,
+                compaction_progress:
+                    Option<rustx_types::context::operation::RuntimeClientCompactionProgress>,
             }
             let value = Diagnostic {
                 latest_compaction: super::observation_occupancy::compaction(connection, event)?,
                 occupancy,
+                compaction_progress: None,
             };
             super::observation_request::index_state(
                 connection,
@@ -324,4 +423,99 @@ pub fn read(
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
     let kind = validate(connection, domain, id, cut)?;
     super::observation_request::read_from(connection, kind, TABLE, id, path, offset, max_bytes)
+}
+
+/// Two admission seeks and two indexed status seeks, bounded independently of Journal size.
+pub(super) fn latest_compaction_operations(
+    connection: &Connection,
+    through: u64,
+) -> Result<Vec<rustx_types::context::operation::CompactionOperationStatus>, ConversationStoreError>
+{
+    let through = super::seq_to_i64(through)?;
+    let mut statement = connection.prepare_cached("SELECT source_id FROM state_observation_sources INDEXED BY state_observation_journal_idx WHERE domain='compaction_admission' AND journal_sequence<=?1 ORDER BY journal_sequence DESC LIMIT 2").map_err(|e| storage(e.to_string()))?;
+    let keys = statement
+        .query_map([through], |row| row.get::<_, String>(0))
+        .map_err(|e| storage(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| storage(e.to_string()))?;
+    let mut statuses = Vec::new();
+    let mut read_status = connection.prepare_cached("SELECT CASE WHEN octet_length(e.event_json)<=16384 THEN e.event_json END FROM state_observation_sources s INDEXED BY state_observation_journal_idx JOIN events e ON e.sequence=s.journal_sequence WHERE s.domain=?1 AND s.journal_sequence<=?2 ORDER BY s.journal_sequence DESC LIMIT 1").map_err(|error| storage(error.to_string()))?;
+    for key in keys {
+        let domain = format!("compaction_operation/{key}");
+        let text = read_status
+            .query_row(params![domain, through], |row| {
+                row.get::<_, Option<String>>(0)
+            })
+            .map_err(|error| storage(error.to_string()))?
+            .ok_or_else(|| {
+                ConversationStoreError::ResourceBoundExceeded(
+                    "compaction status exceeds its byte budget".into(),
+                )
+            })?;
+        let envelope: rustx_types::events::types::RuntimeEventEnvelope =
+            serde_json::from_str(&text).map_err(|e| storage(e.to_string()))?;
+        let rustx_types::events::types::RuntimeEvent::CompactionOperationUpdated { status } =
+            envelope.event
+        else {
+            return Err(storage("invalid compaction status source"));
+        };
+        status.validate().map_err(|e| storage(e.to_string()))?;
+        statuses.push(status);
+    }
+    statuses.reverse();
+    Ok(statuses)
+}
+
+/// Index only foreground lifecycle facts. Proactive progress can be arbitrarily dense
+/// between a foreground failure and the next cold attach.
+pub(super) fn index_foreground_compaction(
+    connection: &Connection,
+    event: &rustx_types::events::types::RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    use rustx_types::events::types::RuntimeEvent;
+    match &event.event {
+        RuntimeEvent::CompactionStarted {
+            mode: rustx_types::context::operation::CompactionMode::Proactive,
+            ..
+        } => return Ok(()),
+        RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionFailed { .. }
+        | RuntimeEvent::CompactionCancelled { .. }
+        | RuntimeEvent::CompactionSkipped { .. } => {}
+        RuntimeEvent::CompactionChunkAccepted { operation_id, .. }
+        | RuntimeEvent::CompactionCompleted { operation_id, .. } => {
+            if is_proactive_operation(connection, operation_id)? {
+                return Ok(());
+            }
+        }
+        _ => return Ok(()),
+    }
+    connection.execute_cached("INSERT INTO state_observation_sources(domain,source_id,journal_sequence) VALUES('foreground_compaction',?1,?2)",
+        params![format!("context/{}", event.sequence),event.sequence]).map_err(|e| storage(e.to_string()))?;
+    Ok(())
+}
+
+pub(super) fn is_proactive_operation(
+    connection: &Connection,
+    operation_id: &rustx_types::runtime::identity::CompactionOperationId,
+) -> Result<bool, ConversationStoreError> {
+    connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM state_observation_sources WHERE domain='compaction_identity' AND source_id=?1)", [operation_id.as_str()], |row| row.get(0)).map_err(|error| storage(error.to_string()))
+}
+
+/// Index authoritative operation admission and each exact status update.
+pub(super) fn index_compaction_operation(
+    connection: &Connection,
+    event: &rustx_types::events::types::RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let rustx_types::events::types::RuntimeEvent::CompactionOperationUpdated { status } =
+        &event.event
+    else {
+        return Ok(());
+    };
+    let key = status.admission_generation.to_string();
+    connection.execute("INSERT OR IGNORE INTO state_observation_sources(domain,source_id,journal_sequence) VALUES('compaction_admission',?1,?2)", params![key,event.sequence]).map_err(|e| storage(e.to_string()))?;
+    connection.execute("INSERT OR IGNORE INTO state_observation_sources(domain,source_id,journal_sequence) VALUES('compaction_identity',?1,?2)", params![status.operation_id.as_str(),event.sequence]).map_err(|e| storage(e.to_string()))?;
+    let domain = format!("compaction_operation/{}", status.admission_generation);
+    connection.execute("INSERT INTO state_observation_sources(domain,source_id,journal_sequence) VALUES(?1,?2,?3)", params![domain,format!("status/{}",event.sequence),event.sequence]).map_err(|e| storage(e.to_string()))?;
+    Ok(())
 }

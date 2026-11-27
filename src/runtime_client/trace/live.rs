@@ -125,6 +125,8 @@ impl AnchorFacts {
 #[derive(Clone, Copy)]
 pub(crate) struct LiveSnapshot<'a> {
     conversation_id: &'a crate::runtime::identity::ConversationId,
+    compaction_operations:
+        &'a [crate::runtime_client::snapshot::RuntimeClientCompactionOperation],
     jobs: &'a [crate::runtime_client::snapshot::RuntimeClientJob],
     agents: &'a [crate::runtime_client::snapshot::RuntimeClientAgent],
     workflows: &'a crate::runtime::workflow::read_model::WorkflowSnapshot,
@@ -144,6 +146,7 @@ macro_rules! live_snapshot {
             fn from(snapshot: &'a $snapshot) -> Self {
                 Self {
                     conversation_id: &snapshot.conversation_id,
+                    compaction_operations: &snapshot.context.compaction_operations,
                     jobs: &snapshot.jobs,
                     agents: &snapshot.agents,
                     workflows: &snapshot.workflows,
@@ -198,6 +201,7 @@ fn repair<'a>(targets: impl IntoIterator<Item = LiveTarget<'a>>, snapshot: LiveS
             continue;
         }
         let live = match record.kind {
+            TraceKind::Compaction => live_compaction(record.native_id, snapshot),
             TraceKind::Background => snapshot
                 .jobs
                 .iter()
@@ -278,6 +282,20 @@ fn repair<'a>(targets: impl IntoIterator<Item = LiveTarget<'a>>, snapshot: LiveS
             _ => {}
         }
     }
+}
+
+fn live_compaction(native_id: Option<&str>, snapshot: LiveSnapshot<'_>) -> Option<TraceState> {
+    use crate::context::operation::CompactionOperationPhase as Phase;
+    snapshot
+        .compaction_operations
+        .iter()
+        .find(|current| current.live && native_id == Some(current.status.operation_id.as_str()))
+        .and_then(|current| match current.status.phase {
+            Phase::Generating | Phase::Retrying => Some(TraceState::Running),
+            Phase::Ready => Some(TraceState::Pending),
+            Phase::ForegroundWaiting => Some(TraceState::Waiting),
+            _ => None,
+        })
 }
 
 /// A child Trace uses only child activity identities, never the parent's snapshot.

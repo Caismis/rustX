@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "verification": "Git blob identities verified against immutable GitHub file responses; SHA-256 hashes cover exact upstream bytes.",
+  "sources": [
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-chat/src/client/chat/CompactionItem.tsx",
+      "git_blob": "006b57055743e7e04a88092a312b21a7f7c74ce3",
+      "sha256": "3e8f5a4b1392fa2d824d25e068667cbb982e3f9c11913977ff7806fb3ccc3f30"
+    },
+    {
+      "repository": "https://github.com/earendil-works/pi",
+      "commit": "850ea2eae2f39eb16ae14e1f09448eab6da2188a",
+      "path": "packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts",
+      "git_blob": "8b6ebb22430d823e403759682789ad6a31fa2c28",
+      "sha256": "8be0de10993c1c491f245e4d3f55e9ea3290ac1d33a51c5cc8026889d9a991fe"
+    },
+    {
+      "repository": "https://github.com/earendil-works/pi",
+      "commit": "850ea2eae2f39eb16ae14e1f09448eab6da2188a",
+      "path": "packages/coding-agent/src/modes/interactive/components/status-indicator.ts",
+      "git_blob": "c2ccc3a87f7ec81d307a500233c973438f33354e",
+      "sha256": "80d33d17875b6f58af3878d3bb0b29d099e2b7a9fbfb0725a6cd4408bd535ab8"
+    },
+    {
+      "repository": "https://github.com/earendil-works/pi",
+      "commit": "850ea2eae2f39eb16ae14e1f09448eab6da2188a",
+      "path": "packages/coding-agent/src/modes/interactive/theme/dark.json",
+      "git_blob": "0a82c289d3e6a7234cf5b738662427cf9b7cced4",
+      "sha256": "e1f96982f8cb7d2a48eca7db03c9cb282cb1e14a243680cd855638ecd6a251b6"
+    },
+    {
+      "repository": "https://github.com/earendil-works/pi",
+      "commit": "850ea2eae2f39eb16ae14e1f09448eab6da2188a",
+      "path": "LICENSE",
+      "git_blob": "b0a8e9b81083294360c69b4ec45d3d39a2b28197",
+      "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "LICENSE",
+      "git_blob": "c1f7a78e89e4e4dc7b86664c3b3c76eb5eee1785",
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-chat/src/client/chat/CompactionCommandCard.tsx",
+      "git_blob": "bf4305dc5b1520c121ae7d13e3e6ad259b919585",
+      "sha256": "4dc3650ef3abfc42350868f16f90ea1d668ac534a23bab9ffff52d0845716cbd"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts",
+      "git_blob": "4a43af9336254780c4258a905aaf04cbcbdb115c",
+      "sha256": "587a4ac3db4f56ddf4cac2f3a752ac03733dd9c1626d7814d4db4cb766403fe6"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx",
+      "git_blob": "5eafe475ffb8f9c4163109bece1b19ecbd9417ad",
+      "sha256": "05910a5c8c6cf93af50485f328977d1031771fcdd5923ad9da2d16d9423153bd"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css",
+      "git_blob": "494b1997dea92bc40cd0351f69f5919b312157cb",
+      "sha256": "7dc38d1d3b0ab9a3275d24cabb5b4018807093b95c8da8431a6e705c6abd0c27"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-primitives/src/icons/index.tsx",
+      "git_blob": "b6f03f12992e0ebdf13d34d88b1a649c26b5d04b",
+      "sha256": "59f2722b1be659edd73cabc4071558b8bc1afeda158a55cbed1f1f8adc11f197"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-chat/src/client/markdown-labels.ts",
+      "git_blob": "8818ea8f14abe059b6b7c891aaff23da0cdab5cb",
+      "sha256": "ecb76d9db853ca785b532001c31df3be7d60f98e5bcd221b28196a18db94600a"
+    },
+    {
+      "repository": "https://github.com/earendil-works/pi",
+      "commit": "850ea2eae2f39eb16ae14e1f09448eab6da2188a",
+      "path": "packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+      "git_blob": "88ef9f6433dd147d782bcfc4e762bc4a971d2602",
+      "sha256": "21bec688eac0bdd7166cee7a372ed72779e1aa3a1a6668d247563d2a9796db16"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
+      "git_blob": "5e0e99b0d3cc8554f2fddc66bf01aa05745dcd71",
+      "sha256": "ca84271735a3e41229d4edc49bd9e3ddc06ea99698f12a2a3c98dd30a8d14743"
+    },
+    {
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159",
+      "path": "packages/client/ui-primitives/src/icons/artwork.ts",
+      "git_blob": "28a3819995f1213496b81e5c79f62546c1012d4d",
+      "sha256": "9116550d1fe745f8b10414699b08428c8c22ce8196b131a284eff4da1b43a7bb"
+    }
+  ]
+}

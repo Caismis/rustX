@@ -69,9 +69,9 @@ test('publications and an acknowledgement during outstanding convergence reads c
     // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
-    const field = settings.getByLabel('Reserved tokens', { exact: true });
-    const save = settings.getByRole('button', { name: 'Save Context', exact: true });
-    const notice = settledSave(settings, 'Context');
+    const field = settings.getByLabel('Response start timeout (ms)', { exact: true });
+    const save = settings.getByRole('button', { name: 'Save Model timeout', exact: true });
+    const notice = settledSave(settings, 'Model timeout');
     // Settle a save whose acknowledgement already landed: release held
     // authoritative reads one at a time until the post-commit read is adopted.
     // Each stale or superseded read may owe exactly one more bounded read.
@@ -89,7 +89,7 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await expect(field).toBeEnabled();
     // First save: acknowledgements flow, authoritative reads are held.
     probe.armReads();
-    await field.fill('19');
+    await field.fill('19000');
     await save.click();
     await expect.poll(() => probe.readsIssued()).toBeGreaterThan(1);
     await settle();
@@ -99,12 +99,12 @@ test('publications and an acknowledgement during outstanding convergence reads c
     // the acknowledgement neither cancels the reads nor poses as the
     // observation; every obligation converges through the same read owner.
     const changedBefore = probe.changed();
-    await field.fill('20');
+    await field.fill('20000');
     await save.click();
     await expect.poll(() => probe.changed()).toBeGreaterThan(changedBefore);
     await settle();
     probe.releaseReads();
-    await expect(field).toHaveValue('20');
+    await expect(field).toHaveValue('20000');
     expect(probe.writes()).toBe(2);
     // No spin remains after the obligations settle: nothing else is read.
     const settledReads = probe.readsIssued();
@@ -127,11 +127,11 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
 
     // The write commits natively, but its acknowledgement is held on the wire.
-    await expect(settings.getByLabel('Reserved tokens', { exact: true })).toBeEnabled();
+    await expect(settings.getByLabel('Maximum concurrent subagents', { exact: true })).toBeEnabled();
     probe.armWrites();
     probe.armReads();
-    await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
-    await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
+    await settings.getByLabel('Maximum concurrent subagents', { exact: true }).fill('19');
+    await settings.getByRole('button', { name: 'Save Subagent limits', exact: true }).click();
     await expect.poll(() => probe.heldWrites.length).toBe(1);
     await expect.poll(() => probe.heldReads.length).toBeGreaterThan(0);
 
@@ -154,7 +154,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settledSave(settings, 'Context')).toBeVisible();
+    await expect(settledSave(settings, 'Subagent limits')).toBeVisible();
     await expect(timeout).toHaveValue('600001');
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }

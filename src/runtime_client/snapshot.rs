@@ -248,6 +248,16 @@ pub struct RuntimeClientSnapshot {
     pub goal: Option<crate::observation::goal::RuntimeClientGoalView>,
 }
 
+pub use rustx_types::context::operation::RuntimeClientCompactionProgress;
+
+/// A bounded operation observation and whether this process still owns the work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientCompactionOperation {
+    pub status: crate::context::operation::CompactionOperationStatus,
+    pub live: bool,
+}
+
 /// The context diagnostics carried by the Runtime Client snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -266,6 +276,12 @@ pub struct RuntimeClientContextView {
     /// Latest native measured request or committed compacted-context estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
+    /// At most two most recently admitted asynchronous compaction operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compaction_operations: Vec<RuntimeClientCompactionOperation>,
+    /// Latest accepted fragment, scoped to the currently active operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_progress: Option<RuntimeClientCompactionProgress>,
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
     pub compaction_in_progress: bool,
@@ -608,6 +624,10 @@ pub struct RuntimeClientManualCompaction {
     pub request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     /// False until coordinator state is restored and maintenance released.
     pub released: bool,
+    /// A confirmed native no-op, distinct from a committed checkpoint.
+    pub skipped: bool,
+    /// Native cancellation released this command without a checkpoint.
+    pub cancelled: bool,
     /// Exact pre-commit failure diagnostic, if released unsuccessfully.
     pub error: Option<String>,
 }

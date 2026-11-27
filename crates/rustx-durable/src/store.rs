@@ -88,6 +88,8 @@ pub enum ConversationStoreError {
     IncompatibleSchema(String),
     /// A durable reference points at a fact that is not present.
     InvalidReference(String),
+    /// A valid competing activation replaced the expected Projection Head.
+    ProjectionHeadChanged,
     /// A byte range exceeds the protocol limit or retained readable prefix.
     InvalidContentRange,
     /// A finite source or snapshot exceeds an explicit logical materialization budget.
@@ -107,6 +109,19 @@ pub enum ConversationStoreError {
     TransactionInvalid(String),
     /// The underlying storage rejected the operation.
     Storage(String),
+}
+
+impl From<rustx_types::context::checkpoint::CheckpointError> for ConversationStoreError {
+    fn from(error: rustx_types::context::checkpoint::CheckpointError) -> Self {
+        match error {
+            rustx_types::context::checkpoint::CheckpointError::Capacity(message) => {
+                Self::ResourceBoundExceeded(message.into())
+            }
+            rustx_types::context::checkpoint::CheckpointError::Invalid(message) => {
+                Self::InvalidReference(message)
+            }
+        }
+    }
 }
 
 impl core::fmt::Display for ConversationStoreError {
@@ -144,6 +159,7 @@ impl core::fmt::Display for ConversationStoreError {
                 write!(f, "incompatible durable schema shape: {detail}")
             }
             Self::InvalidReference(message) => write!(f, "invalid durable reference: {message}"),
+            Self::ProjectionHeadChanged => write!(f, "the expected projection head was replaced"),
             Self::InvalidContentRange => write!(f, "invalid content byte range"),
             Self::ResourceBoundExceeded(message) => {
                 write!(f, "resource materialization bound: {message}")

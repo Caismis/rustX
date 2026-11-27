@@ -3,11 +3,6 @@ use crate::model::deadline::{DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE
 
 pub(super) const MINIMAL: &str = r#"agent_id = "agent-a"
 
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 4096
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -18,7 +13,6 @@ model = "p/m"
 fn minimal_configuration_parses() {
     let config = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).expect("valid");
     assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Plan);
-    assert_eq!(config.context_policy().reserve_tokens, 1024);
     assert!(config.agent.extensions.agent_status.time.enabled);
     assert!(config.agent.extensions.agent_status.background.enabled);
     assert_eq!(config.agent.extensions.agent_status.time.timezone, None);
@@ -319,11 +313,6 @@ fn unknown_fields_are_rejected() {
     let json = r#"agent_id = "a"
 future_knob = true
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -471,11 +460,6 @@ fn unsupported_schema_version_fails() {
     let json = r#"schema_version = 99
 agent_id = "a"
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -492,11 +476,6 @@ fn array_based_mcp_servers_are_rejected() {
     let json = r#"agent_id = "a"
 mcp_servers = [{ server_id = "s", transport = { type = "streamable_http", endpoint = "https://x" } }]
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -505,23 +484,6 @@ model = "p/m"
         CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
         CurrentRuntimeConfigError::Syntax { .. }
     ));
-}
-
-/// A present zero summary cap is a configuration error, even when the
-/// context would otherwise never need compaction.
-#[test]
-fn zero_summary_output_cap_is_rejected() {
-    let json = MINIMAL.replace(
-        "[context]",
-        "[context]\nsummary_output_cap = { mode = 'limit', tokens = 0 }",
-    );
-    let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
-    assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-    assert!(
-        error
-            .to_string()
-            .contains("summary_output_cap must be positive")
-    );
 }
 
 #[test]

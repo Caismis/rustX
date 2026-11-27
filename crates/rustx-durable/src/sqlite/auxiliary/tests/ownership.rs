@@ -74,6 +74,7 @@ fn request_start(
     request_id: RequestId,
 ) -> AuxiliaryRequestStart {
     AuxiliaryRequestStart {
+        invocation: rustx_types::model::auxiliary::fixture_invocation_identity(),
         call_id,
         ordinal,
         request_id,
@@ -447,6 +448,7 @@ fn historical_input_uses_the_complete_native_cut() {
 
     let mut missing_compaction = call_start(AuxiliaryCallId::generate());
     missing_compaction.business_source = AuxiliaryBusinessSource::Compaction {
+        preceding_call: None,
         operation_id: rustx_types::runtime::identity::CompactionOperationId::new(
             "missing-compaction",
         ),
@@ -1818,6 +1820,7 @@ fn business_sources_may_follow_the_frozen_input_cut() {
             "later-operation-start".into(),
             RuntimeEvent::CompactionStarted {
                 operation_id: operation_id.clone(),
+                mode: rustx_types::context::operation::CompactionMode::Blocking,
             },
         ))
         .unwrap();
@@ -1826,7 +1829,10 @@ fn business_sources_may_follow_the_frozen_input_cut() {
         AuxiliaryBusinessSource::HumanMessage {
             message_id: MessageId::new("trigger"),
         },
-        AuxiliaryBusinessSource::Compaction { operation_id },
+        AuxiliaryBusinessSource::Compaction {
+            preceding_call: None,
+            operation_id,
+        },
     ] {
         let mut start = call_start(AuxiliaryCallId::generate());
         start.input = AuxiliaryInputEvidence::Historical {

@@ -34,6 +34,7 @@ import {
 } from "../src/app-server/client.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import { AppServerSession } from "../src/app-server/session.ts";
+import { compactionNotice } from "../src/ui/components/status.ts";
 import type {
   AttachmentTarget,
   MethodResult,
@@ -112,7 +113,7 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 80);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 82);
     assert.equal(params.protocol_version, APP_SERVER_PROTOCOL_VERSION);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
@@ -141,7 +142,7 @@ describe("initialization", () => {
     assert.ok(transport.closed, "failed initialization releases its physical transport");
   });
 
-  it("refuses a v56 server before using the v80 protocol contract", async () => {
+  it("refuses a v56 server before using the v82 protocol contract", async () => {
     const transport = new FakeTransport();
     const pending = AppServerClient.initialize({ transport });
     const [request] = await transport.log.awaitMethod("initialize");
@@ -150,7 +151,7 @@ describe("initialization", () => {
       protocol_version: 56,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 56, this client speaks 80/);
+    await assert.rejects(pending, /negotiated protocol 56, this client speaks 82/);
     assert.equal(transport.log.count("initialize"), 1);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
@@ -464,6 +465,28 @@ describe("authoritative repair", () => {
     });
     await repair;
     assert.equal(session.state.cursor, "60");
+  });
+
+  it('retains observed notice dismissal across successive resyncs', async () => {
+    const { client, transport } = await initialized();
+    const session = await attached(client, transport, target());
+    const failure = (id: string, generation: string) => ({ live: false, status: { operation_id: id, admission_generation: generation,
+      phase: 'failed' as const, accepted_fragments: 0, diagnostic: `${id} failure`, triggering_attempt_id: null, waiting_attempt_id: null } });
+    const old = failure('old', '1'), unknown = failure('unknown', '2');
+    const base = { compaction_in_progress: false, compaction_count: 0, compaction_operations: [old] };
+    const next = { ...base, compaction_count: 1, latest_compaction: { operation_id: 'manual', generation: '1',
+      checkpoint_id: 'checkpoint-1', activation_id: '1', tokens_before: { input_tokens: '50', source: 'estimated' as const }, estimated_tokens_after: '10' },
+      compaction_operations: [old, unknown] };
+    for (const [index, context] of [base, next, next].entries()) {
+      const repair = session.resync(), count = index + 2, cursor = runtimeCursor(60 + index);
+      const request = (await transport.log.awaitMethod('session/checkpoint', count)).at(-1)!;
+      transport.respond(request.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot({ conversation_id: session.target.conversation_id, context }), cursor) });
+      const subscribe = (await transport.log.awaitMethod('session/subscribe', count)).at(-1)!;
+      transport.respond(subscribe.id, { type: 'subscribed', after_cursor: cursor });
+      await repair;
+      assert.match(compactionNotice(session.state)!, index ? /unknown failure/ : /old failure/);
+      if (index) assert.equal(session.state.dismissedCompactionNotices?.length, 1);
+    }
   });
 
   it("repairs again when the repair's own cursor has already fallen out of the ring", async () => {
@@ -1045,7 +1068,7 @@ it('T13 a lost native read-only MCP probe preserves connection-failure classific
 });
 
 it("derives parameter-sensitive Goal reads and lanes from the one shared method policy", () => {
-  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v80.ts").Request1;
+  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v82.ts").Request1;
   assert.equal(requestEffect(goal("show")), "read");
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {

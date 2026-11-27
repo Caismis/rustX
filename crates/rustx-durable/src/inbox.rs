@@ -223,6 +223,62 @@ pub struct AdoptedBatch {
     pub adoption: Option<RuntimeEventEnvelope>,
 }
 
+/// Scoped fixture control for adoption's persisted bytes; absent in production.
+#[cfg(test)]
+pub(crate) mod adoption_time {
+    use chrono::{DateTime, Utc};
+    use std::cell::Cell;
+    use std::marker::PhantomData;
+    use std::rc::Rc;
+
+    thread_local! {
+        static FIXED: Cell<Option<DateTime<Utc>>> = const { Cell::new(None) };
+    }
+
+    /// Restore the current thread's prior fixture clock, including on unwind.
+    #[must_use]
+    pub(crate) struct Guard {
+        previous: Option<DateTime<Utc>>,
+        // The guard must be dropped on the thread whose override it owns.
+        _thread: PhantomData<Rc<()>>,
+    }
+
+    pub(crate) fn scoped(at: DateTime<Utc>) -> Guard {
+        Guard {
+            previous: FIXED.with(|fixed| fixed.replace(Some(at))),
+            _thread: PhantomData,
+        }
+    }
+
+    pub(super) fn now() -> DateTime<Utc> {
+        FIXED.with(Cell::get).unwrap_or_else(Utc::now)
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FIXED.with(|fixed| fixed.set(self.previous));
+        }
+    }
+
+    #[test]
+    fn adoption_time_scope_restores_nested_unwind_and_does_not_cross_threads() {
+        let first = DateTime::from_timestamp(1_786_104_000, 123_456_789).unwrap();
+        let second = first + chrono::Duration::seconds(1);
+        let outer = scoped(first);
+        let other_thread = std::thread::spawn(|| FIXED.with(Cell::get));
+        assert_eq!(other_thread.join().unwrap(), None);
+        let unwound = std::panic::catch_unwind(|| {
+            let _inner = scoped(second);
+            assert_eq!(now(), second);
+            panic!("fixture unwind");
+        });
+        assert!(unwound.is_err());
+        assert_eq!(now(), first);
+        drop(outer);
+        assert_eq!(FIXED.with(Cell::get), None);
+    }
+}
+
 /// Builds the [`RuntimeEvent::InboundTurnAdopted`] fact of one adoption.
 ///
 /// The adoption transaction commits this fact with the canonical messages it
@@ -244,6 +300,9 @@ pub fn inbound_adoption_event(
         conversation_id: conversation_id.clone(),
         attempt_id,
         turn_id: None,
+        #[cfg(test)]
+        timestamp: adoption_time::now(),
+        #[cfg(not(test))]
         timestamp: Utc::now(),
         event: RuntimeEvent::InboundTurnAdopted { message_ids },
     }

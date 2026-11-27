@@ -38,6 +38,7 @@ fn record() -> TraceRecord {
         }),
         request: None,
         tool: None,
+        compaction: None,
         calls: Vec::new(),
         configuration: None,
         configuration_instructions: None,
