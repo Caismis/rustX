@@ -78,8 +78,8 @@ fn measure_native_schema_open_cost() {
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .unwrap();
-        let store = SqliteConversationStore::from_validated_schedule_reader(id.clone(), connection)
-            .unwrap();
+        let store =
+            SqliteConversationStore::from_validated_connection(id.clone(), connection).unwrap();
         assert_eq!(
             store.schedule_summary().unwrap().pending,
             [] as [crate::scheduler::ScheduleTriggerId; 0]

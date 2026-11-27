@@ -295,27 +295,7 @@ async fn measure_native_scheduler_reconciliation() {
             .sources
             .values()
             .all(|source| source.available && source.enabled == 0 && source.pending_targets == 0);
-    let mut report = serde_json::json!({"size":size,"probe_integrity":probe_integrity,"registered_test_probes":registered_probes,"retained_test_probes":retained_probes,"setup_method":"native historical seed initialization and one validated durable catalog publication before measurement","mode":if sparse{"sparse_with_unavailable_and_repair"}else{"zero_enabled_zero_pending"},"optimized":!cfg!(debug_assertions),"setup_seconds":setup_started.elapsed().as_secs_f64()-elapsed,"passes":passes,"elapsed_seconds":elapsed,"cpu_seconds":cpu,"cpu_core_equivalents":cpu_cores,"startup_cpu_seconds":startup_cpu-cpu_before,"steady_elapsed_seconds":warm_elapsed,"steady_cpu_core_equivalents":steady_cpu_cores,"steady_logical_read_bytes_per_second":steady_logical_rate,"steady_physical_read_bytes_per_second":steady_physical_rate,"database_open_path_entries":opens,"logical_read_bytes_per_second":logical_rate,"physical_read_bytes_per_second":physical_rate,"startup_cold_database_cache_ms":durations.first(),"warm_pass_p50_ms":percentile(warm,50),"warm_pass_p95_ms":percentile(warm,95),"foreground_read_p95_ms":percentile(&controls,95),"write_during_traversal_ms":write_ms,"rss_baseline_bytes":baseline_rss,"rss_peak_sampled_bytes":peak_rss,"rss_delta_bytes":peak_rss.saturating_sub(baseline_rss),"diagnostic_pass_bound_ms":diagnostics.pass_bound_ms,"pass_overruns":diagnostics.pass_overruns,"unavailable_sources":diagnostics.sources.values().filter(|source|!source.available).count(),"release_gate_eligible":eligible,"release_gate_passed":within_budget,"cache_method":"fsync plus per-database POSIX_FADV_DONTNEED before startup; catalog metadata remains warm; later passes use ordinary kernel cache","logical_cpu_count":std::thread::available_parallelism().unwrap().get(),"kernel":std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),"schema":crate::durable::sqlite::SQLITE_SCHEMA_VERSION});
-    {
-        let extra = report.as_object_mut().unwrap();
-        extra.insert("warm_pass_samples".into(), serde_json::json!(warm.len()));
-        extra.insert(
-            "warm_pass_max_ms".into(),
-            serde_json::json!(warm.iter().copied().reduce(f64::max)),
-        );
-        extra.insert(
-            "foreground_read_samples".into(),
-            serde_json::json!(controls.len()),
-        );
-        extra.insert(
-            "foreground_read_p50_ms".into(),
-            serde_json::json!(percentile(&controls, 50)),
-        );
-        extra.insert(
-            "foreground_read_max_ms".into(),
-            serde_json::json!(controls.iter().copied().reduce(f64::max)),
-        );
-    }
+    let report = serde_json::json!({"size":size,"probe_integrity":probe_integrity,"registered_test_probes":registered_probes,"retained_test_probes":retained_probes,"setup_method":"native historical seed initialization and one validated durable catalog publication before measurement","mode":if sparse{"sparse_with_unavailable_and_repair"}else{"zero_enabled_zero_pending"},"optimized":!cfg!(debug_assertions),"setup_seconds":setup_started.elapsed().as_secs_f64()-elapsed,"passes":passes,"elapsed_seconds":elapsed,"cpu_seconds":cpu,"cpu_core_equivalents":cpu_cores,"startup_cpu_seconds":startup_cpu-cpu_before,"steady_elapsed_seconds":warm_elapsed,"steady_cpu_core_equivalents":steady_cpu_cores,"steady_logical_read_bytes_per_second":steady_logical_rate,"steady_physical_read_bytes_per_second":steady_physical_rate,"database_open_path_entries":opens,"logical_read_bytes_per_second":logical_rate,"physical_read_bytes_per_second":physical_rate,"startup_cold_database_cache_ms":durations.first(),"warm_pass_p50_ms":percentile(warm,50),"warm_pass_p95_ms":percentile(warm,95),"foreground_read_p95_ms":percentile(&controls,95),"write_during_traversal_ms":write_ms,"rss_baseline_bytes":baseline_rss,"rss_peak_sampled_bytes":peak_rss,"rss_delta_bytes":peak_rss.saturating_sub(baseline_rss),"diagnostic_pass_bound_ms":diagnostics.pass_bound_ms,"pass_overruns":diagnostics.pass_overruns,"unavailable_sources":diagnostics.sources.values().filter(|source|!source.available).count(),"release_gate_eligible":eligible,"release_gate_passed":within_budget,"cache_method":"fsync plus per-database POSIX_FADV_DONTNEED before startup; catalog metadata remains warm; later passes use ordinary kernel cache","logical_cpu_count":std::thread::available_parallelism().unwrap().get(),"kernel":std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap().trim(),"schema":crate::durable::sqlite::SQLITE_SCHEMA_VERSION});
     eprintln!("SCHEDULER_BENCHMARK_JSON={report}");
     if let Some(output) = std::env::var_os("RUSTX_SCHEDULER_BENCH_JSON") {
         std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();

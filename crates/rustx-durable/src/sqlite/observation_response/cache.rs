@@ -161,6 +161,7 @@ impl Owner {
             state: Mutex::new(State::default()),
         }))
     }
+    #[cfg(any(test, feature = "test-hooks"))]
     #[must_use]
     pub fn uninstalled() -> Arc<Self> {
         Arc::new(Self {

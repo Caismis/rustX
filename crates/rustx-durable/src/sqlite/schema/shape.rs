@@ -12,79 +12,8 @@ use crate::sqlite::{event_heads, event_holes};
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-// Canonical creation fixes one exact sqlite_schema row sequence for this schema
-// version. Update the constant when any schema DDL changes. A matching
-// fingerprint is complete shape evidence; a mismatch falls through to the
-// detailed verifier so accepted noncanonical-but-valid layouts and precise
-// corruption diagnostics are unchanged.
-pub(super) const CANONICAL_SCHEMA_SHAPE_SHA256: &str =
-    "bcd510d85175490a523f6d465d42a5d9a2f7ebc027c04ccaeaa447fe8466f684";
-
-fn hash_schema_field(hasher: &mut sha2::Sha256, value: Option<String>) {
-    use sha2::Digest as _;
-    if let Some(value) = value {
-        hasher.update([1]);
-        hasher.update((value.len() as u64).to_le_bytes());
-        hasher.update(value.as_bytes());
-    } else {
-        hasher.update([0]);
-    }
-}
-
-pub(super) fn schema_shape_fingerprint(
-    connection: &Connection,
-) -> Result<String, ConversationStoreError> {
-    use sha2::Digest as _;
-    let mut statement = connection
-        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY rowid")
-        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
-    let mut rows = statement
-        .query([])
-        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
-    let mut hasher = sha2::Sha256::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
-    {
-        hash_schema_field(
-            &mut hasher,
-            Some(
-                row.get::<_, String>(0)
-                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-            ),
-        );
-        hash_schema_field(
-            &mut hasher,
-            Some(
-                row.get::<_, String>(1)
-                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-            ),
-        );
-        hash_schema_field(
-            &mut hasher,
-            Some(
-                row.get::<_, String>(2)
-                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-            ),
-        );
-        hash_schema_field(
-            &mut hasher,
-            row.get::<_, Option<String>>(3)
-                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-        );
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-fn canonical_schema_shape(connection: &Connection) -> Result<bool, ConversationStoreError> {
-    Ok(schema_shape_fingerprint(connection)? == CANONICAL_SCHEMA_SHAPE_SHA256)
-}
-
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 pub fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
-    if canonical_schema_shape(connection)? {
-        return request_owner_shape::verify_stored_rows(connection);
-    }
     // The small model lookup uses its native identity as the storage key.
     // Lifecycle rows retain rowid locality: clustering their terminal updates
     // increases repeated dirty-page work in long-history conversations.

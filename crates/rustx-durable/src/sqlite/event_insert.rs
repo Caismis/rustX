@@ -23,6 +23,7 @@ pub struct Guard {
     geometry: Option<std::sync::Arc<super::manifest::geometry::Cache>>,
 }
 impl Guard {
+    #[cfg(any(test, feature = "test-hooks"))]
     #[must_use]
     pub fn uninstalled() -> Self {
         Self {

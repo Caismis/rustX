@@ -3,7 +3,7 @@ import copy
 import json
 import unittest
 
-from turn_growth_oracle import PERMISSION_REMINDER, tool_call, verify_request
+from turn_growth_oracle import tool_call, verify_request
 
 
 def text(role, value):
@@ -11,7 +11,7 @@ def text(role, value):
 
 
 def fixture(tool=False):
-    messages = [text('system', 'native prompt'), text('user', 'turn growth'), text('user', PERMISSION_REMINDER)]
+    messages = [text('system', 'native prompt'), text('user', 'turn growth')]
     messages[0]['content'] = 'native prompt'
     if tool:
         messages.extend([
@@ -50,31 +50,31 @@ class TurnGrowthOracleTests(unittest.TestCase):
             verify_request(body, 1, 'text')
 
     def test_changed_call_or_result_id_is_rejected(self):
-        for position in (3, 4):
+        for position in (2, 3):
             body = fixture(True)
-            if position == 3:
-                body['messages'][3]['tool_calls'][0]['id'] = 'wrong'
+            if position == 2:
+                body['messages'][2]['tool_calls'][0]['id'] = 'wrong'
             else:
-                body['messages'][4]['tool_call_id'] = 'wrong'
+                body['messages'][3]['tool_call_id'] = 'wrong'
             with self.subTest(position=position), self.assertRaises(AssertionError):
                 verify_request(body, 2, 'tool')
 
     def test_reordered_history_is_rejected(self):
         body = fixture(True)
-        body['messages'][3], body['messages'][4] = body['messages'][4], body['messages'][3]
+        body['messages'][2], body['messages'][3] = body['messages'][3], body['messages'][2]
         with self.assertRaises(AssertionError):
             verify_request(body, 2, 'tool')
 
     def test_flat_or_wrong_business_arguments_are_rejected(self):
         for arguments in ({'path': 'fixture.txt'}, {'arguments': {'path': 'other.txt'}}):
             body = fixture(True)
-            body['messages'][3]['tool_calls'][0]['function']['arguments'] = json.dumps(arguments)
+            body['messages'][2]['tool_calls'][0]['function']['arguments'] = json.dumps(arguments)
             with self.subTest(arguments=arguments), self.assertRaises(AssertionError):
                 verify_request(body, 2, 'tool')
 
     def test_tool_preflight_failure_is_rejected(self):
         body = fixture(True)
-        body['messages'][4]['content'] = 'Invalid invocation envelope'
+        body['messages'][3]['content'] = 'Invalid invocation envelope'
         with self.assertRaises(AssertionError):
             verify_request(body, 2, 'tool')
 
