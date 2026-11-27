@@ -1422,7 +1422,7 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "afbc2eab93807e5b9c698c0f26c7ce36a1afe3bfafb9253d39002b625bc3aa45"
+      "local_sha256": "a988d1b65487cc0a1e9570363448f3d860d6782993ccb585c4ab4b6cf77d1a76"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
