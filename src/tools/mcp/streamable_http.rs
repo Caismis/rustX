@@ -1319,8 +1319,11 @@ impl McpHttpClient {
                         attempt.error("Workspace MCP redirect destination is not permitted")
                     } else {
                         if let Some(redirect) = &setup_redirect {
+                            // A same-origin gateway may redirect only
+                            // Initialize and keep serving the session at
+                            // the configured path.
                             *redirect.lock().expect("MCP setup redirect") =
-                                Some(attempt.url().clone());
+                                (attempt.url().origin() != origin).then(|| attempt.url().clone());
                         }
                         attempt.follow()
                     }
@@ -1388,8 +1391,8 @@ impl McpHttpClient {
                 "Workspace MCP session is already bound to its redirect destination",
             )));
         }
-        // This client is used only for this POST. Its accepted redirect hops
-        // therefore identify the issuer of a session ID in the response.
+        // This client is used only for this POST. Its final accepted redirect
+        // hop identifies a cross-origin issuer of the resulting session ID.
         let redirect = Arc::new(Mutex::new(None));
         let client = Self::build_http_client(Some(&uri), true, Some(redirect.clone()))
             .map_err(setup_client_error)?;
@@ -2211,17 +2214,76 @@ mod tests {
     #[cfg(feature = "mcp-fixture")]
     #[tokio::test]
     async fn redirected_stateful_workspace_session_discovers_tools_and_cleans_up_at_the_issuer() {
-        use crate::tools::mcp::fixture::FixtureServer;
+        check_redirected_stateful_workspace_session(true).await;
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test]
+    async fn same_origin_initialize_redirect_keeps_the_configured_session_path() {
+        check_redirected_stateful_workspace_session(false).await;
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    type ObservedSessions = Arc<std::sync::Mutex<Vec<(http::Method, http::HeaderValue, String)>>>;
+
+    #[cfg(feature = "mcp-fixture")]
+    async fn observe_stateful_workspace_session(
+        axum::extract::State((observed, initialize_redirect)): axum::extract::State<(
+            ObservedSessions,
+            Option<String>,
+        )>,
+        axum::extract::OriginalUri(original): axum::extract::OriginalUri,
+        request: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
         use axum::response::IntoResponse as _;
-        use rmcp::model::{
-            DiscoverRequestMethod, ErrorData, ProtocolVersion, ServerJsonRpcMessage,
-        };
+        use rmcp::model::{DiscoverRequestMethod, ErrorData, ServerJsonRpcMessage};
+
+        // The fixture implements Discover even with only a legacy revision
+        // configured. Require the SDK to fall back to Initialize.
+        if request
+            .headers()
+            .get("mcp-method")
+            .is_some_and(|method| method == "server/discover")
+        {
+            let body = axum::body::to_bytes(request.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let message = serde_json::from_slice(&body).unwrap();
+            let id = super::request_id(&message).expect("Discover request ID");
+            return axum::Json(ServerJsonRpcMessage::error(
+                ErrorData::method_not_found::<DiscoverRequestMethod>(),
+                Some(id),
+            ))
+            .into_response();
+        }
+        let path = original.path();
+        if let Some(id) = request.headers().get("mcp-session-id") {
+            observed
+                .lock()
+                .unwrap()
+                .push((request.method().clone(), id.clone(), path.to_owned()));
+        } else if let Some(issuer) = initialize_redirect
+            && path == "/mcp"
+            && request.method() == http::Method::POST
+        {
+            return (
+                http::StatusCode::TEMPORARY_REDIRECT,
+                [(http::header::LOCATION, issuer)],
+            )
+                .into_response();
+        }
+        next.run(request).await
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    async fn check_redirected_stateful_workspace_session(cross_origin: bool) {
+        use crate::tools::mcp::fixture::FixtureServer;
+        use rmcp::model::ProtocolVersion;
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         };
-        use std::sync::Mutex;
 
-        type ObservedSessions = Arc<Mutex<Vec<(http::Method, http::HeaderValue)>>>;
         let observed: ObservedSessions = Arc::default();
         let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
         let fixture = FixtureServer {
@@ -2235,43 +2297,21 @@ mod tests {
             Arc::default(),
             config,
         );
-        let app = axum::Router::new().nest_service("/issuer", service).layer(
-            axum::middleware::from_fn_with_state(
-                observed.clone(),
-                |axum::extract::State(observed): axum::extract::State<ObservedSessions>,
-                 request: axum::extract::Request,
-                 next: axum::middleware::Next| async move {
-                    // The fixture implements Discover even with only a legacy
-                    // revision configured. Emulate an older server that
-                    // requires the SDK to fall back to Initialize.
-                    if request
-                        .headers()
-                        .get("mcp-method")
-                        .is_some_and(|method| method == "server/discover")
-                    {
-                        let body = axum::body::to_bytes(request.into_body(), 64 * 1024)
-                            .await
-                            .unwrap();
-                        let message = serde_json::from_slice(&body).unwrap();
-                        let id = super::request_id(&message).expect("Discover request ID");
-                        return axum::Json(ServerJsonRpcMessage::error(
-                            ErrorData::method_not_found::<DiscoverRequestMethod>(),
-                            Some(id),
-                        ))
-                        .into_response();
-                    }
-                    if let Some(id) = request.headers().get("mcp-session-id") {
-                        observed
-                            .lock()
-                            .unwrap()
-                            .push((request.method().clone(), id.clone()));
-                    }
-                    next.run(request).await
-                },
-            ),
-        );
+        let issuer = landing_guard.url("/issuer");
+        let app = axum::Router::new()
+            .nest_service("/issuer", service.clone())
+            .nest_service("/mcp", service)
+            .layer(axum::middleware::from_fn_with_state(
+                (observed.clone(), (!cross_origin).then(|| issuer.clone())),
+                observe_stateful_workspace_session,
+            ));
         let landing_server = tokio::spawn(async move { axum::serve(landing, app).await.unwrap() });
-        let (entry, redirect_server) = redirect_fixture(landing_guard.url("/issuer")).await;
+        let redirect = if cross_origin {
+            Some(redirect_fixture(issuer).await)
+        } else {
+            None
+        };
+        let entry = redirect.as_ref().map_or(&landing_guard, |(entry, _)| entry);
         let workspace = tempfile::tempdir().unwrap();
         let runtime = connect_redirected_workspace(entry.url("/mcp"), workspace.path()).await;
         assert_eq!(runtime.protocol_version(), &ProtocolVersion::V_2025_11_25);
@@ -2285,15 +2325,19 @@ mod tests {
         );
         runtime.close().await.unwrap();
         let seen = observed.lock().unwrap();
-        let (_, id) = seen
+        let (_, id, _) = seen
             .iter()
-            .find(|(method, _)| *method == http::Method::DELETE)
-            .expect("SDK cleanup reached the session issuer");
+            .find(|(method, _, _)| *method == http::Method::DELETE)
+            .expect("SDK cleanup reached the session server");
         assert!(
             seen.iter()
-                .any(|(method, seen_id)| *method == http::Method::POST && seen_id == id)
+                .any(|(method, seen_id, _)| *method == http::Method::POST && seen_id == id)
         );
-        redirect_server.abort();
+        let expected_path = if cross_origin { "/issuer" } else { "/mcp" };
+        assert!(seen.iter().all(|(_, _, path)| path == expected_path));
+        if let Some((_, server)) = redirect {
+            server.abort();
+        }
         landing_server.abort();
     }
 
