@@ -206,6 +206,9 @@ impl ResourceNode<'_> {
             Self::WorkflowDiagnostics(v) => v.len(),
             Self::ToolOrigin(v) => match v {
                 crate::tools::types::ToolOrigin::Builtin => 0,
+                crate::tools::types::ToolOrigin::Mcp {
+                    source: Some(_), ..
+                } => 2,
                 _ => 1,
             },
             Self::Definitions(v) => v.len(),
@@ -317,6 +320,12 @@ impl ResourceReadSource {
             ResourceNode::ToolOrigin(value) => match (value, name) {
                 (crate::tools::types::ToolOrigin::Mcp { .. }, "server_id")
                 | (crate::tools::types::ToolOrigin::ManagedPython { .. }, "package") => Some(0),
+                (
+                    crate::tools::types::ToolOrigin::Mcp {
+                        source: Some(_), ..
+                    },
+                    "source",
+                ) => Some(1),
                 _ => None,
             },
             _ => None,
@@ -598,9 +607,16 @@ fn metadata_child<'a>(
         },
         Node::WorkflowDiagnostics(v) => Some((None, Node::WorkflowDiagnostic(v.get(position)?))),
         Node::ToolOrigin(v) => match (v, position) {
-            (crate::tools::types::ToolOrigin::Mcp { server_id }, 0) => {
+            (crate::tools::types::ToolOrigin::Mcp { server_id, .. }, 0) => {
                 Some((Some("server_id"), Node::Text(server_id.as_str())))
             }
+            (
+                crate::tools::types::ToolOrigin::Mcp {
+                    source: Some(source),
+                    ..
+                },
+                1,
+            ) => Some((Some("source"), Node::Text(source))),
             (crate::tools::types::ToolOrigin::ManagedPython { package }, 0) => {
                 Some((Some("package"), Node::Text(package)))
             }

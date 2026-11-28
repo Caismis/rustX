@@ -2,7 +2,7 @@
 //!
 //! Glob's physical traversal lives on the Session's admitted Execution
 //! Client: the shared file universe is enumerated descriptor-relative
-//! inside the workspace, and the Server owns only admission, input
+//! on the Client, and the Server owns only admission, input
 //! validation, and the model-facing projection of the verified record
 //! page — the exact notices and no-results text the pre-migration
 //! contract produced.
@@ -14,7 +14,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search_failure::search_failure;
 use crate::tools::native::support::{
-    cancelled_result, failed_result, interpret_path, success_text,
+    cancelled_result, failed_result, interpret_file_path, success_text,
 };
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
@@ -30,7 +30,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<GlobInput>(
         "tool-glob",
         NAME,
-        "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+        "Find files whose path matches a glob pattern through the Session's admitted Execution Client. Resolve a relative path from the execution cwd; absolute paths refer to the Client filesystem. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
         policy,
     )
 }
@@ -86,10 +86,13 @@ async fn run_glob(
     {
         return failed_result(format!("invalid glob pattern {pattern:?}: {error}"));
     }
-    let root = interpret_path(
+    let root = match interpret_file_path(
         context.workspace.root(),
         input.path.as_deref().unwrap_or("."),
-    );
+    ) {
+        Ok(root) => root,
+        Err(error) => return failed_result(error),
+    };
     // Cancellation observable before the exchange is admitted means the
     // dispatch never starts: no request frame is ever written for a
     // cancelled search.

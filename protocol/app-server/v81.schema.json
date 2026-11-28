@@ -7548,6 +7548,13 @@
               "properties": {
                 "server_id": {
                   "$ref": "#/$defs/McpServerId"
+                },
+                "source": {
+                  "description": "Workspace origin for a workspace-authored MCP definition.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [

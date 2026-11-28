@@ -14,8 +14,8 @@ use crate::tools::types::{
 /// This is a syntax-only boundary: it resolves relative paths against `cwd`,
 /// removes `.` and `..` components without consulting the filesystem, and
 /// leaves symlink/effective-target resolution to the mutation layer. Absolute
-/// paths are interpreted verbatim; containment against the admitted Client
-/// workspace is applied by the Execution Client, never locally.
+/// paths are interpreted verbatim on the admitted Client; physical traversal
+/// is descriptor-relative and does not follow symlinks.
 #[must_use]
 pub fn interpret_path(cwd: &Path, requested: &str) -> PathBuf {
     let path = Path::new(requested);
@@ -25,6 +25,32 @@ pub fn interpret_path(cwd: &Path, requested: &str) -> PathBuf {
         cwd.join(path)
     };
     lexical_normalize(&interpreted)
+}
+
+/// Resolves an Agent file-tool path, rejecting relative traversal above the
+/// execution cwd before normalization can hide it. Absolute Client paths may
+/// explicitly name locations outside the workspace.
+///
+/// # Errors
+///
+/// Returns a diagnostic when a relative path crosses above the cwd.
+pub fn interpret_file_path(cwd: &Path, requested: &str) -> Result<PathBuf, String> {
+    let path = Path::new(requested);
+    if !path.is_absolute() {
+        let mut depth = 0_usize;
+        for part in path.components() {
+            match part {
+                std::path::Component::Normal(_) => depth += 1,
+                std::path::Component::ParentDir if depth == 0 => {
+                    return Err("relative file path cannot leave the Client workspace".into());
+                }
+                std::path::Component::ParentDir => depth -= 1,
+                std::path::Component::CurDir => {}
+                _ => return Err("invalid relative file path".into()),
+            }
+        }
+    }
+    Ok(interpret_path(cwd, requested))
 }
 
 /// Removes `.` and `..` components without traversing the filesystem.
@@ -66,7 +92,7 @@ pub use super::mutation::{BoundMutationTarget, PreparedRemoteMutation};
 /// authoritative.
 ///
 /// For a builtin `write`/`edit` the binder resolves the logical path
-/// with [`interpret_path`], applies the lexical managed-output guard,
+/// with [`interpret_file_path`], applies the lexical managed-output guard,
 /// and sends the full planned operation — the write payload or the edit
 /// replacements — to the Session's admitted Client as a `Current`
 /// expectation prepare *before* authorization: the Client retains the
@@ -77,8 +103,8 @@ pub use super::mutation::{BoundMutationTarget, PreparedRemoteMutation};
 ///
 /// # Errors
 ///
-/// Returns `Err` only for a missing `path` argument or a managed-output
-/// guard denial — the failures the caller reports verbatim.
+/// Returns `Err` for a missing or escaping relative path, a managed-output
+/// guard denial, or a Client preparation failure.
 pub async fn bind_invocation_mutation_target(
     origin: &crate::tools::types::ToolOrigin,
     tool_name: &str,
@@ -96,7 +122,7 @@ pub async fn bind_invocation_mutation_target(
         .get("path")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "write/edit invocation is missing a path".to_owned())?;
-    let interpreted = interpret_path(workspace.root(), requested);
+    let interpreted = interpret_file_path(workspace.root(), requested)?;
     if crate::tools::native::bash_operation_at(&interpreted).is_some() {
         return Err(format!(
             "the Bash continuation path {requested:?} is read-only"
@@ -317,6 +343,7 @@ mod tests {
         for origin in [
             ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("remote"),
+                source: None,
             },
             ToolOrigin::ManagedPython {
                 package: "remote".into(),

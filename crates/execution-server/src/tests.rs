@@ -36,6 +36,7 @@ fn valid_hello(credential: &BindingCredential) -> Hello {
         instance: ClientInstanceId::new("instance-1"),
         generation: Generation::new(NonZeroU64::MIN),
         workspace: PathBuf::from("/work/root"),
+        user_root: "/client/rustx".into(),
         capabilities: required(),
         credential: credential.clone(),
     }
@@ -135,6 +136,11 @@ fn wrong_hello_fields_never_consume_a_reservation() {
                 h.workspace = PathBuf::from("/work/./root");
             }),
             Reject::WorkspaceMismatch,
+        ),
+        (
+            "relative User root",
+            Box::new(|h: &mut Hello| h.user_root = "rustx".into()),
+            Reject::UserRootMismatch,
         ),
         (
             "required capability",
@@ -535,7 +541,7 @@ fn ws_connection(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v10"))
             .unwrap()
     };
     // The data half: `PeerHello::Data` earns `Pending` and the
@@ -688,14 +694,23 @@ fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
 }
 
 #[test]
+fn admission_retains_the_physical_spelling_of_an_aliased_user_root() {
+    let (binding, credential) = Binding::reserve(reservation()).unwrap();
+    let mut hello = valid_hello(&credential);
+    hello.user_root = "/volumes/client/standing-resources".into();
+    let (connection, _peer) = live(&binding, &hello);
+    assert_eq!(connection.user_root(), hello.user_root);
+}
+
+#[test]
 fn previous_wire_revision_cannot_admit_either_lane() {
     use rustx_execution_protocol::process::{OperationId, ProcessOperationKey, ProcessRequest};
 
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(PROTOCOL_VERSION, 10);
     let (binding, credential) = Binding::reserve(reservation()).unwrap();
     let hello = valid_hello(&credential);
     let mut old = hello.clone();
-    old.version = 8;
+    old.version = 9;
     let (mut data_peer, data_stream) = UnixStream::pair().unwrap();
     write_record(&mut data_peer, &PeerHello::Data(old.clone())).unwrap();
     write_record(
@@ -3315,7 +3330,7 @@ fn congested_websocket_pair(
     let address = listener.local_addr().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let endpoint = || {
-        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v9"))
+        rustx_execution_transport::ExecutionUrl::validate(&format!("ws://{address}/execution/v10"))
             .unwrap()
     };
     let (challenge, client, probe) = thread::scope(|scope| {
@@ -4256,5 +4271,70 @@ fn host_cutoff_bounds_pairing_and_stops_post_cutoff_revoke() {
     assert!(
         RecoveryFence::session_pending(&root, &reservation().session).unwrap(),
         "durable recovery fence stays on disk when cutoff expires unconfirmed"
+    );
+}
+
+#[test]
+fn mcp_environment_refused_by_admit_sends_nothing_and_keeps_connection_live() {
+    let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+    let (mut connection, mut peer) = live(&binding, &hello);
+    let request = rustx_execution_protocol::mcp_environment::Request {
+        service: String::from("inventory"),
+        origin: String::from("https://mcp.example.invalid"),
+        names: BTreeSet::from([String::from("API_TOKEN")]),
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    let error = connection
+        .mcp_environment(&request, deadline, || {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "cancelled before dispatch",
+            ))
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+
+    peer.set_nonblocking(true).unwrap();
+    let mut probe = [0u8; 1];
+    assert_eq!(
+        peer.read(&mut probe).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    peer.set_nonblocking(false).unwrap();
+    assert_eq!(binding.status().phase, BindingPhase::Live);
+
+    let expected = request.clone();
+    let answer = thread::spawn(move || {
+        let received: ClientRequest = read_record(&mut peer).unwrap();
+        assert_eq!(received, ClientRequest::McpEnvironment(expected));
+        write_record(
+            &mut peer,
+            &ClientReply::McpEnvironment(rustx_execution_protocol::mcp_environment::Reply {
+                values: std::collections::BTreeMap::from([(
+                    String::from("API_TOKEN"),
+                    String::from("secret-value"),
+                )]),
+            }),
+        )
+        .unwrap();
+        peer
+    });
+
+    let granted = connection
+        .mcp_environment(&request, deadline, || Ok(()))
+        .unwrap();
+    assert_eq!(
+        granted,
+        std::collections::BTreeMap::from([(
+            String::from("API_TOKEN"),
+            String::from("secret-value")
+        )])
+    );
+    let mut peer = answer.join().unwrap();
+    peer.set_nonblocking(true).unwrap();
+    assert_eq!(
+        peer.read(&mut probe).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
     );
 }

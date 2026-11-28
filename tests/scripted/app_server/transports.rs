@@ -185,9 +185,8 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario(uv: std::path::Pat
         let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() };
         let scope = fixture.manager.execution_scope(&session);
         let endpoint = scope.endpoint().unwrap();
-        let user = sandbox.path().join("rustx/.agents");
         let frozen = tokio::task::spawn_blocking(move || crate::local_runtime::managed_python_resources::discover_bound(
-            &endpoint, &user, &crate::runtime::CancellationSignal::new(),
+            &endpoint, &crate::runtime::CancellationSignal::new(),
         )).await.unwrap().unwrap();
         let (_, package) = frozen.packages().iter().next().unwrap();
         package.as_ref().unwrap().prepare_on_client(&crate::runtime::CancellationSignal::new()).await.unwrap().unwrap();
@@ -303,10 +302,11 @@ async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting()
 
     bounded(async {
         let fixture = Fixture::with_session_count(None, 2).await;
-        let peer = FixtureServer::start(|_, _| {
+        let (listener, guard) =
+            crate::tools::mcp::streamable_http::WorkspaceFixtureGuard::bind().await;
+        let peer = FixtureServer::start_with_listener(listener, Some(guard.origin()), |_, _| {
             FixtureReply::body(400, "Bad Request", "text/plain", "fixture")
-        })
-        .await;
+        });
         let target = SourceTarget::Workspace {
             directory: fixture.workspaces[0].clone(),
         };
@@ -427,7 +427,7 @@ async fn workspace_mcp_management_requires_its_binding_only_after_reservation() 
 
     let fixture = Fixture::with_session_count(None, 2).await;
     let control = HttpFixtureControl::new();
-    let peer = HttpFixture::start(control.clone()).await;
+    let peer = HttpFixture::start_workspace(control.clone()).await;
     let target = SourceTarget::Workspace {
         directory: fixture.workspaces[0].clone(),
     };

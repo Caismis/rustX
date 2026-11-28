@@ -25,6 +25,7 @@ async fn an_external_origin_requirement_is_no_longer_refused_by_the_registry() {
         replay_policy: crate::tools::types::ToolReplayPolicy::Never,
         origin: crate::tools::types::ToolOrigin::Mcp {
             server_id: crate::runtime::identity::McpServerId::new("github"),
+            source: None,
         },
     };
     spec.authority.resolved.tools = vec![

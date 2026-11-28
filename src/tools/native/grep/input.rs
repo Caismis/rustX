@@ -13,8 +13,7 @@ pub(super) struct GrepInput {
     /// The pattern to search for. A regular expression unless `literal` is
     /// true.
     pub pattern: String,
-    /// An optional relative or absolute directory/file search root, inside
-    /// the Session's admitted Client workspace. Omit it to search the
+    /// An optional relative or absolute directory/file search root on the Client filesystem. Omit it to search the
     /// execution cwd.
     pub path: Option<String>,
     /// A glob restricting which files are searched, matched against paths

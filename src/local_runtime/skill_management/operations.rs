@@ -34,7 +34,7 @@ const OWNED_DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC);
 
 fn managed_root<'a>(package: &'a SkillPackage, collection: &Path) -> Option<&'a Path> {
-    let marker = Path::new(package.location());
+    let marker = package.offered_source();
     let root = marker.parent()?;
     (marker.file_name()? == SKILL_MARKDOWN_FILE
         && marker == package.instruction_source()

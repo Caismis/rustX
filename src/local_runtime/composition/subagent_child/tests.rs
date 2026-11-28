@@ -1376,6 +1376,7 @@ async fn frozen_fixture_tool(
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
+            source: None,
         },
     }
 }
@@ -1536,6 +1537,7 @@ async fn a_missing_mcp_definition_fails_before_the_child_is_ready() {
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
+            source: None,
         },
     };
     let mcp = ResolvedSubagentTool::Source {
@@ -1588,6 +1590,7 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
+            source: None,
         },
     };
     let mcp = ResolvedSubagentTool::Source {
@@ -1647,6 +1650,7 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
+            source: None,
         },
     };
     let mcp = ResolvedSubagentTool::Source {

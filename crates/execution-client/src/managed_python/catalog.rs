@@ -142,19 +142,11 @@ impl Drop for Capture {
 
 impl Catalog {
     pub(crate) fn new(workspace: &Path) -> Self {
-        let user = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| {
-                nix::unistd::User::from_uid(nix::unistd::geteuid())
-                    .ok()
-                    .flatten()
-                    .map(|user| user.dir)
-            });
+        let user = crate::client_user_root();
         let store_root = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
-            .or_else(|| user.as_ref().map(|home| home.join(".local/share")))
+            .or_else(|| crate::client_home_directory().map(|home| home.join(".local/share")))
             .map(|data| data.join("rustx/environments/python-tools"));
         Self {
             workspace: workspace.to_path_buf(),
@@ -173,7 +165,7 @@ impl Catalog {
 
     fn root(&self, scope: PythonSourceScope) -> Option<PathBuf> {
         match scope {
-            PythonSourceScope::User => Some(self.user.as_ref()?.join("rustx/.agents/tools")),
+            PythonSourceScope::User => Some(self.user.as_ref()?.join(".agents/tools")),
             PythonSourceScope::Workspace => Some(self.workspace.join(".agents/tools")),
         }
     }

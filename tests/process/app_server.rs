@@ -32,6 +32,8 @@ mod app_server_conformance;
 mod case_insensitive_volume;
 #[path = "../support/app_server_driver.rs"]
 mod driver;
+#[path = "../support/workspace_http.rs"]
+mod workspace_http;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -3518,6 +3520,18 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
         let list_calls = mcp.list_tools_calls.clone();
         let catalog_reads = || list_calls.load(Ordering::Relaxed);
         let (mcp_runtime, mcp_workspace) = (runtime.clone(), workspace.clone());
+        let private_ip = match workspace_http::ensure_private_ipv4_or_reexec(
+            "app_server::installed_web_discovers_workspace_mcp_and_workflow_tools_before_creating_a_session",
+        ) {
+            workspace_http::WorkspaceHttpFixtureIp::Ready(ip) => ip,
+            workspace_http::WorkspaceHttpFixtureIp::DelegatedToIsolatedNetns => return,
+        };
+        let listener = tokio::net::TcpListener::bind((private_ip, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut mcp_config = StreamableHttpServerConfig::default().with_json_response(true);
+        mcp_config.allowed_hosts = vec![address.to_string()];
         let service = StreamableHttpService::<McpFixture, LocalSessionManager>::new(
             move || {
                 assert!(
@@ -3527,10 +3541,8 @@ async fn installed_web_discovers_workspace_mcp_and_workflow_tools_before_creatin
                 Ok(mcp.clone())
             },
             std::sync::Arc::default(),
-            StreamableHttpServerConfig::default().with_json_response(true),
+            mcp_config,
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
         let (entered, mut first_request) = tokio::sync::watch::channel(false);
         let (allow, release) = tokio::sync::watch::channel(false);
         let slow = axum::Router::new()

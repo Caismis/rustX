@@ -5330,6 +5330,10 @@ export type ToolOrigin =
   | {
       mcp: {
         server_id: McpServerId;
+        /**
+         * Workspace origin for a workspace-authored MCP definition.
+         */
+        source?: string | null;
       };
     }
   | {
@@ -8194,6 +8198,10 @@ export type InteractionKind =
         | {
             mcp: {
               server_id: McpServerId;
+              /**
+               * Workspace origin for a workspace-authored MCP definition.
+               */
+              source?: string | null;
             };
           }
         | {
@@ -14176,6 +14184,10 @@ export interface InteractionRequester {
     | {
         mcp: {
           server_id: McpServerId;
+          /**
+           * Workspace origin for a workspace-authored MCP definition.
+           */
+          source?: string | null;
         };
       }
     | {
@@ -15781,6 +15793,10 @@ export interface InteractionRequest {
           | {
               mcp: {
                 server_id: McpServerId;
+                /**
+                 * Workspace origin for a workspace-authored MCP definition.
+                 */
+                source?: string | null;
               };
             }
           | {
@@ -15848,6 +15864,10 @@ export interface InteractionRequester1 {
     | {
         mcp: {
           server_id: McpServerId;
+          /**
+           * Workspace origin for a workspace-authored MCP definition.
+           */
+          source?: string | null;
         };
       }
     | {
@@ -16495,6 +16515,10 @@ export interface RuntimeClientTool {
     | {
         mcp: {
           server_id: McpServerId;
+          /**
+           * Workspace origin for a workspace-authored MCP definition.
+           */
+          source?: string | null;
         };
       }
     | {
@@ -20620,6 +20644,10 @@ export interface ToolDefinition {
     | {
         mcp: {
           server_id: McpServerId;
+          /**
+           * Workspace origin for a workspace-authored MCP definition.
+           */
+          source?: string | null;
         };
       }
     | {
@@ -22405,6 +22433,10 @@ export interface InteractionRequest1 {
           | {
               mcp: {
                 server_id: McpServerId;
+                /**
+                 * Workspace origin for a workspace-authored MCP definition.
+                 */
+                source?: string | null;
               };
             }
           | {
@@ -22504,6 +22536,10 @@ export interface InteractionRequester2 {
     | {
         mcp: {
           server_id: McpServerId;
+          /**
+           * Workspace origin for a workspace-authored MCP definition.
+           */
+          source?: string | null;
         };
       }
     | {

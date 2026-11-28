@@ -644,6 +644,25 @@ explicitly supplied members.
 
 ## Resources and admission
 
+For a bound Session the Server loads its standing User configuration from
+`~/rustx/`. The admitted Client supplies the Workspace view, including its
+`.agents/mcp.toml`. A Workspace Skill or MCP service which overrides the
+same User identity emits a warning. MCP replacement selects one complete
+service before resolving credentials.
+
+A Workspace HTTP MCP service connects from the Server. Ordinary literal
+headers are allowed. To use a Client environment reference, the Client
+operator grants the service, HTTP origin and variable at startup. For example,
+`--mcp-env search https://search.example.com SEARCH_TOKEN` permits the
+`search` service to reference `$SEARCH_TOKEN` on that origin. Repeat the flag
+for each required variable. Each lookup returns only the requested granted
+values and lives with its service binding. An HTTP `sensitive_headers`
+reference in the Workspace also requires a matching Client grant. The local
+sibling starts with a minimal environment. To grant variables on the same
+machine, start the Client explicitly with its own environment and grants.
+Host-authored HTTP services use the Host credential snapshot. Workspace
+stdio runs on the Client with its declared literal environment.
+
 For every Agent, Workflow, Python package and MCP identity, the Workspace
 definition shadows the complete User definition. Shadow selection occurs before
 validation. An invalid Workspace duplicate never restores a valid User duplicate.
@@ -679,9 +698,7 @@ MCP definitions live only in `.agents/mcp.toml`:
 type = "stdio"
 command = "github-mcp"
 args = []
-
-[mcp_servers.github.sensitive_env]
-TOKEN = "$GITHUB_TOKEN"
+env = { GITHUB_MODE = "readonly" }
 
 [mcp_servers.search]
 type = "http"
@@ -695,7 +712,25 @@ The bounded schema accepts `type` (`stdio` or `http`), `command`, `args`, litera
 Transport-specific combinations are validated; a sole `command` or `url` can
 identify its transport. There is no `enabled` activation field. Relative source
 paths are resolved by their native definition owner. Secrets use explicit
-environment references and never splice across resource shadowing.
+environment references and never splice across resource shadowing:
+
+- `stdio` MCP runs on the admitted Client with its declared literal `env`.
+  Bound Sessions reject sending Host `sensitive_env` values to a Client
+  `stdio` process, and Workspace `stdio` does not receive Host credentials or
+  Client `--mcp-env` grants.
+  Spell scripts and other path arguments with an absolute or dot-relative path
+  (for example, `./server.py`) so the Host resolves them and the Client
+  validates them. Known file-valued options also declare their values as paths;
+  other bare values and URLs remain unchanged.
+- HTTP MCP supports `sensitive_headers` (and `$VAR` references in Workspace
+  definitions). User-scoped HTTP services under `~/rustx/` resolve
+  `sensitive_headers` from the Host credential snapshot. Workspace-scoped HTTP
+  services resolve referenced `$VAR` and `sensitive_headers` only from explicit
+  Client `--mcp-env SERVICE ORIGIN NAME` grants when the service is prepared.
+  A restored Agent requests fresh grants for its frozen service, origin and
+  variable references. Credential values remain outside durable storage.
+  Live tool discovery rejects declarations containing these granted values
+  before publishing them to a model or the Workflow tool catalog.
 
 Discovery captures definitions and inert Python package bytes. Root selection
 produces finite Root demand. Merely listing a named Agent creates no demand for
@@ -1484,10 +1519,15 @@ Product Host registration lane. Source reads remain inert. Runtime capability
 ownership and running Session resources are unchanged.
 
 Ordinary `configuration/sourceWrite` rejects new literal MCP environment/header
-values. Use `sensitive_env` / `sensitive_headers` environment references instead.
-Existing literals may be retained by key or removed, on the exact source revision;
-replacing them requires editing through the native source owner, outside the Web
-configuration protocol. No Host credential-writing API is introduced.
+values. For HTTP MCP, use `sensitive_headers` environment references
+(resolved from the Host credential snapshot for User scope, or from explicit
+Client `--mcp-env SERVICE ORIGIN NAME` grants for Workspace scope). For
+`stdio` MCP, bound Sessions run the server on the Client and reject Host
+`sensitive_env`; author non-secret literal `env` directly in `.agents/mcp.toml`
+outside the Web configuration protocol. Existing literals may be retained by
+key or removed, on the exact source revision; replacing them requires editing
+through the native source owner, outside the Web configuration protocol. No
+Host credential-writing API is introduced.
 
 The earlier trust-gate planning in issues #303/#312 predates accepted CFG3:
 there is no native Workspace trust gate. Product Host Workspace authorization

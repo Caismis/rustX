@@ -10,7 +10,7 @@ use crate::tools::native::input::decode;
 #[serde(deny_unknown_fields)]
 pub(super) struct WriteInput {
     /// A relative path resolved against the execution cwd, or an absolute
-    /// path within the Session's admitted Execution Client workspace.
+    /// path on the Client filesystem.
     pub path: String,
     /// The complete new UTF-8 content of the file.
     pub content: String,

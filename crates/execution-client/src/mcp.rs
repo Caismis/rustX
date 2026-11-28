@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     future::Future,
     io::{self, Write},
-    path::Component,
+    path::{Component, Path},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -80,6 +80,16 @@ enum Status {
 }
 
 impl Sessions {
+    /// A detached transport must not leave Client-owned MCP process groups
+    /// running while the binding waits for a possible reconnection.
+    pub(crate) fn cancel_all(&self) {
+        for entry in self.entries.values() {
+            if let Entry::Session(session) = entry {
+                session.signal.cancel();
+            }
+        }
+    }
+
     pub(crate) fn exchange(
         &mut self,
         request: Request,
@@ -205,6 +215,12 @@ impl Sessions {
             return Reply::Failed(Failure::Unavailable);
         }
         Reply::Opening
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.signal.cancel();
     }
 }
 
@@ -380,6 +396,14 @@ fn launch_parameters(
         }
         return Some((python.prepared_launch(source, operations)?, lifecycle, info));
     }
+    // Classify the authored interpreter spelling on both sides, even when
+    // the Client pins that executable through a Workspace symlink.
+    let args = client_arguments(
+        operations.workspace_root(),
+        operations.workspace(),
+        &launch.program,
+        launch.args,
+    )?;
     let program = client_program(
         operations.workspace_root(),
         operations.workspace(),
@@ -390,7 +414,7 @@ fn launch_parameters(
         InteractiveProcessSpec {
             cwd,
             program,
-            args: launch.args,
+            args,
             environment: launch.environment.into_iter().collect(),
         },
         lifecycle,
@@ -411,6 +435,9 @@ fn client_program(
     if bytes.is_empty()
         || bytes.contains(&0)
         || program
+            .to_str()
+            .is_some_and(rustx_execution_protocol::mcp::foreign_stdio_path)
+        || program
             .components()
             .any(|part| part == Component::ParentDir)
     {
@@ -418,7 +445,10 @@ fn client_program(
     }
     let relative = if program.is_absolute() {
         let Ok(path) = program.strip_prefix(workspace) else {
-            return Some(program);
+            return std::fs::metadata(&program)
+                .ok()?
+                .is_file()
+                .then_some(program);
         };
         path.to_path_buf()
     } else if bytes.contains(&b'/') || program.starts_with(".") {
@@ -438,6 +468,143 @@ fn client_program(
         .metadata
         .is_file
         .then(|| workspace.join(resolved.relative_path))
+}
+
+/// Required input operands must exist; other path operands may name a new leaf
+/// beneath a writable, existing Client directory.
+fn client_arguments(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &std::path::Path,
+    program: &std::path::Path,
+    args: Vec<String>,
+) -> Option<Vec<String>> {
+    use rustx_execution_protocol::{EntryKind, mcp::StdioPathKind};
+
+    for arg in rustx_execution_protocol::mcp::stdio_argument_paths(program, &args) {
+        let arg = arg.ok()?;
+        let path = Path::new(arg.value);
+        let kind = existing_argument(root, workspace, path).ok()?;
+        let admitted = match arg.kind {
+            StdioPathKind::Input => kind.is_some(),
+            StdioPathKind::Directory => kind == Some(EntryKind::Directory),
+            StdioPathKind::CommonJs => commonjs_input_exists(root, workspace, path, kind)?,
+            StdioPathKind::WritableLeaf => kind.is_some() || writable_parent(root, workspace, path),
+        };
+        if !admitted {
+            return None;
+        }
+    }
+    Some(args)
+}
+
+/// Distinguish a missing operand from one that cannot be admitted.
+fn existing_argument(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &Path,
+    path: &Path,
+) -> io::Result<Option<rustx_execution_protocol::EntryKind>> {
+    use rustx_execution_protocol::EntryKind;
+
+    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let classify = |is_file, is_directory| {
+        if is_file {
+            EntryKind::RegularFile
+        } else if is_directory {
+            EntryKind::Directory
+        } else {
+            EntryKind::Other
+        }
+    };
+    if path == workspace {
+        root.verify()?;
+        return Ok(Some(EntryKind::Directory));
+    }
+    if let Ok(relative) = path.strip_prefix(workspace) {
+        if let Some(entry) = root.resolve_resource(workspace, relative)?.entry {
+            return Ok(Some(classify(
+                entry.metadata.is_file,
+                entry.metadata.is_directory,
+            )));
+        }
+        return match std::fs::symlink_metadata(path) {
+            Ok(_) => Err(io::ErrorKind::PermissionDenied.into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            let metadata = std::fs::metadata(path)?;
+            Ok(Some(classify(metadata.is_file(), metadata.is_dir())))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn commonjs_input_exists(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &Path,
+    path: &Path,
+    exact: Option<rustx_execution_protocol::EntryKind>,
+) -> Option<bool> {
+    use rustx_execution_protocol::EntryKind;
+
+    if exact == Some(EntryKind::RegularFile) {
+        return Some(true);
+    }
+    // Match the file candidates Node tries before directory resolution. The
+    // interpreter still owns package.json, index files and module execution.
+    for extension in [".js", ".json", ".node"] {
+        let mut candidate = path.as_os_str().to_owned();
+        candidate.push(extension);
+        if existing_argument(root, workspace, Path::new(&candidate)).ok()?
+            == Some(EntryKind::RegularFile)
+        {
+            return Some(true);
+        }
+    }
+    Some(exact == Some(EntryKind::Directory))
+}
+
+fn writable_parent(
+    root: &rustx_confined_fs::PackageDirectory,
+    workspace: &std::path::Path,
+    path: &std::path::Path,
+) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let parent = if let Ok(relative) = parent.strip_prefix(workspace) {
+        if relative.as_os_str().is_empty() {
+            if root.verify().is_err() {
+                return false;
+            }
+            workspace.to_path_buf()
+        } else {
+            let Some(entry) = root
+                .resolve_resource(workspace, relative)
+                .ok()
+                .and_then(|result| result.entry)
+            else {
+                return false;
+            };
+            if !entry.metadata.is_directory {
+                return false;
+            }
+            workspace.join(entry.relative_path)
+        }
+    } else {
+        parent.to_path_buf()
+    };
+    std::fs::metadata(&parent).is_ok_and(|metadata| metadata.is_dir())
+        && nix::unistd::access(
+            &parent,
+            nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK,
+        )
+        .is_ok()
 }
 
 struct Negotiator(ClientInfo);
@@ -682,9 +849,63 @@ mod launch_tests {
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
-    use super::client_program;
+    use super::{client_arguments, client_program};
 
     #[test]
+    fn client_accepts_named_shell_options_and_url_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().canonicalize().unwrap();
+        let root = rustx_confined_fs::PackageDirectory::open(&workspace).unwrap();
+        let script = workspace.join("server.sh");
+        std::fs::write(&script, "exit 0").unwrap();
+        let args = vec![
+            "-O".into(),
+            "extglob".into(),
+            script.into_os_string().into_string().unwrap(),
+        ];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("/bin/bash"), args.clone()),
+            Some(args)
+        );
+        let python_args = vec![
+            "--check-hash-based-pycs".into(),
+            "always".into(),
+            workspace.join("server.py").display().to_string(),
+        ];
+        assert!(
+            client_arguments(&root, &workspace, Path::new("python3"), python_args.clone())
+                .is_none()
+        );
+        std::fs::write(workspace.join("server.py"), "pass").unwrap();
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("python3"), python_args.clone()),
+            Some(python_args)
+        );
+        for args in [
+            vec!["server.py".into()],
+            vec!["--".into(), "server.py".into()],
+            vec!["-u".into(), "server.py".into()],
+        ] {
+            assert!(client_arguments(&root, &workspace, Path::new("python3"), args).is_none());
+        }
+        let ambiguous = vec!["--unknown".into(), "opaque".into(), "server.py".into()];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("python3"), ambiguous.clone()),
+            Some(ambiguous)
+        );
+        let urls = vec![
+            "--input".into(),
+            "https://example.test/feed".into(),
+            "--input=https://example.test/two".into(),
+        ];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("feed"), urls.clone()),
+            Some(urls)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One Client-side path and interpreter admission matrix.
     fn path_valued_programs_stay_in_the_client_workspace() {
         let temporary = tempfile::tempdir().unwrap();
         let base = temporary.path().canonicalize().unwrap();
@@ -708,5 +929,113 @@ mod launch_tests {
         assert_eq!(resolve(workspace.join("../external")), None);
         assert_eq!(resolve("/bin/sh".into()), Some("/bin/sh".into()));
         assert_eq!(resolve("sh".into()), Some("sh".into()));
+        assert_eq!(resolve(base.join("missing")), None);
+        let args = vec![format!("--config={}", commands.join("peer").display())];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("fixture"), args.clone()),
+            Some(args)
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("python3"),
+                vec![base.join("missing.py").display().to_string()]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec![base.join("missing.py").display().to_string()]
+            )
+            .is_some()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec!["./relative.py".into()]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("/bin/sh"),
+                vec!["-c".into(), "printf 'x/y'".into()]
+            )
+            .is_some()
+        );
+        for program in ["/bin/sh", "/usr/bin/env"] {
+            for flag in ["-lc", "-ic"] {
+                let args = if program.ends_with("env") {
+                    vec!["bash".into(), flag.into(), "exec /some/server.py".into()]
+                } else {
+                    vec![flag.into(), "exec /some/server.py".into()]
+                };
+                assert_eq!(
+                    client_arguments(&root, &workspace, Path::new(program), args.clone()),
+                    Some(args)
+                );
+            }
+        }
+        for path in [commands.join("new.log"), base.join("new.log")] {
+            let args = vec![format!("--log-file={}", path.display())];
+            assert_eq!(
+                client_arguments(&root, &workspace, Path::new("fixture"), args.clone()),
+                Some(args)
+            );
+        }
+        let missing_parent = base.join("absent/new.log");
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec![format!("--log-file={}", missing_parent.display())]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec![format!("--config={}", base.join("missing.toml").display())]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("fixture"),
+                vec!["--input".into(), base.join("missing").display().to_string()]
+            )
+            .is_none()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("python3"),
+                vec!["-m".into(), "package.server".into()]
+            )
+            .is_some()
+        );
+        assert!(
+            client_arguments(
+                &root,
+                &workspace,
+                Path::new("/usr/bin/env"),
+                vec!["python3".into(), "-c".into(), "print('x/y')".into()]
+            )
+            .is_some()
+        );
     }
 }

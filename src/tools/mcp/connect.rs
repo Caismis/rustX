@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rmcp::ClientServiceExt;
 use rmcp::model::ProtocolVersion;
@@ -84,6 +85,90 @@ impl<'a> OwnedConnect<'a> {
     }
 }
 
+/// Hydrates Session-bound Client environment grants only when a service is actually
+/// prepared or connected. Unselected Workspace HTTP services never contact the Client.
+///
+/// Returns `false` if `cancellation` fired before or while waiting for the Client reply.
+pub(crate) async fn hydrate_client_credentials(
+    server_id: &McpServerId,
+    binding: &mut McpServerBinding,
+    workspace: &Workspace,
+    cancellation: &CancellationSignal,
+) -> bool {
+    let Some(scope) = workspace.execution_scope() else {
+        return !cancellation.is_cancelled();
+    };
+    let deadline = Instant::now()
+        + crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
+    hydrate_client_credentials_with_scope_until(server_id, binding, scope, deadline, cancellation)
+        .await
+}
+
+/// Hydrates Session-bound Client environment grants using an explicit
+/// [`SessionExecutionScope`] under a shared `deadline` and `cancellation` signal.
+///
+/// Returns `false` if `cancellation` fired before or during the RPC.
+/// A dispatched exchange still consumes its reply if the caller stops waiting.
+pub(crate) async fn hydrate_client_credentials_with_scope_until(
+    server_id: &McpServerId,
+    binding: &mut McpServerBinding,
+    scope: &crate::local_runtime::session_runtime_manager::SessionExecutionScope,
+    deadline: Instant,
+    cancellation: &CancellationSignal,
+) -> bool {
+    if cancellation.is_cancelled() {
+        return false;
+    }
+    if !binding.credentials.needs_client_hydration() {
+        return true;
+    }
+    let McpTransportConfig::StreamableHttp { endpoint: url, .. } = &binding.transport else {
+        return true;
+    };
+    let Ok(endpoint) = scope.endpoint() else {
+        return true;
+    };
+    let Ok(parsed) = url::Url::parse(url) else {
+        return true;
+    };
+    let request = rustx_execution_protocol::mcp_environment::Request {
+        service: server_id.to_string(),
+        origin: parsed.origin().ascii_serialization(),
+        names: binding.credentials.client_environment_names(),
+    };
+    if request.names.is_empty() {
+        return true;
+    }
+    if Instant::now() >= deadline {
+        binding.credentials.mark_client_hydrated();
+        return true;
+    }
+    let worker_cancel = cancellation.clone();
+    let mut task = tokio::task::spawn_blocking(move || {
+        endpoint.mcp_environment_by(&request, deadline, &worker_cancel)
+    });
+    let hydration = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => {
+            task.abort();
+            return false;
+        }
+        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+            task.abort();
+            binding.credentials.mark_client_hydrated();
+            return true;
+        }
+        result = &mut task => result,
+    };
+    binding.credentials.mark_client_hydrated();
+    if let Ok(Ok(values)) = hydration {
+        binding
+            .credentials
+            .capture(crate::credentials::CredentialSnapshot::new(values));
+    }
+    true
+}
+
 impl McpServerRuntime {
     /// Connects a protocol fixture without constructing a Session binding.
     ///
@@ -141,9 +226,15 @@ impl McpServerRuntime {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::Connect,
         );
-        let binding = request
-            .binding
-            .with_connection_redactions(request.server_id);
+        let mut binding = request.binding.clone();
+        let _ = hydrate_client_credentials(
+            request.server_id,
+            &mut binding,
+            request.workspace,
+            &request.cancellation,
+        )
+        .await;
+        let binding = binding.with_connection_redactions(request.server_id);
         let request = OwnedConnect {
             binding: &binding,
             ..request
@@ -378,6 +469,24 @@ impl McpServerRuntime {
                         "HTTP endpoint must be non-empty".to_owned(),
                     ));
                 }
+                let endpoint = if binding.credentials.client_owned {
+                    let resolved = binding
+                        .credentials
+                        .interpolate(endpoint)
+                        .map_err(McpError::Configuration)?;
+                    let before = url::Url::parse(endpoint).map_err(|_| {
+                        McpError::Configuration("invalid Workspace MCP endpoint".into())
+                    })?;
+                    let after = url::Url::parse(&resolved).map_err(|_| {
+                        McpError::Configuration("invalid Workspace MCP endpoint".into())
+                    })?;
+                    if before.origin() != after.origin() {
+                        return Err(McpError::Configuration("Workspace MCP environment references cannot change the destination origin".into()));
+                    }
+                    resolved
+                } else {
+                    endpoint.clone()
+                };
                 let mut transport_config = rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(endpoint.clone());
                 transport_config.custom_headers = headers
                     .iter()
@@ -385,9 +494,20 @@ impl McpServerRuntime {
                         let name = http::HeaderName::try_from(name).map_err(|_| {
                             McpError::Configuration("invalid HTTP header name".to_owned())
                         })?;
-                        let value = http::HeaderValue::try_from(value).map_err(|_| {
+                        let value = if binding.credentials.client_owned {
+                            binding
+                                .credentials
+                                .interpolate(value)
+                                .map_err(McpError::Configuration)?
+                        } else {
+                            value.clone()
+                        };
+                        let mut value = http::HeaderValue::try_from(value).map_err(|_| {
                             McpError::Configuration("invalid HTTP header value".to_owned())
                         })?;
+                        if binding.credentials.client_owned {
+                            value.set_sensitive(true);
+                        }
                         Ok((name, value))
                     })
                     .collect::<Result<_, McpError>>()?;
@@ -401,6 +521,15 @@ impl McpServerRuntime {
                     value.set_sensitive(true);
                     transport_config.custom_headers.insert(name, value);
                 }
+                if binding.credentials.client_owned
+                    && transport_config
+                        .custom_headers
+                        .contains_key(&http::header::HOST)
+                {
+                    return Err(McpError::Configuration(
+                        "Workspace MCP requests must use the HTTP authority of their configured origin".into(),
+                    ));
+                }
                 transport_config.reinit_on_expired_session = false;
                 transport_config.allow_stateless = true;
                 // rustX supplies the HTTP client rather than taking rmcp's
@@ -409,7 +538,18 @@ impl McpServerRuntime {
                 // call has to terminate and prove released. The registry
                 // returned here is that authority; it belongs to exactly
                 // this connection generation.
-                let (client, ownership) = streamable_http::McpHttpClient::new()?;
+                let (client, ownership) = if binding.credentials.client_owned {
+                    let no_configured_credentials = headers.is_empty()
+                        && binding.credentials.headers.is_empty()
+                        && binding.credentials.templates.is_empty()
+                        && url::Url::parse(&endpoint).is_ok_and(|url| url.query().is_none());
+                    streamable_http::McpHttpClient::for_workspace(
+                        &endpoint,
+                        no_configured_credentials,
+                    )?
+                } else {
+                    streamable_http::McpHttpClient::new()?
+                };
                 request_ownership = Some(Arc::clone(&ownership));
                 let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
                     client,

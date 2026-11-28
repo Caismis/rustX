@@ -276,7 +276,7 @@ impl Dependencies {
             .map(|tool| {
                 match &tool.origin {
                     ToolOrigin::Builtin | ToolOrigin::Host { .. } => {}
-                    ToolOrigin::Mcp { server_id } => {
+                    ToolOrigin::Mcp { server_id, .. } => {
                         selected.insert(ToolSourceId::Mcp(server_id.clone()));
                     }
                     ToolOrigin::ManagedPython { package } => {
@@ -501,7 +501,7 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
             let server = match &definition.origin {
                 crate::tools::types::ToolOrigin::Builtin
                 | crate::tools::ToolOrigin::Host { .. } => None,
-                crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id.clone()),
+                crate::tools::types::ToolOrigin::Mcp { server_id, .. } => Some(server_id.clone()),
                 crate::tools::types::ToolOrigin::ManagedPython { package } => {
                     Some(crate::tools::python::python_server_id(package))
                 }

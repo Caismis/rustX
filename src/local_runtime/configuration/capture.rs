@@ -790,7 +790,16 @@ impl UserConfigManager {
         for (id, definition) in mcp.definitions {
             match definition {
                 Ok(definition) => {
-                    config.mcp_servers.insert(id.clone(), definition.resolve());
+                    let mut definition = definition.resolve();
+                    if matches!(
+                        mcp.origins.get(&id),
+                        Some(Origin::Workspace { .. } | Origin::Session { .. })
+                    ) {
+                        definition.client_owned = true;
+                        definition.workspace_source =
+                            matches!(mcp.origins.get(&id), Some(Origin::Workspace { .. }));
+                    }
+                    config.mcp_servers.insert(id.clone(), definition);
                 }
                 Err(error) => {
                     diagnostics.push(
@@ -1020,12 +1029,8 @@ impl UserConfigManager {
         let managed_python = if let Some(catalog) = prefetched_python {
             catalog
         } else if let Some(endpoint) = workspace_endpoint {
-            super::super::managed_python_resources::discover_bound(
-                endpoint,
-                &python_user,
-                &self.resource_io,
-            )
-            .map_err(LaunchFailure::resource)?
+            super::super::managed_python_resources::discover_bound(endpoint, &self.resource_io)
+                .map_err(LaunchFailure::resource)?
         } else {
             super::super::managed_python_resources::discover_controlled(
                 authored_workspace,

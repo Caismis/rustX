@@ -37,6 +37,7 @@ use tokio::sync::Semaphore;
 pub(crate) struct ChildExecutionGrant {
     admission: Admission,
     connection: ConnectionId,
+    user_root: std::path::PathBuf,
     capabilities: BTreeSet<Capability>,
 }
 
@@ -60,6 +61,7 @@ impl ChildExecutionGrant {
             self.admission.clone(),
             self.connection,
             self.capabilities,
+            self.user_root.clone(),
             data,
             control,
         )?;
@@ -87,6 +89,7 @@ impl ChildExecutionGrant {
             save_abort_gate: Mutex::default(),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::from(self.admission),
+            user_root: std::sync::OnceLock::from(self.user_root),
             managed_output: std::sync::OnceLock::from(false),
             stdio_mcp: std::sync::OnceLock::from(stdio_mcp),
             recovery_fence: None,
@@ -182,6 +185,7 @@ impl ChildExecutionRelay {
                 admission: connection.admission().clone(),
                 connection: connection.connection_id().clone(),
                 capabilities: connection.capabilities().clone(),
+                user_root: connection.user_root().to_owned(),
             })
         })?;
         let authority = Arc::new(Authority {

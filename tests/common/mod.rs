@@ -172,6 +172,7 @@ impl FixtureReply {
 /// A fixture server bound to an ephemeral loopback port.
 pub struct FixtureServer {
     pub address: SocketAddr,
+    url_origin: Option<String>,
     attempts: Arc<AtomicU64>,
     request_bodies: Arc<Mutex<Vec<String>>>,
     handle: tokio::task::JoinHandle<()>,
@@ -187,6 +188,21 @@ impl FixtureServer {
         Self::start_with_body(move |attempt, head, _body| responder(attempt, head)).await
     }
 
+    /// Starts a server over an already-bound listener with an optional logical URL origin.
+    #[allow(dead_code)]
+    pub fn start_with_listener<F>(
+        listener: TcpListener,
+        url_origin: Option<String>,
+        responder: F,
+    ) -> Self
+    where
+        F: Fn(u64, &str) -> FixtureReply + Send + Sync + 'static,
+    {
+        Self::serve_listener(listener, url_origin, move |attempt, head, _body| {
+            responder(attempt, head)
+        })
+    }
+
     /// Starts a server whose responder also sees the request body, for
     /// conversations whose request ordering is nondeterministic (Issue #60:
     /// a subagent child runtime calls the same provider concurrently with
@@ -198,6 +214,13 @@ impl FixtureServer {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind fixture server");
+        Self::serve_listener(listener, None, responder)
+    }
+
+    fn serve_listener<F>(listener: TcpListener, url_origin: Option<String>, responder: F) -> Self
+    where
+        F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync + 'static,
+    {
         let address = listener.local_addr().expect("local address");
         let attempts = Arc::new(AtomicU64::new(0));
         let request_bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -220,6 +243,7 @@ impl FixtureServer {
         });
         Self {
             address,
+            url_origin,
             attempts,
             request_bodies,
             handle,
@@ -258,7 +282,10 @@ impl FixtureServer {
 
     /// The base URL pointing at this server.
     pub fn url(&self, prefix: &str) -> String {
-        format!("http://127.0.0.1:{}{}", self.address.port(), prefix)
+        self.url_origin.as_deref().map_or_else(
+            || format!("http://{}{}", self.address, prefix),
+            |origin| format!("{origin}{prefix}"),
+        )
     }
 }
 
@@ -1055,6 +1082,15 @@ pub struct NativeFixture {
 }
 
 impl NativeFixture {
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    pub fn mount_scratch(&self) -> std::path::PathBuf {
+        self._execution
+            .as_ref()
+            .and_then(session_execution::ExecutionFixture::mount_scratch)
+            .expect("the fixture owns a Client scratch mount")
+    }
+
     /// Reaps the real Client while the native runtime and artifacts remain pinned.
     pub fn disconnect_execution(&mut self) {
         drop(self._execution.take().expect("live Execution Client"));
@@ -1168,11 +1204,34 @@ pub fn native_fixture_with_execution(environment: Vec<(String, String)>) -> Nati
     )
 }
 
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn native_fixture_with_mount_view(physical: &std::path::Path) -> NativeFixture {
+    native_fixture_inner_with_mount(
+        Vec::new(),
+        rustx::tools::native::NativeToolPolicies::default(),
+        &rustx::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(rustx::context::AgentStatusConfig::default()),
+        true,
+        Some(physical),
+    )
+}
+
 pub(crate) fn native_fixture_inner(
     environment: Vec<(String, String)>,
     policies: rustx::tools::native::NativeToolPolicies,
     extensions: &rustx::extensions::NativeAgentExtensions,
     execution: bool,
+) -> NativeFixture {
+    native_fixture_inner_with_mount(environment, policies, extensions, execution, None)
+}
+
+fn native_fixture_inner_with_mount(
+    environment: Vec<(String, String)>,
+    policies: rustx::tools::native::NativeToolPolicies,
+    extensions: &rustx::extensions::NativeAgentExtensions,
+    execution: bool,
+    mount: Option<&std::path::Path>,
 ) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
@@ -1197,7 +1256,8 @@ pub(crate) fn native_fixture_inner(
     // The execution route is reserved for exactly the Session's workspace
     // before the runtime is composed — the same order production
     // composition binds it.
-    let execution = execution.then(|| session_execution::ExecutionFixture::new(&workspace_root));
+    let execution = execution
+        .then(|| session_execution::ExecutionFixture::with_mount_view(&workspace_root, mount));
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
         ConversationRuntimeConfig {

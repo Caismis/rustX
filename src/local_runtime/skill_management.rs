@@ -303,6 +303,8 @@ impl SessionRuntimeManager {
                 .ok_or(SettingsError::Invalid)?;
             let (data_base64, next_offset, revision) = match kind {
                 SkillContentKind::Instructions => {
+                    // User instructions come from their authoritative Host package.
+                    // Workspace instructions use the admitted Client.
                     let workspace = endpoint
                         .as_deref()
                         .filter(|_| package.source() == crate::skills::SkillSource::Workspace);

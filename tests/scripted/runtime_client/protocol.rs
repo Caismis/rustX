@@ -175,6 +175,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
         tool_name: "create_issue".to_owned(),
         origin: crate::tools::types::ToolOrigin::Mcp {
             server_id: crate::runtime::identity::McpServerId::new("github"),
+            source: None,
         },
     };
     let interaction_id = InteractionId::new("interaction-questionnaire-v3");
@@ -796,6 +797,7 @@ fn number_question_at_two_pow_63() -> InteractionRequest {
                 tool_name: "post_entry".to_owned(),
                 origin: crate::tools::types::ToolOrigin::Mcp {
                     server_id: crate::runtime::identity::McpServerId::new("ledger"),
+                    source: None,
                 },
             },
             questionnaire: QuestionnaireSpecification {

@@ -1612,10 +1612,20 @@ impl CapabilityCoordinator {
         let preparation = self.inner.mcp_owner.prepare_sources(
             bindings,
             &cancellation,
-            |(server_id, binding)| {
+            |(server_id, mut binding)| {
                 let cancellation = &cancellation;
                 async move {
                     let owner = &self.inner.mcp_owner;
+                    if !crate::tools::mcp::hydrate_client_credentials(
+                        &server_id,
+                        &mut binding,
+                        &owner.workspace,
+                        cancellation,
+                    )
+                    .await
+                    {
+                        return (server_id, Err("MCP preparation was cancelled".into()));
+                    }
                     let key = startup_live_mcp.and_then(|required| {
                         let key = crate::tools::mcp::declaration_cache::DeclarationKey::for_source(
                             &self.inner.python_store_root,
@@ -3720,6 +3730,7 @@ body
                                 origin: match &source {
                                     ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
                                         server_id: id.clone(),
+                                        source: None,
                                     },
                                     ToolSourceId::ManagedPython(package) => {
                                         ToolOrigin::ManagedPython {
@@ -5067,7 +5078,7 @@ mod mcp_race_tests {
         assert_eq!(v1_snapshot.revision().get(), 1);
 
         let frozen_registration = v1_snapshot.available_tools().registrations().iter()
-            .find(|entry| matches!(&entry.definition.origin, crate::tools::types::ToolOrigin::Mcp { server_id: id } if id == &server_id))
+            .find(|entry| matches!(&entry.definition.origin, crate::tools::types::ToolOrigin::Mcp { server_id: id , .. } if id == &server_id))
             .expect("available MCP registration").clone();
 
         // The old execution is admitted before the source/runtime change:

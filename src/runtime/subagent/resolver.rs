@@ -1489,11 +1489,16 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
             field(hasher, &key("origin"), &format!("python:{package}"));
         }
         crate::tools::types::ToolOrigin::Builtin => field(hasher, &key("origin"), "builtin"),
-        crate::tools::types::ToolOrigin::Mcp { server_id } => {
+        crate::tools::types::ToolOrigin::Mcp { server_id, source } => {
             field(
                 hasher,
                 &key("origin"),
                 &format!("mcp:{}", server_id.as_str()),
+            );
+            field(
+                hasher,
+                &key("origin_source"),
+                source.as_deref().unwrap_or(""),
             );
         }
     }
@@ -1753,6 +1758,7 @@ mod tests {
             let origin = match &source {
                 ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
                     server_id: id.clone(),
+                    source: None,
                 },
                 ToolSourceId::ManagedPython(package) => ToolOrigin::ManagedPython {
                     package: package.clone(),
@@ -1814,6 +1820,7 @@ mod tests {
                 "get_issue",
                 ToolOrigin::Mcp {
                     server_id: McpServerId::new("github"),
+                    source: None,
                 },
             ),
             tool(
@@ -1959,6 +1966,7 @@ mod tests {
                     "get_issue",
                     ToolOrigin::Mcp {
                         server_id: github.clone(),
+                        source: None,
                     },
                 ),
             ),
@@ -2103,6 +2111,7 @@ mod tests {
             "get_issue",
             ToolOrigin::Mcp {
                 server_id: McpServerId::new("github"),
+                source: None,
             },
         );
         let frozen = freeze_tool(
@@ -2135,6 +2144,7 @@ mod tests {
                 "search",
                 ToolOrigin::Mcp {
                     server_id: McpServerId::new("github"),
+                    source: None,
                 },
             ),
         ]);
@@ -2887,6 +2897,7 @@ mod tests {
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Mcp {
                 server_id: server.clone(),
+                source: None,
             },
         };
         let identity_of = |definition: &ToolDefinition| {
@@ -3013,6 +3024,7 @@ mod tests {
                 "get_issue",
                 ToolOrigin::Mcp {
                     server_id: server.clone(),
+                    source: None,
                 },
             ),
         )];

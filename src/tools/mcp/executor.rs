@@ -277,6 +277,7 @@ pub fn definitions(
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
+                    source: None,
                 },
             };
             (
@@ -316,6 +317,7 @@ pub(crate) fn definitions_owned(
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
+                    source: None,
                 },
             };
             (definition, executor as Arc<dyn ToolExecutor>)
@@ -325,10 +327,19 @@ pub(crate) fn definitions_owned(
 
 /// Applies the binding's exact-tool or source permission object onto a plain registration.
 pub(crate) fn with_binding_permissions(
-    definition: crate::tools::types::ToolDefinition,
+    mut definition: crate::tools::types::ToolDefinition,
     executor: std::sync::Arc<dyn crate::tools::executor::ToolExecutor>,
     binding: &super::McpServerBinding,
 ) -> crate::tools::executor::ToolRegistration {
+    if binding.credentials.workspace_source
+        && matches!(
+            binding.transport,
+            super::McpTransportConfig::StreamableHttp { .. }
+        )
+        && let ToolOrigin::Mcp { source, .. } = &mut definition.origin
+    {
+        *source = Some("workspace".to_owned());
+    }
     let remote_name = definition.name.clone();
     let mut registration = crate::tools::executor::ToolRegistration::plain(definition, executor);
     if let Some(set) = binding
@@ -409,6 +420,7 @@ pub(crate) fn definitions_owned_for_source(
             definition.origin = match source {
                 crate::capabilities::ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
                     server_id: id.clone(),
+                    source: None,
                 },
                 crate::capabilities::ToolSourceId::ManagedPython(package) => {
                     ToolOrigin::ManagedPython {

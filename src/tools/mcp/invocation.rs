@@ -726,6 +726,7 @@ impl McpCallIdentity<'_> {
             tool_name: self.tool_name.to_owned(),
             origin: crate::tools::types::ToolOrigin::Mcp {
                 server_id: server_id.clone(),
+                source: None,
             },
         }
     }

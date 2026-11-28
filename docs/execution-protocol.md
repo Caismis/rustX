@@ -119,7 +119,7 @@ partial body — is a truncation error, never a silent end.
 
 ### Negotiation (implemented)
 
-The Client opens a pair with a revision 8 Hello. It retains
+The Client opens a pair with a revision 10 Hello. It retains
 `physical_settlement_proven` in terminal process snapshots and requires the
 same-instance recovery handshake after a transport loss. Managed Python
 source capture and generic stdio launch carry exact binding identity in
@@ -134,6 +134,7 @@ pub struct Hello {
     pub instance: ClientInstanceId,
     pub generation: Generation,
     pub workspace: PathBuf,
+    pub user_root: PathBuf,
     pub capabilities: BTreeSet<Capability>,
     pub credential: BindingCredential,
 }
@@ -507,7 +508,7 @@ not discharge it.
 
 The Execution Client validates the bootstrap URL before any connect. It
 requires `wss://`, a literal IPv4 or bracketed IPv6 address, and the
-exact `/execution/v9` path. The directory-page entry limit has a distinct
+exact `/execution/v10` path. The directory-page entry limit has a distinct
 wire error from a permission denial or revision conflict. A port may be
 omitted to use 443. Userinfo,
 queries, fragments, hostnames, and non-ASCII or overlong URLs are refused.
@@ -568,7 +569,7 @@ revocation and protocol failure close abruptly by the same design.
 
 The operator entry point is `rustx app-server --execution-session
 SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
-/private/dir/bundle [--execution-public-url wss://…/execution/v9]`,
+/private/dir/bundle [--execution-public-url wss://…/execution/v10]`,
 which conflicts with the local `--local-execution-*` composition flags
 and never launches a Client: the Session's workspace is resolved only
 from the trusted catalog, the reservation is published, and management
@@ -1134,9 +1135,64 @@ preview and complete-output path, including empty items. A result exceeding
 the preview limit retains the exact Client locator if publication succeeds,
 or an unavailable continuation with the business result intact.
 
+### Bound Session resource policy
+
+Revision 10 carries the Client's normalized absolute User root in the data
+Hello. The Client resolves its locally configured home and product-root aliases
+to a physical spelling. The Python Store still uses the Client's own data home.
+Recovery pins the reported root to the admitted Client instance. A local sibling,
+remote Client and short-lived container each report the root in their own
+filesystem namespace. The Server publishes bound Skill locations under
+the Client-visible collection and Managed Python User locations under
+`<client-user-root>/.agents/tools`. It reads authoritative User Skill
+metadata from its own standing tree. Bound User Skill addresses retain a
+collection-relative name until projection, so a non-UTF-8 Host ancestor cannot
+invalidate a representable Client address.
+
+Read, Write, Edit, Grep and Glob accept Client absolute paths and
+Workspace-relative paths. The Client retains directory descriptors, rejects
+links and escaping relative components, and denies file-tool writes inside
+the official User Skill tree. Bash continues to use the Workspace as its
+working directory and home. Bash may write to a shared standing root.
+Ordinary management file APIs retain their Workspace scope.
+
+A Workspace-authored HTTP MCP connection uses the Server's direct transport.
+Its resolver checks each candidate socket address, including mapped IPv4,
+and only supplies allowed candidates to the dialer. Literal IPs and redirect
+destinations undergo the same policy. Loopback, unspecified, link-local and
+metadata destinations are rejected. Private network addresses can be valid.
+The metadata exclusions include the documented [EC2 IPv6 endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html)
+and [Alibaba ECS endpoint](https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata/).
+Requests carrying service headers, credentials, session IDs or SSE continuation
+IDs remain within their granted origin across redirects. When an anonymous
+legacy Initialize request establishes a session at another origin, subsequent
+session requests and cleanup start at the endpoint that issued the session ID.
+Shadowing a User service selects the Workspace service's credentials.
+
+Workspace stdio resolves path operands against the configuration directory
+and checks the executable, cwd and path arguments on the Client before launch.
+Use an absolute path or a relative path starting with `./` or `../` for
+generic file arguments, including values written as `--option=PATH`.
+Interpreter scripts must be explicitly path-qualified, and their files must
+exist. Unqualified operands in known script positions are rejected before
+launch; bare operands following an unknown option remain opaque. Options that identify input files also accept bare relative paths and
+require them to exist. Other bare arguments, Node loader specifiers, URLs,
+literal option values and inline interpreter programs are passed unchanged.
+Path-qualified Node preloads also allow CommonJS file extension lookup. The
+Client checks the directory passed to `env --chdir` before launch.
+A generic output operand may name a new leaf under an existing writable
+Client directory. A relative Host configuration path without a Client
+Workspace base fails admission.
+
+Release packaging checks both the Workspace MCP environment contract and the
+official User Skill sync contract before building a versioned archive. The
+two changes share this gate on the execution-boundary integration branch.
+
 ### Client-owned stdio MCP
 
 The Server admits the configured source and freezes its credential resolution.
+Each Client stdio service owns a supervised process group. Transport detachment
+cancels the group and its descendants, including during the recovery window.
 An `Open` names one operation and its canonical source identity on the
 exact authenticated Session binding, then supplies the selected Client
 program, Workspace-relative cwd, explicit environment and allowed protocol

@@ -207,7 +207,7 @@ fn iconify(value: &str) -> Option<SkillDisplayIcon> {
 }
 
 fn package_root(package: &SkillPackage) -> Option<PathBuf> {
-    let location = Path::new(package.location());
+    let location = package.offered_source();
     if location.file_name()? != SKILL_MARKDOWN_FILE
         || location.canonicalize().ok()? != package.instruction_source()
     {
@@ -217,7 +217,7 @@ fn package_root(package: &SkillPackage) -> Option<PathBuf> {
 }
 
 fn editable_root(package: &SkillPackage, root: &Path, collection: &Path) -> bool {
-    let location = Path::new(package.location());
+    let location = package.offered_source();
     location == package.instruction_source()
         && location.parent() == Some(root)
         && root.starts_with(collection)
@@ -239,7 +239,7 @@ fn document(bytes: Option<&[u8]>) -> Option<serde_yaml_ng::Mapping> {
 
 fn display_revision(package: &SkillPackage, bytes: Option<&[u8]>) -> Result<String, SettingsError> {
     digest(&(
-        package.location(),
+        package.offered_source(),
         package.instruction_source(),
         revision(bytes),
     ))

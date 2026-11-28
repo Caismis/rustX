@@ -98,6 +98,7 @@ pub struct LocalExecutionEndpoint {
     /// connection lands; the operation-identity source for every
     /// managed process this endpoint dispatches.
     admission: std::sync::OnceLock<rustx_execution_protocol::Admission>,
+    user_root: std::sync::OnceLock<PathBuf>,
     managed_output: std::sync::OnceLock<bool>,
     stdio_mcp: std::sync::OnceLock<bool>,
     recovery_fence: Option<rustx_execution_server::RecoveryFence>,
@@ -336,6 +337,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            user_root: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
             recovery_fence: None,
@@ -349,7 +351,7 @@ impl LocalExecutionEndpoint {
     /// owner-only `0700` directory the caller owns — a collision with a
     /// user file is refused by `create_new` and left untouched.
     ///
-    /// `public_url`, when given, is the operator's `wss://…/execution/v9`
+    /// `public_url`, when given, is the operator's `wss://…/execution/v10`
     /// ingress endpoint published in the bundle instead of the binding's
     /// dedicated loopback TLS address.
     fn new_websocket(
@@ -397,6 +399,7 @@ impl LocalExecutionEndpoint {
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
             admission: std::sync::OnceLock::new(),
+            user_root: std::sync::OnceLock::new(),
             managed_output: std::sync::OnceLock::new(),
             stdio_mcp: std::sync::OnceLock::new(),
             recovery_fence: None,
@@ -558,6 +561,7 @@ impl LocalExecutionEndpoint {
                 let _ = self
                     .stdio_mcp
                     .set(connection.supports(Capability::StdioMcp));
+                let _ = self.user_root.set(connection.user_root().to_owned());
                 let _ = self.admission.set(connection.admission().clone());
                 let retired = slot.replace(connection);
                 drop(slot);
@@ -813,9 +817,24 @@ impl LocalExecutionEndpoint {
         deadline: Instant,
         dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
     ) -> io::Result<T> {
+        self.with_bounded_data_connection_cancellable(deadline, None, dispatch)
+    }
+
+    fn with_bounded_data_connection_cancellable<T>(
+        &self,
+        deadline: Instant,
+        cancellation: Option<&crate::runtime::CancellationSignal>,
+        dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
         tokio::runtime::Handle::current().block_on(async {
-            let _data = wait_for_execution_permit(self.data_slots.clone(), deadline).await?;
-            self.wait_for_connection(deadline, dispatch).await
+            let _data = wait_for_execution_permit_cancellable(
+                self.data_slots.clone(),
+                deadline,
+                cancellation,
+            )
+            .await?;
+            self.wait_for_connection_cancellable(deadline, cancellation, dispatch)
+                .await
         })
     }
 
@@ -829,6 +848,44 @@ impl LocalExecutionEndpoint {
             let relative = workspace_entry(self.workspace(), path)?;
             read(connection, &relative)
         })
+    }
+
+    pub(crate) fn client_user_root(&self) -> io::Result<&Path> {
+        self.user_root
+            .get()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| io::ErrorKind::NotConnected.into())
+    }
+
+    pub(crate) const MCP_ENVIRONMENT_BUDGET: std::time::Duration =
+        std::time::Duration::from_secs(5);
+
+    pub(crate) fn mcp_environment_by(
+        &self,
+        request: &rustx_execution_protocol::mcp_environment::Request,
+        admission_deadline: Instant,
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> io::Result<std::collections::BTreeMap<String, String>> {
+        self.with_bounded_data_connection_cancellable(
+            admission_deadline,
+            Some(cancellation),
+            |connection| {
+                // Once sent, this exchange must consume its reply before the
+                // data lane can serve another request.
+                let wire_deadline = Instant::now() + Self::MCP_ENVIRONMENT_BUDGET;
+                connection.mcp_environment(request, wire_deadline, || {
+                    cancellation
+                        .with_active(|| {
+                            if Instant::now() >= admission_deadline {
+                                Err(execution_wait_timeout())
+                            } else {
+                                Ok(())
+                            }
+                        })
+                        .ok_or_else(cancelled_before_dispatch)?
+                })
+            },
+        )
     }
 
     pub(crate) fn managed_python_source(
@@ -933,7 +990,7 @@ impl LocalExecutionEndpoint {
         cancellation: &crate::runtime::CancellationSignal,
     ) -> io::Result<rustx_execution_protocol::mcp::PythonSourceReply> {
         let request = rustx_execution_protocol::mcp::PythonSourceRequest::Prepare { key };
-        self.with_bounded_data_connection(deadline, |connection| {
+        self.with_bounded_data_connection_cancellable(deadline, Some(cancellation), |connection| {
             connection.python_source_admitted(&request, deadline, || {
                 cancellation
                     .with_active(|| ())
@@ -945,19 +1002,44 @@ impl LocalExecutionEndpoint {
     async fn wait_for_connection<T>(
         &self,
         deadline: Instant,
+        dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.wait_for_connection_cancellable(deadline, None, dispatch)
+            .await
+    }
+
+    async fn wait_for_connection_cancellable<T>(
+        &self,
+        deadline: Instant,
+        cancellation: Option<&crate::runtime::CancellationSignal>,
         mut dispatch: impl FnMut(&mut LocalConnection) -> io::Result<T>,
     ) -> io::Result<T> {
         let limit = tokio::time::Instant::from_std(deadline);
         loop {
             let released = self.connection_released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if cancellation.is_some_and(crate::runtime::CancellationSignal::is_cancelled) {
+                return Err(cancelled_before_dispatch());
+            }
             if Instant::now() >= deadline {
                 return Err(execution_wait_timeout());
             }
             match self.with_connection_slot(false, &mut dispatch) {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    tokio::time::timeout_at(limit, released)
-                        .await
-                        .map_err(|_| execution_wait_timeout())?;
+                    if let Some(signal) = cancellation {
+                        tokio::select! {
+                            biased;
+                            () = signal.cancelled() => return Err(cancelled_before_dispatch()),
+                            waited = tokio::time::timeout_at(limit, released) => {
+                                waited.map_err(|_| execution_wait_timeout())?;
+                            }
+                        }
+                    } else {
+                        tokio::time::timeout_at(limit, released)
+                            .await
+                            .map_err(|_| execution_wait_timeout())?;
+                    }
                 }
                 result => return result,
             }
@@ -1276,7 +1358,7 @@ impl LocalExecutionEndpoint {
         sent: impl FnOnce(),
     ) -> io::Result<rustx_confined_fs::TextPage> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, false)?;
             if document {
                 connection
                     .read_document_admitted(&relative, offset, limit, None, deadline, admit, sent)
@@ -1295,10 +1377,9 @@ impl LocalExecutionEndpoint {
     /// traversal rooted at `path` narrowed by `spec` — for a caller that
     /// already holds the shared `data` budget and the `writer` permit,
     /// under the same contract as
-    /// [`read_page_admitted`](Self::read_page_admitted). `path` resolves
-    /// through [`workspace_entry`]: the workspace root itself is a legal
-    /// search root — the empty relative path the Client reads as "the
-    /// root itself" — unlike the page operations, which require a leaf.
+    /// [`read_page_admitted`](Self::read_page_admitted). `path` may name
+    /// an absolute Client location outside the workspace; the workspace
+    /// root itself is a legal search root, unlike page operations.
     ///
     /// # Errors
     ///
@@ -1316,7 +1397,7 @@ impl LocalExecutionEndpoint {
         sent: impl FnOnce(),
     ) -> io::Result<SearchResult> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_entry(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, true)?;
             connection.search_admitted(&relative, spec, deadline, admit, sent)
         })
     }
@@ -1352,8 +1433,8 @@ impl LocalExecutionEndpoint {
     }
 
     /// The admitted prepare half of one Agent write: resolves the
-    /// already-interpreted absolute `path` once through the lexical
-    /// workspace gate, then dispatches `PrepareWrite` — or
+    /// already-interpreted `path` once for the Client, then dispatches
+    /// `PrepareWrite` — or
     /// `BeginWrite`/`WriteChunk` for an over-chunk payload — with the
     /// caller's `WriteExpectation` under the shared deadline and
     /// per-request `with_active` cancellation grant. The returned
@@ -1373,7 +1454,7 @@ impl LocalExecutionEndpoint {
         sent: impl Fn(),
     ) -> io::Result<rustx_execution_server::PreparedMutation> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, false)?;
             connection.prepare_write(&relative, expectation, bytes, Some(deadline), &admit, &sent)
         })
     }
@@ -1395,7 +1476,7 @@ impl LocalExecutionEndpoint {
         sent: impl Fn(),
     ) -> io::Result<rustx_execution_server::PreparedMutation> {
         self.with_connection(Some(data), true, |connection| {
-            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            let relative = client_file_path(&connection.admission().workspace, path, false)?;
             connection.prepare_edit(
                 &relative,
                 expectation,
@@ -2214,6 +2295,24 @@ async fn wait_for_execution_permit(
     .map_err(|_| io::ErrorKind::NotConnected.into())
 }
 
+async fn wait_for_execution_permit_cancellable(
+    slots: Arc<Semaphore>,
+    deadline: Instant,
+    cancellation: Option<&crate::runtime::CancellationSignal>,
+) -> io::Result<OwnedSemaphorePermit> {
+    let Some(signal) = cancellation else {
+        return wait_for_execution_permit(slots, deadline).await;
+    };
+    if signal.is_cancelled() {
+        return Err(cancelled_before_dispatch());
+    }
+    tokio::select! {
+        biased;
+        () = signal.cancelled() => Err(cancelled_before_dispatch()),
+        permit = wait_for_execution_permit(slots, deadline) => permit,
+    }
+}
+
 impl LocalExecutionEndpoint {
     async fn cleanup_prepared(
         self: &Arc<Self>,
@@ -2244,6 +2343,42 @@ impl LocalExecutionEndpoint {
 /// root itself, an empty path, and any control or NUL byte are refused.
 fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
     confined_relative(workspace, path, u8::is_ascii_control)
+}
+
+/// File tools can also name absolute Client paths outside the workspace.
+/// Keep workspace paths relative to preserve the retained workspace anchor;
+/// an external absolute path is passed to the Client without consulting the
+/// Server filesystem. The Client opens it component by component from `/`.
+fn client_file_path(workspace: &Path, path: &Path, allow_root: bool) -> io::Result<PathBuf> {
+    let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "invalid Client file path");
+    let raw = path.as_os_str().as_bytes();
+    if raw.is_empty()
+        || raw.contains(&0)
+        || raw
+            .split(|byte| *byte == b'/')
+            .any(|segment| segment == b"." || segment == b"..")
+    {
+        return Err(denied());
+    }
+    if path.is_absolute() {
+        if let Ok(relative) = path.strip_prefix(workspace) {
+            if relative.as_os_str().is_empty() && !allow_root {
+                return Err(denied());
+            }
+            return Ok(relative.to_path_buf());
+        }
+        if path == Path::new("/") && !allow_root {
+            return Err(denied());
+        }
+        return Ok(path.to_path_buf());
+    }
+    if path
+        .components()
+        .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Ok(path.to_path_buf());
+    }
+    Err(denied())
 }
 
 fn confined_relative(
@@ -3953,6 +4088,9 @@ impl SessionRuntimeManager {
     }
 }
 
+#[cfg(all(test, feature = "mcp-fixture"))]
+pub(crate) use tests::{AdmittedTestExecution, admitted_scope_for_workspace};
+
 #[cfg(test)]
 mod tests {
     use std::io::Read;
@@ -4459,6 +4597,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
+            user_root: "/client/rustx".into(),
             capabilities: BTreeSet::from([
                 Capability::Connection,
                 Capability::ReadRange,
@@ -4766,6 +4905,36 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "mcp-fixture")]
+    pub(crate) struct AdmittedTestExecution {
+        pub(crate) session: SessionId,
+        pub(crate) scope: SessionExecutionScope,
+        _endpoint: Arc<LocalExecutionEndpoint>,
+        _registry: Arc<SessionExecutionRegistry>,
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    pub(crate) fn admitted_scope_for_workspace(
+        workspace: &Path,
+        capabilities: BTreeSet<Capability>,
+    ) -> (AdmittedTestExecution, UnixStream) {
+        let registry = Arc::new(SessionExecutionRegistry::default());
+        let session = SessionId::generate();
+        let slot = create(&registry, &session, workspace);
+        let endpoint = prepare(&slot, &session, workspace);
+        let client = admit_scripted_peer(&endpoint, capabilities, control_peer_loop);
+        let scope = scope_for(&registry, &session);
+        (
+            AdmittedTestExecution {
+                session,
+                scope,
+                _endpoint: endpoint,
+                _registry: registry,
+            },
+            client,
+        )
+    }
+
     /// One registry-claimed, published endpoint with a scripted peer
     /// admitted under `capabilities`: the claim registry, the Session it
     /// names, the endpoint, the peer socket, the workspace root, and the
@@ -4817,6 +4986,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
+            user_root: "/client/rustx".into(),
             capabilities,
             credential: published.credential.clone(),
         };
@@ -5371,6 +5541,7 @@ mod tests {
                 instance: published.instance.clone(),
                 generation: published.generation,
                 workspace: published.workspace.clone(),
+                user_root: "/client/rustx".into(),
                 capabilities: BTreeSet::from([Capability::Connection]),
                 credential: published.credential.clone(),
             }),
@@ -5467,6 +5638,533 @@ mod tests {
         assert_eq!(relative_path, expected);
         write_record(&mut client, &lines_reply(&relative_path)).unwrap();
         client
+    }
+
+    #[test]
+    fn client_file_paths_allow_absolute_external_names_without_host_io() {
+        let workspace = Path::new("/client/workspace");
+        assert_eq!(
+            client_file_path(workspace, Path::new("/client/workspace/a"), false).unwrap(),
+            Path::new("a")
+        );
+        assert_eq!(
+            client_file_path(workspace, Path::new("/client/elsewhere/a"), false).unwrap(),
+            Path::new("/client/elsewhere/a")
+        );
+        assert_eq!(
+            client_file_path(workspace, workspace, true).unwrap(),
+            Path::new("")
+        );
+        assert_eq!(
+            client_file_path(workspace, Path::new("/"), true).unwrap(),
+            Path::new("/")
+        );
+        for path in [
+            "/client/elsewhere/../a",
+            "/client/elsewhere/./a",
+            "../outside",
+            "",
+        ] {
+            assert!(
+                client_file_path(workspace, Path::new(path), false).is_err(),
+                "{path:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn external_file_tool_path_is_sent_to_the_admitted_client() {
+        let (registry, session, _endpoint, client, _workspace, _dir) = admitted_lines_endpoint();
+        let path = PathBuf::from("/client-only/outside.txt");
+        let expected = path.clone();
+        let peer = std::thread::spawn(move || answer_lines(client, &expected));
+        let page = scope_for(&registry, &session)
+            .read_page(&path, 1, None, false, &detached_cancellation())
+            .await
+            .unwrap();
+        assert_eq!(page.text, "/client-only/outside.txt\n");
+        drop(peer.join().unwrap());
+    }
+
+    fn spawn_unselected_mcp_peer(
+        mut client: UnixStream,
+        mcp_toml: String,
+        revision: String,
+    ) -> (
+        Arc<std::sync::Mutex<Vec<String>>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let requested_services = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let requested_for_peer = Arc::clone(&requested_services);
+        let peer = std::thread::spawn(move || {
+            while let Ok(request) = read_record::<ClientRequest>(&mut client) {
+                let reply = match request {
+                    ClientRequest::Ping => ClientReply::Pong,
+                    ClientRequest::ResolveResourceEntry { relative_path } => {
+                        if relative_path == Path::new(".agents/mcp.toml") {
+                            ClientReply::ResourceEntry {
+                                relative_path,
+                                metadata: rustx_execution_protocol::EntryStamp {
+                                    kind: rustx_execution_protocol::EntryKind::RegularFile,
+                                    stamp: FileStamp {
+                                        size: DecimalU64::new(mcp_toml.len() as u64),
+                                        revision: revision.clone(),
+                                        identity: String::from("1:1"),
+                                        modified_at_ms: None,
+                                    },
+                                },
+                                link_paths: Vec::new(),
+                            }
+                        } else {
+                            ClientReply::ResourceUnavailable {
+                                link_paths: Vec::new(),
+                                unresolved_path: Some(relative_path),
+                            }
+                        }
+                    }
+                    ClientRequest::ReadRange {
+                        relative_path,
+                        offset,
+                        ..
+                    } => {
+                        if relative_path == Path::new(".agents/mcp.toml") {
+                            range_reply(
+                                offset.get(),
+                                mcp_toml.as_bytes(),
+                                None,
+                                mcp_toml.len() as u64,
+                                &revision,
+                                "1:1",
+                            )
+                        } else {
+                            ClientReply::Error {
+                                kind: ReadError::NotFound,
+                            }
+                        }
+                    }
+                    ClientRequest::GetMetadata { relative_path }
+                        if relative_path.as_os_str().is_empty() =>
+                    {
+                        ClientReply::Metadata {
+                            metadata: rustx_execution_protocol::EntryStamp {
+                                kind: rustx_execution_protocol::EntryKind::Directory,
+                                stamp: FileStamp {
+                                    size: DecimalU64::new(0),
+                                    revision: revision.clone(),
+                                    identity: String::from("0:0"),
+                                    modified_at_ms: None,
+                                },
+                            },
+                        }
+                    }
+                    ClientRequest::GetMetadata { .. } | ClientRequest::ReadDirectory { .. } => {
+                        ClientReply::Error {
+                            kind: ReadError::NotFound,
+                        }
+                    }
+                    ClientRequest::McpEnvironment(request) => {
+                        requested_for_peer
+                            .lock()
+                            .unwrap()
+                            .push(request.service.clone());
+                        let values = if request.service == "selected" {
+                            std::collections::BTreeMap::from([(
+                                String::from("SELECTED_TOKEN"),
+                                String::from("Bearer client-selected-secret"),
+                            )])
+                        } else {
+                            std::collections::BTreeMap::new()
+                        };
+                        ClientReply::McpEnvironment(
+                            rustx_execution_protocol::mcp_environment::Reply { values },
+                        )
+                    }
+                    other => {
+                        panic!("unexpected client request during MCP capture proof: {other:?}")
+                    }
+                };
+                write_record(&mut client, &reply).unwrap();
+            }
+        });
+        (requested_services, peer)
+    }
+
+    fn unselected_mcp_config_manager(root: &Path) -> UserConfigManager {
+        let home = root.join("home");
+        let rustx_dir = home.join("rustx");
+        std::fs::create_dir_all(&rustx_dir).unwrap();
+        let config_path = rustx_dir.join("rustx.toml");
+        std::fs::write(
+            &config_path,
+            r#"[providers.local]
+protocol = "openai_responses"
+base_url = "http://127.0.0.1:9/v1"
+api_key = "SECRET_SENTINEL"
+
+[models."local/a"]
+provider = "local"
+id = "wire-a"
+context_window = 128000
+max_output_tokens = 8192
+
+[models."local/a".capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+
+[agent.model]
+model = "local/a"
+
+[agent.tools.sources]
+selected = "all"
+"#,
+        )
+        .unwrap();
+        UserConfigManager::new(UserConfigSources {
+            home_directory: home,
+            config_path,
+            runtime_root: root.join("runtime"),
+        })
+        .unwrap()
+    }
+
+    async fn assert_selective_mcp_hydration(
+        mut bindings: crate::tools::mcp::McpServerBindings,
+        bound_workspace: &crate::tools::Workspace,
+        requested_services: &std::sync::Mutex<Vec<String>>,
+    ) {
+        let selected_id = crate::runtime::identity::McpServerId::new("selected");
+        let unselected_id = crate::runtime::identity::McpServerId::new("unselected");
+        let denied_id = crate::runtime::identity::McpServerId::new("denied");
+        let mut selected = bindings.remove(&selected_id).unwrap();
+        let unselected = bindings.remove(&unselected_id).unwrap();
+        let mut denied = bindings.remove(&denied_id).unwrap();
+        assert!(selected.credentials.client_owned);
+        assert!(unselected.credentials.client_owned);
+        assert!(selected.credentials.resolve().is_err());
+        assert!(unselected.credentials.resolve().is_err());
+
+        let no_cancel = crate::runtime::CancellationSignal::new();
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &selected_id,
+                &mut selected,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &selected_id,
+                &mut selected,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert_eq!(
+            *requested_services.lock().unwrap(),
+            vec![String::from("selected")],
+            "only the prepared selected service triggers one McpEnvironment RPC; unselected triggers zero"
+        );
+        assert_eq!(
+            selected.credentials.resolve().unwrap().headers["Authorization"].expose(),
+            "Bearer client-selected-secret"
+        );
+        assert!(unselected.credentials.resolve().is_err());
+
+        // Missing or denied Client grants mark the binding hydrated so follow-up steps never re-ask.
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &denied_id,
+                &mut denied,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials(
+                &denied_id,
+                &mut denied,
+                bound_workspace,
+                &no_cancel,
+            )
+            .await
+        );
+        assert_eq!(
+            *requested_services.lock().unwrap(),
+            vec![String::from("selected"), String::from("denied")]
+        );
+        assert!(denied.credentials.resolve().is_err());
+    }
+
+    #[tokio::test]
+    async fn unselected_workspace_mcp_triggers_zero_client_environment_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = unselected_mcp_config_manager(root.path());
+
+        let (registry, session, endpoint, client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+                Capability::DirectoryMetadata,
+            ]));
+        let mcp_toml = r#"[mcp_servers.selected]
+url = "http://workspace-fixture.invalid/mcp"
+sensitive_headers = { Authorization = "$SELECTED_TOKEN" }
+
+[mcp_servers.unselected]
+url = "http://workspace-fixture.invalid/mcp"
+sensitive_headers = { Authorization = "$UNSELECTED_TOKEN" }
+
+[mcp_servers.denied]
+url = "http://workspace-fixture.invalid/mcp"
+sensitive_headers = { Authorization = "$DENIED_TOKEN" }
+"#
+        .to_owned();
+        let (requested_services, peer) =
+            spawn_unselected_mcp_peer(client, mcp_toml, "a".repeat(64));
+
+        let input = SessionConfigInput::new(workspace.clone());
+        let captured = tokio::task::spawn_blocking({
+            let endpoint = Arc::clone(&endpoint);
+            move || {
+                manager
+                    .capture_session_application_with_python(
+                        &input,
+                        &CredentialSnapshot::default(),
+                        Some(&endpoint),
+                        Some(crate::runtime::resources::ManagedPythonCatalog::default()),
+                        &mut crate::local_runtime::configuration::application::BoundSourceReads::default(),
+                    )
+                    .unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        let prospective = captured.context.unwrap();
+        assert!(
+            requested_services.lock().unwrap().is_empty(),
+            "configuration capture must trigger zero Client McpEnvironment RPCs"
+        );
+
+        let bound_workspace =
+            crate::tools::Workspace::for_session(&workspace, scope_for(&registry, &session))
+                .unwrap();
+        assert_selective_mcp_hydration(
+            prospective.config.mcp_bindings().unwrap(),
+            &bound_workspace,
+            &requested_services,
+        )
+        .await;
+
+        drop(endpoint);
+        drop(registry);
+        peer.join().unwrap();
+    }
+
+    fn client_workspace_http_mcp_binding(token_env: &str) -> crate::tools::mcp::McpServerBinding {
+        crate::tools::mcp::McpServerBinding {
+            credentials: crate::credentials::SourceCredentials {
+                headers: std::collections::BTreeMap::from([(
+                    String::from("Authorization"),
+                    crate::credentials::EnvironmentReference::from_name(token_env.to_owned()),
+                )]),
+                client_owned: true,
+                workspace_source: true,
+                ..Default::default()
+            },
+            transport: crate::tools::mcp::McpTransportConfig::StreamableHttp {
+                endpoint: String::from("http://workspace-fixture.invalid/mcp"),
+                headers: std::collections::BTreeMap::new(),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_shared_deadline_skips_further_client_mcp_environment_requests() {
+        let (registry, session, endpoint, mut client, _workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([Capability::Connection]));
+        let scope = scope_for(&registry, &session);
+        let server_id = crate::runtime::identity::McpServerId::new("slow");
+        let mut binding = client_workspace_http_mcp_binding("SLOW_TOKEN");
+        let expired = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        let no_cancel = crate::runtime::CancellationSignal::new();
+        assert!(
+            crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                &server_id,
+                &mut binding,
+                &scope,
+                expired,
+                &no_cancel,
+            )
+            .await
+        );
+        wire_is_quiet(&mut client);
+        assert!(!binding.credentials.needs_client_hydration());
+        assert!(binding.credentials.resolve().is_err());
+        drop(endpoint);
+        drop(registry);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mcp_environment_reply_after_preparation_deadline_keeps_data_lane() {
+        let (registry, session, endpoint, mut client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+            ]));
+        let (sent, dispatched) = tokio::sync::oneshot::channel();
+        let (release, delayed_reply) = std::sync::mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let ClientRequest::McpEnvironment(request) = read_record(&mut client).unwrap() else {
+                panic!("expected grant request");
+            };
+            sent.send(()).unwrap();
+            delayed_reply.recv().unwrap();
+            let values = request
+                .names
+                .into_iter()
+                .map(|name| (name, "fixture-grant".into()))
+                .collect();
+            write_record(
+                &mut client,
+                &ClientReply::McpEnvironment(rustx_execution_protocol::mcp_environment::Reply {
+                    values,
+                }),
+            )
+            .unwrap();
+            answer_range(client, Path::new("after"))
+        });
+        let scope = scope_for(&registry, &session);
+        let hydration = tokio::spawn(async move {
+            let mut binding = client_workspace_http_mcp_binding("LATE_TOKEN");
+            let deadline = Instant::now() + Duration::from_secs(1);
+            assert!(
+                crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                    &crate::runtime::identity::McpServerId::new("late"),
+                    &mut binding,
+                    &scope,
+                    deadline,
+                    &crate::runtime::CancellationSignal::new(),
+                )
+                .await
+            );
+            assert!(binding.credentials.resolve().is_err());
+        });
+        tokio::time::timeout(Duration::from_secs(2), dispatched)
+            .await
+            .unwrap()
+            .unwrap();
+        hydration.await.unwrap();
+        release.send(()).unwrap();
+        let after_path = workspace.join("after");
+        tokio::task::spawn_blocking(move || {
+            endpoint.read_workspace_source(
+                &after_path,
+                Instant::now() + Duration::from_secs(2),
+                |lane, relative| lane.read_range(relative, 0, 16, None),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let mut client = peer.join().unwrap();
+        wire_is_quiet(&mut client);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_mcp_environment_waiting_on_busy_channel_sends_zero_wire_requests() {
+        use base64::Engine;
+
+        let (registry, session, endpoint, mut client, workspace, _dir) =
+            admitted_endpoint(BTreeSet::from([
+                Capability::Connection,
+                Capability::ReadRange,
+            ]));
+        let (busy_tx, busy_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let ClientRequest::ReadRange {
+                relative_path,
+                offset,
+                ..
+            } = read_record(&mut client).unwrap()
+            else {
+                panic!("expected busy ReadRange request");
+            };
+            assert_eq!(relative_path, Path::new("busy"));
+            busy_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            write_record(
+                &mut client,
+                &ClientReply::Range {
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
+                    offset,
+                    next_offset: None,
+                    metadata: FileStamp {
+                        size: DecimalU64::new(2),
+                        revision: "a".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
+                },
+            )
+            .unwrap();
+            answer_range(client, Path::new("after"))
+        });
+
+        let busy_endpoint = endpoint.clone();
+        let busy_path = workspace.join("busy");
+        let busy_read =
+            std::thread::spawn(move || busy_endpoint.read_range(&busy_path, 0, 16, None));
+        busy_rx.await.unwrap();
+
+        let initial_slots = endpoint.data_slots.available_permits();
+        let scope = scope_for(&registry, &session);
+        let server_id = crate::runtime::identity::McpServerId::new("busy");
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let hydration_cancel = cancellation.clone();
+        let hydration = tokio::spawn(async move {
+            let mut binding = client_workspace_http_mcp_binding("BUSY_TOKEN");
+            let deadline = Instant::now() + LocalExecutionEndpoint::MCP_ENVIRONMENT_BUDGET;
+            crate::tools::mcp::hydrate_client_credentials_with_scope_until(
+                &server_id,
+                &mut binding,
+                &scope,
+                deadline,
+                &hydration_cancel,
+            )
+            .await
+        });
+
+        wait_data_slots(&endpoint, initial_slots - 1).await;
+        cancellation.cancel();
+        let completed = tokio::time::timeout(Duration::from_secs(1), hydration)
+            .await
+            .expect("cancelled hydration should not wait for busy channel")
+            .unwrap();
+        assert!(!completed);
+        wait_data_slots(&endpoint, initial_slots).await;
+
+        release_tx.send(()).unwrap();
+        busy_read.join().unwrap().unwrap();
+        let after_endpoint = endpoint.clone();
+        let after_path = workspace.join("after");
+        tokio::task::spawn_blocking(move || after_endpoint.read_range(&after_path, 0, 16, None))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut client = peer.join().unwrap();
+        wire_is_quiet(&mut client);
+        drop(endpoint);
+        drop(registry);
     }
 
     /// The shared data budget and the single writer permit are per

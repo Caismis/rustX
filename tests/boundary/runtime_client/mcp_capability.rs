@@ -108,7 +108,7 @@ async fn capability_projection_carries_mcp_origin_metadata() {
     for tool in mcp_tools {
         assert!(matches!(
             &tool.origin,
-            ToolOrigin::Mcp { server_id } if server_id.as_str() == "fixture"
+            ToolOrigin::Mcp { server_id , .. } if server_id.as_str() == "fixture"
         ));
     }
     // The wire projection carries no MCP SDK objects or transport data.

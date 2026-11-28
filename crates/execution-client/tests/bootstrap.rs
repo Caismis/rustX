@@ -162,6 +162,29 @@ fn expect_terminal_refusal(rig: &Rig, child: &mut Child) {
     expect_success(child);
 }
 
+#[test]
+fn client_admits_a_workspace_when_its_home_is_still_absent() {
+    let rig = rig();
+    let (_owner, existing) = private_dir();
+    let (_links, links) = private_dir();
+    let alias = links.join("alias");
+    std::os::unix::fs::symlink(&existing, &alias).unwrap();
+    let missing_home = alias.join("not-created/home");
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &missing_home)
+        .spawn()
+        .unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
+    assert_eq!(
+        connection.user_root(),
+        existing.join("not-created/home/rustx")
+    );
+    connection.ping().unwrap();
+    assert!(!missing_home.exists());
+    connection.control().unwrap().request_revoke().unwrap();
+    expect_success(&mut child);
+}
+
 fn assert_never_connected(rig: &Rig) {
     rig.listener.set_nonblocking(true).unwrap();
     assert_eq!(
@@ -2926,6 +2949,332 @@ fn workspace_listing(workspace: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One Client session proves all file operations and the protected tree.
+fn file_tools_use_absolute_client_paths_and_protect_official_skills() {
+    use rustx_execution_protocol::{DecimalU64, SearchSpec, WriteExpectation};
+
+    let rig = rig();
+    let (_outside, outside) = private_dir();
+    let (_home, home) = private_dir();
+    let skill = home.join("rustx/.agents/skills/example/SKILL.md");
+    fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    fs::write(&skill, "skill content").unwrap();
+    let source = outside.join("source.txt");
+    fs::write(&source, "needle before").unwrap();
+
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
+    assert_eq!(
+        connection.read_lines(&source, 1, None, None).unwrap().text,
+        "needle before"
+    );
+    assert_eq!(
+        connection.read_lines(&skill, 1, None, None).unwrap().text,
+        "skill content"
+    );
+
+    let glob = SearchSpec::Glob {
+        pattern: "*.txt".into(),
+        limit: DecimalU64::new(10),
+    };
+    let grep = SearchSpec::Grep {
+        pattern: "needle".into(),
+        glob: None,
+        literal: false,
+        ignore_case: false,
+        context: 0,
+        limit: DecimalU64::new(10),
+    };
+    assert_eq!(
+        connection.search(&outside, &glob).unwrap().body,
+        "source.txt"
+    );
+    assert_eq!(
+        connection.search(&outside, &grep).unwrap().body,
+        "source.txt:1: needle before"
+    );
+
+    let new_file = outside.join("new/created.txt");
+    let written = connection
+        .write_file(&new_file, b"old value", None, |_| Ok(()))
+        .unwrap();
+    connection
+        .edit_file(
+            &new_file,
+            &written.revision,
+            &[TextReplacement {
+                old_text: "old".into(),
+                new_text: "new".into(),
+            }],
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(fs::read_to_string(&new_file).unwrap(), "new value");
+
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    let denied_write = connection
+        .prepare_write(
+            &skill,
+            &WriteExpectation::Current,
+            b"changed",
+            deadline,
+            &|| Ok(()),
+            &|| (),
+        )
+        .unwrap_err();
+    assert_eq!(denied_write.kind(), io::ErrorKind::PermissionDenied);
+    let denied_edit = connection
+        .prepare_edit(
+            &skill,
+            &WriteExpectation::Current,
+            &[TextReplacement {
+                old_text: "skill".into(),
+                new_text: "changed".into(),
+            }],
+            deadline,
+            &|| Ok(()),
+            &|| (),
+        )
+        .unwrap_err();
+    assert_eq!(denied_edit.kind(), io::ErrorKind::PermissionDenied);
+    let missing = home.join("rustx/.agents/skills/new/deep/SKILL.md");
+    assert_eq!(
+        connection
+            .prepare_write(
+                &missing,
+                &WriteExpectation::Current,
+                b"changed",
+                deadline,
+                &|| Ok(()),
+                &|| (),
+            )
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(fs::read_to_string(&skill).unwrap(), "skill content");
+
+    std::os::unix::fs::symlink(&outside, rig.workspace_path.join("link")).unwrap();
+    assert!(
+        connection
+            .read_lines(&rig.workspace_path.join("link/source.txt"), 1, None, None)
+            .is_err()
+    );
+    connection.ping().unwrap();
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[allow(clippy::too_many_lines)] // Keep startup, disconnect, physical settlement and recovery in one proof.
+fn detaching_client_connection_stops_the_stdio_process_group() {
+    use rustx_execution_protocol::mcp::{Launch, Reply, Request};
+    use rustx_execution_protocol::process::{OperationId, ProcessOperationKey};
+
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::StdioMcp,
+    ]));
+    let mut child = spawn_client(&rig);
+    let mut connection = admit_pair(&rig, &mut child);
+    let admission = connection.admission().clone();
+    let key = ProcessOperationKey {
+        incarnation: admission.server_incarnation,
+        session: admission.session.clone(),
+        instance: admission.instance.clone(),
+        generation: admission.generation,
+        operation: OperationId::new(),
+    };
+    let launch = Launch {
+        program: std::fs::canonicalize("/bin/sh").unwrap(),
+        args: vec![
+            "-c".into(),
+            "/bin/sleep 30 & echo $! > descendant.pid; echo $$ > leader.pid; wait".into(),
+        ],
+        cwd: PathBuf::new(),
+        environment: std::collections::BTreeMap::new(),
+        versions: vec![rmcp::model::ProtocolVersion::V_2025_06_18.as_str().into()],
+        legacy_version: None,
+        python_source: None,
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    assert!(matches!(
+        connection
+            .mcp_by(
+                Request::Open {
+                    key: key.clone(),
+                    source_id: "fixture".into(),
+                    launch,
+                },
+                deadline,
+                || Ok(())
+            )
+            .unwrap(),
+        Reply::Opening
+    ));
+    let leader_file = rig.workspace_path.join("leader.pid");
+    let descendant_file = rig.workspace_path.join("descendant.pid");
+    let read_pid = |path: &Path| loop {
+        if let Ok(value) = fs::read_to_string(path)
+            && let Ok(pid) = value.trim().parse::<u32>()
+        {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "stdio process did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let leader = read_pid(&leader_file);
+    let descendant = read_pid(&descendant_file);
+    let group = |pid| {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        stat[stat.rfind(')').unwrap() + 2..]
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+    };
+    assert_eq!(group(leader), group(descendant));
+    assert_ne!(group(leader), group(child.id()));
+
+    rig.binding.disconnect(connection.connection_id());
+    let terminal = Instant::now() + Duration::from_secs(10);
+    while Path::new(&format!("/proc/{leader}")).exists()
+        || Path::new(&format!("/proc/{descendant}")).exists()
+    {
+        assert!(
+            Instant::now() < terminal,
+            "stdio group survived disconnection"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "Client remains available for recovery"
+    );
+    let mut recovered = admit_pair(&rig, &mut child);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match recovered
+            .mcp_by(Request::State { key: key.clone() }, deadline, || Ok(()))
+            .unwrap()
+        {
+            Reply::Closed | Reply::Failed(_) | Reply::StartupFailed { .. } => break,
+            Reply::Opening | Reply::Closing => {
+                assert!(
+                    Instant::now() < deadline,
+                    "stdio settlement was not published"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => panic!("unexpected stdio state after disconnect: {other:?}"),
+        }
+    }
+    drop(connection);
+    drop(recovered);
+    expect_success(&mut child);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stdio_combined_shell_flags_allow_a_new_output_but_reject_missing_inputs() {
+    use rustx_execution_protocol::mcp::{Failure, Launch, Reply, Request};
+    use rustx_execution_protocol::process::{OperationId, ProcessOperationKey};
+
+    for flag in ["-lc", "-ic"] {
+        let rig = rig_with(BTreeSet::from([
+            Capability::Connection,
+            Capability::StdioMcp,
+        ]));
+        let mut child = spawn_client(&rig);
+        let mut connection = admit_pair(&rig, &mut child);
+        let admission = connection.admission().clone();
+        let key = ProcessOperationKey {
+            incarnation: admission.server_incarnation,
+            session: admission.session.clone(),
+            instance: admission.instance.clone(),
+            generation: admission.generation,
+            operation: OperationId::new(),
+        };
+        let output = rig.workspace_path.join("new-output.log");
+        let launch = Launch {
+            program: std::fs::canonicalize("/bin/sh").unwrap(),
+            args: vec![
+                flag.into(),
+                "printf ready > \"${1#--log-file=}\"; exec /bin/sleep 30".into(),
+                "fixture".into(),
+                format!("--log-file={}", output.display()),
+            ],
+            cwd: PathBuf::new(),
+            environment: std::collections::BTreeMap::new(),
+            versions: vec![rmcp::model::ProtocolVersion::V_2025_06_18.as_str().into()],
+            legacy_version: None,
+            python_source: None,
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        assert!(matches!(
+            connection
+                .mcp_by(
+                    Request::Open {
+                        key: key.clone(),
+                        source_id: "output".into(),
+                        launch,
+                    },
+                    deadline,
+                    || Ok(())
+                )
+                .unwrap(),
+            Reply::Opening
+        ));
+        while !output.exists() {
+            assert!(Instant::now() < deadline, "shell did not create its output");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(fs::read(&output).unwrap(), b"ready");
+        let missing = Launch {
+            program: std::fs::canonicalize("/bin/sh").unwrap(),
+            args: vec![
+                rig.workspace_path
+                    .join("missing-input.sh")
+                    .display()
+                    .to_string(),
+            ],
+            cwd: PathBuf::new(),
+            environment: std::collections::BTreeMap::new(),
+            versions: vec![rmcp::model::ProtocolVersion::V_2025_06_18.as_str().into()],
+            legacy_version: None,
+            python_source: None,
+        };
+        let missing_key = ProcessOperationKey {
+            operation: OperationId::new(),
+            ..key
+        };
+        assert!(matches!(
+            connection
+                .mcp_by(
+                    Request::Open {
+                        key: missing_key,
+                        source_id: "missing".into(),
+                        launch: missing,
+                    },
+                    deadline,
+                    || Ok(())
+                )
+                .unwrap(),
+            Reply::Failed(Failure::Invalid)
+        ));
+        connection.control().unwrap().request_revoke().unwrap();
+        drop(connection);
+        expect_success(&mut child);
+    }
 }
 
 /// The real Client searches one shared file universe for both `Glob` and

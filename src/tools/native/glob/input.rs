@@ -11,8 +11,7 @@ use crate::tools::native::input::decode;
 pub(super) struct GlobInput {
     /// The glob pattern, matched against paths relative to the search root.
     pub pattern: String,
-    /// An optional relative or absolute directory search root, inside the
-    /// Session's admitted Client workspace. Omit it to search the
+    /// An optional relative or absolute directory search root on the Client filesystem. Omit it to search the
     /// execution cwd.
     pub path: Option<String>,
     /// The maximum number of results to return. Defaults to 1000; larger

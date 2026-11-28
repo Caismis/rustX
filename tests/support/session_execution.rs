@@ -135,7 +135,7 @@ pub struct ExecutionFixture {
     /// The private runtime/home root the controller and manager state
     /// live under, declared last so handles drop first.
     temporary: tempfile::TempDir,
-    _mount_parent: Option<MountParent>,
+    mount_parent: Option<MountParent>,
 }
 
 /// Bubblewrap's parent-death signal follows the thread that spawned it.
@@ -167,6 +167,18 @@ impl Drop for ChildGuard {
 }
 
 impl ExecutionFixture {
+    /// Server-side spelling of the Client's private scratch mount.
+    #[allow(dead_code)]
+    pub fn mount_scratch(&self) -> Option<PathBuf> {
+        self.mount_parent.as_ref().map(|_| {
+            self.temporary
+                .path()
+                .join("scratch")
+                .canonicalize()
+                .expect("scratch mount point")
+        })
+    }
+
     /// Builds one real Session execution route for `workspace`: a private
     /// controller/home root, one catalog Session for the canonical
     /// workspace, one reserved endpoint, and one staged Execution Client
@@ -209,7 +221,7 @@ impl ExecutionFixture {
             .expect("mount fixture setup thread");
         let fixture = fixture.recv().expect("mount fixture setup panicked");
         Self {
-            _mount_parent: Some(MountParent {
+            mount_parent: Some(MountParent {
                 lifetime: Some(lifetime),
                 thread: Some(thread),
             }),
@@ -248,11 +260,9 @@ impl ExecutionFixture {
         sources: impl IntoIterator<Item = impl Into<String>>,
     ) -> rustx::capabilities::source::ToolSourceDemand {
         let endpoint = self.endpoint.clone();
-        let user = self.temporary.path().join("home/rustx/.agents");
         let catalog = tokio::task::spawn_blocking(move || {
             rustx::local_runtime::managed_python_resources::discover_bound(
                 &endpoint,
-                &user,
                 &rustx::runtime::CancellationSignal::new(),
             )
         })
@@ -429,7 +439,7 @@ impl ExecutionFixture {
                 child,
                 manager,
                 temporary,
-                _mount_parent: None,
+                mount_parent: None,
             }
         })
     }

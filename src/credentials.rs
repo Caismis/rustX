@@ -2,7 +2,7 @@
 
 use crate::model::catalog::{CredentialEnvironment, ResolvedCredential};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 /// A validated reference, written as `$ENV_VAR` only in declared secret fields.
@@ -17,6 +17,41 @@ pub fn valid_environment_name(name: &str) -> bool {
         .first()
         .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
         && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// Names referenced by `$NAME` in an MCP HTTP template.
+pub(crate) fn referenced_environment_names(value: &str) -> BTreeSet<String> {
+    let bytes = value.as_bytes();
+    let mut names = BTreeSet::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'$'
+            || index + 1 == bytes.len()
+            || !(bytes[index + 1].is_ascii_alphabetic() || bytes[index + 1] == b'_')
+        {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        index = start + 1;
+        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+        {
+            index += 1;
+        }
+        names.insert(value[start..index].to_owned());
+    }
+    names
+}
+
+impl EnvironmentReference {
+    pub(crate) fn name(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn from_name(name: String) -> Self {
+        debug_assert!(valid_environment_name(&name));
+        Self(name)
+    }
 }
 
 impl Serialize for EnvironmentReference {
@@ -82,6 +117,13 @@ impl CredentialEnvironment for CredentialSnapshot {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientHydrationState {
+    #[default]
+    Unhydrated,
+    Hydrated,
+}
+
 /// Declared source secrets plus a private, once-resolved instance cache.
 /// Only reference names cross normal serialization; resolved bytes never do.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -93,6 +135,15 @@ pub struct SourceCredentials {
     /// Sensitive HTTP headers, separate from ordinary literal headers.
     #[serde(default)]
     pub headers: BTreeMap<String, EnvironmentReference>,
+    /// Workspace sources can only use values granted by their Client.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) client_owned: bool,
+    /// The winning definition originated in the Workspace document.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) workspace_source: bool,
+    /// Variables used in workspace HTTP endpoint and header templates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) templates: BTreeMap<String, EnvironmentReference>,
     #[serde(skip)]
     pub(crate) captured: CredentialSnapshot,
     #[serde(skip)]
@@ -100,12 +151,22 @@ pub struct SourceCredentials {
     /// Native transport literals remain write-only in every observation.
     #[serde(skip)]
     pub(crate) literal_redactions: Vec<ResolvedCredential>,
+    #[serde(skip)]
+    pub(crate) client_hydration: ClientHydrationState,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip predicate receives a reference.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl PartialEq for SourceCredentials {
     fn eq(&self, other: &Self) -> bool {
         self.environment == other.environment
             && self.headers == other.headers
+            && self.client_owned == other.client_owned
+            && self.workspace_source == other.workspace_source
+            && self.templates == other.templates
             && self.captured == other.captured
             && self.literal_redactions == other.literal_redactions
     }
@@ -117,23 +178,49 @@ impl Eq for SourceCredentials {}
 pub(crate) struct ResolvedSourceCredentials {
     pub environment: BTreeMap<String, ResolvedCredential>,
     pub headers: BTreeMap<String, ResolvedCredential>,
+    pub templates: BTreeMap<String, ResolvedCredential>,
 }
 
 impl SourceCredentials {
     /// Private process transfer of this already captured source environment.
     pub(crate) fn export_process_credentials(&mut self, output: &mut Vec<(String, String)>) {
-        for reference in self
+        let base = output.len();
+        for (index, reference) in self
             .environment
             .values_mut()
             .chain(self.headers.values_mut())
+            .chain(self.templates.values_mut())
+            .enumerate()
         {
-            if let Some(value) = self.captured.var(&reference.0) {
-                let name = format!("RUSTX_ADMITTED_SOURCE_{}", output.len());
-                output.push((name.clone(), value));
-                reference.0 = name;
-            }
+            let name = format!("RUSTX_ADMITTED_SOURCE_{}", base + index);
+            let value = self.captured.var(&reference.0).unwrap_or_default();
+            output.push((name.clone(), value));
+            reference.0 = name;
         }
     }
+
+    pub(crate) fn client_environment_names(&self) -> BTreeSet<String> {
+        self.templates
+            .values()
+            .chain(self.headers.values())
+            .map(|reference| reference.name().to_owned())
+            .collect()
+    }
+
+    pub(crate) fn needs_client_hydration(&self) -> bool {
+        self.client_owned
+            && self.client_hydration == ClientHydrationState::Unhydrated
+            && self
+                .templates
+                .values()
+                .chain(self.headers.values())
+                .any(|reference| self.captured.var(reference.name()).is_none())
+    }
+
+    pub(crate) fn mark_client_hydrated(&mut self) {
+        self.client_hydration = ClientHydrationState::Hydrated;
+    }
+
     /// Capture the immutable environment for a newly admitted child instance.
     pub fn capture_from(&mut self, environment: &dyn CredentialEnvironment) {
         self.capture(environment.snapshot());
@@ -151,6 +238,7 @@ impl SourceCredentials {
                     .environment
                     .values()
                     .chain(resolved.headers.values())
+                    .chain(resolved.templates.values())
                     .map(ResolvedCredential::expose),
             );
         }
@@ -198,10 +286,43 @@ impl SourceCredentials {
                 Ok(ResolvedSourceCredentials {
                     environment: resolve(&self.environment)?,
                     headers: resolve(&self.headers)?,
+                    templates: resolve(&self.templates)?,
                 })
             })
             .as_ref()
             .map_err(Clone::clone)
+    }
+
+    pub(crate) fn interpolate(&self, value: &str) -> Result<String, String> {
+        let resolved = self.resolve()?;
+        let bytes = value.as_bytes();
+        let mut result = String::with_capacity(value.len());
+        let mut start = 0;
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] != b'$'
+                || index + 1 == bytes.len()
+                || !(bytes[index + 1].is_ascii_alphabetic() || bytes[index + 1] == b'_')
+            {
+                index += 1;
+                continue;
+            }
+            let name_start = index + 1;
+            let mut end = name_start + 1;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                end += 1;
+            }
+            result.push_str(&value[start..index]);
+            let secret = resolved
+                .templates
+                .get(&value[name_start..end])
+                .ok_or_else(|| "MCP environment reference is unavailable".to_owned())?;
+            result.push_str(secret.expose());
+            index = end;
+            start = end;
+        }
+        result.push_str(&value[start..]);
+        Ok(result)
     }
 }
 
@@ -210,6 +331,57 @@ mod tests {
     use super::*;
 
     const SENTINEL: &str = "CFG233_SENTINEL_NEVER_PROJECT_8b94";
+
+    #[test]
+    fn client_http_credentials_round_trip_as_references_for_fresh_authorization() {
+        assert_eq!(
+            referenced_environment_names("Bearer $TOKEN and $OTHER/$TOKEN"),
+            BTreeSet::from(["OTHER".into(), "TOKEN".into()])
+        );
+        let mut credentials = SourceCredentials {
+            client_owned: true,
+            headers: BTreeMap::from([(
+                "X-Token".into(),
+                EnvironmentReference::from_name("HEADER_TOKEN".into()),
+            )]),
+            templates: BTreeMap::from([(
+                "TOKEN".into(),
+                EnvironmentReference::from_name("TOKEN".into()),
+            )]),
+            ..Default::default()
+        };
+        credentials.capture(CredentialSnapshot::new([
+            ("TOKEN".into(), SENTINEL.into()),
+            ("HEADER_TOKEN".into(), SENTINEL.into()),
+        ]));
+        credentials.mark_client_hydrated();
+        assert_eq!(
+            credentials.interpolate("Bearer $TOKEN").unwrap(),
+            format!("Bearer {SENTINEL}")
+        );
+        assert!(!format!("{credentials:?}").contains(SENTINEL));
+        let wire = serde_json::to_string(&credentials).unwrap();
+        assert!(!wire.contains(SENTINEL));
+        let mut restored: SourceCredentials = serde_json::from_str(&wire).unwrap();
+        assert!(restored.needs_client_hydration());
+        assert!(restored.resolve().is_err());
+        assert_eq!(
+            restored.client_environment_names(),
+            BTreeSet::from(["HEADER_TOKEN".into(), "TOKEN".into()])
+        );
+        restored.capture(CredentialSnapshot::new([
+            ("TOKEN".into(), "new-template-value".into()),
+            ("HEADER_TOKEN".into(), "new-header-value".into()),
+        ]));
+        assert_eq!(
+            restored.interpolate("Bearer $TOKEN").unwrap(),
+            "Bearer new-template-value"
+        );
+        assert_eq!(
+            restored.resolve().unwrap().headers["X-Token"].expose(),
+            "new-header-value"
+        );
+    }
 
     #[test]
     fn literal_redactions_are_private_nonempty_and_longest_first() {

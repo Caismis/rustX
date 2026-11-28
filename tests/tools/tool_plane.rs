@@ -69,6 +69,66 @@ fn assert_no_stray_temps(fixture: &NativeFixture) {
     assert!(found.is_empty(), "temporary commit files remain: {found:?}");
 }
 
+/// The absolute path names different files in the Server and Client mount
+/// namespaces. Native tools must read and mutate only the Client's file.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "opt-in bwrap proof; run test-support/prove_execution_mount_view.sh"]
+async fn file_tools_use_the_client_only_external_mount() {
+    assert!(std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some());
+    let physical = tempfile::tempdir().unwrap();
+    let fixture = crate::common::native_fixture_with_mount_view(physical.path());
+    let external = fixture.mount_scratch().join("client-only.txt");
+    assert!(!external.starts_with(fixture.runtime.workspace().root()));
+    std::fs::write(&external, "server decoy").unwrap();
+
+    let result = run_tool(
+        &fixture,
+        "write",
+        serde_json::json!({
+            "path": external, "content": "needle original"
+        }),
+    )
+    .await;
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "{result:?}"
+    );
+    let result = run_tool(&fixture, "read", serde_json::json!({"path": external})).await;
+    assert_eq!(text_content(&result), "needle original");
+    let result = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": external, "edits": [edit("original", "updated")]
+        }),
+    )
+    .await;
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "{result:?}"
+    );
+    let result = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({
+            "path": external, "pattern": "updated"
+        }),
+    )
+    .await;
+    assert_eq!(text_content(&result), "client-only.txt:1: needle updated");
+    let result = run_tool(
+        &fixture,
+        "glob",
+        serde_json::json!({
+            "path": fixture.mount_scratch(), "pattern": "client-only.txt"
+        }),
+    )
+    .await;
+    assert_eq!(text_content(&result), "client-only.txt");
+    assert_eq!(std::fs::read_to_string(&external).unwrap(), "server decoy");
+}
+
 /// Executes a native executor without registry preflight. This keeps direct
 /// typed-input validation covered separately from the canonical registry
 /// boundary and proves invalid arguments cannot cause filesystem side effects.
@@ -328,6 +388,73 @@ async fn native_tools_interpret_dot_and_dotdot_lexically_before_filesystem_acces
 }
 
 #[tokio::test]
+async fn relative_file_paths_never_traverse_above_the_workspace() {
+    let fixture = native_fixture_with_execution(Vec::new());
+    let workspace = fixture.runtime.workspace().root();
+    std::fs::create_dir(workspace.join("existing")).unwrap();
+    std::fs::write(workspace.join("inside.txt"), "inside needle").unwrap();
+    let outside = workspace.parent().unwrap().join("outside.txt");
+    std::fs::write(&outside, "outside needle").unwrap();
+
+    let within = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({
+            "path": "existing/../inside.txt"
+        }),
+    )
+    .await;
+    assert_eq!(text_content(&within), "inside needle");
+
+    let escape = "existing/../../outside.txt";
+    for (tool, arguments) in [
+        ("read", serde_json::json!({"path": escape})),
+        (
+            "write",
+            serde_json::json!({"path": escape, "content": "changed"}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"path": escape, "edits": [edit("outside", "changed")]}),
+        ),
+        (
+            "grep",
+            serde_json::json!({"path": escape, "pattern": "needle"}),
+        ),
+        (
+            "glob",
+            serde_json::json!({"path": "existing/../..", "pattern": "*.txt"}),
+        ),
+    ] {
+        let result = run_tool(&fixture, tool, arguments).await;
+        assert_failed_contains(
+            &result,
+            "relative file path cannot leave the Client workspace",
+        );
+    }
+    // Even returning to the workspace after crossing its boundary is denied.
+    let reentry = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({
+            "path": "existing/../../workspace/inside.txt"
+        }),
+    )
+    .await;
+    assert_failed_contains(
+        &reentry,
+        "relative file path cannot leave the Client workspace",
+    );
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside needle");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("inside.txt")).unwrap(),
+        "inside needle"
+    );
+    let absolute = run_tool(&fixture, "read", serde_json::json!({"path": outside})).await;
+    assert_eq!(text_content(&absolute), "outside needle");
+}
+
+#[tokio::test]
 async fn read_uses_contiguous_complete_line_head_for_line_and_byte_limits() {
     let fixture = native_fixture_with_execution(Vec::new());
     let exact_lines: Vec<String> = (1..=2000).map(|index| format!("exact-{index}")).collect();
@@ -417,10 +544,8 @@ async fn write_creates_parents_accepts_absolute_paths_and_reports_utf8_bytes() {
         "héllo"
     );
 
-    // Absolute paths still resolve — but mutations are confined to the
-    // admitted workspace now: an absolute target inside the workspace
-    // commits, and the same spelling outside it is refused instead of
-    // reaching a host path the Session never admitted.
+    // Absolute targets resolve on the Client both inside and outside
+    // the workspace.
     let inside = workspace_path(&fixture, "absolute.txt");
     let absolute = run_tool(
         &fixture,
@@ -437,8 +562,14 @@ async fn write_creates_parents_accepts_absolute_paths_and_reports_utf8_bytes() {
     );
     assert_eq!(std::fs::read_to_string(&inside).unwrap(), "inside");
 
-    let outside = fixture.dir().path().join("outside").join("file.txt");
-    let refused = run_tool(
+    let outside = fixture
+        .dir()
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("outside")
+        .join("file.txt");
+    let created = run_tool(
         &fixture,
         "write",
         serde_json::json!({
@@ -447,8 +578,8 @@ async fn write_creates_parents_accepts_absolute_paths_and_reports_utf8_bytes() {
         }),
     )
     .await;
-    assert!(matches!(refused.status, ToolExecutionStatus::Failed { .. }));
-    assert!(!outside.exists());
+    assert!(matches!(created.status, ToolExecutionStatus::Success));
+    assert_eq!(std::fs::read_to_string(outside).unwrap(), "outside");
 }
 
 #[tokio::test]
@@ -1255,9 +1386,13 @@ async fn edit_accepts_known_model_argument_variants_but_keeps_one_canonical_exec
         );
     }
 
-    // An absolute edit outside the admitted workspace is refused — the
-    // physical target never leaves the Session's reserved root.
-    let outside = fixture.dir().path().join("absolute-edit.txt");
+    // An absolute edit outside the workspace is performed on the Client.
+    let outside = fixture
+        .dir()
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("absolute-edit.txt");
     std::fs::write(&outside, "outside").expect("absolute fixture");
     let result = run_tool(
         &fixture,
@@ -1268,8 +1403,8 @@ async fn edit_accepts_known_model_argument_variants_but_keeps_one_canonical_exec
         }),
     )
     .await;
-    assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
-    assert_eq!(std::fs::read_to_string(outside).unwrap(), "outside");
+    assert!(matches!(result.status, ToolExecutionStatus::Success));
+    assert_eq!(std::fs::read_to_string(outside).unwrap(), "edited");
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,9 +1431,13 @@ async fn grep_is_bounded_text_output_with_cwd_single_file_and_context() {
     assert!(output.contains("a.txt:2: hit"));
     assert!(output.contains("a.txt-3- after"));
 
-    // An absolute root outside the admitted Client workspace is denied —
-    // the search never leaves the binding root, and no body leaks.
-    let outside = fixture.dir().path().join("outside.txt");
+    // A Client file outside the workspace is a valid search root.
+    let outside = fixture
+        .dir()
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("outside.txt");
     std::fs::write(&outside, "outside-hit").expect("outside");
     let result = run_tool(
         &fixture,
@@ -1306,12 +1445,7 @@ async fn grep_is_bounded_text_output_with_cwd_single_file_and_context() {
         serde_json::json!({"pattern": "hit", "path": outside.to_str().unwrap()}),
     )
     .await;
-    assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
-    let error_text = error_content(&result);
-    assert!(
-        !error_text.contains("outside-hit"),
-        "no out-of-root body may leak: {error_text}"
-    );
+    assert_eq!(text_content(&result), "outside.txt:1: outside-hit");
 
     // A single-file root inside the workspace is the whole grep universe.
     let file = run_tool(
@@ -1614,9 +1748,8 @@ async fn glob_is_cwd_oriented_sorted_posix_text_and_supports_absolute_roots() {
     .await;
     assert_eq!(text_content(&result), "inside.txt");
 
-    // An absolute root outside the admitted Client workspace is denied —
-    // the traversal never leaves the binding root, and no name leaks.
-    let outside = fixture.dir().path().join("outside");
+    // An absolute directory outside the workspace is a valid Client root.
+    let outside = fixture.dir().path().canonicalize().unwrap().join("outside");
     std::fs::create_dir_all(&outside).expect("outside");
     std::fs::write(outside.join("outside.txt"), "outside").expect("outside fixture");
     let result = run_tool(
@@ -1625,12 +1758,7 @@ async fn glob_is_cwd_oriented_sorted_posix_text_and_supports_absolute_roots() {
         serde_json::json!({"pattern": "*.txt", "path": outside.to_str().unwrap()}),
     )
     .await;
-    assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
-    let error_text = error_content(&result);
-    assert!(
-        !error_text.contains("outside.txt"),
-        "no out-of-root name may leak: {error_text}"
-    );
+    assert_eq!(text_content(&result), "outside.txt");
 }
 
 #[tokio::test]

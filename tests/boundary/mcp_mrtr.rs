@@ -593,6 +593,7 @@ async fn one_supported_elicitation_drives_exactly_one_interaction_and_one_result
         requester.origin,
         crate::tools::types::ToolOrigin::Mcp {
             server_id: McpServerId::new("mrtr-fixture"),
+            source: None
         }
     );
     assert_eq!(
@@ -1756,6 +1757,7 @@ async fn a_routed_child_coordinator_still_owns_the_mrtr_questionnaire() {
         routed_requester.origin,
         crate::tools::types::ToolOrigin::Mcp {
             server_id: McpServerId::new("mrtr-fixture"),
+            source: None
         },
         "a routed child interaction still names the MCP server that asked"
     );

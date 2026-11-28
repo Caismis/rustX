@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { startupWait } from '../../../tui/test/support/mcp-startup-gate';
 
@@ -11,6 +12,23 @@ interface Session {
   held: Set<ServerResponse>;
   closed: Promise<void>;
   complete: () => void;
+}
+
+/** A local interface the Workspace MCP dial policy permits. */
+function fixtureAddress(): string {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const candidate of addresses ?? []) {
+      if (candidate.family !== 'IPv4' || candidate.internal) continue;
+      const [first, second, third, fourth] = candidate.address.split('.').map(Number);
+      const privateAddress = first === 10
+        || (first === 172 && second! >= 16 && second! <= 31)
+        || (first === 192 && second === 168)
+        || (first === 100 && second! >= 64 && second! <= 127
+          && !(second === 100 && third === 100 && fourth === 200));
+      if (privateAddress) return candidate.address;
+    }
+  }
+  throw new Error('The Workspace MCP fixture requires a non-loopback private IPv4 interface.');
 }
 
 export async function startHttpMcpPeer(
@@ -132,11 +150,12 @@ export async function startHttpMcpPeer(
   server.on('error', failed);
   let url: string;
   try {
-    server.listen({ port: 0, host: '127.0.0.1', signal });
+    const host = fixtureAddress();
+    server.listen({ port: 0, host, signal });
     await startupWait(() => once(server, 'listening'), signal);
     const address = server.address();
     if (typeof address !== 'object' || address === null) throw new Error('Missing HTTP MCP fixture address');
-    url = `http://127.0.0.1:${address.port}/mcp`;
+    url = `http://${host}:${address.port}/mcp`;
   } catch (error) {
     await close(error);
     throw error;

@@ -272,6 +272,13 @@ fn capture(
         super::mcp_resources::load_with_workspace(None, Some(endpoint.workspace()), move |_| {
             Ok(document)
         })
+    } else if let Some(workspace) = target.workspace() {
+        target.validate()?;
+        super::mcp_resources::load_with_workspace(
+            None,
+            Some(workspace),
+            super::settings::read_document,
+        )
     } else {
         target.validate()?;
         super::mcp_resources::load(&root, None)
@@ -292,15 +299,20 @@ fn capture(
         .get(id)
         .and_then(|value| value.as_ref().ok())
         .ok_or(SettingsError::Invalid)?;
-    let mut bindings = super::config::resolve_mcp_bindings(&BTreeMap::from([(
-        id.clone(),
-        definition.clone().resolve(),
-    )]))
-    .map_err(|_| SettingsError::Invalid)?;
+    let mut definition = definition.clone().resolve();
+    if target.workspace().is_some() {
+        definition.client_owned = true;
+        definition.workspace_source = true;
+    }
+    let mut bindings =
+        super::config::resolve_mcp_bindings(&BTreeMap::from([(id.clone(), definition)]))
+            .map_err(|_| SettingsError::Invalid)?;
     let mut binding = bindings.remove(id).ok_or(SettingsError::Invalid)?;
-    binding
-        .credentials
-        .capture(crate::credentials::CredentialSnapshot::capture());
+    if !binding.credentials.client_owned {
+        binding
+            .credentials
+            .capture(crate::credentials::CredentialSnapshot::capture());
+    }
     let scope = if let Some(scope) = bound_workspace {
         Some(scope)
     } else if matches!(binding.transport, McpTransportConfig::Stdio { .. }) {
@@ -841,7 +853,7 @@ os.execv(sys.argv[2], sys.argv[2:])
         use crate::local_runtime::session_runtime_manager::StandaloneExecution;
         use crate::tools::mcp::{catalog::CatalogKind, test_sync::CloseProbe};
 
-        let fixture = HttpFixture::start(HttpFixtureControl::default()).await;
+        let fixture = HttpFixture::start_workspace(HttpFixtureControl::default()).await;
         let directory = tempfile::tempdir().unwrap();
         let owner = owner(directory.path());
         let workspace = directory.path().canonicalize().unwrap();

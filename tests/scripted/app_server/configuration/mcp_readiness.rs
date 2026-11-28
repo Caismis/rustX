@@ -222,10 +222,14 @@ impl McpFixture {
     }
 
     async fn named(name: &'static str) -> Self {
-        Self::with_lifecycle(name, false).await
+        Self::with_lifecycle(name, false, true).await
     }
 
-    async fn with_lifecycle(name: &'static str, legacy: bool) -> Self {
+    async fn host() -> Self {
+        Self::with_lifecycle(TOOL, false, false).await
+    }
+
+    async fn with_lifecycle(name: &'static str, legacy: bool, workspace: bool) -> Self {
         use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService,
@@ -245,16 +249,27 @@ impl McpFixture {
             paginate: Arc::new(AtomicBool::new(false)),
             cancelled: tokio::sync::watch::channel(0).0,
         };
+        // Workspace HTTP definitions are not allowed to reach loopback. Bind a
+        // controlled Workspace fixture host so this suite needs no external NIC.
+        let (listener, authority, guard) = if workspace {
+            let (listener, guard) =
+                crate::tools::mcp::streamable_http::WorkspaceFixtureGuard::bind().await;
+            (listener, guard.authority(), Some(guard))
+        } else {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let authority = listener.local_addr().unwrap().to_string();
+            (listener, authority, None)
+        };
         let handler = control.clone();
         let mut config = StreamableHttpServerConfig::default();
         config.sse_keep_alive = None;
+        config.allowed_hosts = vec![authority.clone()];
         let service = StreamableHttpService::<StartupServer, LocalSessionManager>::new(
             move || Ok(handler.clone()),
             Arc::default(),
             config,
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let endpoint = format!("http://{authority}/mcp");
         let closed = control.closed.clone();
         let app =
             axum::Router::new()
@@ -277,6 +292,7 @@ impl McpFixture {
                     },
                 ));
         let task = tokio::spawn(async move {
+            let _guard = guard;
             axum::serve(listener, app).await.unwrap();
         });
         Self {
@@ -417,7 +433,7 @@ async fn wait_runtime_catalog(
 async fn bound_credential_rotation_preserves_the_admitted_attempt_and_closes_after_last_lease() {
     bounded(async {
         // Use the stateful lifecycle so the fixture can prove the two physical closes.
-        let mcp = McpFixture::with_lifecycle(TOOL, true).await;
+        let mcp = McpFixture::with_lifecycle(TOOL, true, true).await;
         let mut fixture = Fixture::with_session_count(Some(TOOL), 0).await;
         configure(&fixture, &[("late", &mcp)]);
         let workspace = &fixture.workspaces[0];

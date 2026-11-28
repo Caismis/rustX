@@ -155,7 +155,7 @@ mod result;
 mod runtime;
 mod stdio;
 pub(crate) use stdio::launch_spec as stdio_launch_spec;
-mod streamable_http;
+pub(crate) mod streamable_http;
 mod task_driver;
 mod tasks;
 #[cfg(test)]
@@ -177,7 +177,9 @@ use crate::runtime::identity::McpServerId;
 use crate::tools::limits::bounded_text_preview;
 use crate::tools::types::ToolInvocationPolicy;
 
-pub(crate) use connect::OwnedConnect;
+pub(crate) use connect::{
+    OwnedConnect, hydrate_client_credentials, hydrate_client_credentials_with_scope_until,
+};
 pub(crate) use connection::McpConnection;
 pub use executor::{
     CanonicalMcpTool, McpToolExecutor, definitions, mcp_tool_id, source_server_id,
@@ -426,17 +428,11 @@ impl McpServerBinding {
                     values.push(crate::model::catalog::ResolvedCredential::new(value));
                     // The scheme is framing; a peer authenticates with the
                     // token and may echo it without the complete field value.
-                    if name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str())
-                        || name.eq_ignore_ascii_case(http::header::PROXY_AUTHORIZATION.as_str())
+                    if (name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str())
+                        || name.eq_ignore_ascii_case(http::header::PROXY_AUTHORIZATION.as_str()))
+                        && let Some(token) = diagnostics::bearer_token(value)
                     {
-                        let mut parts = value.split_ascii_whitespace();
-                        if parts
-                            .next()
-                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer"))
-                            && let Some(token) = parts.next()
-                        {
-                            values.push(crate::model::catalog::ResolvedCredential::new(token));
-                        }
+                        values.push(crate::model::catalog::ResolvedCredential::new(token));
                     }
                 };
                 for (name, value) in headers {

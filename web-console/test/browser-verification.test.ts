@@ -9,7 +9,7 @@ import { assign, cases, inventoryOf, playwrightList, verify, weightsOf, type Inv
 
 const identity: Identity = {
   commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.100.0',
-  cargo: { profile: 'dev', command: 'cargo build --bins --example document_artifact_fixture --locked', features: 'default', debuginfo: 'stripped' }, build: 'repository-defaults',
+  cargo: { profile: 'dev', command: 'cargo build --workspace --bins --example document_artifact_fixture --locked', features: 'default', debuginfo: 'stripped' }, build: 'repository-defaults',
   node: { version: 'v24.19.0', abi: '137' }, pnpm: '11.13.1', playwright: '1.63.0', sources: { 'Cargo.lock': 'c'.repeat(64) },
 };
 

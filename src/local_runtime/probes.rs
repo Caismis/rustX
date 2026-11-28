@@ -197,10 +197,9 @@ pub(super) async fn execute(
         .any(|target| target.admitted && target.kind == "python")
         && let Some(endpoint) = scope.as_ref().and_then(|scope| scope.endpoint().ok())
     {
-        let user_root = launch.sources.home_directory.join("rustx/.agents");
         let cancellation = cancellation.clone();
         tokio::task::spawn_blocking(move || {
-            super::managed_python_resources::discover_bound(&endpoint, &user_root, &cancellation)
+            super::managed_python_resources::discover_bound(&endpoint, &cancellation)
         })
         .await
         .ok()

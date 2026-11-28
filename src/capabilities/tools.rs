@@ -295,7 +295,7 @@ pub(crate) fn select_tools(
                 }
                 let (other_namespace, other_name) = match &other.definition.origin {
                     crate::tools::ToolOrigin::Builtin => (None, other.definition.name.as_str()),
-                    crate::tools::ToolOrigin::Mcp { server_id } => {
+                    crate::tools::ToolOrigin::Mcp { server_id, .. } => {
                         (Some(server_id.as_str()), other.definition.name.as_str())
                     }
                     crate::tools::ToolOrigin::ManagedPython { package } => {
@@ -533,6 +533,7 @@ mod tests {
                 "search",
                 ToolOrigin::Mcp {
                     server_id: crate::runtime::identity::McpServerId::new("search"),
+                    source: None,
                 },
             ),
         ] {
@@ -634,6 +635,7 @@ mod tests {
                 "search",
                 ToolOrigin::Mcp {
                     server_id: server_id.clone(),
+                    source: None,
                 },
             );
             let mut intent = profile(&[]);
@@ -832,6 +834,7 @@ mod tests {
             ToolOrigin::Builtin,
             ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("server"),
+                source: None,
             },
         ] {
             let registrations = [ToolRegistration::plain(

@@ -118,9 +118,13 @@ pub fn private_authority(
             .model
             .export_process_credentials(&mut credentials);
         for binding in authority.resolved.materialization.sources.values_mut() {
-            binding
-                .credentials
-                .export_process_credentials(&mut credentials);
+            // Client references remain intact. Their values and hydration state
+            // are runtime-only, so a restored Agent must recheck the Client grant.
+            if !binding.credentials.client_owned {
+                binding
+                    .credentials
+                    .export_process_credentials(&mut credentials);
+            }
         }
         rustx_durable::PrivateAgentAuthority {
             authority: serde_json::to_value(authority)

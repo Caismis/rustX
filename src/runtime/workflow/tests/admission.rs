@@ -166,6 +166,7 @@ fn cfg274_all_freezes_exact_source_set_and_recovery_readmits_only_new_catalog() 
             tool.id = crate::runtime::identity::ToolId::new(format!("github-{name}"));
             tool.origin = ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("github"),
+                source: None,
             };
             tool
         }))
@@ -591,7 +592,10 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
     let mut tool = definition();
     tool.name = "check".into();
     tool.id = crate::runtime::identity::ToolId::new("github-check");
-    tool.origin = ToolOrigin::Mcp { server_id: github };
+    tool.origin = ToolOrigin::Mcp {
+        server_id: github,
+        source: None,
+    };
     let available = crate::capabilities::AvailableToolCatalog::new(
         ToolRegistry::from_registrations([crate::tools::executor::ToolRegistration::plain(
             tool.clone(),
@@ -739,6 +743,7 @@ fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_gene
     tool.name = "lookup".into();
     tool.origin = ToolOrigin::Mcp {
         server_id: crate::runtime::identity::McpServerId::new("github"),
+        source: None,
     };
     let with_tool = crate::capabilities::AvailableToolCatalog::metadata([tool])
         .with_resource_sources([source].into());

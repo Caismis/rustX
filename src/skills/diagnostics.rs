@@ -19,10 +19,8 @@
 //! Shadowed               a higher-precedence source won the same identity
 //! ```
 //!
-//! Severity is deliberately separate from cause: a missing `~/rustx/.agents/skills`
-//! and an intentional Workspace-over-User shadow are ordinary
-//! [`SkillDiagnosticSeverity::Fact`]s, while an excluded package is a
-//! [`SkillDiagnosticSeverity::Warning`]. Nothing here is a launch failure.
+//! A missing collection is an ordinary fact. A Workspace override is a
+//! warning so operators can see which definition took precedence.
 
 use crate::skills::package::SkillPackageError;
 use crate::skills::source::SkillSource;
@@ -131,8 +129,9 @@ impl SkillDiagnostic {
     #[must_use]
     pub const fn severity(&self) -> SkillDiagnosticSeverity {
         match self {
-            Self::SourceRootMissing { .. } | Self::Shadowed { .. } => SkillDiagnosticSeverity::Fact,
-            Self::SourceRootInvalid { .. }
+            Self::SourceRootMissing { .. } => SkillDiagnosticSeverity::Fact,
+            Self::Shadowed { .. }
+            | Self::SourceRootInvalid { .. }
             | Self::PackageInvalid { .. }
             | Self::PackageWarning { .. }
             | Self::DuplicateIdentity { .. } => SkillDiagnosticSeverity::Warning,

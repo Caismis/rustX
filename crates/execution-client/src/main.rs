@@ -48,6 +48,7 @@ mod bash_capture;
 mod changes;
 mod managed_python;
 mod mcp;
+mod mcp_environment;
 mod mutation;
 mod process;
 mod saves;
@@ -70,9 +71,57 @@ const _: () = {
     );
 };
 
+/// The Client's locally configured home, before resolving User-tree aliases.
+pub(crate) fn client_home_directory() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| is_normalized_absolute_path(home))
+        .or_else(|| {
+            nix::unistd::User::from_uid(nix::unistd::geteuid())
+                .ok()
+                .flatten()
+                .map(|user| user.dir)
+        })
+        .filter(|home| is_normalized_absolute_path(home))
+}
+
+/// Resolve only locally selected HOME/`rustx` aliases. Published paths use a
+/// physical spelling which the Client's no-follow file tools can open.
+fn resolve_user_root(home: &Path) -> io::Result<PathBuf> {
+    let configured = home.join("rustx");
+    for prefix in configured.ancestors() {
+        match fs::symlink_metadata(prefix) {
+            Ok(_) => {
+                // A dangling link is an existing entry. Canonicalization must
+                // succeed before any missing descendants can be appended.
+                let mut physical = prefix.canonicalize()?;
+                if !physical.is_dir() {
+                    return Err(io::ErrorKind::NotADirectory.into());
+                }
+                physical.extend(
+                    configured
+                        .strip_prefix(prefix)
+                        .map_err(io::Error::other)?
+                        .iter(),
+                );
+                return Ok(physical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::ErrorKind::NotFound.into())
+}
+
+/// Official User tree in this Client's filesystem namespace.
+pub(crate) fn client_user_root() -> Option<PathBuf> {
+    client_home_directory()
+        .and_then(|home| resolve_user_root(&home).ok())
+        .filter(|root| is_normalized_absolute_path(root))
+}
+
 fn main() -> ExitCode {
-    const USAGE: &str =
-        "usage: rustx-client --binding-file PATH --workspace ABSOLUTE_PATH [--tls-ca-file PATH]";
+    const USAGE: &str = "usage: rustx-client --binding-file PATH --workspace ABSOLUTE_PATH [--tls-ca-file PATH] [--mcp-env SERVICE ORIGIN NAME]...";
     let mut args = env::args_os();
     let _program = args.next();
     let usage = || {
@@ -107,17 +156,38 @@ fn main() -> ExitCode {
     if binding_flag != OsStr::new("--binding-file") || workspace_flag != OsStr::new("--workspace") {
         return usage();
     }
-    let ca_file = match (args.next(), args.next(), args.next()) {
-        (None, None, None) => None,
-        (Some(flag), Some(path), None) if flag == OsStr::new("--tls-ca-file") => {
-            Some(PathBuf::from(path))
+    let mut ca_file = None;
+    let mut grants = mcp_environment::Grants::default();
+    while let Some(flag) = args.next() {
+        if flag == OsStr::new("--tls-ca-file") && ca_file.is_none() {
+            let Some(path) = args.next() else {
+                return usage();
+            };
+            ca_file = Some(PathBuf::from(path));
+        } else if flag == OsStr::new("--mcp-env") {
+            let (Some(service), Some(origin), Some(name)) = (args.next(), args.next(), args.next())
+            else {
+                return usage();
+            };
+            let (Ok(service), Ok(origin), Ok(name)) = (
+                service.into_string(),
+                origin.into_string(),
+                name.into_string(),
+            ) else {
+                return usage();
+            };
+            if !grants.insert(service, origin, name) {
+                return usage();
+            }
+        } else {
+            return usage();
         }
-        _ => return usage(),
-    };
+    }
     match run(
         &PathBuf::from(binding_path),
         &PathBuf::from(workspace_path),
         ca_file.as_deref(),
+        grants,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -127,7 +197,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<(), String> {
+fn run(
+    binding_file: &Path,
+    workspace: &Path,
+    ca_file: Option<&Path>,
+    grants: mcp_environment::Grants,
+) -> Result<(), String> {
     // The credential endpoint and the socket endpoint must both live under
     // owner-only directories, or either could have been planted — and each
     // check runs against the pinned no-follow parent descriptor, never a
@@ -216,6 +291,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
         instance: bootstrap.instance,
         generation: bootstrap.generation,
         workspace: bootstrap.workspace,
+        user_root: client_user_root().ok_or("Client User directory unavailable")?,
         // Independently known, fixed, actually implemented capabilities —
         // never read from the file.
         capabilities: BTreeSet::from([
@@ -248,7 +324,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     .map_err(PairFailure::diagnostic)?;
     hello.credential = hello.credential.recovery_credential(&pair.challenge);
     let reconnect = |deadline| pair_endpoint(&endpoint, &hello, deadline, ca_file);
-    serve_session(pair, &root, reconnect)
+    serve_session(pair, &root, reconnect, grants)
 }
 
 struct Pair {
@@ -348,6 +424,7 @@ fn serve_session(
     mut pair: Pair,
     root: &PackageDirectory,
     reconnect: impl Fn(Instant) -> Result<Pair, PairFailure>,
+    grants: mcp_environment::Grants,
 ) -> Result<(), String> {
     let admission = pair.admission.clone();
     let saves = Arc::new(Mutex::new(saves::Saves::new(admission.clone())));
@@ -367,6 +444,7 @@ fn serve_session(
                     python: managed_python::Catalog::new(&admission.workspace),
                     changes: changes::Changes::default(),
                     next_ticket: None,
+                    mcp_environment: grants,
                 };
                 let revocation = Arc::new(ClientRevocation::default());
                 let mut recovery_cutoff = None;
@@ -398,6 +476,10 @@ fn serve_session(
                         &mut state,
                         &revocation,
                     );
+                    // A detached data lane may reconnect for other Client
+                    // operations, but each stdio MCP group belongs to the
+                    // disconnected transport and must stop immediately.
+                    state.mcp.cancel_all();
                     let now = Instant::now();
                     let cutoff = now + rustx_execution_protocol::DETACHED_CLIENT_RETENTION;
                     let control_end = control.stop();
@@ -875,6 +957,7 @@ struct DataState {
     python: managed_python::Catalog,
     changes: changes::Changes,
     next_ticket: Option<u64>,
+    mcp_environment: mcp_environment::Grants,
 }
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One typed data lane.
@@ -889,7 +972,10 @@ fn serve(
     state: &mut DataState,
     revocation: &ClientRevocation,
 ) -> io::Result<()> {
-    let mut writes = mutation::Writes::new(arbitration.clone());
+    let mut writes = mutation::Writes::new(
+        arbitration.clone(),
+        Some(mutation::FileWritePolicy::for_workspace(workspace)),
+    );
     if let Some(ticket) = state.next_ticket {
         writes.continue_ticket_sequence(ticket);
     }
@@ -990,6 +1076,14 @@ fn serve_requests(
                         kind: ReadError::Invalid,
                     }
                 }
+            }
+            ClientRequest::McpEnvironment(request) => {
+                state.mcp_environment.resolve(&request).map_or(
+                    ClientReply::Error {
+                        kind: ReadError::Denied,
+                    },
+                    ClientReply::McpEnvironment,
+                )
             }
             ClientRequest::Mcp(request) => {
                 ClientReply::Mcp(state.mcp.exchange(request, operations, &state.python))
@@ -1148,37 +1242,75 @@ fn serve_requests(
                 offset,
                 limit,
                 expected_revision,
-            } => read_lines(
-                root,
-                &relative_path,
-                offset,
-                limit,
-                expected_revision.as_deref(),
-            ),
+            } => with_file_target(root, &relative_path, |root, path| {
+                read_lines(root, path, offset, limit, expected_revision.as_deref())
+            }),
             ClientRequest::ReadDocument {
                 relative_path,
                 offset,
                 limit,
                 expected_revision,
-            } => read_document(
-                root,
-                &relative_path,
-                offset,
-                limit,
-                expected_revision.as_deref(),
-            ),
+            } => with_file_target(root, &relative_path, |root, path| {
+                read_document(root, path, offset, limit, expected_revision.as_deref())
+            }),
             ClientRequest::Search {
                 relative_root,
                 spec,
-            } => search::search(
-                root,
-                &relative_root,
-                &spec,
-                std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
-            ),
+            } => with_file_target(root, &relative_root, |root, path| {
+                search::search(
+                    root,
+                    path,
+                    &spec,
+                    std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
+                )
+            }),
         };
         let encoded = encode_record(&reply)?;
         channel.send(&encoded, None)?;
+    }
+}
+
+/// Select the retained workspace root for relative requests, or `/` for an
+/// external absolute Client path. Both traversals use the same no-follow,
+/// component-wise filesystem primitives.
+fn with_file_target(
+    workspace: &PackageDirectory,
+    path: &Path,
+    operation: impl FnOnce(&PackageDirectory, &Path) -> ClientReply,
+) -> ClientReply {
+    if let Err(error) = workspace.verify() {
+        return ClientReply::Error {
+            kind: read_error(&error),
+        };
+    }
+    if !path.is_absolute() {
+        return operation(workspace, path);
+    }
+    let raw = path.as_os_str().as_bytes();
+    if raw.contains(&0)
+        || raw
+            .split(|byte| *byte == b'/')
+            .any(|part| part == b"." || part == b"..")
+    {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    }
+    let Ok(relative) = path.strip_prefix("/") else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    if relative_entry(relative).is_err() {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    }
+    match PackageDirectory::open(Path::new("/")) {
+        Ok(root) => operation(&root, relative),
+        Err(error) => ClientReply::Error {
+            kind: read_error(&error),
+        },
     }
 }
 
@@ -1237,8 +1369,8 @@ fn read_range(
     }
 }
 
-/// `ReadLines`: one bounded logical-text page of `relative_path` under the
-/// workspace — the same streaming scanner the native Read tool projects,
+/// `ReadLines`: one bounded logical-text page under the selected retained
+/// filesystem root — the same streaming scanner the native Read tool projects,
 /// under the same complete-line byte/line budgets. The file is opened
 /// once, stamped before the scan, and proven unchanged after it (the
 /// retained descriptor plus a freshly opened path) — a mid-scan change is

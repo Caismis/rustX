@@ -21,6 +21,7 @@ pub struct LocalConnection {
     /// and `Drop` never send it twice.
     pub(super) closed: bool,
     pub(super) capabilities: BTreeSet<Capability>,
+    pub(super) user_root: PathBuf,
     pub(super) connection: ConnectionId,
     pub(super) admission: Admission,
 }
@@ -179,6 +180,12 @@ impl LocalConnection {
     #[must_use]
     pub fn admission(&self) -> &Admission {
         &self.admission
+    }
+
+    /// The User resource base as seen by this admitted peer.
+    #[must_use]
+    pub fn user_root(&self) -> &Path {
+        &self.user_root
     }
 
     /// Whether this peer advertised a capability at admission.
@@ -838,6 +845,58 @@ impl LocalConnection {
                 io::ErrorKind::InvalidData,
                 "invalid Python source reply",
             ))),
+        }
+    }
+
+    /// Read only explicitly Client-granted names for one HTTP MCP source.
+    ///
+    /// `admit` runs on the connection immediately before writing the request,
+    /// matching other bounded exchanges so a pre-wire refusal sends nothing and
+    /// leaves the live connection intact.
+    ///
+    /// # Errors
+    /// Returns an admission refusal, denial, transport failure, or invalid reply.
+    pub fn mcp_environment(
+        &mut self,
+        request: &rustx_execution_protocol::mcp_environment::Request,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<std::collections::BTreeMap<String, String>> {
+        use rustx_execution_protocol::mcp_environment::MAX_VALUE_BYTES;
+        if !request.valid() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        match self.exchange_admitted(
+            &ClientRequest::McpEnvironment(request.clone()),
+            Some(deadline),
+            admit,
+            || (),
+        )? {
+            ClientReply::McpEnvironment(reply) => {
+                let total = reply
+                    .values
+                    .values()
+                    .try_fold(0usize, |sum, value| sum.checked_add(value.len()));
+                if reply
+                    .values
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    != request.names
+                    || total.is_none_or(|bytes| bytes > MAX_VALUE_BYTES)
+                    || reply
+                        .values
+                        .values()
+                        .any(|value| value.is_empty() || value.contains('\0'))
+                {
+                    return Err(self.retire(io::ErrorKind::InvalidData.into()));
+                }
+                Ok(reply.values)
+            }
+            ClientReply::Error {
+                kind: rustx_execution_protocol::ReadError::Denied,
+            } => Err(io::ErrorKind::PermissionDenied.into()),
+            _ => Err(self.retire(io::ErrorKind::InvalidData.into())),
         }
     }
 
@@ -1630,9 +1689,9 @@ impl LocalConnection {
         })
     }
 
-    /// One bounded logical-text page of `relative_path` under the binding
-    /// workspace — the complete-line page contract the Read tool
-    /// projects, scanned physically by the Client.
+    /// One bounded logical-text page of a workspace-relative or absolute
+    /// Client path — the complete-line page contract the Read tool projects,
+    /// scanned physically by the Client.
     ///
     /// The peer must have advertised [`Capability::ReadLines`] at
     /// admission or the call is [`io::ErrorKind::Unsupported`] and no
@@ -1784,7 +1843,7 @@ impl LocalConnection {
     }
 
     /// One bounded logical-text page of a whitelisted structured document
-    /// under the binding workspace — the Client decodes the source with
+    /// at a workspace-relative or absolute Client path. The Client decodes it with
     /// the shared rustX parser policy and serves the complete-line
     /// projection of the decoded Markdown.
     ///
@@ -1943,9 +2002,9 @@ impl LocalConnection {
         })
     }
 
-    /// One bounded workspace search: the shared file-universe traversal
-    /// rooted at `relative_root` — the workspace root itself when empty —
-    /// narrowed by `spec` into one selected-records page.
+    /// One bounded Client search: the file-universe traversal is rooted at a
+    /// workspace-relative or absolute Client path. An empty path names the
+    /// workspace root; `spec` narrows it to one selected-records page.
     ///
     /// The peer must have advertised [`Capability::BoundedSearch`] at
     /// admission or the call is [`io::ErrorKind::Unsupported`] and no
@@ -2113,7 +2172,7 @@ impl LocalConnection {
         })
     }
 
-    /// The conditional write: `relative_path` under the binding workspace
+    /// The conditional write: the workspace-relative or absolute Client path
     /// becomes exactly `bytes` when `expected_revision` still names the
     /// current file — or the target did not exist for `None`.
     ///

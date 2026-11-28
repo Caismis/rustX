@@ -23,6 +23,8 @@
 //! model context. Only definition edits publish a later generation at the
 //! existing safe boundary. Bodies and assets remain live Tool inputs.
 
+mod locations;
+
 use std::collections::BTreeMap;
 use std::io;
 
@@ -118,6 +120,7 @@ pub struct SkillPackage {
     version_id: SkillVersionId,
     definition: Frontmatter,
     location: String,
+    offered_source: PathBuf,
     instruction_source: PathBuf,
     source: SkillSource,
 }
@@ -193,13 +196,18 @@ impl SkillPackage {
         self.definition.allowed_tools.as_deref()
     }
 
-    /// The model-visible host path of this package's `SKILL.md`.
+    /// The model-visible path of this package's `SKILL.md`.
     ///
     /// This is the one published address: the catalog projects it verbatim,
     /// and the model hands it straight back to Read and Bash.
     #[must_use]
     pub fn location(&self) -> &str {
         &self.location
+    }
+
+    /// Instruction path as offered by the source collection, before publication.
+    pub(crate) fn offered_source(&self) -> &Path {
+        &self.offered_source
     }
 
     /// The resolved regular file captured during discovery.
@@ -405,7 +413,11 @@ impl SkillDiscovery {
                     &mut diagnostics,
                     &self.cancellation,
                     tree,
-                    workspace_client.is_some(),
+                    match (client.is_some(), source) {
+                        (false, _) => CollectionView::Native,
+                        (true, SkillSource::Workspace) => CollectionView::BoundWorkspace,
+                        (true, SkillSource::User) => CollectionView::BoundUser,
+                    },
                 )?);
             }
         }
@@ -413,6 +425,10 @@ impl SkillDiscovery {
         roots.sort();
         roots.dedup();
         outcome.roots = roots;
+        if let Some(client) = client {
+            let visible = client.user_skill_collection()?;
+            outcome.publish_user_paths(&visible, |relative| Ok(visible.join(relative)))?;
+        }
         Ok(outcome)
     }
 }
@@ -507,6 +523,13 @@ fn invalid_collection(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollectionView {
+    Native,
+    BoundWorkspace,
+    BoundUser,
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "the collection source owns discovery, diagnostics and the offered paths"
@@ -516,8 +539,9 @@ fn collect_automatic_source(
     diagnostics: &mut Vec<SkillDiagnostic>,
     cancellation: &crate::runtime::CancellationSignal,
     tree: &dyn SkillTree,
-    bound: bool,
+    view: CollectionView,
 ) -> io::Result<Vec<Candidate>> {
+    let bound = view == CollectionView::BoundWorkspace;
     let source = root.source;
     tree.observe(&root.root);
     let collection = match tree.entry(&root.root) {
@@ -538,12 +562,17 @@ fn collect_automatic_source(
         }
         Err(error) => Err(error),
     }
-    .map(|directory| super::discovery::collect_from(&directory, cancellation, tree));
-    let files = match collection {
-        Ok(collection) if collection.error.is_none() => collection.files,
+    .map(|directory| {
+        (
+            super::discovery::collect_from(&directory, cancellation, tree),
+            directory,
+        )
+    });
+    let (files, collection_root) = match collection {
+        Ok((collection, directory)) if collection.error.is_none() => (collection.files, directory),
         failed => {
             let error = match failed {
-                Ok(collection) => collection.error.expect("matched failed collection"),
+                Ok((collection, _)) => collection.error.expect("matched failed collection"),
                 Err(error) => error,
             };
             if bound {
@@ -570,11 +599,20 @@ fn collect_automatic_source(
             continue;
         };
         let fallback_name = directory.to_string_lossy().into_owned();
-        let location = file.display().to_string();
-        let location_for_tools = if bound { &canonical } else { &file };
+        // Bound User locations cross filesystem namespaces. Retain only their
+        // collection-relative spelling in the catalog until Client projection.
+        let logical = if view == CollectionView::BoundUser {
+            file.strip_prefix(&collection_root)
+                .map_err(io::Error::other)?
+        } else {
+            &file
+        };
+        let location = logical.display().to_string();
+        let location_for_tools = if bound { &canonical } else { logical };
         let result = match tree.frontmatter(&canonical, cancellation) {
             Ok(header) => discover_package(
                 location_for_tools,
+                &file,
                 &canonical,
                 &fallback_name,
                 source,
@@ -626,6 +664,7 @@ fn collect_automatic_source(
 /// Parses, validates, and hashes one Skill instruction file.
 fn discover_package(
     path: &Path,
+    offered: &Path,
     canonical: &Path,
     directory_name: &str,
     source: SkillSource,
@@ -670,6 +709,7 @@ fn discover_package(
             version_id,
             definition: frontmatter,
             location,
+            offered_source: offered.to_owned(),
             instruction_source: canonical.to_path_buf(),
             source,
         },
@@ -990,6 +1030,39 @@ mod frontmatter_tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn bound_user_locations_publish_the_client_collection_and_retain_the_host_reader() {
+        let (_temp, base, workspace) = workspace_fixture();
+        let host = base.join("private-user/skills");
+        let visible = Path::new("/client-home/rustx/.agents/skills");
+        write_skill(&host, "guide", "Host guide", "");
+        write_skill(&host, "shared", "Global version", "");
+        let project = workspace.root().join(".agents/skills");
+        write_skill(&project, "shared", "Workspace version", "");
+        let mut outcome = SkillDiscovery::with_config(automatic(&[
+            (SkillSource::User, host.clone()),
+            (SkillSource::Workspace, project),
+        ]))
+        .discover();
+        outcome
+            .publish_user_paths(visible, |relative| Ok(visible.join(relative)))
+            .unwrap();
+        let guide = &outcome.packages[0];
+        assert_eq!(Path::new(guide.location()), visible.join("guide/SKILL.md"));
+        assert_eq!(guide.instruction_source(), host.join("guide/SKILL.md"));
+        let provenance = &outcome.provenance[1];
+        assert_eq!(provenance.source, SkillSource::Workspace);
+        assert_eq!(
+            Path::new(&provenance.shadowed[0].location),
+            visible.join("shared/SKILL.md")
+        );
+        assert_eq!(
+            outcome.diagnostics[0].severity(),
+            SkillDiagnosticSeverity::Warning
+        );
+        assert!(outcome.roots.iter().any(|root| root.root == visible));
     }
 
     #[test]
