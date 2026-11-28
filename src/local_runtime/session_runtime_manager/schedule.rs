@@ -20,7 +20,7 @@ use tokio::sync::watch;
 // its scan budget expires. If both lane threads still own physical tails, the
 // final fallback is the ordinary blocking pool: losing cache locality in that
 // degenerate state is preferable to starving every healthy source.
-type ScanReadJob = Box<dyn FnOnce() + Send>;
+type ScanReadJob = Box<dyn FnOnce(Option<&std::sync::atomic::AtomicBool>) + Send>;
 
 struct ScanReadWorker {
     sender: Option<std::sync::mpsc::Sender<ScanReadJob>>,
@@ -35,7 +35,9 @@ impl ScanReadWorker {
             .name(format!("rustx-scan-read-{index}"))
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
-                    job();
+                    job(Some(&worker_active));
+                    // Safety net for any future job implementation that does not
+                    // release the lane before publishing its reply.
                     worker_active.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
             })
@@ -72,20 +74,19 @@ impl ScheduleScanReadLane {
         T: Send + 'static,
     {
         let (reply, receiver) = tokio::sync::oneshot::channel();
-        let job: ScanReadJob = Box::new(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        let job: ScanReadJob = Box::new(move |lane_active| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
                 .unwrap_or_else(|_| Err(error("Scheduler scan read worker panicked")));
-            let _ = reply.send(result);
+            if let Some(active) = lane_active {
+                active.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            let _ = reply.send(outcome);
         });
-        let claimed = if self.primary.claim() {
-            Some(&self.primary)
-        } else if self.backup.claim() {
-            Some(&self.backup)
-        } else {
-            None
-        };
         let mut overflow = job;
-        if let Some(worker) = claimed {
+        for worker in [&self.primary, &self.backup] {
+            if !worker.claim() {
+                continue;
+            }
             match worker
                 .sender
                 .as_ref()
@@ -94,14 +95,14 @@ impl ScheduleScanReadLane {
             {
                 Ok(()) => return receiver,
                 Err(returned) => {
-                    worker
-                        .active
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    // The receiver is gone. Keeping the claim set makes this
+                    // dead worker permanently unavailable instead of retrying it
+                    // on every later scan read.
                     overflow = returned.0;
                 }
             }
         }
-        tokio::task::spawn_blocking(overflow);
+        tokio::task::spawn_blocking(move || overflow(None));
         receiver
     }
 }
@@ -897,6 +898,34 @@ mod scan_read_lane_tests {
         };
         let receiver = lane.submit(|| Ok::<_, RuntimeManagerError>(7));
         assert_eq!(receiver.await.unwrap().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn dead_primary_scan_worker_falls_back_to_backup_and_is_not_reclaimed() {
+        let (dead_sender, dead_receiver) = std::sync::mpsc::channel();
+        drop(dead_receiver);
+        let lane = ScheduleScanReadLane {
+            primary: Arc::new(ScanReadWorker {
+                sender: Some(dead_sender),
+                active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
+            backup: Arc::new(ScanReadWorker::spawn(1)),
+        };
+        let first = lane.submit(|| {
+            Ok::<_, RuntimeManagerError>(std::thread::current().name().unwrap_or("").to_owned())
+        });
+        let first_name = first.await.unwrap().unwrap();
+        assert_eq!(first_name, "rustx-scan-read-1");
+        assert!(
+            lane.primary
+                .active
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        let second = lane.submit(|| {
+            Ok::<_, RuntimeManagerError>(std::thread::current().name().unwrap_or("").to_owned())
+        });
+        let second_name = second.await.unwrap().unwrap();
+        assert_eq!(second_name, "rustx-scan-read-1");
     }
 
     #[tokio::test]
