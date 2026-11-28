@@ -181,6 +181,7 @@ impl Transfer {
             Err(error) => return Err(error.into()),
         }
         let cache = ensure_owned(&skills, OsStr::new(CACHE))?;
+        cleanup_owner_initializations(&cache)?;
         cleanup_retired_authorities(&cache)?;
         make_authority_room(&cache, authority)?;
         let owner = ensure_owned(&cache, OsStr::new(authority))?;
@@ -363,6 +364,14 @@ impl Transfer {
     }
 
     fn publish(&mut self, arbitration: &Arbitration) -> io::Result<Reply> {
+        self.publish_with_limit(arbitration, MAX_CACHE_BYTES)
+    }
+
+    fn publish_with_limit(
+        &mut self,
+        arbitration: &Arbitration,
+        byte_limit: u64,
+    ) -> io::Result<Reply> {
         let sync = self.sync.as_mut().ok_or(io::ErrorKind::InvalidInput)?;
         let stage = sync.stage.as_ref().ok_or(io::ErrorKind::InvalidInput)?;
         if stage.file.is_some() {
@@ -372,7 +381,7 @@ impl Transfer {
         stage.data.verify()?;
         let stage_directory = sync.owner.child(OsStr::new(&stage.name))?;
         write_new(&stage_directory, SIZE, stage.bytes.to_string().as_bytes())?;
-        prune(&sync.owner, stage.bytes, MAX_CACHE_BYTES)?;
+        prune(&sync.owner, stage.bytes, byte_limit)?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let moved = arbitration.with_grant(|| {
             rustix::fs::renameat_with(
@@ -485,14 +494,85 @@ fn ensure_selected_collection(path: &Path) -> io::Result<PackageDirectory> {
     Ok(directory)
 }
 
+// The collection initializer lock serializes this protocol for both levels.
+// The intent is created before the stage and survives until after publication.
 fn ensure_owned(parent: &PackageDirectory, name: &OsStr) -> io::Result<PackageDirectory> {
-    let (directory, created) = ensure_directory(parent, name)?;
-    if created {
-        write_new(&directory, MARKER, MARKER_CONTENT)?;
-    } else {
-        verify_marker(&directory, MARKER)?;
+    let name_text = name.to_str().ok_or(io::ErrorKind::InvalidInput)?;
+    let stage = format!(".init-{name_text}");
+    let intent = format!("{stage}{INTENT_SUFFIX}");
+    match parent.child(name) {
+        Ok(directory) => {
+            // A final name is never recovered based on an intent: it must
+            // already have its complete marker before it became visible.
+            verify_marker(&directory, MARKER)?;
+            match verify_intent(parent, &intent) {
+                Ok(()) => cleanup_work_item(parent, &stage)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            return Ok(directory);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
-    Ok(directory)
+    match verify_intent(parent, &intent) {
+        Ok(()) => {
+            // An incomplete marker or directory is safe to discard only
+            // because the preexisting intent owns this private stage.
+            cleanup_work_item(parent, &stage)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    parent.verify()?;
+    match rustix::fs::statat(
+        parent.descriptor(),
+        stage.as_str(),
+        AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(_) => return Err(io::ErrorKind::AlreadyExists.into()),
+        Err(rustix::io::Errno::NOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    open_new(parent, &intent)?;
+    rustix::fs::mkdirat(
+        parent.descriptor(),
+        stage.as_str(),
+        Mode::from_raw_mode(0o700),
+    )?;
+    let directory = parent.child(OsStr::new(&stage))?;
+    write_new(&directory, MARKER, MARKER_CONTENT)?;
+    directory.verify()?;
+    parent.verify()?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    rustix::fs::renameat_with(
+        parent.descriptor(),
+        stage.as_str(),
+        parent.descriptor(),
+        name,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    return Err(io::ErrorKind::Unsupported.into());
+    remove_intent(parent, &stage)?;
+    parent.child(name)
+}
+
+// Interrupted initializations for a different authority must not accumulate
+// indefinitely when later syncs choose other authorities.
+fn cleanup_owner_initializations(cache: &PackageDirectory) -> io::Result<()> {
+    for name in cache.names(MAX_CACHE_AUTHORITIES * 2 + 1)? {
+        let Some(text) = name.to_str() else { continue };
+        let Some(stage) = text.strip_suffix(INTENT_SUFFIX) else {
+            continue;
+        };
+        if stage.strip_prefix(".init-").is_some_and(valid_cache_id)
+            && verify_intent(cache, text).is_ok()
+        {
+            cleanup_work_item(cache, stage)?;
+        }
+    }
+    Ok(())
 }
 
 fn open_new(directory: &PackageDirectory, name: &str) -> io::Result<File> {
@@ -718,6 +798,7 @@ fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result
     }
     versions.sort_by_key(|(modified, _, _)| *modified);
     let mut count = versions.len();
+    let mut selected = Vec::new();
     for (_, name, size) in versions {
         if count < MAX_CACHE_VERSIONS && bytes.saturating_add(incoming) <= byte_limit {
             break;
@@ -726,22 +807,7 @@ fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result
         let lease = open_existing(&directory, LEASE)?;
         match rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {
-                let retired = reserve_work(owner, ".prune-")?;
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
-                let renamed = rustix::fs::renameat_with(
-                    owner.descriptor(),
-                    name.as_os_str(),
-                    owner.descriptor(),
-                    retired.as_str(),
-                    rustix::fs::RenameFlags::NOREPLACE,
-                );
-                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-                let renamed: Result<(), rustix::io::Errno> = Err(rustix::io::Errno::NOTSUP);
-                if let Err(error) = renamed {
-                    remove_intent(owner, &retired)?;
-                    return Err(error.into());
-                }
-                cleanup_work_item(owner, &retired)?;
+                selected.push((name, lease));
                 bytes -= size;
                 count -= 1;
             }
@@ -755,6 +821,38 @@ fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result
             "live User Skill versions exhaust the cache bound",
         ));
     }
+    // Reserve every cleanup intent before retiring any version, and retain
+    // all exclusive leases until the entire plan has been executed.
+    let mut reservations = Vec::new();
+    for _ in &selected {
+        match reserve_work(owner, ".prune-") {
+            Ok(name) => reservations.push(name),
+            Err(error) => {
+                for name in &reservations {
+                    remove_intent(owner, name)?;
+                }
+                return Err(error);
+            }
+        }
+    }
+    for ((name, _lease), retired) in selected.iter().zip(&reservations) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let renamed = rustix::fs::renameat_with(
+            owner.descriptor(),
+            name.as_os_str(),
+            owner.descriptor(),
+            retired.as_str(),
+            rustix::fs::RenameFlags::NOREPLACE,
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let renamed: Result<(), rustix::io::Errno> = Err(rustix::io::Errno::NOTSUP);
+        if let Err(error) = renamed {
+            // All remaining empty intents are also safe for next-sync recovery.
+            return Err(error.into());
+        }
+        cleanup_work_item(owner, retired)?;
+    }
+
     Ok(())
 }
 
@@ -995,6 +1093,210 @@ mod tests {
                 .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
                 .count(),
             MAX_CACHE_AUTHORITIES
+        );
+    }
+
+    #[test]
+    fn interrupted_owner_initialization_recovers_only_owned_stages() {
+        for level in [0, 1] {
+            for marker in [
+                None,
+                Some(None),
+                Some(Some(b"partial".as_slice())),
+                Some(Some(MARKER_CONTENT)),
+            ] {
+                let home = tempfile::tempdir().unwrap();
+                let root = home.path().join("rustx");
+                let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+                let parent_path = if level == 0 {
+                    collection.clone()
+                } else {
+                    collection.join(CACHE)
+                };
+                let parent = ensure_selected_collection(&collection).unwrap();
+                let (parent, name) = if level == 0 {
+                    (parent, CACHE.to_owned())
+                } else {
+                    (
+                        ensure_owned(&parent, OsStr::new(CACHE)).unwrap(),
+                        authority(),
+                    )
+                };
+                let stage = format!(".init-{name}");
+                open_new(&parent, &format!("{stage}{INTENT_SUFFIX}")).unwrap();
+                if let Some(marker) = marker {
+                    rustix::fs::mkdirat(
+                        parent.descriptor(),
+                        stage.as_str(),
+                        Mode::from_raw_mode(0o700),
+                    )
+                    .unwrap();
+                    let staged = parent.child(OsStr::new(&stage)).unwrap();
+                    if let Some(marker) = marker {
+                        write_new(&staged, MARKER, marker).unwrap();
+                    }
+                }
+                assert!(matches!(
+                    Transfer::default().begin_sync(&root, &collection, &authority()),
+                    Ok(Reply::SyncStarted)
+                ));
+                assert!(!parent_path.join(&stage).exists());
+                assert!(!parent_path.join(format!("{stage}{INTENT_SUFFIX}")).exists());
+                verify_marker(&parent.child(OsStr::new(&name)).unwrap(), MARKER).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn owner_initialization_rejects_unknown_final_and_stage_directories() {
+        for level in [0, 1] {
+            for final_name in [false, true] {
+                let home = tempfile::tempdir().unwrap();
+                let root = home.path().join("rustx");
+                let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+                let parent_path = if level == 0 {
+                    collection.clone()
+                } else {
+                    collection.join(CACHE)
+                };
+                let parent = ensure_selected_collection(&collection).unwrap();
+                let (parent, name) = if level == 0 {
+                    (parent, CACHE.to_owned())
+                } else {
+                    (
+                        ensure_owned(&parent, OsStr::new(CACHE)).unwrap(),
+                        authority(),
+                    )
+                };
+                let unknown = if final_name {
+                    name
+                } else {
+                    format!(".init-{name}")
+                };
+                let directory = ensure_directory(&parent, OsStr::new(&unknown)).unwrap().0;
+                write_new(&directory, "personal", b"keep").unwrap();
+                assert!(
+                    Transfer::default()
+                        .begin_sync(&root, &collection, &authority())
+                        .is_err()
+                );
+                assert_eq!(
+                    fs::read(parent_path.join(unknown).join("personal")).unwrap(),
+                    b"keep"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn different_authority_cleans_interrupted_owned_initialization() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        let parent = ensure_selected_collection(&collection).unwrap();
+        let cache = ensure_owned(&parent, OsStr::new(CACHE)).unwrap();
+        let abandoned = format!(".init-{}", authority());
+        open_new(&cache, &format!("{abandoned}{INTENT_SUFFIX}")).unwrap();
+        let stage = ensure_directory(&cache, OsStr::new(&abandoned)).unwrap().0;
+        write_new(&stage, MARKER, b"partial").unwrap();
+        let mut transfer = Transfer::default();
+        assert_eq!(
+            transfer
+                .begin_sync(&root, &collection, &version('b'))
+                .unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(!collection.join(CACHE).join(&abandoned).exists());
+        assert!(
+            !collection
+                .join(CACHE)
+                .join(format!("{abandoned}{INTENT_SUFFIX}"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn partial_final_marker_is_not_recovered_even_with_an_intent() {
+        for level in [0, 1] {
+            let home = tempfile::tempdir().unwrap();
+            let root = home.path().join("rustx");
+            let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+            let parent = ensure_selected_collection(&collection).unwrap();
+            let (parent, name) = if level == 0 {
+                (parent, CACHE.to_owned())
+            } else {
+                (
+                    ensure_owned(&parent, OsStr::new(CACHE)).unwrap(),
+                    authority(),
+                )
+            };
+            let directory = ensure_directory(&parent, OsStr::new(&name)).unwrap().0;
+            write_new(&directory, MARKER, b"partial").unwrap();
+            open_new(&parent, &format!(".init-{name}{INTENT_SUFFIX}")).unwrap();
+            assert!(
+                Transfer::default()
+                    .begin_sync(&root, &collection, &authority())
+                    .is_err()
+            );
+            let mut bytes = Vec::new();
+            directory
+                .file(Path::new(MARKER))
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            assert_eq!(bytes, b"partial");
+        }
+    }
+
+    #[test]
+    fn rejected_publish_preserves_unleased_reusable_version() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        let mut transfer = Transfer::default();
+        transfer
+            .begin_sync(&root, &collection, &authority())
+            .unwrap();
+        let owner = &transfer.sync.as_ref().unwrap().owner;
+        for name in [version('a'), version('b')] {
+            let dir = ensure_directory(owner, OsStr::new(&name)).unwrap().0;
+            write_new(&dir, VERSION_MARKER, MARKER_CONTENT).unwrap();
+            write_new(&dir, SIZE, b"1").unwrap();
+            write_new(&dir, LEASE, b"").unwrap();
+            let data = ensure_directory(&dir, OsStr::new("data")).unwrap().0;
+            write_new(&data, "SKILL.md", b"x").unwrap();
+        }
+        let pinned =
+            open_existing(&owner.child(OsStr::new(&version('b'))).unwrap(), LEASE).unwrap();
+        rustix::fs::flock(&pinned, FlockOperation::NonBlockingLockShared).unwrap();
+        transfer.begin_package(&version('c')).unwrap();
+        transfer
+            .begin_file(Path::new("SKILL.md"), 2, false)
+            .unwrap();
+        transfer.chunk(0, "eHg=").unwrap();
+        transfer.end_file().unwrap();
+        assert_eq!(
+            transfer
+                .publish_with_limit(&Arbitration::new(), 2)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::FileTooLarge
+        );
+        transfer.abort().unwrap();
+        assert!(matches!(
+            transfer.retain(&version('a')),
+            Ok(Reply::Retained { .. })
+        ));
+        assert_eq!(
+            fs::read(
+                collection
+                    .join(CACHE)
+                    .join(authority())
+                    .join(version('a'))
+                    .join("data/SKILL.md")
+            )
+            .unwrap(),
+            b"x"
         );
     }
 
