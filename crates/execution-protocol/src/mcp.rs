@@ -56,6 +56,22 @@ enum Operand {
     Inline,
 }
 
+fn python_interpreter(name: &str) -> bool {
+    let Some(version) = name.strip_prefix("python") else {
+        return false;
+    };
+    if version.is_empty() {
+        return true;
+    }
+    // CPython also publishes versioned free-threaded executables with a t suffix.
+    let version = version.strip_suffix('t').unwrap_or(version);
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    version.split_once('.').map_or_else(
+        || digits(version),
+        |(major, minor)| digits(major) && digits(minor),
+    )
+}
+
 fn interpreter_operand(name: &str, option: &str) -> Option<Operand> {
     let shell = matches!(name, "sh" | "bash" | "dash" | "zsh");
     if (shell
@@ -64,11 +80,11 @@ fn interpreter_operand(name: &str, option: &str) -> Option<Operand> {
         }))
         || (matches!(name, "node" | "nodejs")
             && matches!(option, "-e" | "--eval" | "-p" | "--print"))
-        || (name.starts_with("python") && matches!(option, "-c" | "-m"))
+        || (python_interpreter(name) && matches!(option, "-c" | "-m"))
     {
         Some(Operand::Inline)
     } else if (shell && matches!(option, "-o" | "+o" | "-O" | "+O"))
-        || (name.starts_with("python") && matches!(option, "-W" | "-X"))
+        || (python_interpreter(name) && matches!(option, "-W" | "-X"))
     {
         Some(Operand::Opaque)
     } else if matches!(name, "node" | "nodejs") {
@@ -85,7 +101,7 @@ fn interpreter_operand(name: &str, option: &str) -> Option<Operand> {
 // Recognize only switches whose arity is certain. Unknown switches leave the
 // following operands ambiguous; they must not be guessed to be scripts.
 fn interpreter_switch(name: &str, option: &str) -> bool {
-    if name.starts_with("python") {
+    if python_interpreter(name) {
         matches!(
             option,
             "-b" | "-bb"
@@ -266,8 +282,7 @@ pub fn stdio_argument_paths<'a>(
         .and_then(|name| name.to_str())
         .unwrap_or_default();
     let shell = matches!(name, "sh" | "bash" | "dash" | "zsh");
-    let mut before_script =
-        shell || matches!(name, "node" | "nodejs") || name.starts_with("python");
+    let mut before_script = shell || matches!(name, "node" | "nodejs") || python_interpreter(name);
     let mut options = true;
     let mut next = None;
     let mut script_position_known = true;
@@ -465,6 +480,21 @@ mod stdio_path_tests {
             path_values("server", &["--input=https://example.test/feed"]),
             NO_PATHS
         );
+    }
+
+    #[test]
+    fn python_prefixed_servers_keep_bare_subcommands() {
+        for program in ["./python-mcp", "python3.13-config", "python3-server"] {
+            assert_eq!(path_values(program, &["serve"]), NO_PATHS);
+        }
+        for program in ["python", "python3", "python3.13", "python3.13t"] {
+            assert_eq!(path_values(program, &["./server.py"]), [(0, Input)]);
+            let unqualified = ["server.py".to_owned()];
+            assert_eq!(
+                stdio_argument_paths(Path::new(program), &unqualified).next(),
+                Some(Err(UnqualifiedStdioScript))
+            );
+        }
     }
 
     #[test]

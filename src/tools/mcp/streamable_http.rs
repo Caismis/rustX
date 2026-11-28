@@ -1916,6 +1916,23 @@ mod tests {
         ));
     }
 
+    async fn redirect_fixture(
+        location: String,
+    ) -> (super::WorkspaceFixtureGuard, tokio::task::JoinHandle<()>) {
+        let (listener, guard) = super::WorkspaceFixtureGuard::bind().await;
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::any(move || async move {
+                (
+                    http::StatusCode::TEMPORARY_REDIRECT,
+                    [(http::header::LOCATION, location)],
+                )
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (guard, server)
+    }
+
     #[tokio::test]
     async fn protocol_only_workspace_request_follows_a_permitted_cross_origin_redirect() {
         let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
@@ -1930,19 +1947,8 @@ mod tests {
         );
         let landing_server =
             tokio::spawn(async move { axum::serve(landing, landing_app).await.unwrap() });
-        let (entry, entry_guard) = super::WorkspaceFixtureGuard::bind().await;
+        let (entry_guard, entry_server) = redirect_fixture(location).await;
         let endpoint = entry_guard.url("/mcp");
-        let entry_app = axum::Router::new().route(
-            "/mcp",
-            axum::routing::get(move || async move {
-                (
-                    http::StatusCode::FOUND,
-                    [(http::header::LOCATION, location)],
-                )
-            }),
-        );
-        let entry_server =
-            tokio::spawn(async move { axum::serve(entry, entry_app).await.unwrap() });
         let (client, _) = super::McpHttpClient::for_workspace(&endpoint, true).unwrap();
         let header = http::HeaderName::from_static("mcp-protocol-version");
         let value = http::HeaderValue::from_static("2026-07-28");
@@ -1984,6 +1990,7 @@ mod tests {
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         };
+        use std::collections::BTreeMap;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
@@ -2021,19 +2028,7 @@ mod tests {
         );
         let landing_server =
             tokio::spawn(async move { axum::serve(landing, landing_app).await.unwrap() });
-        let location = landing_guard.url("/mcp");
-        let (entry, entry_guard) = super::WorkspaceFixtureGuard::bind().await;
-        let entry_app = axum::Router::new().route(
-            "/mcp",
-            axum::routing::any(move || async move {
-                (
-                    http::StatusCode::TEMPORARY_REDIRECT,
-                    [(http::header::LOCATION, location)],
-                )
-            }),
-        );
-        let entry_server =
-            tokio::spawn(async move { axum::serve(entry, entry_app).await.unwrap() });
+        let (entry_guard, entry_server) = redirect_fixture(landing_guard.url("/mcp")).await;
         let workspace = tempfile::tempdir().unwrap();
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials {
@@ -2042,11 +2037,11 @@ mod tests {
             },
             transport: McpTransportConfig::StreamableHttp {
                 endpoint: entry_guard.url("/mcp"),
-                headers: Default::default(),
+                headers: BTreeMap::new(),
             },
-            policy: Default::default(),
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: BTreeMap::new(),
         };
         let runtime = McpServerRuntime::connect_fixture(
             &McpServerId::new("redirected"),

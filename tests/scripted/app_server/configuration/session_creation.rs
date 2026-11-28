@@ -1324,8 +1324,8 @@ args = ["--", "server.py"]
                     launch: rustx_execution_protocol::mcp::Launch {
                         program: "/usr/bin/python3".into(),
                         args: vec!["--".into(), "server.py".into()],
-                        cwd: Default::default(),
-                        environment: Default::default(),
+                        cwd: std::path::PathBuf::new(),
+                        environment: std::collections::BTreeMap::new(),
                         versions: vec!["2025-03-26".into()],
                         legacy_version: None,
                         python_source: None,
