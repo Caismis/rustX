@@ -1,6 +1,6 @@
 import { imageSize } from 'image-size';
 import { validateRaster } from '../../../../client/raster';
-import { LoadingManager, type Object3D, type Texture } from 'three';
+import { Group, LoadingManager, Mesh, type Object3D, type Texture } from 'three';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { disposeScene, validateScene } from './scene-resources';
 
@@ -148,7 +148,7 @@ export function admitGlb(bytes: Uint8Array<ArrayBuffer>): Set<string> {
   return uris;
 }
 
-export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSignal) {
+export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSignal, nativeStep = false) {
   signal.throwIfAborted();
   check(glbImports < L.owners, 'capacity');
   const uris = admitGlb(bytes), manager = new LoadingManager();
@@ -196,8 +196,23 @@ export async function importGlb(bytes: Uint8Array<ArrayBuffer>, signal: AbortSig
     const input = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
     const loaded = await loader.parseAsync(input, ''); scenes = loaded.scenes;
     signal.throwIfAborted(); check(!retired);
-    const bounds = validateScene(loaded.scenes, loaded.scene);
-    return { scene: loaded.scene, scenes: loaded.scenes, bounds, dispose };
+    let materialPrimitives: Set<Object3D> | undefined;
+    if (nativeStep) {
+      // The native helper publishes one scene. GLTFLoader's associations
+      // identify its split material draws separately from authored child nodes.
+      check(scenes.length === 1, 'unsupported');
+      const primitives = new Set<Object3D>();
+      const { associations } = loaded.parser;
+      loaded.scene.traverse(item => {
+        if (!(item instanceof Mesh) || !(item.parent instanceof Group) || item.children.length) return;
+        const primitive = associations.get(item), parent = associations.get(item.parent);
+        if (primitive?.primitives !== undefined && primitive.nodes === undefined && primitive.meshes !== undefined
+          && parent?.nodes !== undefined && parent.meshes === primitive.meshes) primitives.add(item);
+      });
+      materialPrimitives = primitives;
+    }
+    const bounds = validateScene(loaded.scenes, loaded.scene, materialPrimitives);
+    return { scene: loaded.scene, scenes: loaded.scenes, bounds, materialPrimitives, dispose };
   } catch (error) { dispose(); throw error; }
   finally { void Promise.allSettled(decodes).then(() => { for (const url of imageUrls) releaseUrl(url); glbImports--; }); }
 }

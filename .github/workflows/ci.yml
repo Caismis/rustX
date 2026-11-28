@@ -1424,6 +1424,64 @@ jobs:
         working-directory: web-console
         run: pnpm check:provenance
 
+  native-step:
+    name: Native STEP parity and Workbench acceptance
+    needs: [plan, browser-prepare]
+    if: fromJSON(needs.plan.outputs.run)['native-step']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    env:
+      RUSTX_REQUIRE_NATIVE_STEP: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pinned Web and TUI dependencies
+        run: |
+          corepack enable
+          (cd web-console && corepack install && pnpm install --frozen-lockfile)
+          (cd tui && pnpm install --frozen-lockfile)
+      - uses: ./.github/actions/browser-inputs
+      - name: Install OCCT build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ rapidjson-dev libgl-dev libx11-dev
+      - name: Identify the immutable OCCT build inputs
+        id: occt
+        run: echo "key=$(bash web-console/host/step-native/occt-ci.sh key)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        id: occt-cache
+        with:
+          path: ${{ runner.temp }}/native-step-occt
+          key: linux-x64-native-step-occt-${{ steps.occt.outputs.key }}
+      - name: Build pinned OCCT on a cache miss
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        run: bash web-console/host/step-native/occt-ci.sh build "$RUNNER_TEMP/native-step-occt"
+      - name: Verify dependency provenance and build the STEP helper
+        run: |
+          prefix="$RUNNER_TEMP/native-step-occt"
+          bash web-console/host/step-native/occt-ci.sh verify "$prefix"
+          cmake -S web-console/host/step-native -B "$RUNNER_TEMP/native-step-helper" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DOCCT_HEADERS="$prefix/include/opencascade" -DCMAKE_LIBRARY_PATH="$prefix/lib"
+          cmake --build "$RUNNER_TEMP/native-step-helper"
+          helper="$RUNNER_TEMP/native-step-helper/rustx-step-native"
+          sha256sum "$helper"
+          printf 'RUSTX_NATIVE_STEP_EXECUTABLE=%s\nLD_LIBRARY_PATH=%s\n' "$helper" "$prefix/lib" >> "$GITHUB_ENV"
+      - uses: actions/cache/save@v5
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/native-step-occt
+          key: linux-x64-native-step-occt-${{ steps.occt.outputs.key }}
+      - name: Exercise the real converter, transfer coverage and WASM parity
+        working-directory: web-console
+        run: pnpm exec vitest run test/native-step-preview.test.ts --reporter=verbose
+      - name: Exercise native STEP through the existing Workbench in Chromium
+        working-directory: web-console
+        env:
+          RUSTX_BROWSER_PREPARED: "1"
+        run: bash scripts/browser-tests.sh native-step.spec.ts --reporter=list
+
   # Two runners, one Playwright worker each, each running whole spec files
   # from its assigned list. Each shard runs against the prepared inputs only after
   # browser-tests.sh re-verifies them, re-checks the installed production
@@ -1600,6 +1658,7 @@ jobs:
       - desktop-macos
       - browser-prepare
       - web-client
+      - native-step
       - browser-shard
       - browser-report
     if: always()

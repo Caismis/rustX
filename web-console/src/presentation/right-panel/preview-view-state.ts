@@ -10,6 +10,7 @@ export interface PreviewViewState {
     isolation?: { target: string; hidden: string[] };
     outlines?: boolean;
     navigationMode?: 'orbit' | 'pan';
+    section?: { enabled: boolean; axis: 'x' | 'y' | 'z'; offset: number; reversed: boolean };
   };
   imageZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   wrap?: boolean;

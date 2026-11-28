@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { writeFileSync } from 'node:fs';
+import { PNG } from 'pngjs';
 import { instrument, resources } from './geometry-observation';
 import { denseBoxStl, planeAndTinySolidStl } from '../geometry-fixtures';
 import { isCadRuntimeRequest, isGeometryRuntimeRequest } from './geometry-requests';
@@ -61,6 +62,28 @@ test('all geometry formats render through actual delivery and Workspace entry po
     await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(mountedBodies);
     await expect.poll(async () => (await resources(page)).workers).toBe(0);
     await expect.poll(async () => (await resources(page)).contexts).toBe(mountedBodies);
+    const view = page.locator('[data-geometry-format]:visible'), canvas = view.locator('canvas');
+    const size = (await canvas.boundingBox())!;
+    const span = Math.sqrt(300) * 1.1 / Math.min(1, size.width / size.height);
+    await canvas.press('Numpad1');
+    const sides = async () => {
+      const image = PNG.sync.read(await canvas.screenshot({ scale: 'css' }));
+      const center = image.width / 2, dx = 2.5 * image.height / span;
+      const pixel = (x: number) => {
+        const index = (Math.round(image.height / 2) * image.width + Math.round(x)) * 4;
+        return image.data.subarray(index, index + 3);
+      };
+      const background = pixel(image.width * .96);
+      return [center - dx, center + dx].map(x =>
+        Math.hypot(...Array.from(pixel(x), (value, index) => value - background[index])) > 35);
+    };
+    await expect.poll(sides, { message: `${entry} ${name} ordinary view` }).toEqual([true, true]);
+    const section = view.getByRole('button', { name: 'Section', exact: true });
+    await section.click();
+    await view.getByRole('combobox', { name: 'Axis' }).selectOption('x');
+    await expect.poll(sides, { message: `${entry} ${name} retained half` }).toEqual([false, true]);
+    await section.click();
+    await expect.poll(sides, { message: `${entry} ${name} restored view` }).toEqual([true, true]);
   }
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('cad-preview.png') });
   writeFileSync(info.outputPath('format-display-timings.json'), JSON.stringify(timings, null, 2));
@@ -229,21 +252,25 @@ test('failed embedded-image decodes release generated URLs and physical import s
   }
 });
 
-for (const view of ['Top', 'Bottom']) test(`${view} horizontal orbit uses the selected up axis before and after restoration`, async ({ page }) => {
+for (const view of ['Top', 'Bottom']) test(`${view} returns to Y-up turntable and keeps that axis after restoration`, async ({ page }) => {
   await page.goto(`${origin}/test/fixtures/geometry.html`); await openDelivery(page, 'cube.stl');
   const pose = () => page.evaluate(() => (window as any).geometryContract.snapshot().find((item: any) => item.name === 'cube.stl').state.camera as { position: number[]; target: number[]; up: number[] });
-  const drag = async () => {
+  const horizontalOrbit = async () => {
     const before = await pose(), box = (await page.locator('[data-geometry-format] canvas').boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
-    const after = await pose(); expect(Math.hypot(...after.position.map((value, index) => value - before.position[index]))).toBeGreaterThan(1);
-    const axisDistance = (value: typeof before) => value.position.reduce((sum, component, index) => sum + (component - value.target[index]) * before.up[index], 0);
-    expect(axisDistance(after)).toBeCloseTo(axisDistance(before), 5);
+    await page.mouse.move(box.x + box.width / 2 + 55, box.y + box.height / 2, { steps: 6 }); await page.mouse.up();
+    const after = await pose();
+    expect(Math.hypot(...after.position.map((value, index) => value - before.position[index]))).toBeGreaterThan(1);
+    expect(after.up).toEqual([0, 1, 0]);
+    expect(after.position[1] - after.target[1]).toBeCloseTo(before.position[1] - before.target[1], 5);
   };
   await page.getByRole('button', { name: 'View angle', exact: true }).click(); await page.getByRole('menuitem', { name: view, exact: true }).click();
-  await drag();
+  const canvas = page.locator('[data-geometry-format] canvas');
+  await canvas.focus(); await canvas.press(view === 'Top' ? 'Numpad2' : 'Numpad8');
+  await expect.poll(async () => (await pose()).up).toEqual([0, 1, 0]);
+  await horizontalOrbit();
   await page.getByRole('button', { name: 'Hide delivery', exact: true }).click(); await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page);
-  await drag();
+  await horizontalOrbit();
 });
 
 test('a burst of camera changes is coalesced and immediate hide saves its final pose', async ({ page }) => {

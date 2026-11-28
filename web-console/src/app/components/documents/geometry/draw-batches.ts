@@ -28,7 +28,9 @@ export function createDrawBatches(root: Object3D, generated: boolean) {
   const visible = (mesh: Mesh) => { for (let object: Object3D | null = mesh; object; object = object.parent) if (!object.visible) return false; return true; };
   return {
     draw(submit: () => void) {
-      const active = batches.filter(batch => batch.sources.every((mesh, index) => mesh.geometry === batch.originals[index] && visible(mesh)));
+      const active = batches.filter(batch => batch.sources.every((mesh, index) => mesh.geometry === batch.originals[index]
+        && (Array.isArray(mesh.material) ? mesh.material.length === 1 && mesh.material[0] === batch.mesh.material : mesh.material === batch.mesh.material)
+        && visible(mesh)));
       try {
         for (const batch of active) { for (const mesh of batch.sources) mesh.visible = false; root.add(batch.mesh); }
         submit();

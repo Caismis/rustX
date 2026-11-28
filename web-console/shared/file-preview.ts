@@ -1,7 +1,7 @@
 /** File content budgets are independent of the ordinary App Server record size. */
 export const FILE_PREVIEW_LIMITS = Object.freeze({
   pageBytes: 2 * 1024 * 1024, pageLines: 5000, fileBytes: 32 * 1024 * 1024,
-  geometryBytes: 200 * 1024 * 1024,
+  geometryBytes: 200 * 1024 * 1024, nativeStepGlbBytes: 100 * 1024 * 1024,
   officeBytes: 50 * 1024 * 1024, pdfBytes: 32 * 1024 * 1024,
   convertedPdfBytes: 100 * 1024 * 1024,
   spreadsheetBytes: 16 * 1024 * 1024, spreadsheetCells: 250000, parserTimeoutMs: 15000,
@@ -48,11 +48,25 @@ export class PreviewCancelled extends Error {
   }
 }
 
+export interface NativeStepPreviewTiming {
+  threads: 1 | 8;
+  readMs: number;
+  parseMs: number;
+  transferMs: number;
+  meshMs: number;
+  encodeMs: number;
+  processMs: number;
+  roots: number;
+  peakRssKiB: number;
+}
+
 /** A bounded source owner. Idle owners hold no physical read permit. */
 export interface FilePreviewOperation {
   readonly version: string;
   readonly bytes: number;
   readonly file?: import('../../protocol/app-server/v82.ts').SessionFileReference;
+  /** Workbench-only, full-detail GLB generated from the bound STEP source. */
+  readonly nativeStep?: NativeStepPreviewTiming;
   /** Pages remain provisional until close validates the complete source. */
   read(range: { offset: number; length: number }, signal?: AbortSignal): Promise<FileBytes>;
   /** Secure final validation and physical retirement precede success. */

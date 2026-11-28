@@ -1,0 +1,91 @@
+diff --git a/src/RWMesh/RWMesh_FaceIterator.hxx b/src/RWMesh/RWMesh_FaceIterator.hxx
+--- a/src/RWMesh/RWMesh_FaceIterator.hxx
++++ b/src/RWMesh/RWMesh_FaceIterator.hxx
+@@ -36,2 +36,3 @@
+   //! Main constructor.
++  //! An occurrence can override the referred shape's surface color without replacing face styles.
+   Standard_EXPORT RWMesh_FaceIterator (const TDF_Label&       theLabel,
+@@ -39,3 +40,4 @@
+                                        const Standard_Boolean theToMapColors = false,
+-                                       const XCAFPrs_Style&   theStyle = XCAFPrs_Style());
++                                       const XCAFPrs_Style&   theStyle = XCAFPrs_Style(),
++                                       const Standard_Boolean theToOverrideRootColor = false);
+
+@@ -167,3 +169,4 @@
+                        const TopLoc_Location& theLocation,
+-                       const XCAFPrs_Style&   theStyle);
++                       const XCAFPrs_Style&   theStyle,
++                       const TopoDS_Shape&    theRootOverride);
+
+diff --git a/src/RWMesh/RWMesh_FaceIterator.cxx b/src/RWMesh/RWMesh_FaceIterator.cxx
+--- a/src/RWMesh/RWMesh_FaceIterator.cxx
++++ b/src/RWMesh/RWMesh_FaceIterator.cxx
+@@ -29,3 +29,4 @@
+                                           const Standard_Boolean theToMapColors,
+-                                          const XCAFPrs_Style&   theStyle)
++                                          const XCAFPrs_Style&   theStyle,
++                                          const Standard_Boolean theToOverrideRootColor)
+ : myDefStyle (theStyle),
+@@ -49,3 +50,4 @@
+   {
+-    dispatchStyles (theLabel, theLocation, theStyle);
++    dispatchStyles (theLabel, theLocation, theStyle,
++                    theToOverrideRootColor ? XCAFDoc_ShapeTool::GetShape (theLabel) : TopoDS_Shape());
+     myStyles.Bind (aShape, theStyle);
+@@ -84,3 +86,4 @@
+                                           const TopLoc_Location& theLocation,
+-                                          const XCAFPrs_Style&   theStyle)
++                                          const XCAFPrs_Style&   theStyle,
++                                          const TopoDS_Shape&    theRootOverride)
+ {
+@@ -118,3 +121,4 @@
+       }
+-      if (!aCafStyle.IsSetColorSurf()
++      const bool isRootOverride = !theRootOverride.IsNull() && aKeyShape.IsSame (theRootOverride);
++      if ((isRootOverride || !aCafStyle.IsSetColorSurf())
+          && theStyle.IsSetColorSurf())
+diff --git a/src/RWGltf/RWGltf_CafWriter.cxx b/src/RWGltf/RWGltf_CafWriter.cxx
+--- a/src/RWGltf/RWGltf_CafWriter.cxx
++++ b/src/RWGltf/RWGltf_CafWriter.cxx
+@@ -434,3 +434,4 @@
+
+-    RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style);
++    RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                   aDocNode.Label != aDocNode.RefLabel);
+     if (myToMergeFaces)
+@@ -645,3 +646,4 @@
+
+-      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style);
++      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                          aDocNode.Label != aDocNode.RefLabel);
+            aFaceIter.More(); aFaceIter.Next())
+@@ -747,3 +749,4 @@
+     {
+-      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style); aFaceIter.More(); aFaceIter.Next())
++      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                          aDocNode.Label != aDocNode.RefLabel); aFaceIter.More(); aFaceIter.Next())
+       {
+@@ -1378,3 +1381,4 @@
+       const XCAFPrs_DocumentNode& aDocNode = aSceneNodeIter.Value();
+-      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style); aFaceIter.More(); aFaceIter.Next())
++      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                          aDocNode.Label != aDocNode.RefLabel); aFaceIter.More(); aFaceIter.Next())
+       {
+@@ -1407,3 +1411,4 @@
+     const XCAFPrs_DocumentNode& aDocNode = aSceneNodeIter.Value();
+-    for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style); aFaceIter.More(); aFaceIter.Next())
++    for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                        aDocNode.Label != aDocNode.RefLabel); aFaceIter.More(); aFaceIter.Next())
+     {
+@@ -1529,3 +1534,4 @@
+     {
+-      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style); aFaceIter.More(); aFaceIter.Next(), ++aNbFacesInNode)
++      for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                          aDocNode.Label != aDocNode.RefLabel); aFaceIter.More(); aFaceIter.Next(), ++aNbFacesInNode)
+       {
+@@ -1838,3 +1844,4 @@
+     const XCAFPrs_DocumentNode& aDocNode = aSceneNodeIter.Value();
+-    for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style); aFaceIter.More(); aFaceIter.Next())
++    for (RWMesh_FaceIterator aFaceIter (aDocNode.RefLabel, TopLoc_Location(), true, aDocNode.Style,
++                                        aDocNode.Label != aDocNode.RefLabel); aFaceIter.More(); aFaceIter.Next())
+     {

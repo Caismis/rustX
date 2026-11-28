@@ -1,4 +1,4 @@
-"""Generate analytic 10-unit cubes. Run with cadquery-ocp-novtk==7.9.3.1.1.
+"""Generate analytic cube and pole-sphere fixtures with cadquery-ocp-novtk==7.9.3.1.1.
 
 The fixtures and this generator are original rustX test data (MIT).
 OCCT exporters run independently of the browser importer. Bounds are analytic:
@@ -9,7 +9,7 @@ import json
 import struct
 import base64
 import zlib
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeSphere
 from OCP.BRepTools import BRepTools
 from OCP.STEPControl import STEPControl_Writer, STEPControl_AsIs
 from OCP.IGESControl import IGESControl_Writer
@@ -23,6 +23,10 @@ for unit, name in [("MM", "cube.step"), ("INCH", "cube-inch.step")]:
     writer = STEPControl_Writer()
     writer.Transfer(shape, STEPControl_AsIs)
     writer.Write(str(root / name))
+Interface_Static.SetCVal_s("write.step.unit", "MM")
+sphere_writer = STEPControl_Writer()
+sphere_writer.Transfer(BRepPrimAPI_MakeSphere(5.0).Shape(), STEPControl_AsIs)
+sphere_writer.Write(str(root / "pole-sphere.step"))
 iges = IGESControl_Writer("MM", 1)
 iges.AddShape(shape)
 iges.ComputeModel()
@@ -82,6 +86,6 @@ payload = struct.pack("<II", len(metadata), 0x4E4F534A) + metadata + struct.pack
 (root / "cube-embedded.glb").write_bytes(struct.pack("<III", 0x46546C67, 2, len(payload) + 12) + payload)
 
 # These formats are whitespace-delimited. IGES retains its fixed-width records.
-for name in ("cube.step", "cube-inch.step", "cube.brep"):
+for name in ("cube.step", "cube-inch.step", "pole-sphere.step", "cube.brep"):
     path = root / name
     path.write_text("\n".join(line.rstrip(" \t") for line in path.read_text().splitlines()) + "\n", encoding="utf-8", newline="\n")

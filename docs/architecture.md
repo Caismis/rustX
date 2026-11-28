@@ -172,6 +172,13 @@ STL decoding consumes acknowledged bounded chunks in a disposable Worker;
 provisional decoded data never becomes a displayed model. See [preview workspaces](preview-workspace.md)
 for identity, lifetime, finite budgets, focus and responsive restoration.
 
+For opt-in native STEP previews on Linux, Product Host supervises the pinned
+OCCT helper. The helper receives the authorized source descriptor and produces
+a bounded temporary GLB. Product Host owns conversion admission, cancellation,
+process settlement and output cleanup. After retiring the temporary output, it
+revalidates the source identity, version and workspace authority before the
+browser can publish the preview. See [geometry previews](geometry-previews.md).
+
 ## Native conversation reading (#430)
 
 ConversationStore owns Attempt turn identity/order/location and finite outline/

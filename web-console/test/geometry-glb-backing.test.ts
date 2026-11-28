@@ -1,10 +1,52 @@
 // @vitest-environment node
 import { expect, it, vi } from 'vitest';
-import { Mesh } from 'three';
+import { Mesh, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { admitGlb, importGlb } from '../src/app/components/documents/geometry/glb';
 import { validateScene } from '../src/app/components/documents/geometry/scene-resources';
+import { createStructure } from '../src/app/components/documents/geometry/structure';
 import { encodeGlb, paddedGlbViews } from './geometry-glb-fixtures';
+
+function nativeAssembly(occurrences: number, colorsPerOccurrence: number) {
+  const { json, bin } = paddedGlbViews(1, 128);
+  const materials = Array.from({ length: colorsPerOccurrence }, (_, i) => ({
+    pbrMetallicRoughness: { baseColorFactor: [i / colorsPerOccurrence, .25, .5, 1] },
+  }));
+  return encodeGlb({
+    ...json, materials,
+    meshes: [{ primitives: materials.map((_, material) => ({ ...json.meshes[0].primitives[0], material })) }],
+    nodes: Array.from({ length: occurrences }, (_, i) => ({ mesh: 0, name: `Part ${i + 1}`, translation: [2 * i, 0, 0] })),
+    scenes: [{ nodes: Array.from({ length: occurrences }, (_, i) => i) }],
+  }, bin);
+}
+
+it('keeps 288 native material draws in 96 independently selectable occurrences', async () => {
+  const source = nativeAssembly(96, 3), signal = new AbortController().signal;
+  await expect(importGlb(source, signal)).rejects.toMatchObject({ code: 'limit' });
+  const loaded = await importGlb(source, signal, true);
+  try {
+    const structure = createStructure(loaded.scene, new Vector3(), undefined, loaded.materialPrimitives);
+    const parts = structure.parts.filter(part => part.kind === 'mesh');
+    expect(parts).toHaveLength(96);
+    expect(parts[0].name).toBe('Part 1');
+    expect(loaded.materialPrimitives?.size).toBe(288);
+    const draws = [...loaded.materialPrimitives!].filter(primitive => structure.occurrenceIds.get(primitive) === parts[0].id);
+    expect(draws).toHaveLength(3);
+    structure.select(parts[0].id);
+    expect(structure.inspect()).toMatchObject({ name: 'Part 1', triangles: 3, visibleTriangles: 3 });
+    structure.isolate();
+    expect(draws.every(draw => structure.visible(draw))).toBe(true);
+    expect([...loaded.materialPrimitives!].filter(draw => structure.visible(draw))).toHaveLength(3);
+  } finally { loaded.dispose(); }
+});
+
+it('retains separate native occurrence and draw limits', async () => {
+  const signal = new AbortController().signal;
+  const atDrawLimit = await importGlb(nativeAssembly(128, 4), signal, true);
+  atDrawLimit.dispose();
+  await expect(importGlb(nativeAssembly(171, 3), signal, true)).rejects.toMatchObject({ code: 'limit' });
+  await expect(importGlb(nativeAssembly(257, 1), signal, true)).rejects.toMatchObject({ code: 'limit' });
+});
 
 it('passes an exact owned input buffer read-only to the real GLTFLoader', async () => {
   const fixture = paddedGlbViews(1, 128), bytes = encodeGlb(fixture.json, fixture.bin), original = bytes.slice();

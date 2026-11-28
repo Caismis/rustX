@@ -136,7 +136,7 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
               const retire = () => { void retirePreview(identity, retained).catch(() => {}); };
               physical.abort.signal.addEventListener('abort', retire, { once: true });
               if (physical.abort.signal.aborted) { await retirePreview(identity, retained); throw new Error('Obsolete preview operation'); }
-              await finishFile(response, boundary, { ok: true, value: { identity, version: operation.version, bytes: operation.bytes, file: operation.file } });
+              await finishFile(response, boundary, { ok: true, value: { identity, version: operation.version, bytes: operation.bytes, file: operation.file, nativeStep: operation.nativeStep } });
             } else if (method === 'preview-read') {
               const value = await owner!.operation.read(body.range, physical.abort.signal);
               await finishFile(response, boundary, { ok: true, attachment: 'data', value: { ...value, data: null } }, value.data);

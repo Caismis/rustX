@@ -4179,7 +4179,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "f1104d0cef17716a28eee101d2204300911e2f11d789f8023ffab218782f0991"
+      "local_sha256": "dc0399afa2f10b1879d45516537bbf79314ce67032dbd227ea1ef4e30b169846"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4702,7 +4702,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "6f2371038310ba1b9a4d640014d01092fa3f12362134aa33c2b149b374af9510",
+      "local_sha256": "0156eae1cc36269fd8ba006a581be444c1b28af254391d7467754f61378f68bb",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -5063,7 +5063,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "b7886a5381dad2696d6ef6d49fc5887c8f6a9cd88ef6c0291a183fa4b67772f0"
+      "local_sha256": "ca9ef4686f9be7e3a359cecfbda5fe8d6e9d2cae85448b4af6e1efc53e0569e0"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -6006,7 +6006,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "a354c78e096671524eca789d7fbc2eae0115339616a707454ac1627a84cd64bc"
+      "local_sha256": "f91e6f88148bc7764c3e9bfca9aca1caebf156b7ec1afbdd69752e4859e9ac31"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

@@ -75,7 +75,7 @@ test('approximately 200 MB STEP has an admitted whole-model first picture throug
     await canvas.screenshot({path:info.outputPath('step-native-handoff.png')});
     for(const button of ['left','right'] as const)for(let action=0;action<5;action++){const x=fineArea.x+fineArea.width/2,y=fineArea.y+fineArea.height/2,direction=action%2?-1:1;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+32*direction,y+12*direction,{steps:10});await page.mouse.up({button});}
     await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
-    const fineSamples=await page.evaluate(()=>(window as any).geometryLatency.samples.slice(priorFineSamples) as number[]);
+    const fineSamples=await page.evaluate(start=>(window as any).geometryLatency.samples.slice(start) as number[],priorFineSamples);
     await page.getByRole('button',{name:'View angle',exact:true}).click();await page.getByRole('menuitem',{name:'Reset view',exact:true}).click();
     await expect(canvas).toHaveAttribute('data-geometry-quality','complete');
     const originalTriangles=await page.evaluate(()=>(window as any).geometryImports.at(-1).reduce((sum:number,mesh:any)=>sum+mesh.triangles,0));
@@ -275,11 +275,77 @@ test('Workbench CAD uses the shared document body and defaults to revealing the 
     await expect(file.locator('[data-geometry-format] canvas')).toBeVisible();
     await expect(file.getByRole('note')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('geometry-sidebar-zh-dark-narrow.png'), animations: 'disabled' });
+    const narrowCanvas = file.locator('[data-geometry-format] canvas');
+    await narrowCanvas.focus(); await page.keyboard.press('Numpad5'); await expect(narrowCanvas).toBeFocused();
+    const viewAngle = file.getByRole('button', { name: '视角', exact: true });
+    await viewAngle.click(); await expect(page.getByRole('menuitem', { name: '透视投影', exact: true })).toHaveAttribute('aria-current', 'true');
+    await page.keyboard.press('Escape'); await narrowCanvas.focus(); await page.keyboard.press('Numpad1');
+    await viewAngle.click(); await expect(page.getByRole('menuitem', { name: '正交投影', exact: true })).toHaveAttribute('aria-current', 'true');
+    await page.keyboard.press('Escape');
     await file.getByRole('button', { name: '部件', exact: true }).click();
     await expect(file.getByRole('button', { name: '展开: Mounting bracket', exact: true })).toHaveAttribute('aria-expanded', 'false');
     await page.screenshot({ path: info.outputPath('geometry-sidebar-parts-zh-dark-narrow.png'), animations: 'disabled' });
     await file.getByRole('button', { name: '收起部件', exact: true }).click();
     await expect(file.getByRole('button', { name: '部件', exact: true })).toBeFocused();
+    passed = true;
+  } finally { await page.close(); await fixture.workspaceHost.stop(); await fixture.stop(passed); }
+});
+
+test('Workbench keypad navigation stays with the selected copy in split and floating views', async ({ page }) => {
+  await instrument(page);
+  await page.setViewportSize({ width: 1700, height: 1000 });
+  const fixture = await deliveredModel(page); let passed = false;
+  try {
+    await page.locator('[data-preview-toggle]').click();
+    const workbench = page.locator('[data-workbench]'), panes = workbench.locator('[data-dockkit-pane]');
+    await workbench.getByRole('button', { name: /Workspace files/ }).click();
+    await workbench.getByRole('button', { name: 'mounting-bracket.step', exact: true }).click();
+    const first = workbench.locator('[data-workbench-file="mounting-bracket.step"]'), firstCanvas = first.locator('canvas[data-geometry-lod="full"]');
+    await expect(firstCanvas).toBeVisible();
+    await first.getByRole('button', { name: 'Parts', exact: true }).click();
+    await first.getByRole('button', { name: 'Expand: Mounting bracket', exact: true }).click();
+    await first.getByRole('button', { name: 'Base plate', exact: true }).click();
+    await firstCanvas.focus(); await page.keyboard.press('NumpadDivide'); await expect(firstCanvas).toBeFocused();
+    const firstIsolate = first.getByRole('button', { name: 'Isolate', exact: true });
+    await expect(firstIsolate).toHaveAttribute('aria-pressed', 'true');
+
+    // The same key in chat neither changes projection nor steals focus.
+    const chat = page.getByRole('textbox', { name: 'Message', exact: true });
+    await chat.focus(); await page.keyboard.type('1 / 5'); await page.keyboard.press('Numpad5');
+    await expect(chat).toBeFocused(); await expect(chat).toContainText('1 / 5');
+    const projection = async (body: ReturnType<typeof page.locator>, name: 'Orthographic' | 'Perspective') => {
+      await body.getByRole('button', { name: 'View angle', exact: true }).click();
+      await expect(page.getByRole('menuitem', { name, exact: true })).toHaveAttribute('aria-current', 'true');
+      await page.keyboard.press('Escape');
+    };
+    await projection(first, 'Orthographic');
+
+    await firstCanvas.focus(); await page.keyboard.press('Control+Backslash');
+    await expect(panes).toHaveCount(2);
+    const split = panes.last();
+    await split.getByRole('button', { name: /Workspace files/ }).click();
+    await split.getByRole('button', { name: 'mounting-bracket.glb', exact: true }).click();
+    const second = workbench.locator('[data-workbench-file="mounting-bracket.glb"]');
+    const secondCanvas = second.locator('canvas[data-geometry-lod="full"]');
+    await expect(secondCanvas).toBeVisible();
+    await second.getByRole('button', { name: 'Parts', exact: true }).click();
+    await expect(second.getByRole('button', { name: 'Isolate', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(firstIsolate).toHaveAttribute('aria-pressed', 'true');
+    await second.getByRole('button', { name: 'Close parts', exact: true }).click();
+    await secondCanvas.focus(); await page.keyboard.press('Numpad5');
+    await projection(second, 'Perspective'); await projection(first, 'Orthographic');
+
+    const tab = workbench.getByRole('tab', { name: /mounting-bracket.glb/ });
+    await tab.hover(); const box = (await tab.boundingBox())!;
+    await page.mouse.move(box.x + 25, box.y + 14); await page.mouse.down();
+    await page.mouse.move(480, 200, { steps: 12 }); await page.mouse.up();
+    await expect(workbench.locator('[data-dockkit-float] [data-workbench-file="mounting-bracket.glb"]')).toBeVisible();
+    await expect(secondCanvas).toBeVisible();
+    await projection(second, 'Perspective');
+    const before = await page.evaluate(() => ({ ...(window as any).geometryActivity }));
+    await secondCanvas.focus(); await page.keyboard.press('Numpad3'); await expect(secondCanvas).toBeFocused();
+    await projection(second, 'Orthographic');
+    expect(await page.evaluate(() => (window as any).geometryActivity)).toEqual(before);
     passed = true;
   } finally { await page.close(); await fixture.workspaceHost.stop(); await fixture.stop(passed); }
 });

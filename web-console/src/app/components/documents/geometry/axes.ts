@@ -45,7 +45,7 @@ export function createAxisNavigation(container: HTMLElement, labels: AxisLabels,
   }
   relabel(labels); container.append(element);
   return {
-    relabel,
+    element, relabel,
     get focusedAxis() { return disposed ? undefined : axes.find(control => control.group === container.ownerDocument.activeElement)?.axis; },
     focusAxis(axis: GeometryAxis) { if (!disposed) axes.find(control => control.axis === axis)?.group.focus({ preventScroll: true }); },
     update(camera: Camera, side: number) {

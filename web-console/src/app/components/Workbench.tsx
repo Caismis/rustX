@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
 import { lazy, Suspense, useMemo, useEffect, useImperativeHandle, useLayoutEffect, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
-import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
+import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog } from '../../workspaces/host';
 import type { WorkbenchRequest, WorkbenchTerminal, WorkbenchTarget } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
 import { WorkspaceFiles, fileTabView } from './WorkbenchFiles';
@@ -30,7 +30,7 @@ const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
 export interface WorkbenchHandle { openSideQuestion(): void; openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void; openTask(id: string, title: string): void }
 export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, active = true, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderSideQuestion?: (visible: boolean) => ReactNode; renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; active?: boolean; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
+  renderSideQuestion?: (visible: boolean) => ReactNode; renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope & Pick<WorkspaceCatalog, 'nativeStepPreview'>; target?: WorkbenchTarget; active?: boolean; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
 }) {
   const tx = useTranslation();
   const session = target && 'session_id' in target ? target : undefined;
@@ -89,6 +89,7 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
       if (request.kind === 'office') { const demand = previewDemands(host, scope); return demand.documents.run(active, () => demand.privateReads.run(active, work)); }
       return request.kind === 'preview' ? previewDemands(host, scope).privateReads.run(active, work) : work();
     };
+    call.nativeStepPreview = scope?.nativeStepPreview === true;
     if (host.openWorkspacePreview && scope && target) call.openPreview = async (path, signal) => {
       const demand = previewDemands(host, scope);
       const operation = await demand.privateReads.run(signal, () => host.openWorkspacePreview!(scope, { target, request: { kind: 'preview', path, read: { kind: 'bytes', range: { offset: 0, length: 1 } } } }, signal));
@@ -99,7 +100,7 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
     };
     if (host.observeWorkspaceFile && scope && target) call.observe = (path, changed, signal) => previewDemands(host, scope).privateReads.run(signal, () => host.observeWorkspaceFile!(scope, { target, request: { kind: 'preview', path, read: { kind: 'bytes', range: { offset: 0, length: 1 } } } }, changed, signal));
     return call;
-  },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace]);
+  },[host,scope?.authorityId,scope?.endpoint,scope?.nativeStepPreview,session?.session_id,session?.active_node,workspace]);
   const available=!!host.workbench && !!scope && !!target;
   const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string},replace = false)=>{
     const before=dock.getSnapshot().state;

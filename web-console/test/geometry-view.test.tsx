@@ -19,7 +19,7 @@ vi.mock('../src/app/components/documents/geometry/parse', () => ({
   parseGeometryStream: (source: GeometrySource, signal: AbortSignal) => source.consume({ start() {}, chunk() {} }, signal),
 }));
 vi.mock('../src/app/components/documents/geometry/viewport', () => ({ prepareGeometryGraphics:graphics,mountGeometry: (_element: unknown, _object: unknown, _bounds: unknown, saved: unknown, _labels: unknown, publish: (patch: unknown) => void) => {
-  const control = { navigationMode: (saved as { navigationMode?: string } | undefined)?.navigationMode === 'pan' ? 'pan' : 'orbit', setNavigationMode: vi.fn((mode: 'pan' | 'orbit') => { control.navigationMode = mode; publish({ navigationMode: mode === 'pan' ? mode : undefined }); }), setVisible: vi.fn(), focusAxis: vi.fn(), fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), isolate: vi.fn(), restore: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: (saved as { camera?: { projection?: string } } | undefined)?.camera?.projection ?? 'orthographic', setProjection: vi.fn(), setOutlines: vi.fn(async (enabled:boolean) => enabled?'on':'off'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }, { id: '0.1', name: 'Wing', depth: 1, kind: 'mesh' }] }; imports.mounts.push(control); return control;
+  const control = { navigationMode: (saved as { navigationMode?: string } | undefined)?.navigationMode === 'pan' ? 'pan' : 'orbit', setNavigationMode: vi.fn((mode: 'pan' | 'orbit') => { control.navigationMode = mode; publish({ navigationMode: mode === 'pan' ? mode : undefined }); }), setVisible: vi.fn(), focusAxis: vi.fn(), fit: vi.fn(), reset: vi.fn(), focus: vi.fn(), toggleIsolation: vi.fn(), showAll: vi.fn(), refreshPreview: vi.fn(), projection: (saved as { camera?: { projection?: string } } | undefined)?.camera?.projection ?? 'orthographic', setProjection: vi.fn(), setOutlines: vi.fn(async (enabled:boolean) => enabled?'on':'off'), relabel: vi.fn(), inspect: () => ({ name: 'Body', triangles: 12, visibleTriangles: 12, min: [-5, -5, -5], max: [5, 5, 5], dimensions: [10, 10, 10] }), dispose: vi.fn(), publish, saved, pending: undefined as unknown, flush: vi.fn((save = publish) => { if (control.pending) { const patch = control.pending; control.pending = undefined; save(patch); } }), select: vi.fn(), visibility: vi.fn(), parts: [{ id: '0', name: 'Body', depth: 0, kind: 'mesh' }, { id: '0.1', name: 'Wing', depth: 1, kind: 'mesh' }] }; imports.mounts.push(control); return control;
 } }));
 afterEach(() => { cleanup(); imports.pending = []; imports.cad = []; imports.mounts = []; });
 
@@ -202,8 +202,9 @@ it('toggles isolation, switches its target, and can restore after the selection 
   const control = imports.mounts[0] as any;
   let selected: string | undefined, isolated: { target: string; hidden: string[] } | undefined;
   control.select.mockImplementation((id: string | undefined) => { selected = id; control.publish({ selected, hidden: [], isolation: isolated }); });
-  control.isolate.mockImplementation(() => { isolated = { target: selected!, hidden: [] }; control.publish({ selected, hidden: ['0.1'], isolation: isolated }); });
-  control.restore.mockImplementation(() => { isolated = undefined; control.publish({ selected, hidden: [], isolation: undefined }); });
+  control.toggleIsolation.mockImplementationOnce(() => { isolated = { target: '0', hidden: [] }; control.publish({ selected, hidden: ['0.1'], isolation: isolated }); })
+    .mockImplementationOnce(() => { isolated = { target: '0.1', hidden: [] }; control.publish({ selected, hidden: [], isolation: isolated }); })
+    .mockImplementationOnce(() => { isolated = undefined; control.publish({ selected, hidden: [], isolation: undefined }); });
   fireEvent.click(ui.getByRole('button', { name: 'Parts' }));
   fireEvent.click(ui.getByRole('button', { name: 'Expand: Body' }));
   const isolate = ui.getByRole('button', { name: 'Isolate' });
@@ -211,10 +212,10 @@ it('toggles isolation, switches its target, and can restore after the selection 
   fireEvent.click(ui.getByRole('button', { name: 'Body' })); expect(isolate).toHaveProperty('disabled', false);
   fireEvent.click(isolate); expect(isolate.getAttribute('aria-pressed')).toBe('true'); expect(isolate.classList.contains(sharedActiveClass)).toBe(true);
   fireEvent.click(ui.getByRole('button', { name: 'Wing' })); fireEvent.click(isolate);
-  expect(control.isolate).toHaveBeenCalledTimes(2); expect(control.restore).not.toHaveBeenCalled(); expect(isolate.getAttribute('aria-pressed')).toBe('true');
+  expect(control.toggleIsolation).toHaveBeenCalledTimes(2); expect(isolate.getAttribute('aria-pressed')).toBe('true');
   fireEvent.click(ui.getByRole('button', { name: 'Wing' }));
   expect(isolate).toHaveProperty('disabled', false); expect(isolate.getAttribute('aria-pressed')).toBe('true');
-  fireEvent.click(isolate); expect(control.restore).toHaveBeenCalledOnce(); expect(isolate.getAttribute('aria-pressed')).toBe('false');
+  fireEvent.click(isolate); expect(control.toggleIsolation).toHaveBeenCalledTimes(3); expect(isolate.getAttribute('aria-pressed')).toBe('false');
   expect(isolate).toHaveProperty('disabled', true); expect(ui.queryByRole('button', { name: 'Exit isolation' })).toBeNull();
 });
 

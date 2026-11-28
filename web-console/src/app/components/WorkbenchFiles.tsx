@@ -27,7 +27,7 @@ import { Menu } from '../../presentation/primitives/Menu';
 import { IconFolderClose16, IconFolderOpenOutline16, IconRefreshOutline16, IconWrapLinesOutline16, IconCodeOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import css from '../../presentation/right-panel/WorkbenchFiles.module.css';
 import type { DesktopApplication } from '../../workspaces/desktop';
-export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { openPreview?: (path: string, signal: AbortSignal) => Promise<FilePreviewOperation>; observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
+export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { nativeStepPreview?: boolean; openPreview?: (path: string, signal: AbortSignal) => Promise<FilePreviewOperation>; observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
 /** Logical tab state; only inert layout/view metadata is persisted. */
 export interface FileTabView { line?: number; focusRevision?: number; treeFocus?: string; expanded: Set<string>; levels: Map<string, WorkbenchResult>; cwd: string; revision: number; mode?: Viewer; document?: PreviewViewState; top: number; left: number; wrap: boolean; cache: PreviewContentCache; current(): boolean; preview?: { call: WorkbenchCall; path: string; owner: PreviewContentOwner; dispose(): void } }
 export const fileTabView = (cache = new PreviewContentCache(), current = () => true): FileTabView => ({ expanded: new Set(), levels: new Map(), cwd: '', revision: 0, top: 0, left: 0, wrap: true, cache, current });
@@ -81,6 +81,7 @@ function Directory({ path, call, view, revision, onOpen, loaded, current }: { pa
 }
 export function WorkspaceFile({ path, call, view, onOpen, visible = true, navigator, tools }: { navigator?: ReactNode; tools?: ReactNode; visible?: boolean; path: string; call: WorkbenchCall; view: FileTabView; onOpen:(path:string)=>void }) {
   const tx = useTranslation();
+  const nativeStep = call.nativeStepPreview === true && /\.(?:step|stp)$/i.test(path);
   const [wrap, setWrap] = useState(view.wrap);
   const [mode, setMode] = useState<Viewer>(view.mode ?? viewersForPath(path)[0]);
   if (!view.preview || view.preview.path !== path) {
@@ -122,7 +123,7 @@ export function WorkspaceFile({ path, call, view, onOpen, visible = true, naviga
     if (mode === 'geometry' && !visible) return;
     view.cache.release(owner); owner.activate();
   }, [owner, view, mode, visible]);
-  useEffect(() => { if (mode === 'geometry' && !visible) return; if (mode === 'geometry') preloadGeometry(path); if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : mode === 'office' ? path.toLowerCase().endsWith('.docx') ? 'docx' : 'pptx' : loadsBytes(mode) ? 'bytes' : 'pages', Math.max(view.document?.textLoadedLines ?? 0, view.line ?? 0)); }, [owner, mode, path, visible]);
+  useEffect(() => { if (mode === 'geometry' && !visible) return; if (mode === 'geometry') preloadGeometry(path, nativeStep ? 'glb' : undefined); if (mode) owner.ensure(mode === 'geometry' ? 'geometry' : mode === 'office' ? path.toLowerCase().endsWith('.docx') ? 'docx' : 'pptx' : loadsBytes(mode) ? 'bytes' : 'pages', Math.max(view.document?.textLoadedLines ?? 0, view.line ?? 0)); }, [owner, mode, path, nativeStep, visible]);
   useLayoutEffect(() => {
     const el = scroll.current;
     if (!el || view.line === undefined || !['code', 'text'].includes(mode) || !value.page?.eof && value.loadedLines < view.line) return;

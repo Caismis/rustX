@@ -4,14 +4,16 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, createReadStream, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { cpus, platform, release } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import type { NativeStepPreviewTiming } from '../../shared/file-preview';
 import { startDogfood } from './dogfood-server';
 import { instrument, observeGeometryLatency, resources } from './geometry-observation';
 import { connectRemote, openEmptySession } from './shell-actions';
 
 interface Fixture { id: string; path: string; control?: boolean }
 interface Benchmark {
-  builds: { baseline: string; lexer: string };
+  builds: { baseline?: string; lexer: string };
+  native?: { executable: string };
   fixtures: Fixture[];
   output: string;
   executablePath?: string;
@@ -89,13 +91,14 @@ async function observeUploads(page: Page) {
   });
 }
 
-async function sample(page: Page, name: string, bytes: number, warm: boolean, diagnostic: boolean) {
+async function sample(page: Page, name: string, bytes: number, warm: boolean, diagnostic: boolean, threads?: 1 | 8) {
   const selector = `[data-files-path="${name}"] > button`;
   await observeGeometryLatency(page, selector, 'click');
   const previous = await page.evaluate(() => {
     performance.clearResourceTimings();
+    performance.clearMarks('geometry:native-step');
     performance.setResourceTimingBufferSize(2_000);
-    for (const name of ['geometry:cad-code-compile', 'geometry:cad-code-wait', 'geometry:display-prepare:step']) performance.clearMeasures(name);
+    for (const name of ['geometry:cad-code-compile', 'geometry:cad-code-wait', 'geometry:display-prepare:step', 'geometry:display-prepare:glb']) performance.clearMeasures(name);
     const observation = window as any;
     return { imports: observation.geometryImports.length, frames: observation.geometryModelFrames.length, uploads: observation.stepUploadFrames.length, lods: observation.geometryLods.length };
   });
@@ -106,7 +109,9 @@ async function sample(page: Page, name: string, bytes: number, warm: boolean, di
     return state.first > 0 || document.querySelector(`[data-workbench-file="${name}"] [role=alert]`);
   }, name, { timeout: 100_000 });
   const failure = file.getByRole('alert');
-  const error = await failure.first().isVisible() ? await failure.first().textContent() : null;
+  const error = await failure.first().isVisible()
+    ? (await failure.first().textContent())?.trim() || 'Preview displayed an error without a message'
+    : null;
   const result = await page.evaluate(previous => {
     const observation = window as any;
     const { start, firstModel, firstModelGpuReady, firstModelSubmission, first, firstGpuReady, firstSubmission, lodStages } = observation.geometryLatency;
@@ -128,11 +133,14 @@ async function sample(page: Page, name: string, bytes: number, warm: boolean, di
     const lods = observation.geometryLods.slice(previous.lods).map((entry: any) => ({ level: entry.level, triangles: entry.triangles, receivedMs: entry.at - start }));
     const gl = document.querySelector<HTMLCanvasElement>('[data-geometry-format="step"] canvas')?.getContext('webgl2');
     const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+    const native = performance.getEntriesByName('geometry:native-step', 'mark').at(-1) as PerformanceMark | undefined;
     return {
       first: { submissionMs: firstModelSubmission, gpuReadyMs: firstModelGpuReady, displayProxyMs: firstModel },
       final: { submissionMs: firstSubmission, gpuReadyMs: firstGpuReady, displayProxyMs: first }, lodStages,
       source: open && close ? { startedMs: open.startTime - start, settledMs: close.responseEnd - start,
         ms: close.responseEnd - open.startTime, pages: pages.length, encodedBytes: pages.reduce((sum, page) => sum + page.encodedBodySize, 0) } : null,
+      native: native ? native.detail as NativeStepPreviewTiming & { bytes: number; transportMs: number } : null,
+      dimensions: document.querySelector('[data-geometry-format="step"] footer')?.textContent,
       wasm: wasm.map(entry => ({ asset: method(entry), startedMs: entry.startTime - start, ms: entry.duration, transferBytes: entry.transferSize })),
       measures, gpu: debug && gl?.getParameter(debug.UNMASKED_RENDERER_WEBGL), lods, frames, uploads,
       geometry: imports.map((meshes: { triangles: number; vertices: number }[]) => ({
@@ -142,14 +150,22 @@ async function sample(page: Page, name: string, bytes: number, warm: boolean, di
       worker: importsTiming,
     };
   }, previous);
-  expect(result.source?.pages, 'Read every source page through Product Host').toBe(Math.ceil(bytes / (2 * 1024 * 1024)));
-  expect(result.source?.encodedBytes).toBeGreaterThanOrEqual(bytes);
-  expect(result.wasm.length).toBe(warm ? 0 : 1);
   if (error) return { ...result, error };
-  expect(result.worker).toHaveLength(1);
-  expect(result.worker[0].profile.cad.some((entry: { name: string }) => entry.name === 'geometry:cad-initialize')).toBe(true);
-  expect(Boolean(result.worker[0].profile.native?.length)).toBe(diagnostic);
-  expect(result.geometry).toHaveLength(1);
+  const payloadBytes = threads ? result.native?.bytes : bytes;
+  expect(payloadBytes).toBeGreaterThan(0);
+  expect(result.source?.pages, 'Read every preview page through Product Host').toBe(Math.ceil(payloadBytes! / (2 * 1024 * 1024)));
+  expect(result.source?.encodedBytes).toBeGreaterThanOrEqual(payloadBytes!);
+  expect(result.wasm.length).toBe(warm || threads ? 0 : 1);
+  if (threads) {
+    expect(result.native?.threads).toBe(threads);
+    expect(result.worker).toHaveLength(0);
+    await expect(file.locator('[data-geometry-preview-format]')).toHaveAttribute('data-geometry-preview-format', 'glb');
+  } else {
+    expect(result.worker).toHaveLength(1);
+    expect(result.worker[0].profile.cad.some((entry: { name: string }) => entry.name === 'geometry:cad-initialize')).toBe(true);
+    expect(Boolean(result.worker[0].profile.native?.length)).toBe(diagnostic);
+    expect(result.geometry).toHaveLength(1);
+  }
   expect(result.frames.some((frame: { lod?: string; triangles: number }) => frame.lod === 'full' && frame.triangles > 0)).toBe(true);
   expect(result.first.displayProxyMs).toBeGreaterThan(0);
   expect(result.final.displayProxyMs).toBeGreaterThanOrEqual(result.first.displayProxyMs);
@@ -161,7 +177,8 @@ test('paired STEP preview from production Workbench', async () => {
   test.skip(!manifest, 'Set RUSTX_STEP_BROWSER_BENCHMARK to a local benchmark JSON manifest.');
   const config: Benchmark = JSON.parse(readFileSync(manifest!, 'utf8'));
   const repetitions = config.repetitions ?? 3, diagnosticRepetitions = config.diagnosticRepetitions ?? 1;
-  if (!config.fixtures.length || config.fixtures.some(fixture => !/^[a-z0-9-]+$/.test(fixture.id))
+  if (!config.builds.lexer || !config.builds.baseline && !config.native || config.native && platform() !== 'linux'
+    || !config.fixtures.length || config.fixtures.some(fixture => !/^[a-z0-9-]+$/.test(fixture.id))
     || new Set(config.fixtures.map(fixture => fixture.id)).size !== config.fixtures.length
     || !Number.isSafeInteger(repetitions) || repetitions < 0 || !Number.isSafeInteger(diagnosticRepetitions) || diagnosticRepetitions < 0
     || repetitions + diagnosticRepetitions === 0)
@@ -174,12 +191,15 @@ test('paired STEP preview from production Workbench', async () => {
     if (files.length !== 1) throw new Error(`Expected one CAD WASM asset in ${build}`);
     return { build, asset: files[0]!, sha256: await sha256(join(assets, files[0]!)) };
   }));
-  if (buildAssets[0]?.sha256 === buildAssets[1]?.sha256) throw new Error('The two builds contain the same CAD WASM');
+  if (buildAssets.length === 2 && buildAssets[0]?.sha256 === buildAssets[1]?.sha256) throw new Error('The two builds contain the same CAD WASM');
+  const variants: { name: string; directory: string; threads?: 1 | 8 }[] = Object.entries(config.builds).map(([name, directory]) => ({ name, directory }));
+  if (config.native) for (const threads of [1, 8] as const) variants.push({ name: `native-${threads}`, directory: config.builds.lexer, threads });
+  const nativeHelper = config.native && await sha256(config.native.executable);
   const graphicsArgs = config.softwareWebGL ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
     : config.softwareWebGL === false && platform() === 'linux' ? ['--enable-gpu', '--use-gl=angle', '--use-angle=gl'] : [];
   const fixture = await startDogfood();
   const servers: Awaited<ReturnType<typeof serve>>[] = [];
-  const report = { cpu: cpus()[0]?.model, os: `${platform()} ${release()}`, browser: '', cases, buildAssets,
+  const report = { cpu: cpus()[0]?.model, os: `${platform()} ${release()}`, browser: '', cases, buildAssets, nativeHelper,
     affinity: platform() === 'linux' ? readFileSync('/proc/self/status', 'utf8').match(/^Cpus_allowed_list:\s*(.*)$/m)?.[1] : undefined,
     rows: [] as unknown[], failures: [] as unknown[] };
   const persist = () => {
@@ -190,14 +210,22 @@ test('paired STEP preview from production Workbench', async () => {
   try {
     for (const { id, path } of config.fixtures)
       for (const mode of ['cold', 'warm']) copyFileSync(path, join(fixture.workspaceA, `${id}-${mode}.step`));
-    for (const build of [config.builds.baseline, config.builds.lexer])
-      servers.push(await serve(build, fixture.hostConfigFile));
+    for (const { directory, threads } of variants) {
+      let hostConfig = fixture.hostConfigFile;
+      if (threads) {
+        const base = JSON.parse(readFileSync(hostConfig, 'utf8'));
+        hostConfig = join(dirname(hostConfig), `native-step-${threads}.json`);
+        writeFileSync(hostConfig, JSON.stringify({ ...base, stepPreviewConverter: { executable: config.native!.executable, threads } }), { mode: 0o600 });
+      }
+      servers.push(await serve(directory, hostConfig));
+    }
     for (const diagnostic of [false, true]) {
       for (let round = 0; round < (diagnostic ? diagnosticRepetitions : repetitions); round++) {
         for (const [index, model] of cases.entries()) {
           if (model.control && round > 0) continue;
-          for (const variant of (round + index) % 2 ? [1, 0] : [0, 1]) {
-            const build = variant ? 'lexer' : 'baseline';
+          for (const [indexInRound] of variants.entries()) {
+            const variant = (indexInRound + round + index) % variants.length;
+            const { name: build, threads } = variants[variant];
             const browser = await chromium.launch({ executablePath: config.executablePath, args: graphicsArgs });
             try {
               report.browser = browser.version();
@@ -217,8 +245,9 @@ test('paired STEP preview from production Workbench', async () => {
               for (const mode of ['cold', 'warm'] as const) {
                 const name = `${model.id}-${mode}.step`;
                 try {
-                  const value = await sample(page, name, model.bytes, mode === 'warm', diagnostic);
-                  if (config.softwareWebGL === false && !value.error)
+                  const value = await sample(page, name, model.bytes, mode === 'warm', diagnostic, threads);
+                  if (value.error) report.failures.push({ model: model.id, build, mode, round, diagnostic, error: value.error });
+                  else if (config.softwareWebGL === false)
                     expect(value.gpu, 'Requested hardware WebGL').toMatch(/^(?!.*(?:SwiftShader|llvmpipe|softpipe)).+$/i);
                   report.rows.push({ model: model.id, build, mode, round, diagnostic, ...value });
                   persist();

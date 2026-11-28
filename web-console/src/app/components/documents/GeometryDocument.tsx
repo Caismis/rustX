@@ -11,8 +11,7 @@ let loaded: Viewer | undefined;
 const loadGeometry = () => import('./geometry/GeometryPreview').then(module => (loaded = module.default));
 // Explicit visible geometry demand only; overlap module loading with the already
 // authorized source read, without opening a file or retaining a scene/Worker.
-export function preloadGeometry(name: string) {
-  const format = geometryFormat(name);
+export function preloadGeometry(name: string, format = geometryFormat(name)) {
   void loadGeometry().catch(() => {});
   if (format === 'glb') void import('three/addons/loaders/GLTFLoader.js').catch(() => {});
   else if (format !== 'stl') void import('./geometry/cad-code').then(module => module.cadCode()).catch(() => {});

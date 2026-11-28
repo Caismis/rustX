@@ -111,7 +111,19 @@ function Fixture() {
     </div>
   </PreviewContext.Provider>;
 }
+let raycastTimes: number[] = [];
 Object.assign(window, { geometryContract: {
+  async observeRaycasts() {
+    const { Mesh } = await import('three');
+    const original = Mesh.prototype.raycast;
+    raycastTimes = [];
+    Mesh.prototype.raycast = function (...args) {
+      const start = performance.now();
+      try { return original.apply(this, args); }
+      finally { raycastTimes.push(performance.now() - start); }
+    };
+  },
+  raycastTimes: () => [...raycastTimes],
   reads, operations, activity, source: (name: string) => [...files.get(name)!.data],
   async loadLargeStep() {
     const response = await fetch('/test/fixtures/large-step.step');

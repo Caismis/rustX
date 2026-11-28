@@ -132,12 +132,33 @@ def classify(changes):
     return {"risk": "high" if reasons else "low", "surfaces": sorted(surfaces), "reasons": reasons}
 
 
+NATIVE_STEP = (
+    ".github/workflows/ci.yml", ".github/scripts/verification.py", ".github/actions/browser-inputs/**",
+    "web-console/package.json", "web-console/pnpm-lock.yaml", "web-console/pnpm-workspace.yaml",
+    "tui/package.json", "tui/pnpm-lock.yaml", "tui/pnpm-workspace.yaml",
+    "web-console/vite.config.ts", "web-console/test/workbench.vite.config.ts",
+    "web-console/scripts/browser-artifact.ts",
+    "web-console/host/step-native/**", "web-console/host/step-preview.ts",
+    "web-console/host/workspace-preview.ts", "web-console/host/workspaces.ts", "web-console/host/http.ts",
+    "web-console/host/workbench.ts", "web-console/host/workspace-fs/**",
+    "web-console/shared/file-preview.ts", "web-console/src/client/geometry-source.ts",
+    "web-console/src/client/preview-content.ts", "web-console/src/workspaces/http-host.ts",
+    "web-console/src/app/components/Workbench*.tsx", "web-console/src/app/components/workbench-documents/**",
+    "web-console/src/app/components/documents/GeometryDocument.tsx", "web-console/src/app/components/documents/geometry/**",
+    "web-console/test/native-step-preview.test.ts", "web-console/test/geometry-step-fixtures.ts",
+    "web-console/test/fixtures/geometry/**", "web-console/playwright.config.ts", "web-console/scripts/browser-tests.sh",
+    "web-console/test/e2e/native-step.spec.ts", "web-console/test/e2e/workbench-host.ts",
+    "web-console/vendor/occt-import-js/**",
+)
+
+
 # Every gated job and when it runs. FULL runs everything once: the complete
 # Rust lanes replace the FAST Rust lane and macOS full replaces macOS core.
-def selected_jobs(profile, surfaces):
+def selected_jobs(profile, surfaces, paths=()):
     full = profile == "full"
     s = set(surfaces)
     rust = "rust" in s or "protocol" in s
+    native_step = not paths or any(matches(path, NATIVE_STEP) for path in paths)
     return {
         "quality": full or rust,
         "rust-fast": not full and rust,
@@ -159,8 +180,9 @@ def selected_jobs(profile, surfaces):
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,
         "desktop-macos": False,
-        "browser-prepare": full or bool(s & {"web", "dev", "rust", "protocol"}),
+        "browser-prepare": native_step or full or bool(s & {"web", "dev", "rust", "protocol"}),
         "web-client": full or bool(s & {"web", "dev", "rust", "protocol"}),
+        "native-step": native_step,
         "browser-shard": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "browser-report": full or bool(s & {"web", "dev", "rust", "protocol"}),
     }
@@ -233,7 +255,7 @@ def plan(event_name, labels, changes):
     else:
         classified = classify(changes)
         profile = "full" if PROMOTION_LABEL in labels else "fast"
-    run = selected_jobs(profile, classified["surfaces"])
+    run = selected_jobs(profile, classified["surfaces"], paths_of(changes))
     return {**classified, "profile": profile, "run": run,
             "steps": selected_steps(profile, paths_of(changes)), "browser": browser_selection(profile, changes)}
 

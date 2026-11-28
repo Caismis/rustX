@@ -24,6 +24,12 @@
 .control { composes: tool from '../../../../presentation/primitives/CanvasTools.module.css'; }
 .controlActive { composes: active from '../../../../presentation/primitives/CanvasTools.module.css'; }
 .divider { composes: separator from '../../../../presentation/primitives/CanvasTools.module.css'; }
+.sectionControls { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 12px; border-top: .5px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-base); }
+.sectionControls select { color: inherit; background: var(--dsw-alias-bg-base); }
+.sectionOffset { display: flex; flex: 1 1 auto; align-items: center; gap: 4px; }
+.sectionOffset input { flex: 1 1 84px; min-width: 48px; width: 84px; }
+.sectionOffset output { color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.sectionHelp { color: var(--dsw-alias-label-secondary); }
 .count { margin-inline-start: 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .metadata { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 .units { margin-inline-start: 8px; color: var(--dsw-alias-label-tertiary); }

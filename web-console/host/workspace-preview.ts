@@ -3,8 +3,8 @@ import { openWorkspacePath } from './workbench.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import { FILE_PREVIEW_LIMITS, PreviewCancelled, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
 const version = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-const descriptorVersion = (fd: number) => version(fstatSync(fd, { bigint: true }));
-function openPreviewPath(root: string, path: string) {
+export const descriptorVersion = (fd: number, stat = fstatSync(fd, { bigint: true })) => version(stat);
+export function openPreviewPath(root: string, path: string) {
   try { return openWorkspacePath(root, path, false); }
   catch (error) {
     const code = (error as NodeJS.ErrnoException).code;

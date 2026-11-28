@@ -1,5 +1,5 @@
 import { FILE_PREVIEW_LIMITS as L, isFileData, type FileBytes } from '../../shared/file-preview';
-import type { FilePreviewOperation } from '../../shared/file-preview';
+import type { FilePreviewOperation, NativeStepPreviewTiming } from '../../shared/file-preview';
 import type { GeometrySourceConsumer } from '../../shared/geometry-source';
 import { settlementFailureKind, WorkspaceHostError } from '../workspaces/host';
 
@@ -7,7 +7,7 @@ type Open = (signal: AbortSignal) => Promise<FilePreviewOperation>;
 /** Internal policies: streamed STL defaults to bounded adaptive reads; complete-input GLB/CAD defaults to two reads. */
 export type GeometryReadPolicy = 'fixed1' | 'fixed2' | 'adaptive';
 export interface GeometryReadObservation { offset: number; bytes: number; width: number; nextWidth: number; readMs: number; processMs: number }
-export function readGeometrySource(open: Open, signal: AbortSignal): Promise<{ data: Uint8Array<ArrayBuffer>; version: string }>;
+export function readGeometrySource(open: Open, signal: AbortSignal): Promise<{ data: Uint8Array<ArrayBuffer>; version: string; nativeStep?: NativeStepPreviewTiming }>;
 export function readGeometrySource(open: Open, signal: AbortSignal, consumer: GeometrySourceConsumer, policy?: GeometryReadPolicy, observe?: (sample: GeometryReadObservation) => void): Promise<{ version: string }>;
 export async function readGeometrySource(open: Open, signal: AbortSignal, consumer?: GeometrySourceConsumer, policy: GeometryReadPolicy = consumer ? 'adaptive' : 'fixed2', observe?: (sample: GeometryReadObservation) => void) {
   const controller = new AbortController(), reading = controller.signal;
@@ -33,9 +33,11 @@ export async function readGeometrySource(open: Open, signal: AbortSignal, consum
   };
   try {
     reading.throwIfAborted(); operation = await open(reading); reading.throwIfAborted();
-    const { bytes: total, version } = operation;
+    const { bytes: total, version, nativeStep } = operation;
     if (!Number.isSafeInteger(total) || total < 0 || typeof version !== 'string' || !version) throw new Error('malformed');
-    if (total > L.geometryBytes) throw new WorkspaceHostError('too_large', 'too_large');
+    if (total > (nativeStep ? L.nativeStepGlbBytes : L.geometryBytes)) throw new WorkspaceHostError('too_large', 'too_large');
+    if (nativeStep && consumer) throw new Error('malformed');
+    const transportStart = performance.now();
     let data: Uint8Array<ArrayBuffer> | undefined;
     await consumer?.start({ bytes: total, version });
     let nextOffset = 0, received = 0;
@@ -80,7 +82,11 @@ export async function readGeometrySource(open: Open, signal: AbortSignal, consum
     if (received !== total) throw new Error('malformed');
     await operation.close(); operation = undefined;
     reading.throwIfAborted();
-    return data ? { data, version } : { version };
+    if (nativeStep) {
+      performance.clearMarks('geometry:native-step');
+      performance.mark('geometry:native-step', { detail: { ...nativeStep, bytes: total, transportMs: performance.now() - transportStart } });
+    }
+    return data ? { data, version, ...(nativeStep ? { nativeStep } : {}) } : { version };
   } catch (cause) {
     failure(cause);
     await Promise.allSettled(pending);

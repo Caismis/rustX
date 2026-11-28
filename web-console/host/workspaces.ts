@@ -27,12 +27,15 @@ import { observeFile } from './file-observation.ts';
 import { sameSessionFile } from '../shared/session-file-identity.ts';
 import { readWorkspacePreview, openWorkspaceBytePreview } from './workspace-preview.ts';
 import { observeNativeDelivery } from './native-file-observation.ts';
+import { NativeStepPreview, type StepPreviewConverterConfig } from './step-preview.ts';
 
 export interface LocalHostConfig {
   /** Operator attests native runtime and Host share the same filesystem namespace. */
   nativeFilesystem?: 'shared';
   /** Explicit launcher-owned native process supervisor, never browser input. */
   terminalSupervisor?: string;
+  /** Linux Workbench opt-in, configured by the Host operator. */
+  stepPreviewConverter?: StepPreviewConverterConfig;
   transportToken?: string;
   /** Launcher-provisioned secret for native file reads. Never sent to browser. */
   productHostToken?: string;
@@ -59,6 +62,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private closing?: Promise<void>;
   private documentReads = new Set<AbortController>();
   private readonly documents = new OfficeDocuments();
+  private readonly stepPreview?: NativeStepPreview;
   private fileReads = new Set<AbortController>();
   private previewOwners = new Set<AbortController>();
   private previewRetirements = new Set<Promise<void>>();
@@ -82,6 +86,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.terminals = new WorkspaceTerminals(config.terminalSupervisor);
     this.desktop = desktop; this.readSession = readSession;
     this.config = config;
+    if (config.stepPreviewConverter) this.stepPreview = new NativeStepPreview(config.stepPreviewConverter);
     if (!isAbsolute(config.metadataFile)) throw new Error('Host metadataFile must be absolute');
     this.roots = config.roots.map(root => {
       if (!isAbsolute(root.cwd) || !statSync(root.cwd).isDirectory()) throw new Error('Host roots must be absolute existing directories');
@@ -137,6 +142,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
       workspaces: this.registrations.map(({ id, location, displayName, folder }) => ({ id, location, displayName, displayPath: folder?.path ?? this.roots.find(root => root.id === location)!.cwd })),
       ...(preferredWorkspace ? { preferredWorkspace } : {}),
+      ...(this.stepPreview ? { nativeStepPreview: true as const } : {}),
       picker: this.folderPicker() ? { kind: 'native' } : this.config.picker ? { kind: this.canBrowse() ? 'browser' : 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
@@ -191,7 +197,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       const check = async () => {
         const current = await this.resolveWorkbenchRoot(scope, call.target, active);
         if (current.cwd !== root.cwd) throw new WorkspaceHostError('source_changed', 'source_changed');
+        if ('session_id' in call.target && 'ownershipGeneration' in root
+          && (!('ownershipGeneration' in current) || current.ownershipGeneration !== root.ownershipGeneration))
+          throw new WorkspaceHostError('authorization_revoked', 'authorization_revoked');
       };
+      if (this.stepPreview && /\.(?:step|stp)$/i.test(path)) {
+        const converter = this.stepPreview;
+        return acquire(() => converter.open(root.cwd, path, check, active));
+      }
       return acquire(() => {
         const operation = openWorkspaceBytePreview(root.cwd, path, active);
         return { ...operation,
@@ -271,7 +284,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return opened;
       }));
       owner.signal.throwIfAborted();
-      return { version: source.version, bytes: source.bytes, file: source.file,
+      return { version: source.version, bytes: source.bytes, file: source.file, nativeStep: source.nativeStep,
         read: (range, active = owner.signal) => {
           validateFileRead({ kind: 'bytes', range });
           if (closing || pending.size >= 2) return Promise.reject(new Error('Obsolete or full preview operation'));
