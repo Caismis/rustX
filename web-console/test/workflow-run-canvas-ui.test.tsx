@@ -838,8 +838,11 @@ describe('WorkflowRunCanvas UI and integration', () => {
     );
 
     const loadMoreBtn = await screen.findByRole('button', { name: 'Load more trace visits' });
-    const flowBefore = document.querySelector('.react-flow');
-    expect(flowBefore).toBeTruthy();
+    const flowBefore = await waitFor(() => {
+      const flow = document.querySelector('.react-flow');
+      expect(flow).toBeTruthy();
+      return flow;
+    });
     expect(readHeaderSpy).toHaveBeenCalledTimes(1);
     const organizeCallsBefore = organizeSpy.mock.calls.length;
 

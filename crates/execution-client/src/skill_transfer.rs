@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
 
 use base64::Engine as _;
 use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags};
@@ -38,7 +39,8 @@ const MAX_CACHE_AUTHORITIES: usize = 64;
 #[derive(Default)]
 pub(super) struct Transfer {
     sync: Option<Sync>,
-    leases: BTreeMap<LeaseId, BTreeMap<String, File>>,
+    leases: BTreeMap<LeaseId, BTreeMap<String, Arc<File>>>,
+    shared_leases: BTreeMap<(String, String), Weak<File>>,
 }
 
 struct Sync {
@@ -47,7 +49,7 @@ struct Sync {
     _lock: File,
     stage: Option<Stage>,
     bytes: u64,
-    retained: BTreeMap<String, File>,
+    retained: BTreeMap<String, Arc<File>>,
 }
 
 struct Stage {
@@ -72,6 +74,7 @@ impl Transfer {
     pub(super) fn lane_lost(&mut self) -> io::Result<()> {
         let cleanup = self.abort();
         self.sync = None;
+        self.remove_dead_leases();
         cleanup
     }
 
@@ -116,7 +119,10 @@ impl Transfer {
             }
             let sync = self.sync.take().ok_or(io::ErrorKind::InvalidInput)?;
             if let Some(stage) = sync.stage {
-                cleanup_work_item(&sync.owner, &stage.name)?;
+                let cleanup = cleanup_work_item(&sync.owner, &stage.name);
+                drop(sync.retained);
+                self.remove_dead_leases();
+                cleanup?;
                 return Err(io::ErrorKind::InvalidInput.into());
             }
             if !sync.retained.is_empty() {
@@ -125,12 +131,19 @@ impl Transfer {
         } else {
             self.lane_lost()?;
         }
+        self.remove_dead_leases();
         Ok(Reply::SyncEnded)
     }
 
     pub(super) fn release_lease(&mut self, lease: LeaseId) -> Reply {
         self.leases.remove(&lease);
+        self.remove_dead_leases();
         Reply::LeaseReleased
+    }
+
+    fn remove_dead_leases(&mut self) {
+        self.shared_leases
+            .retain(|_, lease| lease.strong_count() > 0);
     }
 
     fn begin_sync(
@@ -246,8 +259,16 @@ impl Transfer {
             if bytes > MAX_SYNC_BYTES.saturating_sub(sync.bytes) {
                 return Err(io::ErrorKind::FileTooLarge.into());
             }
-            let lease = open_existing(&version_dir, LEASE)?;
-            rustix::fs::flock(&lease, FlockOperation::NonBlockingLockShared)?;
+            let key = (sync.authority.clone(), version.to_owned());
+            let lease = if let Some(lease) = self.shared_leases.get(&key).and_then(Weak::upgrade) {
+                lease
+            } else {
+                let lease = open_existing(&version_dir, LEASE)?;
+                rustix::fs::flock(&lease, FlockOperation::NonBlockingLockShared)?;
+                let lease = Arc::new(lease);
+                self.shared_leases.insert(key, Arc::downgrade(&lease));
+                lease
+            };
             sync.retained.insert(version.to_owned(), lease);
             sync.bytes += bytes;
         }
@@ -371,7 +392,12 @@ impl Transfer {
                 // The published version is already visible. A leftover intent
                 // is harmless and will be removed on the next sync.
                 let _ = remove_intent(&sync.owner, &stage.name);
-                sync.retained.insert(stage.version.clone(), stage.lease);
+                let lease = Arc::new(stage.lease);
+                self.shared_leases.insert(
+                    (sync.authority.clone(), stage.version.clone()),
+                    Arc::downgrade(&lease),
+                );
+                sync.retained.insert(stage.version.clone(), lease);
                 Ok(Reply::Published {
                     package: PathBuf::from(CACHE)
                         .join(&sync.authority)
@@ -1373,6 +1399,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one package shared across committed and provisional catalog leases"
+    )]
     fn eviction_waits_for_the_last_catalog_lease() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path().join("rustx");
@@ -1426,11 +1456,41 @@ mod tests {
             .begin_sync(&root, &collection, &authority())
             .unwrap();
         transfer.retain(&version('e')).unwrap();
+        let published_lease = &transfer.leases[&older][&version('e')];
+        let provisional_lease = &transfer.sync.as_ref().unwrap().retained[&version('e')];
+        assert!(Arc::ptr_eq(published_lease, provisional_lease));
+        assert_eq!(Arc::strong_count(published_lease), 2);
         let current = LeaseId::new_v4();
         transfer.end_sync(Some(current)).unwrap();
+        let published_lease = &transfer.leases[&older][&version('e')];
+        let current_lease = &transfer.leases[&current][&version('e')];
+        assert!(Arc::ptr_eq(published_lease, current_lease));
+        assert_eq!(transfer.shared_leases.len(), 1);
+        let mut refreshes = Vec::new();
+        for _ in 0..64 {
+            transfer
+                .begin_sync(&root, &collection, &authority())
+                .unwrap();
+            transfer.retain(&version('e')).unwrap();
+            let refresh = LeaseId::new_v4();
+            transfer.end_sync(Some(refresh)).unwrap();
+            assert!(Arc::ptr_eq(
+                &transfer.leases[&older][&version('e')],
+                &transfer.leases[&refresh][&version('e')]
+            ));
+            refreshes.push(refresh);
+        }
+        assert_eq!(
+            Arc::strong_count(&transfer.leases[&older][&version('e')]),
+            66
+        );
+        for refresh in refreshes {
+            transfer.release_lease(refresh);
+        }
         transfer
             .begin_sync(&root, &collection, &authority())
             .unwrap();
+        transfer.retain(&version('e')).unwrap();
         let owner = PackageDirectory::open(&collection.join(CACHE).join(authority())).unwrap();
         assert!(prune(&owner, 1, 1).is_err());
         assert_eq!(transfer.release_lease(older), Reply::LeaseReleased);
@@ -1443,6 +1503,10 @@ mod tests {
         assert_eq!(fs::read(&readable).unwrap(), b"x");
         assert_eq!(transfer.release_lease(current), Reply::LeaseReleased);
         assert_eq!(transfer.release_lease(current), Reply::LeaseReleased);
+        assert!(prune(&owner, 1, 1).is_err());
+        assert_eq!(transfer.shared_leases.len(), 1);
+        transfer.lane_lost().unwrap();
+        assert!(transfer.shared_leases.is_empty());
         prune(&owner, 1, 1).unwrap();
         assert!(!readable.exists());
     }

@@ -504,8 +504,24 @@ impl SkillDiscovery {
         &self,
         endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
     ) -> io::Result<SkillDiscoveryOutcome> {
+        let mut user_capture = None;
+        for root in self
+            .config
+            .automatic
+            .iter()
+            .filter(|root| root.source == SkillSource::User)
+        {
+            let home = user_home_from_collection(&root.root)?;
+            if user_capture.is_some() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            user_capture = Some(capture_user_skills(
+                &home.join("rustx/.agents/skills"),
+                &self.cancellation,
+            )?);
+        }
         let client = Client::new(endpoint, &self.cancellation);
-        let mut outcome = self.discover_with(Some(&client), None)?;
+        let mut outcome = self.discover_with(Some(&client), user_capture.as_ref())?;
         outcome.observed_workspace = client.into_observations();
         Ok(outcome)
     }

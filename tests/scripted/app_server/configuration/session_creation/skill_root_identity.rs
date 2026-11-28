@@ -457,6 +457,46 @@ async fn symlinked_home_with_no_collection_still_binds() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn symlinked_product_with_invalid_user_collection_still_binds() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_user_root_alias(true).await;
+        let home = &fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory;
+        let collection = home.join("rustx/.agents/skills");
+        if collection.exists() {
+            std::fs::remove_dir(&collection).unwrap();
+        }
+        std::fs::create_dir_all(collection.parent().unwrap()).unwrap();
+        std::fs::write(&collection, "not a directory").unwrap();
+        assert_ne!(collection, collection.canonicalize().unwrap());
+
+        let mut client = fixture.start_execution(0).await;
+        fixture.load(0).await.unwrap().unwrap();
+        let runtime = fixture
+            .manager
+            .configuration_runtime(&fixture.sessions[0].id)
+            .unwrap();
+        let resources = runtime.runtime_resources();
+        let skills = resources.capability().skills();
+        assert!(skills.catalog_entries().is_empty());
+        assert!(skills.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            crate::skills::SkillDiagnostic::SourceRootInvalid {
+                source: crate::skills::SkillSource::User,
+                detail,
+                ..
+            } if detail == "Skill collection is not a directory"
+        )));
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn symlinked_product_root_publishes_a_readable_physical_path() {
     Box::pin(bounded(async {
         let fixture = Fixture::with_user_root_alias(true).await;

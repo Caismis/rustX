@@ -34,7 +34,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rustx_execution_protocol::watch::{WatchChange, WatchId};
 use rustx_execution_protocol::{
@@ -137,22 +137,19 @@ impl Eq for UserSkillLease {}
 impl Drop for UserSkillLease {
     fn drop(&mut self) {
         let endpoint = Arc::clone(&self.endpoint);
-        let request = rustx_execution_protocol::skills::Request::ReleaseLease { lease: self.id };
-        self.runtime.spawn(async move {
-            let released = endpoint
-                .release_retained_record(move |connection, deadline| {
-                    connection
-                        .user_skill_transfer_until(&request, deadline)
-                        .map(|reply| {
-                            reply == rustx_execution_protocol::skills::Reply::LeaseReleased
-                        })
-                })
-                .await;
-            if !released {
-                endpoint.cut_pair_if_open();
-            }
-        });
+        self.runtime
+            .spawn(endpoint.release_user_skill_lease(self.id, RETAINED_RELEASE_WAIT));
     }
+}
+
+const RETAINED_RELEASE_WAIT: Duration =
+    rustx_execution_protocol::SAME_INSTANCE_RECOVERY_WINDOW.saturating_add(PAGE_REQUEST_TIMEOUT);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetainedRelease {
+    Released,
+    Busy,
+    Failed,
 }
 
 enum Settlement {
@@ -941,13 +938,13 @@ impl LocalExecutionEndpoint {
 
         let request = PythonSourceRequest::Release { key };
         let released = self
-            .release_retained_record(move |connection, deadline| {
+            .release_retained_record(RETAINED_RELEASE_WAIT, move |connection, deadline| {
                 connection
                     .python_source_by(&request, deadline)
                     .map(|reply| reply == PythonSourceReply::Released)
             })
             .await;
-        if !released {
+        if released != RetainedRelease::Released {
             self.cut_pair_if_open();
         }
     }
@@ -960,14 +957,38 @@ impl LocalExecutionEndpoint {
 
         let request = ChangeRequest::Release { key };
         let released = self
-            .release_retained_record(move |connection, deadline| {
+            .release_retained_record(RETAINED_RELEASE_WAIT, move |connection, deadline| {
                 connection
                     .workspace_changes(request.clone(), deadline, || Ok(()))
                     .map(|reply| reply == ChangeReply::Accepted)
             })
             .await;
-        if !released {
+        if released != RetainedRelease::Released {
             self.cut_pair_if_open();
+        }
+    }
+
+    async fn release_user_skill_lease(self: Arc<Self>, lease: uuid::Uuid, wait: Duration) {
+        use rustx_execution_protocol::skills::{Reply, Request};
+
+        while self.dispatch_open() {
+            match self
+                .release_retained_record(wait, move |connection, deadline| {
+                    connection
+                        .user_skill_transfer_until(&Request::ReleaseLease { lease }, deadline)
+                        .map(|reply| reply == Reply::LeaseReleased)
+                })
+                .await
+            {
+                RetainedRelease::Released => return,
+                // A sync can keep the data lane for many acknowledged
+                // chunks. Cleanup waits behind it without revoking readers.
+                RetainedRelease::Busy => {}
+                RetainedRelease::Failed => {
+                    self.cut_pair_if_open();
+                    return;
+                }
+            }
         }
     }
 
@@ -976,17 +997,19 @@ impl LocalExecutionEndpoint {
     // If revoke has already closed admission, it owns the remaining cleanup.
     async fn release_retained_record(
         self: &Arc<Self>,
+        wait: Duration,
         dispatch: impl Fn(&mut LocalConnection, Instant) -> io::Result<bool> + Send + Sync + 'static,
-    ) -> bool {
-        use rustx_execution_protocol::{
-            SAME_INSTANCE_RECOVERY_WINDOW, transport::recoverable_lane_loss,
-        };
+    ) -> RetainedRelease {
+        use rustx_execution_protocol::transport::recoverable_lane_loss;
 
-        let deadline = Instant::now() + SAME_INSTANCE_RECOVERY_WINDOW + PAGE_REQUEST_TIMEOUT;
-        let Ok(_slot) = wait_for_execution_permit(self.data_slots.clone(), deadline).await else {
-            return false;
+        let deadline = Instant::now() + wait;
+        let _slot = match wait_for_execution_permit(self.data_slots.clone(), deadline).await {
+            Ok(slot) => slot,
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => return RetainedRelease::Busy,
+            Err(_) => return RetainedRelease::Failed,
         };
         let dispatch = Arc::new(dispatch);
+        let mut pending = RetainedRelease::Busy;
         while Instant::now() < deadline {
             let released = self.connection_released.notified();
             tokio::pin!(released);
@@ -1000,11 +1023,16 @@ impl LocalExecutionEndpoint {
             })
             .await;
             match result {
-                Ok(Ok(released)) => return released,
+                Ok(Ok(true)) => return RetainedRelease::Released,
                 Ok(Err(error))
                     if error.kind() == io::ErrorKind::WouldBlock
                         || recoverable_lane_loss(&error) =>
                 {
+                    pending = if error.kind() == io::ErrorKind::WouldBlock {
+                        RetainedRelease::Busy
+                    } else {
+                        RetainedRelease::Failed
+                    };
                     if tokio::time::timeout_at(deadline.into(), released)
                         .await
                         .is_err()
@@ -1012,10 +1040,10 @@ impl LocalExecutionEndpoint {
                         break;
                     }
                 }
-                _ => break,
+                _ => return RetainedRelease::Failed,
             }
         }
-        false
+        pending
     }
 
     pub(crate) fn prepare_managed_python_source(
@@ -4941,6 +4969,62 @@ mod tests {
         assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
         std::thread::spawn(move || control_loop(control));
         client
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn pending_skill_release_waits_behind_a_healthy_data_owner() {
+        use rustx_execution_protocol::skills::{Reply, Request};
+
+        let (_registry, _, endpoint, mut client, _, _root) = admitted_endpoint(BTreeSet::from([
+            Capability::Connection,
+            Capability::UserSkills,
+        ]));
+        let control = endpoint.control().unwrap();
+        let (held, holding) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let busy = tokio::task::spawn_blocking({
+            let endpoint = endpoint.clone();
+            move || {
+                endpoint.hold_data_exchange_for_test(|| {
+                    held.send(()).unwrap();
+                    released.recv().unwrap();
+                })
+            }
+        });
+        holding.await.unwrap();
+        assert_eq!(
+            endpoint
+                .release_retained_record(Duration::from_millis(30), |_, _| {
+                    panic!("the healthy owner still holds the data lane");
+                })
+                .await,
+            RetainedRelease::Busy
+        );
+        let lease = uuid::Uuid::new_v4();
+        let cleanup = tokio::spawn(
+            endpoint
+                .clone()
+                .release_user_skill_lease(lease, Duration::from_secs(3)),
+        );
+        release.send(()).unwrap();
+        busy.await.unwrap().unwrap();
+        let client = tokio::task::spawn_blocking(move || {
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let request = read_record::<ClientRequest>(&mut client).unwrap();
+            assert_eq!(
+                request,
+                ClientRequest::UserSkills(Request::ReleaseLease { lease })
+            );
+            write_record(&mut client, &ClientReply::UserSkills(Reply::LeaseReleased)).unwrap();
+            client
+        })
+        .await
+        .unwrap();
+        cleanup.await.unwrap();
+        assert!(endpoint.control().unwrap().same_pair(&control));
+        drop(client);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
