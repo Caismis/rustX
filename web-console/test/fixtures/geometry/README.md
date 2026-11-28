@@ -45,6 +45,12 @@ mixed Markdown/model tabs.
 analytic bounds `570 × 72 × 190 mm`. It exercises repeated imports, camera input,
 picking and the shared two-body resource budget under the unchanged CAD settings.
 
+`instance-colors.step` contains two placements of one 10 mm cube definition.
+The origin placement inherits red from the definition, and the placement
+at X = 30 mm overrides it with blue. The original MIT fixture is generated
+by `generate-instance-colors.py` and exercises occurrence styles in native
+and WASM STEP preview parity.
+
 The interaction-roadmap tests derive a transformed, repeated two-part GLB from
 the analytic cube without changing its vertex/material data. The curved-outline
 case writes an original unit-sphere STL from Three.js 0.187.0 SphereGeometry

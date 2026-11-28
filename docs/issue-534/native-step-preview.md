@@ -30,9 +30,11 @@ version and current authority before exposing the GLB, while transporting
 bounded ranges, and after output cleanup at final settlement. It retains
 the original descriptor until that final check. The browser uses the same geometry
 admission, render and copy lifecycle as other GLBs. OCCT XCAF transfers names,
-occurrences and colors. The native preview keeps color primitives under their
-owning occurrence for selection and isolation and charges each primitive to
-the draw budget. Root meshing uses the browser CAD importer
+occurrences and colors. The native exporter applies an occurrence's surface
+color over the shared part's surface color and retains explicit face colors.
+The preview keeps color primitives under their owning occurrence for
+selection and isolation and charges each primitive to the draw budget.
+Root meshing uses the browser CAD importer
 parameters of relative deflection 0.001 of the root's mean axis span and an
 angular deflection of 0.5 radians. The exporter writes meters with the viewer's
 Y-up presentation. Session-file delivery uses the existing browser path.
@@ -48,9 +50,10 @@ triangulation check before export.
 ## Build and package
 
 Use OCCT [`d2abb6d844231cb8f29be6894440874a4700e4a5`](https://github.com/Open-Cascade-SAS/OCCT/tree/d2abb6d844231cb8f29be6894440874a4700e4a5)
-(7.6.1), the same version used by the browser runtime. Apply
-`web-console/vendor/occt-import-js/step-bulk-lexer.patch` to an OCCT source
-checkout. Build in Release with RapidJSON headers and the `TKXDESTEP` and
+(7.6.1), the same version used by the browser runtime. Apply both
+`web-console/vendor/occt-import-js/step-bulk-lexer.patch` and
+`web-console/host/step-native/occt-gltf-instance-color.patch` to the OCCT
+source checkout. Build in Release with RapidJSON headers and the `TKXDESTEP` and
 `TKRWMesh` toolkits. CMake can resolve the required dependent toolkits from
 `BUILD_ADDITIONAL_TOOLKITS="TKXDESTEP TKRWMesh"` when the `BUILD_MODULE_*`
 options are off. Enable `USE_RAPIDJSON` and disable `USE_FREETYPE`, `USE_TBB`
@@ -86,7 +89,7 @@ partial-transfer failure through the Product Host and browser.
 The Linux `Native STEP parity and Workbench acceptance` CI job is required
 when the converter, preview contracts, browser integration or their
 validation inputs change. It uses the existing prepared browser inputs.
-The dependency cache key includes the OCCT commit, lexer patch, recipe and
+The dependency cache key includes the OCCT commit, both patches, recipe and
 runner toolchain. The job verifies the installed OCCT file manifest before
 linking the helper into the current checkout and requires the real native
 tests to execute.

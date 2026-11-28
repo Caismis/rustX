@@ -247,7 +247,8 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves geometry
     return { triangles, occurrences: occurrences.sort(), colorAssignments: colorAssignments.sort() };
   };
   try {
-    for (const name of ['cube.step', 'cube-inch.step', 'pole-sphere.step', 'mounting-bracket.step', 'bracket-array.step']) {
+    const assemblies = ['mounting-bracket.step', 'bracket-array.step', 'instance-colors.step'];
+    for (const name of ['cube.step', 'cube-inch.step', 'pole-sphere.step', ...assemblies]) {
       const source = await readFile(new URL(`./fixtures/geometry/${name}`, import.meta.url));
       await writeFile(join(root, name), source);
       const wasm = modelScene(await importCad(Uint8Array.from(source), 'step', module));
@@ -255,6 +256,10 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves geometry
         const min = wasm.bounds.min.clone().multiplyScalar(.001), max = wasm.bounds.max.clone().multiplyScalar(.001);
         const tolerance = wasm.bounds.getSize(new Vector3()).length() * .001 * 1e-5;
         const expected = compareScene(wasm.scene, .001);
+        if (name === 'instance-colors.step') expect(expected.colorAssignments).toEqual([
+          '0,0,0,10000,10000,10000: 1000,0,0',
+          '30000,0,0,40000,10000,10000: 0,0,1000',
+        ]);
         for (const threads of [1, 8] as const) {
           const converter = new NativeStepPreview({ executable: nativeExecutable!, threads });
           const result = await readGeometrySource(active => converter.open(root, name, async () => {}, active), signal());
@@ -265,7 +270,7 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves geometry
             const actual = compareScene(native.scene, 1);
             expect(actual.triangles, `${name} triangles, ${threads} threads`).toBe(expected.triangles);
             expect(actual.occurrences, `${name} occurrence bounds, ${threads} threads`).toEqual(expected.occurrences);
-            if (name === 'mounting-bracket.step' || name === 'bracket-array.step')
+            if (assemblies.includes(name))
               expect(actual.colorAssignments, `${name} colors by occurrence, ${threads} threads`).toEqual(expected.colorAssignments);
             if (name === 'bracket-array.step') {
               expect(actual.occurrences).toHaveLength(96);

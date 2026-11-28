@@ -7,12 +7,14 @@ if [[ $(uname -s) != Linux || $(uname -m) != x86_64 ]]; then
 fi
 
 recipe=$(realpath "$0")
-patch=$(realpath "$(dirname "$recipe")/../../vendor/occt-import-js/step-bulk-lexer.patch")
+lexer_patch=$(realpath "$(dirname "$recipe")/../../vendor/occt-import-js/step-bulk-lexer.patch")
+color_patch=$(realpath "$(dirname "$recipe")/occt-gltf-instance-color.patch")
 revision=d2abb6d844231cb8f29be6894440874a4700e4a5
 
 inputs() {
   printf 'OCCT %s\n' "$revision"
-  printf 'Patch %s\n' "$(sha256sum "$patch" | cut -d ' ' -f 1)"
+  printf 'STEP lexer patch %s\n' "$(sha256sum "$lexer_patch" | cut -d ' ' -f 1)"
+  printf 'glTF instance color patch %s\n' "$(sha256sum "$color_patch" | cut -d ' ' -f 1)"
   printf 'Recipe %s\n' "$(sha256sum "$recipe" | cut -d ' ' -f 1)"
   printf 'C++ %s %s\n' "$(c++ -dumpmachine)" "$(c++ -dumpfullversion -dumpversion)"
   printf 'CMake %s\n' "$(cmake --version | sed -n '1p')"
@@ -47,7 +49,7 @@ case "${1:-}" in
     git -C "$scratch/source" fetch --quiet --depth=1 https://github.com/Open-Cascade-SAS/OCCT.git "$revision"
     [[ $(git -C "$scratch/source" rev-parse FETCH_HEAD) == "$revision" ]]
     git -C "$scratch/source" checkout --quiet --detach FETCH_HEAD
-    git -C "$scratch/source" apply "$patch"
+    git -C "$scratch/source" apply "$lexer_patch" "$color_patch"
     cmake -S "$scratch/source" -B "$scratch/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DINSTALL_DIR="$prefix" \
       -DINSTALL_DIR_LIB=lib -DINSTALL_DIR_INCLUDE=include/opencascade \

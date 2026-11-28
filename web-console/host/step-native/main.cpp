@@ -11,6 +11,7 @@
 #include <Precision.hxx>
 #include <Poly_Triangulation.hxx>
 #include <RWGltf_CafWriter.hxx>
+#include <RWMesh_FaceIterator.hxx>
 #include <STEPCAFControl_Reader.hxx>
 #include <STEPConstruct_ExternRefs.hxx>
 #include <Standard_Failure.hxx>
@@ -26,12 +27,16 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <sys/resource.h>
 
 using Clock = std::chrono::steady_clock;
 static_assert(OCC_VERSION_MAJOR == 7 && OCC_VERSION_MINOR == 6 && OCC_VERSION_MAINTENANCE == 1,
               "Build with the pinned OCCT 7.6.1 used by the bulk-lexer WASM runtime");
+static_assert(std::is_constructible_v<RWMesh_FaceIterator, const TDF_Label&, const TopLoc_Location&,
+                                      bool, const XCAFPrs_Style&, bool>,
+              "Apply occt-gltf-instance-color.patch to the native OCCT build");
 static double milliseconds(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
