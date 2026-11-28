@@ -50,7 +50,7 @@ export function SessionTasks({ client, sessionId, nodeId, disabled }: { client: 
  <button type="button" className="relative inline-flex flex-none items-center justify-center w-[20px] h-[20px] p-0 border-0 rounded-[var(--dsw-radius-sm)] bg-none [color:var(--dsw-alias-label-secondary)] cursor-pointer disabled:cursor-wait focus-visible:[color:var(--dsw-alias-label-primary)] focus-visible:bg-[var(--dsw-alias-interactive-bg-hover)] hover:[color:var(--dsw-alias-label-primary)] hover:bg-[var(--dsw-alias-interactive-bg-hover)]" aria-label={t('action.delete') + ' · ' + row.title} disabled={!connected} onClick={() => setDeleting(row)}><IconTrashOutline16 size={14}/></button>
  </li>;
  })}</ul>
- <Button size="sm" onClick={() => { setOpen(false); navigation?.openTasks(); }}>{t('header.more')}</Button>
+ <Button size="sm" className="self-stretch" onClick={() => { setOpen(false); navigation?.openTasks(); }}>{t('header.more')}</Button>
  </PickerPopover>
  {deleting && <TaskDeleteDialog client={client} record={deleting} close={() => setDeleting(undefined)}/>}
  </span>;
