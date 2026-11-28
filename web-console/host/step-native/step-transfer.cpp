@@ -76,8 +76,12 @@ Handle(StepBasic_ProductDefinition) productOf(const Handle(StepShape_ShapeDefini
 }
 
 void requireShape(const TopoDS_Shape& shape, bool surface) {
-    if (shape.IsNull() || (surface && !TopExp_Explorer(shape, TopAbs_FACE).More()))
-        throw std::runtime_error("Incomplete STEP transfer");
+    if (!shape.IsNull()) {
+        if (TopExp_Explorer(shape, TopAbs_FACE).More()) return;
+        if (!surface && (TopExp_Explorer(shape, TopAbs_EDGE).More()
+                         || TopExp_Explorer(shape, TopAbs_VERTEX).More())) return;
+    }
+    throw std::runtime_error("Incomplete STEP transfer");
 }
 }
 

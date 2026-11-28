@@ -259,6 +259,8 @@ class AffectedSteps(unittest.TestCase):
         for labels in ([], [v.PROMOTION_LABEL]):
             with self.subTest(labels=labels):
                 for path in ("web-console/host/step-native/main.cpp", "web-console/host/workspace-preview.ts",
+                             "web-console/host/workbench.ts", "web-console/host/workspace-fs/binding.gyp",
+                             "web-console/host/workspace-fs/workspace_fs.c",
                              "web-console/src/app/components/documents/geometry/viewport.ts",
                              "web-console/test/e2e/native-step.spec.ts", ".github/workflows/ci.yml",
                              "web-console/package.json", "web-console/pnpm-lock.yaml", "tui/pnpm-lock.yaml",

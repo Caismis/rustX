@@ -216,8 +216,12 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('requires real OCCT
     expect((await source(complete)).nativeStep?.roots).toBe(2);
     const metadata = await write('metadata-only.step', cases.metadata);
     expect((await source(metadata)).nativeStep?.roots).toBe(1);
+    const wire = await write('wire.step', cases.wire);
+    expect((await source(wire)).nativeStep?.roots).toBe(1);
     const partial = await write('partial.step', cases.partial);
     await expect(source(partial)).rejects.toThrow('parser_failure');
+    const emptyWire = await write('empty-wire.step', cases.emptyWire);
+    await expect(source(emptyWire)).rejects.toThrow('parser_failure');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -240,7 +244,7 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-det
     return { triangles, occurrences: occurrences.sort(), palette: [...palette].sort() };
   };
   try {
-    for (const name of ['cube.step', 'cube-inch.step', 'pole-sphere.step', 'mounting-bracket.step']) {
+    for (const name of ['cube.step', 'cube-inch.step', 'pole-sphere.step', 'mounting-bracket.step', 'bracket-array.step']) {
       const source = await readFile(new URL(`./fixtures/geometry/${name}`, import.meta.url));
       await writeFile(join(root, name), source);
       const wasm = modelScene(await importCad(Uint8Array.from(source), 'step', module));
@@ -258,7 +262,12 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-det
             const actual = compareScene(native.scene, 1);
             expect(actual.triangles, `${name} triangles, ${threads} threads`).toBe(expected.triangles);
             expect(actual.occurrences, `${name} occurrence bounds, ${threads} threads`).toEqual(expected.occurrences);
-            if (name === 'mounting-bracket.step') expect(actual.palette, `${name} authored colors, ${threads} threads`).toEqual(expected.palette);
+            if (name === 'mounting-bracket.step' || name === 'bracket-array.step')
+              expect(actual.palette, `${name} authored colors, ${threads} threads`).toEqual(expected.palette);
+            if (name === 'bracket-array.step') {
+              expect(actual.occurrences).toHaveLength(96);
+              expect(new Set(actual.occurrences).size).toBe(96);
+            }
           } finally { native.dispose(); }
         }
       } finally { disposeScene([wasm.scene]); }

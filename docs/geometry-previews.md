@@ -163,8 +163,11 @@ presentation and imported coordinates, transforms and units. Free orbit uses
 the Y-up turntable and retains the current projection. Top and Bottom use a
 screen-up vector along Z at the poles, and free orbit returns to the Y-up axis.
 Auto Perspective and Orbit Around Selection are optional Blender preferences.
-rustX changes the orbit target on explicit framing and panning actions. Focus
-centers the visible selected subtree and uses its center for the next orbit.
+Focus centers the visible selected subtree and sets its center as the orbit
+target. Pan moves the target with the camera. Pointer zoom also adjusts the
+target as part of keeping the point under the pointer stationary on screen.
+The next orbit uses the resulting target. Selecting a part alone leaves the
+target in place.
 
 | Input | Action |
 | --- | --- |
@@ -456,8 +459,10 @@ See [#551](https://github.com/Caismis/rustX/issues/551).
 The optional Linux Product Host converter derives a full-detail GLB from a
 Workbench STEP/STP preview. The browser independently admits that GLB through
 the ordinary geometry viewer. The preview keeps the original file label and
-uses meters for glTF coordinates. Other preview sources use the existing
-importers. The [native STEP build and benchmark contract](issue-534/native-step-preview.md)
+uses meters for glTF coordinates. A declared shape must transfer to actual
+topology. A wire or point may transfer successfully without contributing
+triangles, while an empty transfer fails the preview. Other preview sources
+use the existing importers. The [native STEP build and benchmark contract](issue-534/native-step-preview.md)
 describes opt-in configuration, artifact provenance, resource limits and
 comparison with the default bulk-lexer WASM path.
 

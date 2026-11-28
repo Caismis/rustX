@@ -140,6 +140,7 @@ NATIVE_STEP = (
     "web-console/scripts/browser-artifact.ts",
     "web-console/host/step-native/**", "web-console/host/step-preview.ts",
     "web-console/host/workspace-preview.ts", "web-console/host/workspaces.ts", "web-console/host/http.ts",
+    "web-console/host/workbench.ts", "web-console/host/workspace-fs/**",
     "web-console/shared/file-preview.ts", "web-console/src/client/geometry-source.ts",
     "web-console/src/client/preview-content.ts", "web-console/src/workspaces/http-host.ts",
     "web-console/src/app/components/Workbench*.tsx", "web-console/src/app/components/workbench-documents/**",

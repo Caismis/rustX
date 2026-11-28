@@ -582,11 +582,18 @@ for (const projection of ['orthographic', 'perspective'] as const) test(`${proje
     await page.mouse.move(x, y); await page.mouse.wheel(0, -140);
     await expect.poll(async () => height((await pose(page)).camera)).toBeLessThan(height(before));
     const afterPose = (await pose(page)).camera;
+    expect(afterPose.target).not.toEqual(before.target);
     const after = fromPose(afterPose);
     const projected = point.clone().project(after);
     const error = Math.hypot((projected.x - ndc.x) * box.width / 2, (projected.y - ndc.y) * box.height / 2);
     expect(error, JSON.stringify({location, before, afterPose, point: point.toArray(), ndc: ndc.toArray(), projected: projected.toArray()})).toBeLessThan(.75);
   }
+  const zoomed = (await pose(page)).camera;
+  const pivot = new Vector3().fromArray(zoomed.target);
+  const view = new Vector3().fromArray(zoomed.position).sub(pivot);
+  await canvas.focus(); await canvas.press('Numpad4');
+  await expect.poll(async () => new Vector3().fromArray((await pose(page)).camera.position).sub(pivot).angleTo(view)).toBeCloseTo(Math.PI / 12, 6);
+  expect(new Vector3().fromArray((await pose(page)).camera.target).distanceTo(pivot)).toBeLessThan(view.length() * 1e-4);
 });
 
 test('pointer zoom preserves an original surface point during simplified motion rendering', async ({ page }, info) => {

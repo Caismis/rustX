@@ -35,7 +35,9 @@ export function workbenchFixture(): Plugin {
       writeFileSync(join(root, 'cube.step'), cube);
       copyFileSync(new URL('../fixtures/geometry/cube-inch.step', import.meta.url), join(root, 'inch.stp'));
       writeFileSync(join(root, 'malformed.step'), 'malformed');
-      writeFileSync(join(root, 'partial-model.step'), stepRootCases(cube).partial);
+      const roots = stepRootCases(cube);
+      writeFileSync(join(root, 'partial-model.step'), roots.partial);
+      writeFileSync(join(root, 'empty-wire.step'), roots.emptyWire);
     }
     const host = new LocalWorkspaceHost({ roots: [{ id: 'A', cwd: root, displayName: 'Workspace A' }, { id: 'B', cwd: otherRoot, displayName: 'Workspace B' }], endpoint: 'ws://localhost:8080', picker: false, metadataFile: join(root, 'registry.json'), nativeFilesystem: 'shared', terminalSupervisor: fileURLToPath(new URL('../../../target/debug/interactive-supervisor', import.meta.url)), transportToken: 'fixture', stepPreviewConverter: executable ? { executable, threads: 1 } : undefined }, undefined, async (_endpoint, _token, target) => { if (target.session_id !== 'A' || target.active_node !== 'node-A') throw new Error('Wrong native Session'); return { cwd: root, ownershipGeneration: '1' }; }, async () => async () => {});
     const handler = workspaceHandler(host);

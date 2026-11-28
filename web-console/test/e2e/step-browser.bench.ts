@@ -109,7 +109,9 @@ async function sample(page: Page, name: string, bytes: number, warm: boolean, di
     return state.first > 0 || document.querySelector(`[data-workbench-file="${name}"] [role=alert]`);
   }, name, { timeout: 100_000 });
   const failure = file.getByRole('alert');
-  const error = await failure.first().isVisible() ? await failure.first().textContent() : null;
+  const error = await failure.first().isVisible()
+    ? (await failure.first().textContent())?.trim() || 'Preview displayed an error without a message'
+    : null;
   const result = await page.evaluate(previous => {
     const observation = window as any;
     const { start, firstModel, firstModelGpuReady, firstModelSubmission, first, firstGpuReady, firstSubmission, lodStages } = observation.geometryLatency;
@@ -244,7 +246,8 @@ test('paired STEP preview from production Workbench', async () => {
                 const name = `${model.id}-${mode}.step`;
                 try {
                   const value = await sample(page, name, model.bytes, mode === 'warm', diagnostic, threads);
-                  if (config.softwareWebGL === false && !value.error)
+                  if (value.error) report.failures.push({ model: model.id, build, mode, round, diagnostic, error: value.error });
+                  else if (config.softwareWebGL === false)
                     expect(value.gpu, 'Requested hardware WebGL').toMatch(/^(?!.*(?:SwiftShader|llvmpipe|softpipe)).+$/i);
                   report.rows.push({ model: model.id, build, mode, round, diagnostic, ...value });
                   persist();

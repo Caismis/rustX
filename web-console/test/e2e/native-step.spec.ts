@@ -28,7 +28,7 @@ test('Linux native STEP and STP open as full-detail GLB in Workbench', async ({ 
     await expect.poll(async () => (await resources(page)).contexts).toBe(0);
     await workbench.getByRole('tab', { name: 'Files', exact: false }).click();
   }
-  for (const name of ['malformed.step', 'partial-model.step']) {
+  for (const name of ['malformed.step', 'partial-model.step', 'empty-wire.step']) {
     await workbench.getByRole('button', { name, exact: true }).click();
     const file = page.locator(`[data-workbench-file="${name}"]`);
     await expect(file.getByRole('alert')).toContainText('Document parser failed');
