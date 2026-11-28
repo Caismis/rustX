@@ -63,7 +63,8 @@ fn python_interpreter(name: &str) -> bool {
     if version.is_empty() {
         return true;
     }
-    // CPython also publishes versioned free-threaded executables with a t suffix.
+    // CPython appends t for free-threaded builds, then d for debug builds.
+    let version = version.strip_suffix('d').unwrap_or(version);
     let version = version.strip_suffix('t').unwrap_or(version);
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
     version.split_once('.').map_or_else(
@@ -487,12 +488,23 @@ mod stdio_path_tests {
         for program in ["./python-mcp", "python3.13-config", "python3-server"] {
             assert_eq!(path_values(program, &["serve"]), NO_PATHS);
         }
-        for program in ["python", "python3", "python3.13", "python3.13t"] {
+        for program in [
+            "python",
+            "python3",
+            "python3.13",
+            "python3.13t",
+            "python3.13d",
+            "python3.13td",
+        ] {
             assert_eq!(path_values(program, &["./server.py"]), [(0, Input)]);
             let unqualified = ["server.py".to_owned()];
             assert_eq!(
                 stdio_argument_paths(Path::new(program), &unqualified).next(),
                 Some(Err(UnqualifiedStdioScript))
+            );
+            assert_eq!(
+                path_values(program, &["--", "./server.py", "--config", "settings.toml"]),
+                [(1, Input), (3, Input)]
             );
         }
     }
