@@ -780,7 +780,8 @@ fn cleanup_retired_authority(cache: &PackageDirectory, name: &OsStr) -> io::Resu
 }
 
 /// Evict oldest unleased versions when an incoming package would exceed the
-/// per-authority retention bound. Metadata reads are shallow and bounded.
+/// per-authority retention bound. The caller holds the authority lock, so a
+/// version found unleased cannot acquire a new lease during eviction.
 fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result<()> {
     let mut versions = Vec::new();
     let mut bytes = 0u64;
@@ -807,7 +808,7 @@ fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result
         let lease = open_existing(&directory, LEASE)?;
         match rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {
-                selected.push((name, lease));
+                selected.push(name);
                 bytes -= size;
                 count -= 1;
             }
@@ -821,8 +822,7 @@ fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result
             "live User Skill versions exhaust the cache bound",
         ));
     }
-    // Reserve every cleanup intent before retiring any version, and retain
-    // all exclusive leases until the entire plan has been executed.
+    // Reserve every cleanup intent before retiring any version.
     let mut reservations = Vec::new();
     for _ in &selected {
         match reserve_work(owner, ".prune-") {
@@ -835,7 +835,7 @@ fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result
             }
         }
     }
-    for ((name, _lease), retired) in selected.iter().zip(&reservations) {
+    for (name, retired) in selected.iter().zip(&reservations) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let renamed = rustix::fs::renameat_with(
             owner.descriptor(),
@@ -1298,6 +1298,64 @@ mod tests {
             .unwrap(),
             b"x"
         );
+    }
+
+    #[test]
+    fn publish_evicts_many_versions_with_a_low_descriptor_limit() {
+        const CHILD: &str = "RUSTX_TEST_SKILL_EVICTION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let (_, module) = module_path!().split_once("::").unwrap();
+            let output = std::process::Command::new("sh")
+                .args(["-c", "ulimit -S -n 64 && exec \"$@\"", "skill-eviction"])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", "--nocapture"])
+                .arg(format!(
+                    "{module}::publish_evicts_many_versions_with_a_low_descriptor_limit"
+                ))
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        let authority = authority();
+        let mut transfer = Transfer::default();
+        transfer.begin_sync(&root, &collection, &authority).unwrap();
+        let owner = &transfer.sync.as_ref().unwrap().owner;
+        let old_versions: Vec<_> = (0..80).map(|index| format!("{index:064x}")).collect();
+        for name in &old_versions {
+            let version = ensure_directory(owner, OsStr::new(name)).unwrap().0;
+            write_new(&version, VERSION_MARKER, MARKER_CONTENT).unwrap();
+            write_new(&version, LEASE, b"").unwrap();
+            write_new(&version, SIZE, b"1").unwrap();
+        }
+        transfer.begin_package(&version('c')).unwrap();
+        transfer
+            .begin_file(Path::new("SKILL.md"), 1, false)
+            .unwrap();
+        transfer.chunk(0, "eA==").unwrap();
+        transfer.end_file().unwrap();
+        let Reply::Published { package } =
+            transfer.publish_with_limit(&Arbitration::new(), 1).unwrap()
+        else {
+            panic!("expected a published version");
+        };
+        assert_eq!(
+            fs::read(collection.join(package).join("SKILL.md")).unwrap(),
+            b"x"
+        );
+        let owner = collection.join(CACHE).join(authority);
+        assert!(old_versions.iter().all(|name| !owner.join(name).exists()));
     }
 
     #[test]
