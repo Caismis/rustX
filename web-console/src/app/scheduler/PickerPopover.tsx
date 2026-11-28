@@ -16,7 +16,7 @@ export function PickerPopover({ open, anchorRef, label, className, onClose, chil
       side="bottom"
       align="start"
       sideOffset={4}
-      className={clsx('box-border z-[1100] flex border-0 rounded-[var(--dsw-radius-lg)] bg-[var(--dsw-specific-menu)] [backdrop-filter:var(--dsw-menu-backdrop-filter)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [&>[data-slot=popover-viewport]]:p-0', className)}
+      className={clsx('box-border z-[1100] flex border-0 rounded-[var(--dsw-radius-lg)] [&>[data-slot=popover-viewport]]:flex [&>[data-slot=popover-viewport]]:flex-col bg-[var(--dsw-specific-menu)] [backdrop-filter:var(--dsw-menu-backdrop-filter)] [--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)] shadow-[var(--dsw-elevation-prominent)] [--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)] [--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)] [&>[data-slot=popover-viewport]]:p-0', className)}
       role="dialog"
       aria-label={label}
       finalFocus={() => anchorRef.current ?? false}
