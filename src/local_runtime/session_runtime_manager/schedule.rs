@@ -36,9 +36,8 @@ impl ScanReadWorker {
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     job(Some(&worker_active));
-                    // Safety net for any future job implementation that does not
-                    // release the lane before publishing its reply.
-                    worker_active.store(false, std::sync::atomic::Ordering::SeqCst);
+                    // Do not clear the flag here: publishing a reply can overlap
+                    // with a newer submit that has already claimed this worker.
                 }
             })
             .is_ok();
