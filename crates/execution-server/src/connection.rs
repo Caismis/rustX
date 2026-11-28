@@ -21,6 +21,7 @@ pub struct LocalConnection {
     /// and `Drop` never send it twice.
     pub(super) closed: bool,
     pub(super) capabilities: BTreeSet<Capability>,
+    pub(super) user_root: PathBuf,
     pub(super) connection: ConnectionId,
     pub(super) admission: Admission,
 }
@@ -179,6 +180,12 @@ impl LocalConnection {
     #[must_use]
     pub fn admission(&self) -> &Admission {
         &self.admission
+    }
+
+    /// The User resource base as seen by this admitted peer.
+    #[must_use]
+    pub fn user_root(&self) -> &Path {
+        &self.user_root
     }
 
     /// Whether this peer advertised a capability at admission.
@@ -427,6 +434,215 @@ impl LocalConnection {
                 io::ErrorKind::InvalidData,
                 "unexpected reply to ping",
             ))),
+        }
+    }
+
+    /// Query the fixed Client User Skill root or one package's `SKILL.md`.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid inquiry, unsupported Client, lost
+    /// connection, or a reply that does not match the inquiry.
+    pub fn user_skills_until(
+        &mut self,
+        request: &rustx_execution_protocol::skills::Request,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::skills::Reply> {
+        use rustx_execution_protocol::skills::{
+            Reply, Request, valid_identity_packages, valid_package_path, valid_probe_name,
+            valid_standalone_names,
+        };
+        if !self.supports(Capability::UserSkills) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        match request {
+            Request::Root { probe: Some(name) } if !valid_probe_name(name) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            Request::Collection { probe: Some(name) } if !valid_probe_name(name) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            Request::Packages { packages } if !valid_identity_packages(packages) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            Request::Standalone { names } if !valid_standalone_names(names) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            Request::Digest { package } if !valid_package_path(package) => {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            Request::Root { .. }
+            | Request::RootIdentity
+            | Request::Collection { .. }
+            | Request::Packages { .. }
+            | Request::Standalone { .. }
+            | Request::Digest { .. } => {}
+            _ => return Err(io::ErrorKind::InvalidInput.into()),
+        }
+        let response = self.exchange_admitted(
+            &ClientRequest::UserSkills(request.clone()),
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )?;
+        match (request, response) {
+            (
+                Request::Root { probe },
+                ClientReply::UserSkills(Reply::Root {
+                    path,
+                    probe: evidence,
+                }),
+            ) if is_normalized_absolute_path(&path) && (probe.is_some() || evidence.is_none()) => {
+                Ok(Reply::Root {
+                    path,
+                    probe: evidence,
+                })
+            }
+            (
+                Request::RootIdentity,
+                ClientReply::UserSkills(Reply::RootIdentity { path, identity }),
+            ) if is_normalized_absolute_path(&path) => Ok(Reply::RootIdentity { path, identity }),
+            (
+                Request::Collection { probe },
+                ClientReply::UserSkills(Reply::Collection {
+                    path,
+                    identity,
+                    probe: evidence,
+                }),
+            ) if is_normalized_absolute_path(&path) && (probe.is_some() || evidence.is_none()) => {
+                Ok(Reply::Collection {
+                    path,
+                    identity,
+                    probe: evidence,
+                })
+            }
+            (
+                Request::Packages { packages },
+                ClientReply::UserSkills(Reply::Packages {
+                    packages: identities,
+                }),
+            ) if packages.len() == identities.len() => Ok(Reply::Packages {
+                packages: identities,
+            }),
+            (
+                Request::Standalone { names },
+                ClientReply::UserSkills(Reply::Standalone { identities }),
+            ) if names.len() == identities.len() => Ok(Reply::Standalone { identities }),
+            (Request::Digest { .. }, ClientReply::UserSkills(reply @ Reply::Digest { .. })) => {
+                Ok(reply)
+            }
+            (_, ClientReply::Error { kind }) => Err(read_error(kind)),
+            _ => Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected User Skill inquiry reply",
+            ))),
+        }
+    }
+
+    /// Send one bounded, stateful User Skill transfer record. A transport
+    /// failure after dispatch has an unknown outcome and must never be
+    /// replayed as an ordinary failed save.
+    ///
+    /// # Errors
+    /// Returns an error if dispatch is refused, the peer fails, or the reply
+    /// does not correspond to the sent record.
+    pub fn user_skill_transfer_until(
+        &mut self,
+        request: &rustx_execution_protocol::skills::Request,
+        deadline: Instant,
+    ) -> io::Result<rustx_execution_protocol::skills::Reply> {
+        use rustx_execution_protocol::skills::{
+            Reply, Request, valid_cache_id, valid_package_path,
+        };
+        if self.owner.is_none() || !self.supports(Capability::UserSkills) {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
+        let valid = match request {
+            Request::BeginSync { authority } => valid_cache_id(authority),
+            Request::BeginPackage { version } | Request::Retain { version } => {
+                valid_cache_id(version)
+            }
+            Request::Directory { path } | Request::BeginFile { path, .. } => {
+                valid_package_path(path)
+            }
+            Request::Chunk { data_base64, .. } => {
+                data_base64.len() <= MAX_RAW_CHUNK_BYTES.div_ceil(3) * 4
+            }
+            Request::EndFile
+            | Request::Publish
+            | Request::AbortPackage
+            | Request::EndSync { .. }
+            | Request::ReleaseLease { .. } => true,
+            Request::Root { .. }
+            | Request::RootIdentity
+            | Request::Collection { .. }
+            | Request::Packages { .. }
+            | Request::Standalone { .. }
+            | Request::Digest { .. } => false,
+        };
+        if !valid {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let response = self
+            .exchange_classified(
+                &ClientRequest::UserSkills(request.clone()),
+                Some(deadline),
+                || Ok(()),
+                || (),
+            )
+            .map_err(|failure| match failure {
+                ExchangeFailure::Refused(error) => error,
+                // Releasing a known lease is safe to repeat after lane recovery.
+                ExchangeFailure::Unknown(error)
+                    if matches!(request, Request::ReleaseLease { .. }) =>
+                {
+                    error
+                }
+                ExchangeFailure::Unknown(_) => io::Error::other(WriteOutcomeUnknown),
+            })?;
+        let matched = match (request, &response) {
+            (
+                Request::Retain { .. },
+                ClientReply::UserSkills(Reply::Retained { package, bytes }),
+            ) => {
+                valid_package_path(package)
+                    && bytes.get() <= rustx_execution_protocol::skills::MAX_SKILL_BYTES
+            }
+            (Request::Publish, ClientReply::UserSkills(Reply::Published { package })) => {
+                valid_package_path(package)
+            }
+            (
+                Request::BeginSync { .. },
+                ClientReply::UserSkills(Reply::SyncStarted | Reply::Busy),
+            )
+            | (
+                Request::BeginPackage { .. }
+                | Request::Directory { .. }
+                | Request::BeginFile { .. }
+                | Request::Chunk { .. }
+                | Request::EndFile
+                | Request::AbortPackage,
+                ClientReply::UserSkills(Reply::Accepted),
+            )
+            | (
+                Request::BeginPackage { .. } | Request::Publish,
+                ClientReply::UserSkills(Reply::VersionExists),
+            )
+            | (Request::EndSync { .. }, ClientReply::UserSkills(Reply::SyncEnded))
+            | (Request::ReleaseLease { .. }, ClientReply::UserSkills(Reply::LeaseReleased))
+            | (_, ClientReply::Error { .. }) => true,
+            _ => false,
+        };
+        if !matched {
+            let _ = self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected User Skill transfer reply",
+            ));
+            return Err(io::Error::other(WriteOutcomeUnknown));
+        }
+        match response {
+            ClientReply::UserSkills(reply) => Ok(reply),
+            ClientReply::Error { kind } => Err(read_error(kind)),
+            _ => unreachable!("reply checked above"),
         }
     }
 
@@ -3063,6 +3279,9 @@ impl PhysicalError {
             ReadError::SearchBudgetExceeded => "search exceeded a bounded budget",
             ReadError::SearchNeedsDirectory => "search root is not a directory",
             ReadError::DirectoryEntryLimit => "directory exceeds the entry bound",
+            ReadError::SkillTooLarge => {
+                "User Skill exceeds a sync or cache bound; exclude it with .ignore"
+            }
             ReadError::Unavailable => "physical operation unavailable",
             ReadError::Busy => "physical preparation budget is full",
         }
@@ -3089,7 +3308,9 @@ fn read_error(kind: ReadError) -> io::Error {
             io::ErrorKind::InvalidData
         }
         ReadError::UnsupportedDocument => io::ErrorKind::Unsupported,
-        ReadError::DocumentTooLarge | ReadError::DirectoryEntryLimit => io::ErrorKind::FileTooLarge,
+        ReadError::DocumentTooLarge | ReadError::DirectoryEntryLimit | ReadError::SkillTooLarge => {
+            io::ErrorKind::FileTooLarge
+        }
         ReadError::SearchBudgetExceeded => io::ErrorKind::QuotaExceeded,
         ReadError::Invalid | ReadError::SearchNeedsDirectory => io::ErrorKind::InvalidInput,
         ReadError::Unavailable => io::ErrorKind::Other,

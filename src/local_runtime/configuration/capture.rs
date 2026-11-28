@@ -959,32 +959,28 @@ impl UserConfigManager {
             },
             |root| crate::skills::automatic_skill_roots(Some(&host.home_directory), root),
         );
-        let mut discover_skills = || {
-            let discovery =
-                crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
-                    automatic: skill_sources.clone(),
-                })
-                .with_cancellation(self.resource_io.clone());
-            if let Some(endpoint) = workspace_endpoint {
-                discovery
-                    .discover_bound_observed(endpoint, &mut observed.skills)
-                    .map_err(|error| {
-                        LaunchFailure::at(
-                            Some(
-                                crate::skills::AutomaticSkillRoot::workspace(&locations.workspace)
-                                    .root,
-                            ),
-                            "agent.skills",
-                            "Workspace Skill discovery is unavailable from the Execution Client",
-                            "check the bound Workspace and Skill collection",
-                            error.to_string(),
-                        )
-                    })
-            } else {
-                Ok(discovery.discover())
-            }
+        let discovery =
+            crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
+                automatic: skill_sources.clone(),
+            })
+            .with_cancellation(self.resource_io.clone());
+        let skill_error = |error: std::io::Error| {
+            LaunchFailure::at(
+                Some(crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root),
+                "agent.skills",
+                "Workspace Skill discovery is unavailable from the Execution Client",
+                "check the bound Workspace and Skill collection",
+                error.to_string(),
+            )
         };
-        let skill_discovery = discover_skills()?;
+        let (skill_discovery, captured_skills) = if let Some(endpoint) = workspace_endpoint {
+            discovery
+                .discover_bound_observed(endpoint, &mut observed.skills)
+                .map_err(skill_error)?
+        } else {
+            let outcome = discovery.discover();
+            (outcome.clone(), outcome)
+        };
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
         {
@@ -1265,7 +1261,12 @@ impl UserConfigManager {
         if let Some(instructions) = bound_instructions {
             instructions.verify_and_append(&mut project_context_files, &mut revisions)?;
         }
-        if discover_skills()? != skill_discovery {
+        let verified_skills = if let Some(endpoint) = workspace_endpoint {
+            discovery.verify_bound(endpoint).map_err(skill_error)?
+        } else {
+            discovery.discover()
+        };
+        if verified_skills != captured_skills {
             return Err("Skill definitions changed during capture; rescan to retry".into());
         }
         // The project Skill collection is the revision key of the complete

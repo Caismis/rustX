@@ -64,7 +64,7 @@ fn ws_rig() -> Rig {
         None,
     )
     .unwrap();
-    let url = format!("wss://{}/execution/v9", listener.local_addr().unwrap());
+    let url = format!("wss://{}/execution/v10", listener.local_addr().unwrap());
     let mut file = fs::File::open(&bundle).unwrap();
     let published: Bootstrap = read_record(&mut file).unwrap();
     assert!(matches!(
@@ -235,6 +235,504 @@ fn websocket_admits_the_real_client_and_serves_typed_records() {
     expect_success(&mut child);
 }
 
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one physical transfer and control-lane lifecycle"
+)]
+fn websocket_skill_transfer_keeps_control_responsive_and_publishes_a_whole_package() {
+    use base64::Engine as _;
+    use rustx_execution_protocol::skills::{Reply, Request};
+    use rustx_execution_protocol::{DecimalU64, MAX_RAW_CHUNK_BYTES};
+    let rig = ws_rig();
+    let (_home, home) = private_dir();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut connection = accept_connection(&rig, &mut child);
+    let control = connection.control().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let authority = "a".repeat(64);
+    let version = "b".repeat(64);
+    assert_eq!(
+        connection
+            .user_skill_transfer_until(&Request::BeginSync { authority }, deadline)
+            .unwrap(),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        connection
+            .user_skill_transfer_until(&Request::BeginPackage { version }, deadline)
+            .unwrap(),
+        Reply::Accepted
+    );
+    let oversized = connection
+        .user_skill_transfer_until(
+            &Request::BeginFile {
+                path: "oversized".into(),
+                length: DecimalU64::new(rustx_execution_protocol::skills::MAX_SKILL_BYTES + 1),
+                executable: false,
+            },
+            deadline,
+        )
+        .unwrap_err();
+    assert_eq!(oversized.kind(), io::ErrorKind::FileTooLarge);
+    let marker = b"---\nname: test\ndescription: transfer\n---\n";
+    assert_eq!(
+        connection
+            .user_skill_transfer_until(
+                &Request::BeginFile {
+                    path: "SKILL.md".into(),
+                    length: DecimalU64::new(marker.len() as u64),
+                    executable: false
+                },
+                deadline
+            )
+            .unwrap(),
+        Reply::Accepted
+    );
+    connection
+        .user_skill_transfer_until(
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(marker),
+            },
+            deadline,
+        )
+        .unwrap();
+    connection
+        .user_skill_transfer_until(&Request::EndFile, deadline)
+        .unwrap();
+    let size = MAX_RAW_CHUNK_BYTES * 16;
+    connection
+        .user_skill_transfer_until(
+            &Request::BeginFile {
+                path: "attachment".into(),
+                length: DecimalU64::new(size as u64),
+                executable: false,
+            },
+            deadline,
+        )
+        .unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(vec![b'x'; MAX_RAW_CHUNK_BYTES]);
+    for index in 0..16 {
+        connection
+            .user_skill_transfer_until(
+                &Request::Chunk {
+                    offset: DecimalU64::new((index * MAX_RAW_CHUNK_BYTES) as u64),
+                    data_base64: data.clone(),
+                },
+                deadline,
+            )
+            .unwrap();
+        if index == 4 {
+            control
+                .health()
+                .expect("control remains available while a package is staged");
+        }
+    }
+    connection
+        .user_skill_transfer_until(&Request::EndFile, deadline)
+        .unwrap();
+    let Reply::Published { package } = connection
+        .user_skill_transfer_until(&Request::Publish, deadline)
+        .unwrap()
+    else {
+        panic!("package is published")
+    };
+    assert_eq!(
+        fs::read(
+            home.join("rustx/.agents/skills")
+                .join(&package)
+                .join("SKILL.md")
+        )
+        .unwrap(),
+        marker
+    );
+    assert_eq!(
+        fs::metadata(
+            home.join("rustx/.agents/skills")
+                .join(&package)
+                .join("attachment")
+        )
+        .unwrap()
+        .len(),
+        size as u64
+    );
+    assert_eq!(
+        connection
+            .user_skills_until(&Request::Digest { package }, deadline)
+            .unwrap(),
+        Reply::Digest {
+            digest: Some(rustx_execution_protocol::save::Sha256Hex::of(marker))
+        }
+    );
+    connection
+        .user_skill_transfer_until(&Request::EndSync { lease: None }, deadline)
+        .unwrap();
+    drop(connection);
+    rig.binding.revoke();
+    expect_success(&mut child);
+}
+
+#[test]
+fn websocket_revoke_during_skill_transfer_removes_only_the_private_stage() {
+    use rustx_execution_protocol::DecimalU64;
+    use rustx_execution_protocol::skills::{Reply, Request};
+    let rig = ws_rig();
+    let (_home, home) = private_dir();
+    let personal = home.join("rustx/.agents/skills/personal");
+    fs::create_dir_all(&personal).unwrap();
+    fs::write(personal.join("SKILL.md"), b"personal").unwrap();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut connection = accept_connection(&rig, &mut child);
+    let control = connection.control().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let authority = "c".repeat(64);
+    let version = "d".repeat(64);
+    assert_eq!(
+        connection
+            .user_skill_transfer_until(
+                &Request::BeginSync {
+                    authority: authority.clone()
+                },
+                deadline
+            )
+            .unwrap(),
+        Reply::SyncStarted
+    );
+    connection
+        .user_skill_transfer_until(
+            &Request::BeginPackage {
+                version: version.clone(),
+            },
+            deadline,
+        )
+        .unwrap();
+    connection
+        .user_skill_transfer_until(
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(1024),
+                executable: false,
+            },
+            deadline,
+        )
+        .unwrap();
+    connection
+        .user_skill_transfer_until(
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "dGVzdA==".into(),
+            },
+            deadline,
+        )
+        .unwrap();
+    control
+        .request_revoke()
+        .expect("control can revoke an in-progress transfer");
+    drop(connection);
+    expect_success(&mut child);
+    let owner = home
+        .join("rustx/.agents/skills/.rustx-sync")
+        .join(authority);
+    assert!(!owner.join(version).exists());
+    assert!(fs::read_dir(owner).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stage-")
+    }));
+    assert_eq!(fs::read(personal.join("SKILL.md")).unwrap(), b"personal");
+}
+
+fn skill_transfer(
+    connection: &mut rustx_execution_server::LocalConnection,
+    request: &rustx_execution_protocol::skills::Request,
+) -> rustx_execution_protocol::skills::Reply {
+    connection
+        .user_skill_transfer_until(request, Instant::now() + Duration::from_secs(30))
+        .unwrap()
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one staged transfer across lane recovery"
+)]
+fn websocket_skill_transfer_recovers_after_a_staged_chunk() {
+    use rustx_execution_protocol::DecimalU64;
+    use rustx_execution_protocol::skills::{Reply, Request};
+    let rig = ws_rig();
+    let (_home, home) = private_dir();
+    let personal = home.join("rustx/.agents/skills/personal");
+    fs::create_dir_all(&personal).unwrap();
+    fs::write(personal.join("SKILL.md"), b"personal").unwrap();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = accept_connection(&rig, &mut child);
+    let authority = "a".repeat(64);
+    let abandoned = "b".repeat(64);
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginSync {
+                authority: authority.clone()
+            }
+        ),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginPackage {
+                version: abandoned.clone()
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(4),
+                executable: false,
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eA==".into(),
+            }
+        ),
+        Reply::Accepted
+    );
+    let owner = home
+        .join("rustx/.agents/skills/.rustx-sync")
+        .join(&authority);
+    assert!(fs::read_dir(&owner).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stage-")
+    }));
+
+    rig.binding.disconnect(first.connection_id());
+    let mut recovered = accept_connection(&rig, &mut child);
+    assert_ne!(recovered.connection_id(), first.connection_id());
+    assert_eq!(recovered.admission(), first.admission());
+    assert!(!owner.join(&abandoned).exists());
+    assert!(fs::read_dir(&owner).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stage-")
+    }));
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::BeginSync { authority }),
+        Reply::SyncStarted
+    );
+    let fresh = "c".repeat(64);
+    assert_eq!(
+        skill_transfer(
+            &mut recovered,
+            &Request::BeginPackage {
+                version: fresh.clone()
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut recovered,
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(1),
+                executable: false,
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut recovered,
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eQ==".into(),
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::EndFile),
+        Reply::Accepted
+    );
+    assert!(matches!(
+        skill_transfer(&mut recovered, &Request::Publish),
+        Reply::Published { .. }
+    ));
+    assert_eq!(
+        fs::read(owner.join(fresh).join("data/SKILL.md")).unwrap(),
+        b"y"
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::EndSync { lease: None }),
+        Reply::SyncEnded
+    );
+    assert_eq!(fs::read(personal.join("SKILL.md")).unwrap(), b"personal");
+    recovered.control().unwrap().request_revoke().unwrap();
+    drop(first);
+    drop(recovered);
+    expect_success(&mut child);
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one published lease across lane recovery"
+)]
+fn websocket_skill_transfer_preserves_published_lease_after_recovery() {
+    use rustix::fs::FlockOperation;
+    use rustx_execution_protocol::DecimalU64;
+    use rustx_execution_protocol::skills::{Reply, Request};
+    let rig = ws_rig();
+    let (_home, home) = private_dir();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .env("HOME", &home)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = accept_connection(&rig, &mut child);
+    let authority = "d".repeat(64);
+    let version = "e".repeat(64);
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginSync {
+                authority: authority.clone()
+            }
+        ),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginPackage {
+                version: version.clone()
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::BeginFile {
+                path: "SKILL.md".into(),
+                length: DecimalU64::new(1),
+                executable: false,
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::Chunk {
+                offset: DecimalU64::new(0),
+                data_base64: "eA==".into(),
+            }
+        ),
+        Reply::Accepted
+    );
+    assert_eq!(
+        skill_transfer(&mut first, &Request::EndFile),
+        Reply::Accepted
+    );
+    let Reply::Published { package } = skill_transfer(&mut first, &Request::Publish) else {
+        panic!("published");
+    };
+    let reader = rustx_execution_protocol::skills::LeaseId::new_v4();
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::EndSync {
+                lease: Some(reader)
+            }
+        ),
+        Reply::SyncEnded
+    );
+    let owner = home
+        .join("rustx/.agents/skills/.rustx-sync")
+        .join(&authority);
+    let lease = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(owner.join(&version).join(".lease"))
+        .unwrap();
+
+    rig.binding.disconnect(first.connection_id());
+    let mut recovered = accept_connection(&rig, &mut child);
+    assert_eq!(recovered.admission(), first.admission());
+    assert_eq!(
+        fs::read(
+            home.join("rustx/.agents/skills")
+                .join(&package)
+                .join("SKILL.md")
+        )
+        .unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
+        rustix::io::Errno::AGAIN
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::BeginSync { authority }),
+        Reply::SyncStarted
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::Retain { version }),
+        Reply::Retained {
+            package,
+            bytes: DecimalU64::new(1),
+        }
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::EndSync { lease: None }),
+        Reply::SyncEnded
+    );
+    assert_eq!(
+        rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
+        rustix::io::Errno::AGAIN
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::ReleaseLease { lease: reader }),
+        Reply::LeaseReleased
+    );
+    recovered.control().unwrap().request_revoke().unwrap();
+    drop(first);
+    drop(recovered);
+    expect_success(&mut child);
+    rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap();
+}
+
 /// Accepts and returns the live `LocalConnection` for tests that drive
 /// typed dispatch themselves — the data half then the pairing control
 /// lane, both inside one handshake budget.
@@ -361,11 +859,11 @@ fn websocket_plaintext_nonloopback_and_wrong_path_never_connect() {
     // before a byte leaves the process — the listener never accepts.
     let address = rig.listener.local_addr().unwrap();
     for url in [
-        format!("ws://192.0.2.10:{}/execution/v9", address.port()),
-        format!("ws://{address}/execution/v9"),
+        format!("ws://192.0.2.10:{}/execution/v10", address.port()),
+        format!("ws://{address}/execution/v10"),
         format!("wss://{address}/other"),
-        format!("wss://user@{address}/execution/v9"),
-        format!("wss://{address}/execution/v9?token=1"),
+        format!("wss://user@{address}/execution/v10"),
+        format!("wss://{address}/execution/v10?token=1"),
     ] {
         tamper_bundle(&rig, |bootstrap| {
             bootstrap.endpoint = BootstrapEndpoint::WebSocket {
@@ -417,7 +915,7 @@ fn websocket_plaintext_never_consumes_the_tls_reservation() {
     // A plaintext peer fails at the TLS handshake; the binding
     // stays Reserved and the real Client still wins afterwards.
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
-    raw.write_all(b"GET /execution/v9 HTTP/1.1\r\nHost: x\r\n\r\n")
+    raw.write_all(b"GET /execution/v10 HTTP/1.1\r\nHost: x\r\n\r\n")
         .unwrap();
     raw.flush().unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
@@ -444,7 +942,7 @@ fn websocket_slow_peer_shares_one_absolute_deadline() {
     // die on the armed deadline, not get a budget per fragment.
     let deadline = Instant::now() + Duration::from_millis(700);
     let mut raw = TcpStream::connect(rig.listener.local_addr().unwrap()).unwrap();
-    raw.write_all(b"GET /execution/v9 HTTP/1.1\r\n").unwrap();
+    raw.write_all(b"GET /execution/v10 HTTP/1.1\r\n").unwrap();
     let (stream, _) = rig.listener.accept().unwrap();
     let outcome = rustx_execution_transport::accept(stream, deadline);
     let elapsed = deadline.saturating_duration_since(Instant::now());

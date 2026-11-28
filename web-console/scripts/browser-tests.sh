@@ -16,7 +16,7 @@ if [[ -n ${RUSTX_BROWSER_PREPARED:-} ]]; then
 else
   # Build binaries and fixture together so Cargo unifies their dependency features
   # once. The Artifact writer is fixture-only, with no product write API.
-  cargo build --manifest-path ../Cargo.toml --bins --example document_artifact_fixture --locked
+  cargo build --manifest-path ../Cargo.toml --workspace --bins --example document_artifact_fixture --locked
 fi
 engine=${CONTAINER_ENGINE:-docker}
 image=mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7

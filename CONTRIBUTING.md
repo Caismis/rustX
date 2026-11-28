@@ -141,7 +141,7 @@ corepack enable
 (cd tui && corepack install)
 (cd tui && pnpm install --frozen-lockfile)
 (cd tui && pnpm typecheck)
-cargo build --bins --locked
+cargo build --workspace --bins --locked
 (cd tui && RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test)
 
 # Generated App Server protocol, development launchers and Web.
@@ -150,7 +150,7 @@ cargo build --bins --locked
 (cd web-console && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test)
 (cd web-console && pnpm check:i18n && pnpm check:provenance)
 # One production build, then browser acceptance in the pinned container
-# (Docker or Podman via CONTAINER_ENGINE); needs `cargo build --bins`.
+# (Docker or Podman via CONTAINER_ENGINE); needs `cargo build --workspace --bins`.
 (cd web-console && pnpm test:e2e)
 
 git diff --check

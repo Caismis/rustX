@@ -1,4 +1,4 @@
-//! Single wire definition for the rustX execution protocol (v4).
+//! Single wire definition for the rustX execution protocol.
 //!
 //! The execution protocol is the physical environment/output channel between
 //! the Agent Server (package `rustx`) and the physical Execution Client
@@ -23,15 +23,16 @@ pub mod changes;
 pub mod mcp;
 pub mod process;
 pub mod save;
+pub mod skills;
 pub mod transport;
 pub mod watch;
 
 /// The only protocol revision this implementation speaks. Incompatible
 /// versions are explicitly rejected; there is no implicit downgrade.
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// WebSocket path for this wire revision.
-pub const EXECUTION_PATH: &str = "/execution/v9";
+pub const EXECUTION_PATH: &str = "/execution/v10";
 
 /// Maximum size of one encoded transport frame, envelope included (1 MiB).
 /// Enforcement happens at the transport read/parse boundary before
@@ -486,6 +487,8 @@ pub enum Capability {
     StdioMcp,
     /// Frozen Managed Python resources and Client-local Store preparation.
     ManagedPython,
+    /// Inquiry and bounded synchronization of the Client's global User Skills.
+    UserSkills,
     /// Bounded byte-chunk content transfer and upload staging.
     ContentTransfer,
     /// Client-owned managed output: private allocation, unpublished
@@ -707,6 +710,8 @@ pub struct Hello {
     pub generation: Generation,
     /// The exact normalized absolute workspace the Client claims.
     pub workspace: PathBuf,
+    /// The official Client-local `~/rustx` path used to publish resource locations.
+    pub user_root: PathBuf,
     /// The capabilities the Client claims to physically own.
     pub capabilities: BTreeSet<Capability>,
     /// The binding credential issued to this reservation.
@@ -722,6 +727,7 @@ impl fmt::Debug for Hello {
             .field("instance", &self.instance)
             .field("generation", &self.generation)
             .field("workspace", &self.workspace)
+            .field("user_root", &self.user_root)
             .field("capabilities", &self.capabilities)
             .field("credential", &self.credential)
             .finish()
@@ -792,6 +798,9 @@ pub enum Reject {
     /// The workspace is not exactly the reserved normalized absolute path.
     #[error("workspace mismatch")]
     WorkspaceMismatch,
+    /// The Client User root is malformed or differs from the admitted root on recovery.
+    #[error("Client User root mismatch")]
+    UserRootMismatch,
     /// A required capability is absent from the Hello.
     #[error("missing required capability")]
     MissingCapabilities,
@@ -1072,6 +1081,8 @@ pub enum TreeMutation {
 pub enum ClientRequest {
     /// A liveness probe.
     Ping,
+    /// A narrowly scoped inquiry about the Client's official User Skill root.
+    UserSkills(crate::skills::Request),
     /// One managed-process operation request — register, start, query,
     /// ordered output paging, stdin, resize, close, release.
     Process(crate::process::ProcessRequest),
@@ -1405,6 +1416,8 @@ pub enum EditRefusal {
 pub enum ClientReply {
     /// The reply to a `Ping`.
     Pong,
+    /// The result of a Client User Skill inquiry.
+    UserSkills(crate::skills::Reply),
     /// The reply to a `Process` request.
     Process(crate::process::ProcessReply),
     /// A reply from the Client-owned stdio MCP session.
@@ -1698,6 +1711,8 @@ pub enum ReadError {
     SearchNeedsDirectory,
     /// A directory listing has more than [`MAX_DIRECTORY_NAMES`] entries.
     DirectoryEntryLimit,
+    /// A User Skill transfer or its retained cache exceeds a stated bound.
+    SkillTooLarge,
     /// The read could not be completed for another reason.
     Unavailable,
     /// Bounded preparation or cleanup remains occupied. The operation
@@ -1722,7 +1737,7 @@ pub enum BootstrapEndpoint {
     },
     /// The authenticated WebSocket execution endpoint.
     WebSocket {
-        /// The exact `wss://IP:PORT/execution/v9` URL the Client connects to.
+        /// The exact `wss://IP:PORT/execution/v10` URL the Client connects to.
         url: String,
         /// Base64 DER of the binding-specific loopback TLS certificate.
         /// An operator-managed public endpoint instead uses its own CA.
@@ -1800,6 +1815,7 @@ mod tests {
             instance: ClientInstanceId::new("instance-1"),
             generation: Generation::try_from(1).unwrap(),
             workspace: PathBuf::from("/work/root"),
+            user_root: "/client/rustx".into(),
             capabilities: BTreeSet::from([Capability::Files, Capability::Process]),
             credential: credential(),
         }

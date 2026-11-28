@@ -52,6 +52,8 @@ mod mutation;
 mod process;
 mod saves;
 mod search;
+mod skill_transfer;
+mod skills;
 mod terminal;
 mod tree;
 mod watch;
@@ -69,6 +71,55 @@ const _: () = {
         "document projection bound must equal the wire policy"
     );
 };
+
+/// The Client's locally configured home, before resolving User-tree aliases.
+pub(crate) fn client_home_directory() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| is_normalized_absolute_path(home))
+        .or_else(|| {
+            nix::unistd::User::from_uid(nix::unistd::geteuid())
+                .ok()
+                .flatten()
+                .map(|user| user.dir)
+        })
+        .filter(|home| is_normalized_absolute_path(home))
+}
+
+/// Resolve only locally selected HOME/`rustx` aliases. Published paths use a
+/// physical spelling which the Client's no-follow file tools can open.
+fn resolve_user_root(home: &Path) -> io::Result<PathBuf> {
+    let configured = home.join("rustx");
+    for prefix in configured.ancestors() {
+        match fs::symlink_metadata(prefix) {
+            Ok(_) => {
+                // A dangling link is an existing entry. Canonicalization must
+                // succeed before any missing descendants can be appended.
+                let mut physical = prefix.canonicalize()?;
+                if !physical.is_dir() {
+                    return Err(io::ErrorKind::NotADirectory.into());
+                }
+                physical.extend(
+                    configured
+                        .strip_prefix(prefix)
+                        .map_err(io::Error::other)?
+                        .iter(),
+                );
+                return Ok(physical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::ErrorKind::NotFound.into())
+}
+
+/// Official User tree in this Client's filesystem namespace.
+pub(crate) fn client_user_root() -> Option<PathBuf> {
+    client_home_directory()
+        .and_then(|home| resolve_user_root(&home).ok())
+        .filter(|root| is_normalized_absolute_path(root))
+}
 
 fn main() -> ExitCode {
     const USAGE: &str =
@@ -216,6 +267,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
         instance: bootstrap.instance,
         generation: bootstrap.generation,
         workspace: bootstrap.workspace,
+        user_root: client_user_root().ok_or("Client User directory unavailable")?,
         // Independently known, fixed, actually implemented capabilities —
         // never read from the file.
         capabilities: BTreeSet::from([
@@ -236,6 +288,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
             Capability::ManagedOutput,
             Capability::StdioMcp,
             Capability::ManagedPython,
+            Capability::UserSkills,
         ]),
         credential: bootstrap.credential,
     };
@@ -344,6 +397,10 @@ fn recover_pair(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one Client binding and lane-recovery lifecycle"
+)]
 fn serve_session(
     mut pair: Pair,
     root: &PackageDirectory,
@@ -366,8 +423,11 @@ fn serve_session(
                     mcp: mcp::Sessions::default(),
                     python: managed_python::Catalog::new(&admission.workspace),
                     changes: changes::Changes::default(),
+                    workspace_observation: changes::WorkspaceObservation::default(),
+                    skills: skills::UserSkills::from_environment(),
                     next_ticket: None,
                 };
+                state.workspace_observation.poll(&operations);
                 let revocation = Arc::new(ClientRevocation::default());
                 let mut recovery_cutoff = None;
                 let mut watches = Arc::new(watch::Watches::new());
@@ -416,6 +476,10 @@ fn serve_session(
                     {
                         break Err(String::from("execution pair violated the protocol"));
                     }
+                    state
+                        .skills
+                        .lane_lost()
+                        .map_err(|_| String::from("unresolved User Skill transfer cleanup"))?;
                     let cutoff = if revocation.started() {
                         *recovery_cutoff.get_or_insert(cutoff)
                     } else {
@@ -874,6 +938,8 @@ struct DataState {
     mcp: mcp::Sessions,
     python: managed_python::Catalog,
     changes: changes::Changes,
+    workspace_observation: changes::WorkspaceObservation,
+    skills: skills::UserSkills,
     next_ticket: Option<u64>,
 }
 
@@ -935,6 +1001,29 @@ fn serve_requests(
         }
         let reply = match request {
             ClientRequest::Ping => ClientReply::Pong,
+            ClientRequest::UserSkills(request) => {
+                let inquiry = matches!(
+                    request,
+                    rustx_execution_protocol::skills::Request::Root { .. }
+                        | rustx_execution_protocol::skills::Request::RootIdentity
+                        | rustx_execution_protocol::skills::Request::Collection { .. }
+                        | rustx_execution_protocol::skills::Request::Packages { .. }
+                        | rustx_execution_protocol::skills::Request::Standalone { .. }
+                        | rustx_execution_protocol::skills::Request::Digest { .. }
+                );
+                let transfer = if inquiry {
+                    None
+                } else {
+                    operations.admit_auxiliary()
+                };
+                if inquiry || transfer.is_some() {
+                    state.skills.reply(&request, arbitration)
+                } else {
+                    ClientReply::Error {
+                        kind: ReadError::Unavailable,
+                    }
+                }
+            }
             ClientRequest::WorkspacePythonStatus => {
                 ClientReply::WorkspacePythonStatus(operations.workspace_python_status())
             }
@@ -1102,7 +1191,13 @@ fn serve_requests(
                 },
             },
             ClientRequest::Watch(request) => {
-                ClientReply::Watch(watches.dispatch(root, workspace, request))
+                let mut reply = watches.dispatch(root, workspace, request);
+                if let rustx_execution_protocol::watch::WatchReply::Changed(change) = &mut reply
+                    && change.id.is_configuration()
+                {
+                    change.resync_required |= state.workspace_observation.poll(operations);
+                }
+                ClientReply::Watch(reply)
             }
             ClientRequest::ReadDirectory {
                 relative_path,

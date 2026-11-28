@@ -20,6 +20,19 @@
 5. Watch notifications are bounded hints, with exact incarnation retirement and explicit reread requirements. Configuration remains owned by native revisions, source authority and safe automatic application; admitted Attempts retain their frozen context.
 6. Provider/App Server secrets are not implicitly inherited by commands or read back through management projections. See [the complete contract](app-server/environment-services.md).
 
+## Session-bound User Skill ownership
+
+The Host standing User root owns Skill definitions. Each admitted Client
+receives a complete package at a readable location before the bound catalog
+publishes it. The copy can be skipped when the binding proves it shares the
+package's filesystem objects or when the Client's existing instruction digest
+matches. A changed instruction publishes a whole replacement package. Discarding
+a Client releases its staging area and leases and preserves the standing User root.
+
+Workspace fingerprints are hints. A changed sample requests exact resource
+observation. The first sample establishes a baseline, and a failed sample
+preserves it.
+
 ## Bounded conversation observation (Issue #467, RFC v3)
 
 Conversation observation is bounded by encoded transport bytes, incremental by

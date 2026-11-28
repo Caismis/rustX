@@ -23,9 +23,12 @@
 //! model context. Only definition edits publish a later generation at the
 //! existing safe boundary. Bodies and assets remain live Tool inputs.
 
+mod locations;
+
 use std::collections::BTreeMap;
 use std::io;
 
+use rustx_confined_fs::{FileMetadata, PackageDirectory};
 use rustx_execution_protocol::EntryKind;
 
 use super::tree::{Client, Native, SkillTree, SkillWatchObservation};
@@ -120,6 +123,9 @@ pub struct SkillPackage {
     location: String,
     instruction_source: PathBuf,
     source: SkillSource,
+    marker_revision: Option<FileMetadata>,
+    client_lease:
+        Option<std::sync::Arc<crate::local_runtime::session_runtime_manager::UserSkillLease>>,
 }
 
 impl SkillPackage {
@@ -292,14 +298,88 @@ pub struct SkillDiscovery {
 }
 
 /// A valid definition or an invalid declared file for source inspection.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Candidate {
     source: SkillSource,
     name: String,
     location: String,
+    offered: PathBuf,
     canonical: PathBuf,
     package: Option<SkillPackage>,
     bound: bool,
+}
+
+/// A User-source discovery shared by concurrent work on one binding.
+#[derive(Debug, Clone)]
+pub(crate) struct UserSkillCapture {
+    root: AutomaticSkillRoot,
+    candidates: Vec<Candidate>,
+    diagnostics: Vec<SkillDiagnostic>,
+}
+
+impl UserSkillCapture {
+    pub(crate) fn candidates(&self) -> impl Iterator<Item = (&Path, Option<&FileMetadata>)> + '_ {
+        self.candidates.iter().map(|candidate| {
+            (
+                candidate.offered.as_path(),
+                candidate
+                    .package
+                    .as_ref()
+                    .and_then(|package| package.marker_revision.as_ref()),
+            )
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("User Skill marker changed during capture")]
+pub(crate) struct SkillMarkerChanged;
+
+impl SkillMarkerChanged {
+    pub(crate) fn io_error() -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, Self)
+    }
+
+    pub(crate) fn matches(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Self>)
+    }
+
+    pub(crate) fn if_missing(error: io::Error) -> io::Error {
+        if error.kind() == io::ErrorKind::NotFound {
+            Self::io_error()
+        } else {
+            error
+        }
+    }
+}
+
+fn bound_user_frontmatter(
+    canonical: &Path,
+    signal: &crate::runtime::CancellationSignal,
+) -> io::Result<(Vec<u8>, Option<FileMetadata>)> {
+    use super::frontmatter::{BUFFER_BYTES, prefix};
+    let parent = canonical.parent().ok_or(io::ErrorKind::InvalidData)?;
+    let name = Path::new(canonical.file_name().ok_or(io::ErrorKind::InvalidData)?);
+    let directory = PackageDirectory::open(parent).map_err(SkillMarkerChanged::if_missing)?;
+    let file = directory
+        .file(name)
+        .map_err(SkillMarkerChanged::if_missing)?;
+    let opened = FileMetadata::of(&file)?;
+    let header = prefix(
+        &mut io::BufReader::with_capacity(BUFFER_BYTES, &file),
+        signal,
+    );
+    if FileMetadata::of(&file)? != opened
+        || directory
+            .entry_metadata(name)
+            .map_err(SkillMarkerChanged::if_missing)?
+            != opened
+    {
+        return Err(SkillMarkerChanged::io_error());
+    }
+    Ok((header?.0, Some(opened)))
 }
 
 impl SkillDiscovery {
@@ -350,41 +430,119 @@ impl SkillDiscovery {
     /// Panics if the internal native reader returns an uncaught collection error.
     #[must_use]
     pub fn discover(&self) -> SkillDiscoveryOutcome {
-        self.discover_with(None)
+        self.discover_with(None, None)
             .expect("native Skill observation reports collection errors as diagnostics")
     }
 
     /// Captures Workspace packages in the authenticated Client filesystem.
     pub(crate) fn discover_bound(
         &self,
-        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        endpoint: &std::sync::Arc<
+            crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        >,
     ) -> io::Result<SkillDiscoveryOutcome> {
         self.discover_bound_observed(endpoint, &mut None)
+            .map(|(outcome, _)| outcome)
     }
 
     pub(crate) fn discover_bound_observed(
         &self,
-        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        endpoint: &std::sync::Arc<
+            crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        >,
         observed: &mut Option<SkillWatchObservation>,
-    ) -> io::Result<SkillDiscoveryOutcome> {
+    ) -> io::Result<(SkillDiscoveryOutcome, SkillDiscoveryOutcome)> {
+        // Host User definitions remain authoritative. The Client copy is
+        // synchronized before any Client-visible catalog path is published.
+        let mut user_sync = None;
+        for root in self
+            .config
+            .automatic
+            .iter()
+            .filter(|root| root.source == SkillSource::User)
+        {
+            let home = user_home_from_collection(&root.root)?;
+            if user_sync.is_some() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            user_sync = Some(endpoint.sync_user_skills(
+                home,
+                &self.cancellation,
+                std::time::Instant::now() + std::time::Duration::from_secs(120),
+            )?);
+        }
         let client = Client::new(endpoint, &self.cancellation);
-        let outcome = self.discover_with(Some(&client));
+        let outcome =
+            self.discover_with(Some(&client), user_sync.as_ref().map(|sync| &sync.capture));
         let paths = client.into_observations();
         *observed = Some(SkillWatchObservation {
             paths: paths.clone(),
             complete: outcome.is_ok(),
         });
-        outcome.map(|mut outcome| {
+        outcome.and_then(|mut outcome| {
             outcome.observed_workspace = paths;
-            outcome
+            let captured = outcome.clone();
+            if let Some(sync) = user_sync {
+                outcome.project_user_locations(&sync.collection, &sync.paths)?;
+                let cache = sync
+                    .collection
+                    .join(rustx_execution_protocol::skills::CACHE_DIRECTORY);
+                for package in &mut outcome.packages {
+                    if package.source == SkillSource::User
+                        && Path::new(&package.location).starts_with(&cache)
+                    {
+                        package.client_lease.clone_from(&sync.lease);
+                    }
+                }
+            }
+            Ok((outcome, captured))
         })
     }
 
-    fn discover_with(&self, client: Option<&Client<'_>>) -> io::Result<SkillDiscoveryOutcome> {
+    /// Reread the captured definition facts without transferring User assets.
+    pub(crate) fn verify_bound(
+        &self,
+        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    ) -> io::Result<SkillDiscoveryOutcome> {
+        let mut user_capture = None;
+        for root in self
+            .config
+            .automatic
+            .iter()
+            .filter(|root| root.source == SkillSource::User)
+        {
+            let home = user_home_from_collection(&root.root)?;
+            if user_capture.is_some() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            user_capture = Some(capture_user_skills(
+                &home.join("rustx/.agents/skills"),
+                &self.cancellation,
+            )?);
+        }
+        let client = Client::new(endpoint, &self.cancellation);
+        let mut outcome = self.discover_with(Some(&client), user_capture.as_ref())?;
+        outcome.observed_workspace = client.into_observations();
+        Ok(outcome)
+    }
+
+    fn discover_with(
+        &self,
+        client: Option<&Client<'_>>,
+        user_capture: Option<&UserSkillCapture>,
+    ) -> io::Result<SkillDiscoveryOutcome> {
         let mut diagnostics = Vec::new();
         let mut candidates = Vec::new();
         let mut roots = Vec::new();
         for source in [SkillSource::Workspace, SkillSource::User] {
+            if source == SkillSource::User
+                && let Some(capture) = user_capture
+            {
+                roots.push(capture.root.clone());
+                candidates.extend(capture.candidates.clone());
+                diagnostics.extend(capture.diagnostics.clone());
+                continue;
+            }
             let workspace_client = client.filter(|_| source == SkillSource::Workspace);
             let tree: &dyn SkillTree = workspace_client.map_or(&Native, |tree| tree);
             for root in self
@@ -405,7 +563,11 @@ impl SkillDiscovery {
                     &mut diagnostics,
                     &self.cancellation,
                     tree,
-                    workspace_client.is_some(),
+                    match (client.is_some(), source) {
+                        (false, _) => CollectionView::Native,
+                        (true, SkillSource::Workspace) => CollectionView::BoundWorkspace,
+                        (true, SkillSource::User) => CollectionView::BoundUser,
+                    },
                 )?);
             }
         }
@@ -414,6 +576,69 @@ impl SkillDiscovery {
         roots.dedup();
         outcome.roots = roots;
         Ok(outcome)
+    }
+}
+
+fn user_home_from_collection(root: &Path) -> io::Result<&Path> {
+    let agents = root
+        .parent()
+        .filter(|_| root.file_name().is_some_and(|name| name == "skills"))
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    let product = agents
+        .parent()
+        .filter(|_| agents.file_name().is_some_and(|name| name == ".agents"))
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    product
+        .parent()
+        .filter(|_| product.file_name().is_some_and(|name| name == "rustx"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "bound User Skills require the official User root",
+            )
+        })
+}
+
+/// Inspect User candidates with the same bounded frontmatter policy used by
+/// discovery. Invalid definitions keep diagnostics, but their attachments
+/// must not be traversed or transferred during bind.
+pub(crate) fn capture_user_skills(
+    root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> io::Result<UserSkillCapture> {
+    let source = AutomaticSkillRoot {
+        source: SkillSource::User,
+        root: Native.canonical(root).unwrap_or_else(|_| root.to_owned()),
+    };
+    let mut diagnostics = Vec::new();
+    let candidates = collect_automatic_source(
+        &source,
+        &mut diagnostics,
+        cancellation,
+        &Native,
+        CollectionView::BoundUser,
+    )?;
+    Ok(UserSkillCapture {
+        root: source,
+        candidates,
+        diagnostics,
+    })
+}
+
+impl SkillDiscoveryOutcome {
+    fn project_user_locations(
+        &mut self,
+        client_root: &Path,
+        paths: &BTreeMap<PathBuf, PathBuf>,
+    ) -> io::Result<()> {
+        self.publish_user_paths(client_root, |relative| {
+            paths.get(relative).cloned().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "a discovered User Skill was not synchronized",
+                )
+            })
+        })
     }
 }
 
@@ -507,6 +732,13 @@ fn invalid_collection(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollectionView {
+    Native,
+    BoundWorkspace,
+    BoundUser,
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "the collection source owns discovery, diagnostics and the offered paths"
@@ -516,8 +748,9 @@ fn collect_automatic_source(
     diagnostics: &mut Vec<SkillDiagnostic>,
     cancellation: &crate::runtime::CancellationSignal,
     tree: &dyn SkillTree,
-    bound: bool,
+    view: CollectionView,
 ) -> io::Result<Vec<Candidate>> {
+    let bound = view == CollectionView::BoundWorkspace;
     let source = root.source;
     tree.observe(&root.root);
     let collection = match tree.entry(&root.root) {
@@ -538,12 +771,17 @@ fn collect_automatic_source(
         }
         Err(error) => Err(error),
     }
-    .map(|directory| super::discovery::collect_from(&directory, cancellation, tree));
-    let files = match collection {
-        Ok(collection) if collection.error.is_none() => collection.files,
+    .map(|directory| {
+        (
+            super::discovery::collect_from(&directory, cancellation, tree),
+            directory,
+        )
+    });
+    let (files, collection_root) = match collection {
+        Ok((collection, directory)) if collection.error.is_none() => (collection.files, directory),
         failed => {
             let error = match failed {
-                Ok(collection) => collection.error.expect("matched failed collection"),
+                Ok((collection, _)) => collection.error.expect("matched failed collection"),
                 Err(error) => error,
             };
             if bound {
@@ -570,16 +808,36 @@ fn collect_automatic_source(
             continue;
         };
         let fallback_name = directory.to_string_lossy().into_owned();
-        let location = file.display().to_string();
-        let location_for_tools = if bound { &canonical } else { &file };
-        let result = match tree.frontmatter(&canonical, cancellation) {
-            Ok(header) => discover_package(
+        // Bound User locations cross filesystem namespaces. Retain only their
+        // collection-relative spelling in the catalog until Client projection.
+        let logical = if view == CollectionView::BoundUser {
+            file.strip_prefix(&collection_root)
+                .map_err(io::Error::other)?
+        } else {
+            &file
+        };
+        let location = logical.display().to_string();
+        let location_for_tools = if bound { &canonical } else { logical };
+        let inspected = if view == CollectionView::BoundUser {
+            bound_user_frontmatter(&canonical, cancellation)
+        } else {
+            tree.frontmatter(&canonical, cancellation)
+                .map(|header| (header, None))
+        };
+        let result = match inspected {
+            Ok((header, revision)) => discover_package(
                 location_for_tools,
                 &canonical,
                 &fallback_name,
                 source,
                 &header,
-            ),
+            )
+            .map(|(mut package, warnings)| {
+                package.marker_revision = revision;
+                (package, warnings)
+            }),
+            Err(error) if SkillMarkerChanged::matches(&error) => return Err(error),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
             Err(error) if bound && error.kind() != io::ErrorKind::InvalidData => return Err(error),
             Err(error) => Err(SkillPackageError::MalformedFrontmatter {
                 directory: fallback_name.clone(),
@@ -615,6 +873,7 @@ fn collect_automatic_source(
             source,
             name,
             location,
+            offered: file,
             canonical,
             package,
             bound,
@@ -672,6 +931,8 @@ fn discover_package(
             location,
             instruction_source: canonical.to_path_buf(),
             source,
+            marker_revision: None,
+            client_lease: None,
         },
         warnings,
     ))
@@ -765,6 +1026,62 @@ mod frontmatter_tests {
     use crate::skills::source::automatic_skill_roots;
     use crate::skills::{SkillDiagnosticSeverity, SkillSnapshot};
     use crate::tools::Workspace;
+
+    #[test]
+    fn bound_user_catalog_uses_client_path_without_injecting_the_body() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx/.agents/skills");
+        let package = root.join("example");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\nname: example\ndescription: A useful example\n---\nsecret body sentinel\n",
+        )
+        .unwrap();
+        let mut discovered = SkillDiscovery::user_root(root).discover();
+        let host = PathBuf::from(discovered.packages[0].location());
+        let client =
+            PathBuf::from("/client/rustx/.agents/skills/.rustx-sync/version/data/SKILL.md");
+        let mut preprojected = discovered.clone();
+        preprojected
+            .project_user_locations(
+                Path::new("/client/rustx/.agents/skills"),
+                &std::collections::BTreeMap::from([(
+                    PathBuf::from("example/SKILL.md"),
+                    PathBuf::from("/client/rustx/.agents/skills/example/SKILL.md"),
+                )]),
+            )
+            .unwrap();
+        preprojected
+            .project_user_locations(
+                Path::new("/client/rustx/.agents/skills"),
+                &std::collections::BTreeMap::from([(
+                    PathBuf::from("example/SKILL.md"),
+                    client.clone(),
+                )]),
+            )
+            .unwrap();
+        discovered
+            .project_user_locations(
+                Path::new("/client/rustx/.agents/skills"),
+                &std::collections::BTreeMap::from([(
+                    PathBuf::from("example/SKILL.md"),
+                    client.clone(),
+                )]),
+            )
+            .unwrap();
+        assert_eq!(preprojected, discovered);
+        assert_eq!(Path::new(discovered.packages[0].location()), client);
+        assert_eq!(discovered.packages[0].instruction_source(), host);
+        let snapshot = crate::skills::SkillSnapshot::from_discovery(discovered);
+        let catalog = crate::skills::render_skill_catalog(
+            snapshot.catalog_entries(),
+            crate::skills::SkillReadTool::Read,
+        );
+        assert!(catalog.contains("A useful example"));
+        assert!(catalog.contains(client.to_str().unwrap()));
+        assert!(!catalog.contains("secret body sentinel"));
+    }
 
     fn write_skill(root: &Path, name: &str, description: &str, extra: &str) {
         let directory = root.join(name);

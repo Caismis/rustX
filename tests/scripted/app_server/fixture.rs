@@ -105,19 +105,20 @@ impl Fixture {
         Self::with_session_count(tool, 2).await
     }
     pub(super) async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
-        Self::with_provider_gating(tool, count, false, None, None).await
+        Self::with_provider_gating(tool, count, false, None, None, None).await
     }
 
     pub(super) async fn with_summary_gate() -> Self {
-        Self::with_provider_gating(None, 1, true, None, None).await
+        Self::with_provider_gating(None, 1, true, None, None, None).await
     }
 
     pub(super) async fn with_titles() -> Self {
-        Self::with_provider_gating(Some("title"), 1, false, None, None).await
+        Self::with_provider_gating(Some("title"), 1, false, None, None, None).await
     }
 
     pub(super) async fn with_anthropic_titles(title: &str) -> Self {
-        Self::with_provider_gating(Some("title"), 1, false, Some(title.to_owned()), None).await
+        Self::with_provider_gating(Some("title"), 1, false, Some(title.to_owned()), None, None)
+            .await
     }
 
     pub(super) async fn with_owner_policy(
@@ -125,7 +126,12 @@ impl Fixture {
         clock: Arc<dyn crate::runtime::monotonic::MonotonicClock>,
         policy: crate::local_runtime::app_server_policy::AppServerPolicy,
     ) -> Self {
-        Self::with_provider_gating(None, count, false, None, Some((clock, policy))).await
+        Self::with_provider_gating(None, count, false, None, Some((clock, policy)), None).await
+    }
+
+    /// Build the Host with a locally configured alias already in place.
+    pub(super) async fn with_user_root_alias(product_alias: bool) -> Self {
+        Self::with_provider_gating(None, 1, false, None, None, Some(product_alias)).await
     }
 
     async fn with_provider_gating(
@@ -137,6 +143,7 @@ impl Fixture {
             Arc<dyn crate::runtime::monotonic::MonotonicClock>,
             crate::local_runtime::app_server_policy::AppServerPolicy,
         )>,
+        user_root_alias: Option<bool>,
     ) -> Self {
         let mut phases = FixturePhase::new("Session fixture construction");
         phases.enter("provider listener");
@@ -230,8 +237,20 @@ impl Fixture {
             )
             .unwrap();
         }
-        let host =
-            HostEnvironment::from_paths(workspaces[0].clone(), root.path().join("home")).unwrap();
+        let home = root.path().join("home");
+        if let Some(product_alias) = user_root_alias {
+            if product_alias {
+                std::fs::create_dir(&home).unwrap();
+                let product = home.join("user-product");
+                std::fs::create_dir(&product).unwrap();
+                std::os::unix::fs::symlink(&product, home.join("rustx")).unwrap();
+            } else {
+                let physical = root.path().join("home-physical");
+                std::fs::create_dir(&physical).unwrap();
+                std::os::unix::fs::symlink(&physical, &home).unwrap();
+            }
+        }
+        let host = HostEnvironment::from_paths(workspaces[0].clone(), home).unwrap();
         let args = [
             "--template",
             "openai-chat",
@@ -430,6 +449,10 @@ impl Fixture {
             .arg(endpoint.workspace())
             .current_dir("/")
             .env_clear()
+            .env(
+                "HOME",
+                &self.manager.configuration.source_bindings().home_directory,
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
