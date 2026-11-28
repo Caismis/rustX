@@ -5,7 +5,7 @@
 //! isolated child of the official collection; cleanup touches private stages
 //! only, never the standing User root or an unmarked directory.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -17,8 +17,8 @@ use rustix::fs::{AtFlags, FlockOperation, Mode, OFlags};
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::MAX_RAW_CHUNK_BYTES;
 use rustx_execution_protocol::skills::{
-    CACHE_DIRECTORY as CACHE, CACHE_LOCK, MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES, MAX_SYNC_BYTES,
-    Reply, Request, valid_cache_id, valid_package_path,
+    CACHE_DIRECTORY as CACHE, CACHE_LOCK, LeaseId, MAX_PACKAGE_ENTRIES, MAX_SKILL_BYTES,
+    MAX_SYNC_BYTES, Reply, Request, valid_cache_id, valid_package_path,
 };
 
 use super::mutation::Arbitration;
@@ -28,6 +28,7 @@ const MARKER_CONTENT: &[u8] = b"rustx user skill cache v1\n";
 const AUTHORITY_LOCK: &str = ".lock";
 const RETIRED_PREFIX: &str = ".retired-";
 const VERSION_MARKER: &str = ".version";
+const INTENT_SUFFIX: &str = ".intent";
 const LEASE: &str = ".lease";
 const SIZE: &str = ".bytes";
 const MAX_CACHE_VERSIONS: usize = 1024;
@@ -37,7 +38,7 @@ const MAX_CACHE_AUTHORITIES: usize = 64;
 #[derive(Default)]
 pub(super) struct Transfer {
     sync: Option<Sync>,
-    leases: BTreeMap<(String, String), File>,
+    leases: BTreeMap<LeaseId, BTreeMap<String, File>>,
 }
 
 struct Sync {
@@ -46,7 +47,7 @@ struct Sync {
     _lock: File,
     stage: Option<Stage>,
     bytes: u64,
-    retained: BTreeSet<String>,
+    retained: BTreeMap<String, File>,
 }
 
 struct Stage {
@@ -67,7 +68,7 @@ struct PendingFile {
 }
 
 impl Transfer {
-    /// Release this lane's unfinished sync without dropping published leases.
+    /// Discard unfinished work and keep leases held by catalog readers.
     pub(super) fn lane_lost(&mut self) -> io::Result<()> {
         let cleanup = self.abort();
         self.sync = None;
@@ -103,12 +104,33 @@ impl Transfer {
                 self.abort()?;
                 Ok(Reply::Accepted)
             }
-            Request::EndSync => {
-                self.lane_lost()?;
-                Ok(Reply::SyncEnded)
-            }
+            Request::EndSync { lease } => self.end_sync(*lease),
             _ => Err(io::ErrorKind::InvalidInput.into()),
         }
+    }
+
+    fn end_sync(&mut self, lease: Option<LeaseId>) -> io::Result<Reply> {
+        if let Some(lease) = lease {
+            if self.leases.contains_key(&lease) {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            let sync = self.sync.take().ok_or(io::ErrorKind::InvalidInput)?;
+            if let Some(stage) = sync.stage {
+                cleanup_work_item(&sync.owner, &stage.name)?;
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            if !sync.retained.is_empty() {
+                self.leases.insert(lease, sync.retained);
+            }
+        } else {
+            self.lane_lost()?;
+        }
+        Ok(Reply::SyncEnded)
+    }
+
+    pub(super) fn release_lease(&mut self, lease: LeaseId) -> Reply {
+        self.leases.remove(&lease);
+        Reply::LeaseReleased
     }
 
     fn begin_sync(
@@ -159,7 +181,7 @@ impl Transfer {
             _lock: lock,
             stage: None,
             bytes: 0,
-            retained: BTreeSet::new(),
+            retained: BTreeMap::new(),
         });
         Ok(Reply::SyncStarted)
     }
@@ -175,18 +197,15 @@ impl Transfer {
             Err(rustix::io::Errno::NOENT) => {}
             Err(error) => return Err(error.into()),
         }
-        let mut random = [0u8; 16];
-        getrandom::fill(&mut random).map_err(io::Error::other)?;
-        let mut name = String::from(".stage-");
-        for byte in random {
-            use std::fmt::Write as _;
-            write!(&mut name, "{byte:02x}").expect("writing to String");
-        }
-        rustix::fs::mkdirat(
+        let name = reserve_work(&sync.owner, ".stage-")?;
+        if let Err(error) = rustix::fs::mkdirat(
             sync.owner.descriptor(),
             name.as_str(),
             Mode::from_raw_mode(0o700),
-        )?;
+        ) {
+            remove_intent(&sync.owner, &name)?;
+            return Err(error.into());
+        }
         let setup = (|| {
             let stage = sync.owner.child(OsStr::new(&name))?;
             write_new(&stage, VERSION_MARKER, MARKER_CONTENT)?;
@@ -199,11 +218,7 @@ impl Transfer {
         let (data, lease) = match setup {
             Ok(stage) => stage,
             Err(error) => {
-                remove_tree(
-                    &sync.owner,
-                    OsStr::new(&name),
-                    &mut (MAX_PACKAGE_ENTRIES + 5),
-                )?;
+                cleanup_work_item(&sync.owner, &name)?;
                 return Err(error);
             }
         };
@@ -224,21 +239,17 @@ impl Transfer {
             return Err(io::ErrorKind::InvalidInput.into());
         }
         let sync = self.sync.as_mut().ok_or(io::ErrorKind::InvalidInput)?;
-        let key = (sync.authority.clone(), version.to_owned());
         let version_dir = sync.owner.child(OsStr::new(version))?;
         verify_marker(&version_dir, VERSION_MARKER)?;
         let bytes = version_size(&version_dir)?;
-        if !sync.retained.contains(version) {
+        if !sync.retained.contains_key(version) {
             if bytes > MAX_SYNC_BYTES.saturating_sub(sync.bytes) {
                 return Err(io::ErrorKind::FileTooLarge.into());
             }
-            sync.bytes += bytes;
-            sync.retained.insert(version.to_owned());
-        }
-        if let std::collections::btree_map::Entry::Vacant(slot) = self.leases.entry(key) {
             let lease = open_existing(&version_dir, LEASE)?;
             rustix::fs::flock(&lease, FlockOperation::NonBlockingLockShared)?;
-            slot.insert(lease);
+            sync.retained.insert(version.to_owned(), lease);
+            sync.bytes += bytes;
         }
         Ok(Reply::Retained {
             package: PathBuf::from(CACHE)
@@ -340,7 +351,7 @@ impl Transfer {
         stage.data.verify()?;
         let stage_directory = sync.owner.child(OsStr::new(&stage.name))?;
         write_new(&stage_directory, SIZE, stage.bytes.to_string().as_bytes())?;
-        prune(&sync.owner, stage.bytes)?;
+        prune(&sync.owner, stage.bytes, MAX_CACHE_BYTES)?;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let moved = arbitration.with_grant(|| {
             rustix::fs::renameat_with(
@@ -357,9 +368,10 @@ impl Transfer {
         match moved {
             Ok(()) => {
                 let stage = sync.stage.take().expect("stage is present");
-                sync.retained.insert(stage.version.clone());
-                self.leases
-                    .insert((sync.authority.clone(), stage.version.clone()), stage.lease);
+                // The published version is already visible. A leftover intent
+                // is harmless and will be removed on the next sync.
+                let _ = remove_intent(&sync.owner, &stage.name);
+                sync.retained.insert(stage.version.clone(), stage.lease);
                 Ok(Reply::Published {
                     package: PathBuf::from(CACHE)
                         .join(&sync.authority)
@@ -386,11 +398,7 @@ impl Transfer {
         if let Some(sync) = &mut self.sync
             && let Some(stage) = sync.stage.take()
         {
-            remove_tree(
-                &sync.owner,
-                OsStr::new(&stage.name),
-                &mut (MAX_PACKAGE_ENTRIES + 5),
-            )?;
+            cleanup_work_item(&sync.owner, &stage.name)?;
         }
         Ok(())
     }
@@ -565,6 +573,7 @@ fn retire_inactive_authority(cache: &PackageDirectory, name: &OsStr) -> io::Resu
     let Some(_lock) = lock_authority(&owner)? else {
         return Ok(false);
     };
+    cleanup_stages(&owner)?;
     for child in owner.names(MAX_CACHE_VERSIONS * 2 + 4)? {
         let Some(text) = child.to_str() else {
             return Ok(false);
@@ -666,7 +675,7 @@ fn cleanup_retired_authority(cache: &PackageDirectory, name: &OsStr) -> io::Resu
 
 /// Evict oldest unleased versions when an incoming package would exceed the
 /// per-authority retention bound. Metadata reads are shallow and bounded.
-fn prune(owner: &PackageDirectory, incoming: u64) -> io::Result<()> {
+fn prune(owner: &PackageDirectory, incoming: u64, byte_limit: u64) -> io::Result<()> {
     let mut versions = Vec::new();
     let mut bytes = 0u64;
     for name in owner.names(MAX_CACHE_VERSIONS * 2 + 4)? {
@@ -684,14 +693,29 @@ fn prune(owner: &PackageDirectory, incoming: u64) -> io::Result<()> {
     versions.sort_by_key(|(modified, _, _)| *modified);
     let mut count = versions.len();
     for (_, name, size) in versions {
-        if count < MAX_CACHE_VERSIONS && bytes.saturating_add(incoming) <= MAX_CACHE_BYTES {
+        if count < MAX_CACHE_VERSIONS && bytes.saturating_add(incoming) <= byte_limit {
             break;
         }
         let directory = owner.child(name.as_os_str())?;
         let lease = open_existing(&directory, LEASE)?;
         match rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {
-                remove_tree(owner, name.as_os_str(), &mut (MAX_PACKAGE_ENTRIES + 5))?;
+                let retired = reserve_work(owner, ".prune-")?;
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                let renamed = rustix::fs::renameat_with(
+                    owner.descriptor(),
+                    name.as_os_str(),
+                    owner.descriptor(),
+                    retired.as_str(),
+                    rustix::fs::RenameFlags::NOREPLACE,
+                );
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                let renamed: Result<(), rustix::io::Errno> = Err(rustix::io::Errno::NOTSUP);
+                if let Err(error) = renamed {
+                    remove_intent(owner, &retired)?;
+                    return Err(error.into());
+                }
+                cleanup_work_item(owner, &retired)?;
                 bytes -= size;
                 count -= 1;
             }
@@ -699,7 +723,7 @@ fn prune(owner: &PackageDirectory, incoming: u64) -> io::Result<()> {
             Err(error) => return Err(error.into()),
         }
     }
-    if count >= MAX_CACHE_VERSIONS || bytes.saturating_add(incoming) > MAX_CACHE_BYTES {
+    if count >= MAX_CACHE_VERSIONS || bytes.saturating_add(incoming) > byte_limit {
         return Err(io::Error::new(
             io::ErrorKind::FileTooLarge,
             "live User Skill versions exhaust the cache bound",
@@ -708,21 +732,84 @@ fn prune(owner: &PackageDirectory, incoming: u64) -> io::Result<()> {
     Ok(())
 }
 
+// Reserve a random work name with an ownership intent before creating or
+// moving any directory there. Only complete intents authorize cleanup.
+fn reserve_work(owner: &PackageDirectory, prefix: &str) -> io::Result<String> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(io::Error::other)?;
+    let mut name = prefix.to_owned();
+    for byte in random {
+        use std::fmt::Write as _;
+        write!(&mut name, "{byte:02x}").expect("writing to String");
+    }
+    owner.verify()?;
+    match rustix::fs::statat(owner.descriptor(), name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => return Err(io::ErrorKind::AlreadyExists.into()),
+        Err(rustix::io::Errno::NOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    // Creation itself is the complete intent, so a crash cannot leave a
+    // partially written reservation that recovery cannot recognize.
+    open_new(owner, &format!("{name}{INTENT_SUFFIX}"))?;
+    Ok(name)
+}
+
+fn remove_intent(owner: &PackageDirectory, name: &str) -> io::Result<()> {
+    owner.verify()?;
+    rustix::fs::unlinkat(
+        owner.descriptor(),
+        format!("{name}{INTENT_SUFFIX}").as_str(),
+        AtFlags::empty(),
+    )?;
+    Ok(())
+}
+
+fn verify_intent(owner: &PackageDirectory, name: &str) -> io::Result<()> {
+    let intent = owner.file(Path::new(name))?;
+    let metadata = intent.metadata()?;
+    if !metadata.is_file() || metadata.len() != 0 {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(())
+}
+
+fn cleanup_work_item(owner: &PackageDirectory, name: &str) -> io::Result<()> {
+    verify_intent(owner, &format!("{name}{INTENT_SUFFIX}"))?;
+    match rustix::fs::statat(owner.descriptor(), name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => remove_tree(owner, OsStr::new(name), &mut (MAX_PACKAGE_ENTRIES + 5))?,
+        Err(rustix::io::Errno::NOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    remove_intent(owner, name)
+}
+
 fn cleanup_stages(owner: &PackageDirectory) -> io::Result<()> {
     for name in owner.names(MAX_CACHE_VERSIONS * 2 + 4)? {
         let Some(text) = name.to_str() else { continue };
-        if !stage_name(text) {
+        let Some(work) = text.strip_suffix(INTENT_SUFFIX) else {
+            continue;
+        };
+        if !stage_name(work) && !prune_name(work) {
             continue;
         }
-        let stage = owner.child(name.as_os_str())?;
-        verify_marker(&stage, VERSION_MARKER)?;
-        remove_tree(owner, name.as_os_str(), &mut (MAX_PACKAGE_ENTRIES + 5))?;
+        // Do not claim unmarked files or directories left by another actor.
+        if verify_intent(owner, text).is_ok() {
+            cleanup_work_item(owner, work)?;
+        }
     }
     Ok(())
 }
 
 fn stage_name(name: &str) -> bool {
-    name.strip_prefix(".stage-").is_some_and(|suffix| {
+    work_name(name, ".stage-")
+}
+
+fn prune_name(name: &str) -> bool {
+    work_name(name, ".prune-")
+}
+
+fn work_name(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix).is_some_and(|suffix| {
         suffix.len() == 32
             && suffix
                 .bytes()
@@ -856,7 +943,7 @@ mod tests {
         else {
             panic!("expected a published version");
         };
-        reader.lane_lost().unwrap();
+        reader.end_sync(Some(LeaseId::new_v4())).unwrap();
 
         let mut active = Transfer::default();
         assert_eq!(begin(&mut active, authority(1)), Reply::SyncStarted);
@@ -1029,7 +1116,15 @@ mod tests {
             0
         );
         assert_eq!(
-            call(&mut first, &root, &arbitration, Request::EndSync).unwrap(),
+            call(
+                &mut first,
+                &root,
+                &arbitration,
+                Request::EndSync {
+                    lease: Some(LeaseId::new_v4())
+                }
+            )
+            .unwrap(),
             Reply::SyncEnded
         );
         assert_eq!(
@@ -1182,7 +1277,103 @@ mod tests {
     }
 
     #[test]
-    fn retention_never_evicts_a_live_lease() {
+    fn interrupted_stages_recover_before_and_after_the_version_marker() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        let authority = authority();
+        let mut transfer = Transfer::default();
+        transfer.begin_sync(&root, &collection, &authority).unwrap();
+        let owner = &transfer.sync.as_ref().unwrap().owner;
+        let before_creation = reserve_work(owner, ".stage-").unwrap();
+        let before_marker = reserve_work(owner, ".stage-").unwrap();
+        rustix::fs::mkdirat(
+            owner.descriptor(),
+            before_marker.as_str(),
+            Mode::from_raw_mode(0o700),
+        )
+        .unwrap();
+        let after_marker = reserve_work(owner, ".stage-").unwrap();
+        rustix::fs::mkdirat(
+            owner.descriptor(),
+            after_marker.as_str(),
+            Mode::from_raw_mode(0o700),
+        )
+        .unwrap();
+        let stage = owner.child(OsStr::new(&after_marker)).unwrap();
+        write_new(&stage, VERSION_MARKER, MARKER_CONTENT).unwrap();
+        write_new(&stage, "partial", b"work").unwrap();
+        let unknown = format!(".stage-{}", "f".repeat(32));
+        rustix::fs::mkdirat(
+            owner.descriptor(),
+            unknown.as_str(),
+            Mode::from_raw_mode(0o700),
+        )
+        .unwrap();
+        let unknown_path = collection.join(CACHE).join(&authority).join(&unknown);
+        fs::write(unknown_path.join("personal"), b"keep").unwrap();
+        transfer.lane_lost().unwrap();
+
+        assert_eq!(
+            transfer.begin_sync(&root, &collection, &authority).unwrap(),
+            Reply::SyncStarted
+        );
+        let owner_path = collection.join(CACHE).join(&authority);
+        for name in [before_creation, before_marker, after_marker] {
+            assert!(!owner_path.join(&name).exists());
+            assert!(!owner_path.join(format!("{name}{INTENT_SUFFIX}")).exists());
+        }
+        assert_eq!(fs::read(unknown_path.join("personal")).unwrap(), b"keep");
+        assert_eq!(
+            transfer.begin_package(&version('a')).unwrap(),
+            Reply::Accepted
+        );
+    }
+
+    #[test]
+    fn interrupted_pruning_recovers_after_version_marker_removal() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("rustx");
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        let authority = authority();
+        let mut transfer = Transfer::default();
+        transfer.begin_sync(&root, &collection, &authority).unwrap();
+        let owner = &transfer.sync.as_ref().unwrap().owner;
+        let original = version('b');
+        let directory = ensure_directory(owner, OsStr::new(&original)).unwrap().0;
+        write_new(&directory, VERSION_MARKER, MARKER_CONTENT).unwrap();
+        write_new(&directory, LEASE, b"").unwrap();
+        write_new(&directory, SIZE, b"1").unwrap();
+        let data = ensure_directory(&directory, OsStr::new("data")).unwrap().0;
+        write_new(&data, "SKILL.md", b"x").unwrap();
+        let retired = reserve_work(owner, ".prune-").unwrap();
+        rustix::fs::renameat_with(
+            owner.descriptor(),
+            original.as_str(),
+            owner.descriptor(),
+            retired.as_str(),
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .unwrap();
+        let owner_path = collection.join(CACHE).join(&authority);
+        fs::remove_file(owner_path.join(&retired).join(VERSION_MARKER)).unwrap();
+        transfer.lane_lost().unwrap();
+
+        assert_eq!(
+            transfer.begin_sync(&root, &collection, &authority).unwrap(),
+            Reply::SyncStarted
+        );
+        assert!(!owner_path.join(&retired).exists());
+        assert!(
+            !owner_path
+                .join(format!("{retired}{INTENT_SUFFIX}"))
+                .exists()
+        );
+        assert_eq!(transfer.begin_package(&original).unwrap(), Reply::Accepted);
+    }
+
+    #[test]
+    fn eviction_waits_for_the_last_catalog_lease() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path().join("rustx");
         let arbitration = Arbitration::new();
@@ -1228,23 +1419,32 @@ mod tests {
         .unwrap();
         call(&mut transfer, &root, &arbitration, Request::EndFile).unwrap();
         call(&mut transfer, &root, &arbitration, Request::Publish).unwrap();
-        let owner = &transfer.sync.as_ref().unwrap().owner;
-        assert!(prune(owner, MAX_CACHE_BYTES).is_err());
-        assert!(
-            root.join(".agents/skills/.rustx-sync")
-                .join(authority())
-                .join(version('e'))
-                .exists()
-        );
-        transfer.leases.clear();
-        prune(&transfer.sync.as_ref().unwrap().owner, MAX_CACHE_BYTES).unwrap();
-        assert!(
-            !root
-                .join(".agents/skills/.rustx-sync")
-                .join(authority())
-                .join(version('e'))
-                .exists()
-        );
+        let older = LeaseId::new_v4();
+        transfer.end_sync(Some(older)).unwrap();
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        transfer
+            .begin_sync(&root, &collection, &authority())
+            .unwrap();
+        transfer.retain(&version('e')).unwrap();
+        let current = LeaseId::new_v4();
+        transfer.end_sync(Some(current)).unwrap();
+        transfer
+            .begin_sync(&root, &collection, &authority())
+            .unwrap();
+        let owner = PackageDirectory::open(&collection.join(CACHE).join(authority())).unwrap();
+        assert!(prune(&owner, 1, 1).is_err());
+        assert_eq!(transfer.release_lease(older), Reply::LeaseReleased);
+        assert!(prune(&owner, 1, 1).is_err());
+        let readable = collection
+            .join(CACHE)
+            .join(authority())
+            .join(version('e'))
+            .join("data/SKILL.md");
+        assert_eq!(fs::read(&readable).unwrap(), b"x");
+        assert_eq!(transfer.release_lease(current), Reply::LeaseReleased);
+        assert_eq!(transfer.release_lease(current), Reply::LeaseReleased);
+        prune(&owner, 1, 1).unwrap();
+        assert!(!readable.exists());
     }
 
     #[test]
@@ -1298,6 +1498,10 @@ mod tests {
         .unwrap();
         call(&mut first, &root, &arbitration, Request::EndFile).unwrap();
         call(&mut first, &root, &arbitration, Request::Publish).unwrap();
+        let lease = LeaseId::new_v4();
+        first.end_sync(Some(lease)).unwrap();
+        let collection = super::super::skills::UserSkills::collection_path(&root).unwrap();
+        first.begin_sync(&root, &collection, &authority()).unwrap();
         call(
             &mut first,
             &root,
@@ -1339,6 +1543,7 @@ mod tests {
         first.lane_lost().unwrap();
         first.lane_lost().unwrap();
         assert!(first.sync.is_none());
+        assert!(first.leases.contains_key(&lease));
         assert!(!owner.join(version('f')).exists());
         assert!(fs::read_dir(&owner).unwrap().all(|entry| {
             !entry
@@ -1445,7 +1650,12 @@ mod tests {
         fs::rename(&owner, &moved).unwrap();
         assert!(
             transfer
-                .dispatch(&root, &collection, &Request::EndSync, &arbitration)
+                .dispatch(
+                    &root,
+                    &collection,
+                    &Request::EndSync { lease: None },
+                    &arbitration
+                )
                 .is_err()
         );
         fs::rename(moved, owner).unwrap();

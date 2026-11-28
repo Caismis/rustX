@@ -137,6 +137,9 @@ pub fn valid_standalone_names(names: &[String]) -> bool {
     true
 }
 
+/// The Server's unique identifier for one completed catalog capture.
+pub type LeaseId = uuid::Uuid;
+
 /// An inquiry addressed to the Client's fixed User root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -161,7 +164,7 @@ pub enum Request {
     BeginSync { authority: String },
     /// Start a private stage if the opaque version key is still available.
     BeginPackage { version: String },
-    /// Pin an existing immutable version for the lifetime of this Client.
+    /// Provisionally pin an existing immutable version in the current sync.
     Retain { version: String },
     /// Add one package-relative directory to the private stage.
     Directory { path: PathBuf },
@@ -182,8 +185,11 @@ pub enum Request {
     Publish,
     /// Discard a private stage, without deleting a published package.
     AbortPackage,
-    /// Release the authority lock. No published package is removed.
-    EndSync,
+    /// Release the authority lock, keeping provisional pins only for a
+    /// successful catalog capture identified by its lease.
+    EndSync { lease: Option<LeaseId> },
+    /// Release every version pinned by this completed capture.
+    ReleaseLease { lease: LeaseId },
 }
 
 /// Evidence from opening the fresh identity probe as a regular file.
@@ -260,6 +266,8 @@ pub enum Reply {
     VersionExists,
     /// The authority lock and private stage were released.
     SyncEnded,
+    /// The capture's immutable versions no longer have this reader.
+    LeaseReleased,
 }
 
 #[cfg(test)]

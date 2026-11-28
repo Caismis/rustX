@@ -26,7 +26,7 @@ use rustx_execution_protocol::{DecimalU64, MAX_RAW_CHUNK_BYTES};
 use rustx_execution_server::LocalConnection;
 use sha2::{Digest, Sha256};
 
-use super::LocalExecutionEndpoint;
+use super::{LocalExecutionEndpoint, UserSkillLease};
 use crate::skills::package::SkillMarkerChanged;
 
 struct ProbeFile<'a> {
@@ -64,10 +64,11 @@ impl CapturedMarker {
 }
 
 #[derive(Clone)]
-struct UserSkillSync {
-    collection: PathBuf,
-    paths: BTreeMap<PathBuf, PathBuf>,
-    capture: crate::skills::package::UserSkillCapture,
+pub(crate) struct UserSkillSync {
+    pub(crate) collection: PathBuf,
+    pub(crate) paths: BTreeMap<PathBuf, PathBuf>,
+    pub(crate) capture: crate::skills::package::UserSkillCapture,
+    pub(crate) lease: Option<std::sync::Arc<UserSkillLease>>,
 }
 
 #[derive(Default)]
@@ -88,6 +89,8 @@ struct FlightState {
     transfer_remaining: u64,
     #[cfg(test)]
     after_transfer: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    on_chunk: Option<super::SkillChunkHook>,
 }
 
 impl Default for SyncFlight {
@@ -99,6 +102,8 @@ impl Default for SyncFlight {
                 transfer_remaining: MAX_SYNC_BYTES,
                 #[cfg(test)]
                 after_transfer: None,
+                #[cfg(test)]
+                on_chunk: None,
             }),
             ready: std::sync::Condvar::new(),
             #[cfg(test)]
@@ -124,7 +129,13 @@ impl SyncFlight {
         let mut state = self.state.lock().expect("User Skill flight state");
         state.transfer_remaining -= bytes;
         state.progress = Instant::now();
+        #[cfg(test)]
+        let hook = state.on_chunk.clone();
         drop(state);
+        #[cfg(test)]
+        if let Some(hook) = hook {
+            hook.lock().unwrap()(bytes);
+        }
         self.ready.notify_all();
     }
 }
@@ -432,6 +443,18 @@ fn host_candidate_identities(
 
 impl LocalExecutionEndpoint {
     #[cfg(test)]
+    pub(crate) fn on_user_skill_chunk(&self, hook: impl FnMut(u64) + Send + 'static) {
+        let was_empty = self
+            .test_hooks
+            .lock()
+            .unwrap()
+            .on_user_skill_chunk
+            .replace(std::sync::Arc::new(std::sync::Mutex::new(Box::new(hook))))
+            .is_none();
+        assert!(was_empty);
+    }
+
+    #[cfg(test)]
     pub(crate) fn after_user_skill_capture(&self, hook: impl FnOnce() + Send + 'static) {
         let was_empty = self
             .test_hooks
@@ -711,18 +734,18 @@ impl LocalExecutionEndpoint {
     /// mapping from collection-relative instruction paths to Client paths.
     /// A matching marker skips the entire package without visiting assets.
     pub(crate) fn sync_user_skills(
-        &self,
+        self: &std::sync::Arc<Self>,
         host_home: &Path,
         signal: &crate::runtime::CancellationSignal,
         deadline: Instant,
-    ) -> io::Result<(
-        PathBuf,
-        BTreeMap<PathBuf, PathBuf>,
-        crate::skills::package::UserSkillCapture,
-    )> {
-        let sync = self
-            .user_skill_flights
+    ) -> io::Result<UserSkillSync> {
+        self.user_skill_flights
             .run(host_home, signal, deadline, |flight| {
+                #[cfg(test)]
+                {
+                    flight.state.lock().unwrap().on_chunk =
+                        self.test_hooks.lock().unwrap().on_user_skill_chunk.clone();
+                }
                 #[cfg(test)]
                 if let Some((limit, hook)) = self
                     .test_hooks
@@ -745,8 +768,7 @@ impl LocalExecutionEndpoint {
                         result => return result,
                     }
                 }
-            })?;
-        Ok((sync.collection, sync.paths, sync.capture))
+            })
     }
 
     #[allow(
@@ -754,7 +776,7 @@ impl LocalExecutionEndpoint {
         reason = "one bind owns discovery, proof, transfer and catalog publication"
     )]
     fn sync_user_skills_owned(
-        &self,
+        self: &std::sync::Arc<Self>,
         host_home: &Path,
         signal: &crate::runtime::CancellationSignal,
         deadline: Instant,
@@ -791,6 +813,7 @@ impl LocalExecutionEndpoint {
                 collection: inert_collection,
                 paths: BTreeMap::new(),
                 capture,
+                lease: None,
             });
         }
         let host_collection = match host_collection.canonicalize() {
@@ -827,6 +850,7 @@ impl LocalExecutionEndpoint {
                     .collect(),
                 collection: inert_collection,
                 capture,
+                lease: None,
             });
         }
         let (client_root, root_proof) = self.shared_user_skill_root(host_home, deadline)?;
@@ -879,9 +903,11 @@ impl LocalExecutionEndpoint {
                 collection: client_collection,
                 paths,
                 capture,
+                lease: None,
             });
         }
         let authority = authority_id(&host_home.join("rustx"), &host_collection)?;
+        let lease = std::sync::Arc::new(UserSkillLease::new(self.clone()));
         let copied = self.with_bounded_data_connection(deadline, |connection| {
             let result = sync_packages(
                 connection,
@@ -892,6 +918,7 @@ impl LocalExecutionEndpoint {
                 signal,
                 deadline,
                 flight,
+                lease.id,
             );
             // `wait_for_connection` retries WouldBlock, which is only safe
             // before an exchange. Never replay a partially sent sync.
@@ -908,6 +935,7 @@ impl LocalExecutionEndpoint {
             collection: client_collection,
             paths,
             capture,
+            lease: Some(lease),
         })
     }
 }
@@ -1040,6 +1068,7 @@ fn sync_packages(
     signal: &crate::runtime::CancellationSignal,
     deadline: Instant,
     flight: &SyncFlight,
+    lease: uuid::Uuid,
 ) -> io::Result<BTreeMap<PathBuf, PathBuf>> {
     loop {
         crate::package_io::check_cancelled(signal)?;
@@ -1076,7 +1105,12 @@ fn sync_packages(
     }) {
         return result;
     }
-    let ended = connection.user_skill_transfer_until(&Request::EndSync, wire_deadline());
+    let ended = connection.user_skill_transfer_until(
+        &Request::EndSync {
+            lease: result.is_ok().then_some(lease),
+        },
+        wire_deadline(),
+    );
     match (result, ended) {
         (Ok(paths), Ok(Reply::SyncEnded)) => Ok(paths),
         (_, Err(error)) | (Err(error), _) => Err(error),
@@ -1229,6 +1263,7 @@ fn sync_locked(
                 total: &mut total,
                 signal,
                 flight,
+                marker,
             };
             if package_dir {
                 copy_directory(
@@ -1397,9 +1432,14 @@ struct CopyBudget<'a> {
     total: &'a mut u64,
     signal: &'a crate::runtime::CancellationSignal,
     flight: &'a SyncFlight,
+    marker: &'a CapturedMarker,
 }
 
-impl CopyBudget<'_> {
+impl<'a> CopyBudget<'a> {
+    fn marker_at(&self, relative: &Path) -> Option<&'a CapturedMarker> {
+        (Some(relative.as_os_str()) == self.marker.path.file_name()).then_some(self.marker)
+    }
+
     fn entry(&mut self) -> io::Result<()> {
         crate::package_io::check_cancelled(self.signal)?;
         self.flight.progressed();
@@ -1434,6 +1474,9 @@ fn copy_directory(
         }
         budget.entry()?;
         let child_relative = relative.join(&child);
+        if let Some(marker) = budget.marker_at(&child_relative) {
+            marker.verify(source, child.as_os_str())?;
+        }
         let metadata = source_entry(source, &child)?;
         if metadata.is_directory {
             expect_accepted(
@@ -1482,13 +1525,28 @@ fn copy_file(
     relative: &Path,
     budget: &mut CopyBudget<'_>,
 ) -> io::Result<()> {
-    let entry = source.entry_metadata(name)?;
-    if !entry.is_file {
-        return Err(io::ErrorKind::InvalidData.into());
+    let marker = budget.marker_at(relative);
+    let stale = || {
+        if marker.is_some() {
+            SkillMarkerChanged::io_error()
+        } else {
+            io::Error::new(io::ErrorKind::InvalidData, "Skill file changed during copy")
+        }
+    };
+    let changed_if_missing = |error| {
+        if marker.is_some() {
+            SkillMarkerChanged::if_missing(error)
+        } else {
+            error
+        }
+    };
+    let entry = source.entry_metadata(name).map_err(changed_if_missing)?;
+    if !entry.is_file || marker.is_some_and(|marker| marker.revision != entry) {
+        return Err(stale());
     }
-    let mut file = source.file(name)?;
+    let mut file = source.file(name).map_err(changed_if_missing)?;
     if rustx_confined_fs::FileMetadata::of(&file)? != entry {
-        return Err(io::ErrorKind::InvalidData.into());
+        return Err(stale());
     }
     let before = file.metadata()?;
     if !before.is_file()
@@ -1521,7 +1579,7 @@ fn copy_file(
             break;
         }
         if count as u64 > before.len().saturating_sub(offset) {
-            return Err(io::ErrorKind::InvalidData.into());
+            return Err(stale());
         }
         expect_accepted(
             connection,
@@ -1536,12 +1594,9 @@ fn copy_file(
     }
     if offset != before.len()
         || file_stamp(&before) != file_stamp(&file.metadata()?)
-        || source.entry_metadata(name)? != entry
+        || source.entry_metadata(name).map_err(changed_if_missing)? != entry
     {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Skill file changed during copy",
-        ));
+        return Err(stale());
     }
     expect_accepted(connection, &Request::EndFile, wire_deadline())
 }
@@ -1654,6 +1709,7 @@ mod tests {
                             collection: "/client/rustx/.agents/skills".into(),
                             paths: BTreeMap::new(),
                             capture: owner_capture,
+                            lease: None,
                         })
                     },
                 )
@@ -1712,6 +1768,7 @@ mod tests {
                         collection: "/next".into(),
                         paths: BTreeMap::new(),
                         capture,
+                        lease: None,
                     })
                 },
             )

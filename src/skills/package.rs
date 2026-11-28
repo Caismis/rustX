@@ -123,6 +123,9 @@ pub struct SkillPackage {
     location: String,
     instruction_source: PathBuf,
     source: SkillSource,
+    marker_revision: Option<FileMetadata>,
+    client_lease:
+        Option<std::sync::Arc<crate::local_runtime::session_runtime_manager::UserSkillLease>>,
 }
 
 impl SkillPackage {
@@ -303,7 +306,6 @@ struct Candidate {
     offered: PathBuf,
     canonical: PathBuf,
     package: Option<SkillPackage>,
-    marker_revision: Option<FileMetadata>,
     bound: bool,
 }
 
@@ -320,7 +322,10 @@ impl UserSkillCapture {
         self.candidates.iter().map(|candidate| {
             (
                 candidate.offered.as_path(),
-                candidate.marker_revision.as_ref(),
+                candidate
+                    .package
+                    .as_ref()
+                    .and_then(|package| package.marker_revision.as_ref()),
             )
         })
     }
@@ -432,16 +437,21 @@ impl SkillDiscovery {
     /// Captures Workspace packages in the authenticated Client filesystem.
     pub(crate) fn discover_bound(
         &self,
-        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        endpoint: &std::sync::Arc<
+            crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        >,
     ) -> io::Result<SkillDiscoveryOutcome> {
         self.discover_bound_observed(endpoint, &mut None)
+            .map(|(outcome, _)| outcome)
     }
 
     pub(crate) fn discover_bound_observed(
         &self,
-        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        endpoint: &std::sync::Arc<
+            crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+        >,
         observed: &mut Option<SkillWatchObservation>,
-    ) -> io::Result<SkillDiscoveryOutcome> {
+    ) -> io::Result<(SkillDiscoveryOutcome, SkillDiscoveryOutcome)> {
         // Host User definitions remain authoritative. The Client copy is
         // synchronized before any Client-visible catalog path is published.
         let mut user_sync = None;
@@ -462,10 +472,8 @@ impl SkillDiscovery {
             )?);
         }
         let client = Client::new(endpoint, &self.cancellation);
-        let outcome = self.discover_with(
-            Some(&client),
-            user_sync.as_ref().map(|(_, _, capture)| capture),
-        );
+        let outcome =
+            self.discover_with(Some(&client), user_sync.as_ref().map(|sync| &sync.capture));
         let paths = client.into_observations();
         *observed = Some(SkillWatchObservation {
             paths: paths.clone(),
@@ -473,11 +481,33 @@ impl SkillDiscovery {
         });
         outcome.and_then(|mut outcome| {
             outcome.observed_workspace = paths;
-            if let Some((collection, paths, _)) = user_sync {
-                outcome.project_user_locations(&collection, &paths)?;
+            let captured = outcome.clone();
+            if let Some(sync) = user_sync {
+                outcome.project_user_locations(&sync.collection, &sync.paths)?;
+                let cache = sync
+                    .collection
+                    .join(rustx_execution_protocol::skills::CACHE_DIRECTORY);
+                for package in &mut outcome.packages {
+                    if package.source == SkillSource::User
+                        && Path::new(&package.location).starts_with(&cache)
+                    {
+                        package.client_lease.clone_from(&sync.lease);
+                    }
+                }
             }
-            Ok(outcome)
+            Ok((outcome, captured))
         })
+    }
+
+    /// Reread the captured definition facts without transferring User assets.
+    pub(crate) fn verify_bound(
+        &self,
+        endpoint: &crate::local_runtime::session_runtime_manager::LocalExecutionEndpoint,
+    ) -> io::Result<SkillDiscoveryOutcome> {
+        let client = Client::new(endpoint, &self.cancellation);
+        let mut outcome = self.discover_with(Some(&client), None)?;
+        outcome.observed_workspace = client.into_observations();
+        Ok(outcome)
     }
 
     fn discover_with(
@@ -772,7 +802,6 @@ fn collect_automatic_source(
         };
         let location = logical.display().to_string();
         let location_for_tools = if bound { &canonical } else { logical };
-        let mut marker_revision = None;
         let inspected = if view == CollectionView::BoundUser {
             bound_user_frontmatter(&canonical, cancellation)
         } else {
@@ -780,19 +809,17 @@ fn collect_automatic_source(
                 .map(|header| (header, None))
         };
         let result = match inspected {
-            Ok((header, revision)) => {
-                let result = discover_package(
-                    location_for_tools,
-                    &canonical,
-                    &fallback_name,
-                    source,
-                    &header,
-                );
-                if result.is_ok() {
-                    marker_revision = revision;
-                }
-                result
-            }
+            Ok((header, revision)) => discover_package(
+                location_for_tools,
+                &canonical,
+                &fallback_name,
+                source,
+                &header,
+            )
+            .map(|(mut package, warnings)| {
+                package.marker_revision = revision;
+                (package, warnings)
+            }),
             Err(error) if SkillMarkerChanged::matches(&error) => return Err(error),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
             Err(error) if bound && error.kind() != io::ErrorKind::InvalidData => return Err(error),
@@ -833,7 +860,6 @@ fn collect_automatic_source(
             offered: file,
             canonical,
             package,
-            marker_revision,
             bound,
         });
     }
@@ -889,6 +915,8 @@ fn discover_package(
             location,
             instruction_source: canonical.to_path_buf(),
             source,
+            marker_revision: None,
+            client_lease: None,
         },
         warnings,
     ))

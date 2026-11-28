@@ -370,7 +370,7 @@ fn websocket_skill_transfer_keeps_control_responsive_and_publishes_a_whole_packa
         }
     );
     connection
-        .user_skill_transfer_until(&Request::EndSync, deadline)
+        .user_skill_transfer_until(&Request::EndSync { lease: None }, deadline)
         .unwrap();
     drop(connection);
     rig.binding.revoke();
@@ -593,7 +593,7 @@ fn websocket_skill_transfer_recovers_after_a_staged_chunk() {
         b"y"
     );
     assert_eq!(
-        skill_transfer(&mut recovered, &Request::EndSync),
+        skill_transfer(&mut recovered, &Request::EndSync { lease: None }),
         Reply::SyncEnded
     );
     assert_eq!(fs::read(personal.join("SKILL.md")).unwrap(), b"personal");
@@ -668,6 +668,16 @@ fn websocket_skill_transfer_preserves_published_lease_after_recovery() {
     let Reply::Published { package } = skill_transfer(&mut first, &Request::Publish) else {
         panic!("published");
     };
+    let reader = rustx_execution_protocol::skills::LeaseId::new_v4();
+    assert_eq!(
+        skill_transfer(
+            &mut first,
+            &Request::EndSync {
+                lease: Some(reader)
+            }
+        ),
+        Reply::SyncEnded
+    );
     let owner = home
         .join("rustx/.agents/skills/.rustx-sync")
         .join(&authority);
@@ -705,12 +715,16 @@ fn websocket_skill_transfer_preserves_published_lease_after_recovery() {
         }
     );
     assert_eq!(
-        skill_transfer(&mut recovered, &Request::EndSync),
+        skill_transfer(&mut recovered, &Request::EndSync { lease: None }),
         Reply::SyncEnded
     );
     assert_eq!(
         rustix::fs::flock(&lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
         rustix::io::Errno::AGAIN
+    );
+    assert_eq!(
+        skill_transfer(&mut recovered, &Request::ReleaseLease { lease: reader }),
+        Reply::LeaseReleased
     );
     recovered.control().unwrap().request_revoke().unwrap();
     drop(first);

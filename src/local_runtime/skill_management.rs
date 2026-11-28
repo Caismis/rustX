@@ -108,7 +108,7 @@ fn skill_collection(
 fn discover(
     configuration: &super::configuration::UserConfigManager,
     target: &SourceTarget,
-    endpoint: Option<&LocalExecutionEndpoint>,
+    endpoint: Option<&std::sync::Arc<LocalExecutionEndpoint>>,
 ) -> Result<crate::skills::SkillDiscoveryOutcome, SettingsError> {
     if let Some(endpoint) = endpoint {
         return crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
@@ -193,7 +193,7 @@ impl SessionRuntimeManager {
             let _owner = owner;
             #[cfg(test)]
             native_gate(&configuration.sources.config_path);
-            let discovered = discover(&configuration, &target, endpoint.as_deref())?;
+            let discovered = discover(&configuration, &target, endpoint.as_ref())?;
             let mut descriptors = Vec::new();
             let mut all_diagnostics = discovered.diagnostics;
             for package in &discovered.packages {
@@ -282,7 +282,7 @@ impl SessionRuntimeManager {
             let _owner = owner;
             #[cfg(test)]
             native_gate(&configuration.sources.config_path);
-            let discovered = discover(&configuration, &target, endpoint.as_deref())?;
+            let discovered = discover(&configuration, &target, endpoint.as_ref())?;
             let package = discovered
                 .packages
                 .iter()
@@ -322,7 +322,7 @@ impl SessionRuntimeManager {
                     )
                 }
             };
-            let current = discover(&configuration, &target, endpoint.as_deref())?;
+            let current = discover(&configuration, &target, endpoint.as_ref())?;
             if !current.packages.iter().any(|current| current == package)
                 || !current
                     .provenance

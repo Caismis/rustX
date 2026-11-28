@@ -37,8 +37,8 @@ pub(crate) mod status;
 pub(crate) use execution::maintain_local_client;
 pub(crate) use execution::{
     ChildExecutionGrant, ChildExecutionRelay, ChildExecutionSettlement, LocalClient, OutputBinding,
-    ReceiveExchange, StandaloneExecution, StdioMcpBinding, WorkspaceDocumentSnapshot,
-    workspace_entry,
+    ReceiveExchange, StandaloneExecution, StdioMcpBinding, UserSkillLease,
+    WorkspaceDocumentSnapshot, workspace_entry,
 };
 pub use execution::{
     EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,

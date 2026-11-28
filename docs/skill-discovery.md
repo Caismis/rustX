@@ -105,9 +105,11 @@ using its earlier paths. The Host stores a random, owner-only authority ID in
 its standing `~/rustx` root and combines it with the collection's filesystem
 identity. A read-only root without that ID uses a process-local identity, so
 its cache can be reused only during that Server process. One authority's binds
-serialize during synchronization. Live sessions retain leases on their versions.
-Unleased versions are evicted when necessary to keep that authority's cache
-under 4 GiB and 1,024 versions.
+serialize during synchronization. A synchronization pins versions provisionally
+until its catalog capture completes. The published catalog and its readers
+keep those leases, including Attempts that still use a previous snapshot.
+The Client can evict a version once its last reader finishes. Each authority
+has a 4 GiB and 1,024-version cache limit.
 The Client admits at most 64 cached authorities. When a new authority needs
 room, it reclaims a marked authority whose synchronization lock and version
 leases are free. The Client moves the authority out of the active namespace
@@ -123,7 +125,9 @@ can consequently remain stale when `SKILL.md` is unchanged, including when an
 attachment subtree has a different mount view; this is an intentional
 performance tradeoff. A missing or different digest causes a whole
 package copy. The Host checks the marker revision captured with the metadata
-before reusing or publishing content. An intervening save restarts discovery.
+before reusing or publishing content. An intervening save during transfer
+restarts discovery. Final configuration verification compares the captured
+revision without transferring files.
 Copies stream regular files and directories with a 512 MiB per-package and
 1 GiB per-bind payload cap. The bind counts bytes sent before a retry.
 Executable files remain executable.
@@ -147,9 +151,8 @@ deadline; a healthy transfer can continue making progress beyond the inquiry
 and admission budget.
 
 Losing the data connection releases the synchronization lock and discards
-its unpublished stage. Versions already published stay pinned by the Client
-while a same-instance connection recovers. A lost publication reply retains
-its unknown outcome.
+the unpublished stage and provisional pins. Completed catalog leases survive
+same-instance recovery. A lost publication reply retains its unknown outcome.
 
 The execution-boundary change and User Skill sync share one release gate:
 do not ship the boundary without both this behavior and #612 in place.

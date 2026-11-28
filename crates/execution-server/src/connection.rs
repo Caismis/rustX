@@ -567,7 +567,11 @@ impl LocalConnection {
             Request::Chunk { data_base64, .. } => {
                 data_base64.len() <= MAX_RAW_CHUNK_BYTES.div_ceil(3) * 4
             }
-            Request::EndFile | Request::Publish | Request::AbortPackage | Request::EndSync => true,
+            Request::EndFile
+            | Request::Publish
+            | Request::AbortPackage
+            | Request::EndSync { .. }
+            | Request::ReleaseLease { .. } => true,
             Request::Root { .. }
             | Request::RootIdentity
             | Request::Collection { .. }
@@ -587,6 +591,12 @@ impl LocalConnection {
             )
             .map_err(|failure| match failure {
                 ExchangeFailure::Refused(error) => error,
+                // Releasing a known lease is safe to repeat after lane recovery.
+                ExchangeFailure::Unknown(error)
+                    if matches!(request, Request::ReleaseLease { .. }) =>
+                {
+                    error
+                }
                 ExchangeFailure::Unknown(_) => io::Error::other(WriteOutcomeUnknown),
             })?;
         let matched = match (request, &response) {
@@ -617,7 +627,8 @@ impl LocalConnection {
                 Request::BeginPackage { .. } | Request::Publish,
                 ClientReply::UserSkills(Reply::VersionExists),
             )
-            | (Request::EndSync, ClientReply::UserSkills(Reply::SyncEnded))
+            | (Request::EndSync { .. }, ClientReply::UserSkills(Reply::SyncEnded))
+            | (Request::ReleaseLease { .. }, ClientReply::UserSkills(Reply::LeaseReleased))
             | (_, ClientReply::Error { .. }) => true,
             _ => false,
         };

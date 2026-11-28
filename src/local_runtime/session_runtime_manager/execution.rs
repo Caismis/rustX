@@ -106,6 +106,55 @@ pub struct LocalExecutionEndpoint {
     recovery_fence: Option<rustx_execution_server::RecoveryFence>,
 }
 
+/// A physical Client cache pin carried by the copied Skill packages.
+#[derive(Debug)]
+pub(crate) struct UserSkillLease {
+    endpoint: Arc<LocalExecutionEndpoint>,
+    runtime: tokio::runtime::Handle,
+    id: uuid::Uuid,
+}
+
+impl UserSkillLease {
+    fn new(endpoint: Arc<LocalExecutionEndpoint>) -> Self {
+        Self {
+            endpoint,
+            runtime: tokio::runtime::Handle::current(),
+            id: uuid::Uuid::new_v4(),
+        }
+    }
+}
+
+impl PartialEq for UserSkillLease {
+    fn eq(&self, other: &Self) -> bool {
+        // Lease IDs represent independent readers of the same physical
+        // Client. They are never part of a Skill's semantic identity.
+        Arc::ptr_eq(&self.endpoint, &other.endpoint)
+    }
+}
+
+impl Eq for UserSkillLease {}
+
+impl Drop for UserSkillLease {
+    fn drop(&mut self) {
+        let endpoint = Arc::clone(&self.endpoint);
+        let request = rustx_execution_protocol::skills::Request::ReleaseLease { lease: self.id };
+        self.runtime.spawn(async move {
+            let released = endpoint
+                .release_retained_record(move |connection, deadline| {
+                    connection
+                        .user_skill_transfer_until(&request, deadline)
+                        .map(|reply| {
+                            reply == rustx_execution_protocol::skills::Reply::LeaseReleased
+                        })
+                })
+                .await;
+            if !released {
+                endpoint.cut_pair_if_open();
+            }
+        });
+    }
+}
+
 enum Settlement {
     Open,
     Closing,
@@ -173,11 +222,15 @@ impl Drop for ClientStartupOwner<'_> {
 }
 
 #[cfg(test)]
+type SkillChunkHook = Arc<Mutex<Box<dyn FnMut(u64) + Send>>>;
+
+#[cfg(test)]
 #[derive(Default)]
 struct ExecutionTestHooks {
     expire_bash_capture_query: bool,
     after_user_skill_capture: Option<Box<dyn FnOnce() + Send>>,
     after_user_skill_transfer: Option<(u64, Box<dyn FnOnce() + Send>)>,
+    on_user_skill_chunk: Option<SkillChunkHook>,
     local_startup: Option<super::super::configuration::ConfigurationHooks>,
     before_settlement_cleanup: Option<(
         tokio::sync::oneshot::Sender<()>,
@@ -3624,9 +3677,6 @@ impl SessionExecutionRegistry {
 }
 
 impl SessionRuntimeManager {
-    pub(crate) fn execution_user_home(&self) -> PathBuf {
-        self.configuration.sources.home_directory.clone()
-    }
     /// A private binding for a trusted local Workspace observation. The caller
     /// owns it through shutdown. It has no durable Session or Agent identity.
     pub(crate) async fn start_local_workspace_probe(

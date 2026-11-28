@@ -69,6 +69,7 @@ impl UserSkills {
         arbitration: &super::mutation::Arbitration,
     ) -> io::Result<Reply> {
         match request {
+            Request::ReleaseLease { lease } => Ok(self.transfer.release_lease(*lease)),
             Request::Root { .. } | Request::RootIdentity => {
                 self.inquire_checked(request, Some(arbitration))
             }
@@ -102,7 +103,7 @@ impl UserSkills {
                         "Client home is unavailable",
                     )
                 })?;
-                let cleanup = matches!(request, Request::AbortPackage | Request::EndSync);
+                let cleanup = matches!(request, Request::AbortPackage | Request::EndSync { .. });
                 let collection = match (&self.selected_collection, cleanup) {
                     (Some(selected), true) => selected.clone(),
                     _ => Self::collection_path(root)?,

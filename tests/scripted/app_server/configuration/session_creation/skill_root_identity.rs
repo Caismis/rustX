@@ -97,6 +97,82 @@ fn replace_skill_marker(package: &Path) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn copied_user_skill_is_pinned_until_its_last_snapshot_reader_finishes() {
+    use rustix::fs::{FlockOperation, flock};
+    use std::sync::Arc;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let home = fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory
+            .clone();
+        let source = write_skill(&home);
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let mut client = start_client_with_separate_home(&fixture, &base).await;
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let capture = || {
+            let home = home.clone();
+            let endpoint = endpoint.clone();
+            tokio::task::spawn_blocking(move || {
+                let discovery = crate::skills::SkillDiscovery::user(&home);
+                crate::skills::SkillSnapshot::from_discovery(
+                    discovery.discover_bound(&endpoint).unwrap(),
+                )
+            })
+        };
+        let published = Arc::new(capture().await.unwrap());
+        let reader = Arc::clone(&published);
+        let old = PathBuf::from(&reader.catalog_entries()[0].location);
+        let old_lease = old.parent().unwrap().parent().unwrap().join(".lease");
+        let old_lease = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(old_lease)
+            .unwrap();
+        replace_skill_marker(&source);
+        let current = capture().await.unwrap();
+        assert_ne!(
+            current.catalog_entries()[0].location,
+            reader.catalog_entries()[0].location
+        );
+        drop(published);
+        assert_eq!(
+            flock(&old_lease, FlockOperation::NonBlockingLockExclusive).unwrap_err(),
+            rustix::io::Errno::AGAIN
+        );
+        assert!(
+            std::fs::read_to_string(&old)
+                .unwrap()
+                .contains("Host instructions")
+        );
+        drop(reader);
+        loop {
+            match flock(&old_lease, FlockOperation::NonBlockingLockExclusive) {
+                Ok(()) => break,
+                Err(rustix::io::Errno::AGAIN) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("check released Skill lease: {error}"),
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(&current.catalog_entries()[0].location).unwrap(),
+            REVISED_SKILL
+        );
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn user_skill_atomic_save_between_capture_and_transfer_refreshes_the_catalog() {
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
@@ -179,6 +255,134 @@ async fn discarded_user_skill_transfer_still_counts_against_the_bind_budget() {
         resume.send(()).unwrap();
         let error = capture.await.unwrap().unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replacement_during_marker_stream_retries_with_the_new_marker() {
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let home = fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory
+            .clone();
+        let package = write_skill(&home);
+        std::fs::remove_file(package.join("attachment")).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            format!(
+                "---\nname: guide\ndescription: Host guide\n---\n{}",
+                "x".repeat(256 * 1024)
+            ),
+        )
+        .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let mut client = start_client_with_separate_home(&fixture, &base).await;
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let (streaming, started) = tokio::sync::oneshot::channel();
+        let (resume, replaced) = std::sync::mpsc::channel();
+        let mut streaming = Some(streaming);
+        endpoint.on_user_skill_chunk(move |_| {
+            if let Some(streaming) = streaming.take() {
+                streaming.send(()).unwrap();
+                replaced.recv().unwrap();
+            }
+        });
+        let capture = tokio::task::spawn_blocking(move || {
+            crate::skills::SkillDiscovery::user(&home).discover_bound(&endpoint)
+        });
+        started.await.unwrap();
+        replace_skill_marker(&package);
+        resume.send(()).unwrap();
+        let catalog = capture.await.unwrap().unwrap();
+        let skill = catalog
+            .packages
+            .iter()
+            .find(|skill| skill.name() == "guide")
+            .unwrap();
+        assert_eq!(skill.description(), "Revised guide");
+        assert_eq!(
+            std::fs::read_to_string(skill.location()).unwrap(),
+            REVISED_SKILL
+        );
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn verification_rejects_changed_skill_without_transferring_it_again() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let home = fixture
+            .manager
+            .configuration
+            .source_bindings()
+            .home_directory
+            .clone();
+        let package = write_skill(&home);
+        let expected: u64 = ["SKILL.md", "attachment"]
+            .iter()
+            .map(|name| std::fs::metadata(package.join(name)).unwrap().len())
+            .sum();
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let mut client = start_client_with_separate_home(&fixture, &base).await;
+        let endpoint = fixture
+            .manager
+            .execution_endpoint(&fixture.sessions[0].id)
+            .unwrap();
+        let transferred = std::sync::Arc::new(AtomicU64::new(0));
+        let counted = transferred.clone();
+        endpoint.on_user_skill_chunk(move |bytes| {
+            counted.fetch_add(bytes, Ordering::SeqCst);
+        });
+        let (captured, ready) = tokio::sync::oneshot::channel();
+        let (resume, replaced) = std::sync::mpsc::channel();
+        fixture.manager.configuration.test_hooks.insert(
+            "before_resource_verification",
+            move || {
+                captured.send(()).unwrap();
+                replaced.recv().unwrap();
+            },
+        );
+        let manager = fixture.manager.clone();
+        let input = crate::local_runtime::configuration::SessionConfigInput::new(
+            fixture.workspaces[0].clone(),
+        );
+        let capture = tokio::task::spawn_blocking(move || {
+            manager.configuration.capture_session_application(
+                &input,
+                &manager.credentials,
+                Some(&endpoint),
+            )
+        });
+        ready.await.unwrap();
+        assert_eq!(transferred.load(Ordering::SeqCst), expected);
+        std::fs::write(
+            package.join("next-marker"),
+            "---\nname: guide\ndescription: Host guide\n---\nChanged body only\n",
+        )
+        .unwrap();
+        std::fs::rename(package.join("next-marker"), package.join("SKILL.md")).unwrap();
+        resume.send(()).unwrap();
+        let captured = capture.await.unwrap().unwrap();
+        assert!(
+            captured.context.is_err(),
+            "changed Skill definitions were accepted"
+        );
+        assert_eq!(transferred.load(Ordering::SeqCst), expected);
         fixture.close().await;
         let _ = client.kill().await;
     }))

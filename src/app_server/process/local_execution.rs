@@ -163,12 +163,7 @@ pub(super) async fn launch_remote(
         .map_err(|error| format!("execution: {error}"))?;
     let listener = tokio::net::TcpListener::from_std(std_listener)
         .map_err(|error| format!("execution: {error}"))?;
-    Ok(tokio::spawn(accept_remote(
-        endpoint,
-        listener,
-        stop,
-        manager.execution_user_home(),
-    )))
+    Ok(tokio::spawn(accept_remote(endpoint, listener, stop)))
 }
 
 /// The loopback accept loop: keeps accepting after a failed or invalid
@@ -181,7 +176,6 @@ async fn accept_remote(
     endpoint: Arc<LocalExecutionEndpoint>,
     listener: tokio::net::TcpListener,
     stop: CancellationToken,
-    user_home: std::path::PathBuf,
 ) {
     // A handful of concurrent upgrades is plenty for a real Client and
     // bounds a flood of half-open handshakes.
@@ -206,7 +200,6 @@ async fn accept_remote(
                 };
                 let endpoint = endpoint.clone();
                 let stopping = stop.clone();
-                let user_home = user_home.clone();
                 tokio::task::spawn_blocking(move || {
                     let _permit = permit;
                     // Accepted before drain but still queued: a drain that
@@ -215,17 +208,7 @@ async fn accept_remote(
                         return;
                     }
                     let Ok(stream) = stream.into_std() else { return };
-                    if matches!(endpoint.admit_websocket_stream_deadline(stream, deadline), Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Live)) {
-                        let signal = crate::runtime::CancellationSignal::new();
-                        if let Err(error) = endpoint.sync_user_skills(
-                            &user_home,
-                            &signal,
-                            std::time::Instant::now() + std::time::Duration::from_secs(120),
-                        ) {
-                            tracing::warn!(%error, "Client User Skill synchronization failed");
-                            endpoint.cut_pair_if_open();
-                        }
-                    }
+                    let _ = endpoint.admit_websocket_stream_deadline(stream, deadline);
                 });
             }
         }
