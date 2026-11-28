@@ -267,9 +267,10 @@ pub fn stdio_argument_paths<'a>(
                         next = role;
                         return None;
                     }
-                    let role = if std::mem::take(&mut before_script) {
-                        // Only the interpreter consumes its own separator. The script
-                        // receives a fresh argv and can have file options of its own.
+                    let role = if before_script && explicit_stdio_path(arg) {
+                        // A bare operand may be an unknown option's value. Require an
+                        // explicit path before treating it as the interpreter script.
+                        before_script = false;
                         options = true;
                         Operand::Input
                     } else {
@@ -306,7 +307,7 @@ mod stdio_path_tests {
                     "--require=./preload",
                     "--import=@scope/package",
                     "--loader=./loader.mjs",
-                    "server.js",
+                    "./server.js",
                     "--model=gpt-4.1-mini",
                     "owner/repo",
                     "report.json",
@@ -336,7 +337,7 @@ mod stdio_path_tests {
                     "APP=foo/bar",
                     "python3",
                     "--",
-                    "server.py",
+                    "./server.py",
                     "--config=settings.toml",
                     "--input",
                     "requests.json",
@@ -349,12 +350,12 @@ mod stdio_path_tests {
         assert_eq!(
             path_values(
                 "env",
-                &["-iC./runtime", "-u", "NODE_PATH", "node", "server.js"]
+                &["-iC./runtime", "-u", "NODE_PATH", "node", "./server.js"]
             ),
             [(0, Directory), (4, Input)]
         );
         assert_eq!(
-            path_values("env", &["-C", "runtime", "--", "node", "server.js"]),
+            path_values("env", &["-C", "runtime", "--", "node", "./server.js"]),
             [(1, Directory), (4, Input)]
         );
     }
@@ -375,8 +376,19 @@ mod stdio_path_tests {
             [(1, Input), (2, Input)]
         );
         assert_eq!(
-            path_values("python3", &["-W", "ignore", "server.py"]),
+            path_values("python3", &["-W", "ignore", "./server.py"]),
             [(2, Input)]
+        );
+        assert_eq!(
+            path_values(
+                "python3",
+                &["--check-hash-based-pycs", "always", "./server.py"]
+            ),
+            [(2, Input)]
+        );
+        assert_eq!(
+            path_values("python3", &["--unknown", "opaque", "server.py"]),
+            NO_PATHS
         );
         assert_eq!(
             path_values("/usr/bin/env", &["python3", "-m", "package.server"]),

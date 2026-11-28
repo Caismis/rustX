@@ -317,6 +317,9 @@ mod tests {
 [mcp_servers.shell]
 command = "bash"
 args = ["-O", "extglob", "./server.sh"]
+[mcp_servers.python]
+command = "python3"
+args = ["--check-hash-based-pycs", "always", "./server.py"]
 [mcp_servers.feed]
 command = "feed"
 args = ["--input", "https://example.test/feed", "--input=https://example.test/two"]
@@ -333,6 +336,14 @@ args = ["--input", "https://example.test/feed", "--input=https://example.test/tw
         assert_eq!(
             args("shell"),
             &["-O", "extglob", "/work/project/.agents/server.sh"]
+        );
+        assert_eq!(
+            args("python"),
+            &[
+                "--check-hash-based-pycs",
+                "always",
+                "/work/project/.agents/server.py"
+            ]
         );
         assert_eq!(
             args("feed"),
@@ -431,7 +442,7 @@ command = "fixture-server"
         let mut host_relative = allowed.clone();
         host_relative.command = Some("python3".into());
         host_relative.cwd = None;
-        host_relative.args = vec!["server.py".into()];
+        host_relative.args = vec!["./server.py".into()];
         assert!(resolve_stdio_paths(&mut host_relative, user, None).is_err());
         host_relative.command = Some(r"C:\host\server.exe".into());
         host_relative.args.clear();

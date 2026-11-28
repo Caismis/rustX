@@ -1249,6 +1249,65 @@ args = ["--require", "dotenv/config", "--require", "./preload", "../client-input
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_preserves_unknown_python_option_value_and_validates_script() {
+    use super::super::protocol::{call, initialize};
+    use crate::app_server::connection::AppServerConnection;
+    use crate::app_server::protocol::{Method, MethodResult};
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::mcp_probe::McpProbeOutcome;
+
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let directory = &fixture.workspaces[0];
+        let agents = directory.join(".agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let document = br#"
+[mcp_servers.inspect]
+command = "python3"
+cwd = ".."
+args = ["--check-hash-based-pycs", "always", "../server.py"]
+"#;
+        std::fs::write(agents.join("mcp.toml"), document).unwrap();
+        let script = directory.join("server.py");
+        std::fs::write(
+            &script,
+            "from pathlib import Path\nPath('observed').write_text('executed')\n",
+        )
+        .unwrap();
+        let mut client = fixture.start_execution(0).await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let request = || Method::McpProbe {
+            target: SourceTarget::Workspace {
+                directory: directory.clone(),
+            },
+            execution_session: Some(fixture.sessions[0].id.clone()),
+            id: crate::runtime::identity::McpServerId::new("inspect"),
+            expected_revision: crate::local_runtime::settings::revision(Some(document)),
+        };
+        let MethodResult::McpProbe { result } = call(&connection, 1, request()).await else {
+            panic!("Workspace stdio probe");
+        };
+        assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
+        let observed = directory.join("observed");
+        assert_eq!(std::fs::read_to_string(&observed).unwrap(), "executed");
+        std::fs::remove_file(&observed).unwrap();
+        std::fs::remove_file(&script).unwrap();
+        let MethodResult::McpProbe { result } = call(&connection, 2, request()).await else {
+            panic!("Workspace stdio probe with missing script");
+        };
+        assert_eq!(result.outcome, McpProbeOutcome::ConnectionFailed);
+        assert!(
+            !observed.exists(),
+            "missing script must prevent physical launch"
+        );
+        fixture.close().await;
+        let _ = client.kill().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disabled_workflow_missing_agent_does_not_block_session_creation() {
     let fixture = Fixture::with_session_count(None, 0).await;
     let directory = fixture.workspaces[0].clone();

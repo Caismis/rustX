@@ -718,6 +718,10 @@ environment references and never splice across resource shadowing:
   Bound Sessions reject sending Host `sensitive_env` values to a Client
   `stdio` process, and Workspace `stdio` does not receive Host credentials or
   Client `--mcp-env` grants.
+  Spell scripts and other path arguments with an absolute or dot-relative path
+  (for example, `./server.py`) so the Host resolves them and the Client
+  validates them. Known file-valued options also declare their values as paths;
+  other bare values and URLs remain unchanged.
 - HTTP MCP supports `sensitive_headers` (and `$VAR` references in Workspace
   definitions). User-scoped HTTP services under `~/rustx/` resolve
   `sensitive_headers` from the Host credential snapshot. Workspace-scoped HTTP

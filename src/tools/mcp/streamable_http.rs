@@ -1318,7 +1318,16 @@ impl McpHttpClient {
     }
 
     fn route(&self, session: bool, auth: bool, headers: &CustomHeaders) -> &reqwest::Client {
-        if !session && !auth && headers.is_empty() {
+        // The anonymous client is only built for a source with no configured
+        // headers. The SDK adds these fixed routing fields after that decision.
+        let protocol_only = headers.iter().all(|(name, value)| {
+            !value.is_sensitive()
+                && matches!(
+                    name.as_str(),
+                    "mcp-protocol-version" | "mcp-method" | "mcp-name"
+                )
+        });
+        if !session && !auth && protocol_only {
             self.anonymous_inner.as_ref().unwrap_or(&self.inner)
         } else {
             &self.inner
@@ -1866,7 +1875,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anonymous_redirect_client_is_never_used_with_session_or_headers() {
+    async fn anonymous_redirect_client_accepts_protocol_headers_and_keeps_session_and_auth_local() {
         let (client, _) =
             super::McpHttpClient::for_workspace("https://public.example/mcp", true).unwrap();
         let empty = super::CustomHeaders::new();
@@ -1874,15 +1883,29 @@ mod tests {
             client.route(false, false, &empty),
             client.anonymous_inner.as_ref().unwrap()
         ));
+        let protocol = super::CustomHeaders::from([
+            (
+                http::HeaderName::from_static("mcp-protocol-version"),
+                http::HeaderValue::from_static("2026-07-28"),
+            ),
+            (
+                http::HeaderName::from_static("mcp-method"),
+                http::HeaderValue::from_static("tools/list"),
+            ),
+        ]);
         assert!(std::ptr::eq(
-            client.route(true, false, &empty),
+            client.route(false, false, &protocol),
+            client.anonymous_inner.as_ref().unwrap()
+        ));
+        assert!(std::ptr::eq(
+            client.route(true, false, &protocol),
             std::ptr::from_ref(&client.inner)
         ));
         assert!(std::ptr::eq(
-            client.route(false, true, &empty),
+            client.route(false, true, &protocol),
             std::ptr::from_ref(&client.inner)
         ));
-        let mut headers = empty;
+        let mut headers = protocol;
         headers.insert(
             http::header::AUTHORIZATION,
             http::HeaderValue::from_static("x"),
@@ -1891,6 +1914,62 @@ mod tests {
             client.route(false, false, &headers),
             std::ptr::from_ref(&client.inner)
         ));
+    }
+
+    #[tokio::test]
+    async fn protocol_only_workspace_request_follows_a_permitted_cross_origin_redirect() {
+        let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
+        let location = landing_guard.url("/mcp");
+        let landing_app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::get(|headers: http::HeaderMap| async move {
+                assert_eq!(headers["mcp-protocol-version"], "2026-07-28");
+                assert!(!headers.contains_key(http::header::AUTHORIZATION));
+                http::StatusCode::OK
+            }),
+        );
+        let landing_server =
+            tokio::spawn(async move { axum::serve(landing, landing_app).await.unwrap() });
+        let (entry, entry_guard) = super::WorkspaceFixtureGuard::bind().await;
+        let endpoint = entry_guard.url("/mcp");
+        let entry_app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::get(move || async move {
+                (
+                    http::StatusCode::FOUND,
+                    [(http::header::LOCATION, location)],
+                )
+            }),
+        );
+        let entry_server =
+            tokio::spawn(async move { axum::serve(entry, entry_app).await.unwrap() });
+        let (client, _) = super::McpHttpClient::for_workspace(&endpoint, true).unwrap();
+        let header = http::HeaderName::from_static("mcp-protocol-version");
+        let value = http::HeaderValue::from_static("2026-07-28");
+        let protocol = super::CustomHeaders::from([(header.clone(), value.clone())]);
+        assert_eq!(
+            client
+                .route(false, false, &protocol)
+                .get(&endpoint)
+                .header(header.clone(), value.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            http::StatusCode::OK
+        );
+        assert!(
+            client
+                .route(false, true, &protocol)
+                .get(endpoint)
+                .header(header, value)
+                .bearer_auth("fixture")
+                .send()
+                .await
+                .is_err()
+        );
+        entry_server.abort();
+        landing_server.abort();
     }
 
     fn id(value: i64) -> RequestId {

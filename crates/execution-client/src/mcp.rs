@@ -866,6 +866,20 @@ mod launch_tests {
             client_arguments(&root, &workspace, Path::new("/bin/bash"), args.clone()),
             Some(args)
         );
+        let python_args = vec![
+            "--check-hash-based-pycs".into(),
+            "always".into(),
+            workspace.join("server.py").display().to_string(),
+        ];
+        assert!(
+            client_arguments(&root, &workspace, Path::new("python3"), python_args.clone())
+                .is_none()
+        );
+        std::fs::write(workspace.join("server.py"), "pass").unwrap();
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("python3"), python_args.clone()),
+            Some(python_args)
+        );
         let urls = vec![
             "--input".into(),
             "https://example.test/feed".into(),

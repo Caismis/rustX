@@ -1171,8 +1171,9 @@ Workspace stdio resolves path operands against the configuration directory
 and checks the executable, cwd and path arguments on the Client before launch.
 Use an absolute path or a relative path starting with `./` or `../` for
 generic file arguments, including values written as `--option=PATH`.
-Interpreter scripts and options that identify input files also accept bare
-relative paths, and their files must exist. Bare Node loader specifiers, URLs,
+Interpreter scripts must be explicitly path-qualified, and their files must
+exist. Options that identify input files also accept bare relative paths and
+require them to exist. Other bare arguments, Node loader specifiers, URLs,
 literal option values and inline interpreter programs are passed unchanged.
 Path-qualified Node preloads also allow CommonJS file extension lookup. The
 Client checks the directory passed to `env --chdir` before launch.
