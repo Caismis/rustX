@@ -3305,7 +3305,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c87c5d4fc3832a0ed1fa1e8a1b8777cd468ace87fa76b481ebe6cfe894479d5b"
+      "local_sha256": "4bd37ac1e766599e9ab931b394566886cdec8ff0c135def6097fa267e5516b50"
     },
     {
       "upstream": "packages/client/ui-open-in-app/src/client/OpenTargetButton.tsx",
