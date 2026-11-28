@@ -481,7 +481,10 @@ async fn symlinked_product_with_invalid_user_collection_still_binds() {
             .unwrap();
         let resources = runtime.runtime_resources();
         let skills = resources.capability().skills();
-        assert!(skills.catalog_entries().is_empty());
+        assert_eq!(
+            skills.catalog_entries(),
+            [] as [crate::skills::SkillCatalogEntry; 0]
+        );
         assert!(skills.diagnostics().iter().any(|diagnostic| matches!(
             diagnostic,
             crate::skills::SkillDiagnostic::SourceRootInvalid {
