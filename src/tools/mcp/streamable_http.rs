@@ -184,7 +184,8 @@ use futures_util::{Stream, StreamExt as _};
 use http::{HeaderName, HeaderValue};
 use rmcp::model::{ClientJsonRpcMessage, ClientRequest, RequestId};
 use rmcp::transport::streamable_http_client::{
-    SseError, StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
+    SseError, StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
+    StreamableHttpPostResponse,
 };
 use sse_stream::Sse;
 use tokio::sync::Semaphore;
@@ -1109,11 +1110,20 @@ impl<S: Stream + Unpin> Stream for OwnedResponseStream<S> {
 pub(crate) struct McpHttpClient {
     inner: reqwest::Client,
     anonymous_inner: Option<reqwest::Client>,
+    redirected_session: Arc<OnceLock<RedirectedSession>>,
     ownership: Arc<McpHttpRequestOwnership>,
     ordinary_posts: Arc<Semaphore>,
     sse_posts: Arc<Semaphore>,
     sse_gets: Arc<Semaphore>,
 }
+
+struct RedirectedSession {
+    id: String,
+    endpoint: Arc<str>,
+    client: reqwest::Client,
+}
+
+type SetupRedirect = Arc<Mutex<Option<url::Url>>>;
 
 /// Resolve every hostname to a set of addresses that are safe to dial. The
 /// HTTP connector receives only these concrete addresses, so a later fallback
@@ -1259,9 +1269,9 @@ impl McpHttpClient {
         allow_anonymous_redirect: bool,
     ) -> Result<(Self, Arc<McpHttpRequestOwnership>), crate::tools::mcp::McpError> {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
-        let inner = Self::build_http_client(workspace_endpoint, false)?;
+        let inner = Self::build_http_client(workspace_endpoint, false, None)?;
         let anonymous_inner = if allow_anonymous_redirect {
-            Some(Self::build_http_client(workspace_endpoint, true)?)
+            Some(Self::build_http_client(workspace_endpoint, true, None)?)
         } else {
             None
         };
@@ -1269,6 +1279,7 @@ impl McpHttpClient {
             Self {
                 inner,
                 anonymous_inner,
+                redirected_session: Arc::default(),
                 ownership: Arc::clone(&ownership),
                 ordinary_posts: ORDINARY_POST_SLOTS
                     .get_or_init(|| Arc::new(Semaphore::new(MAX_ORDINARY_POSTS)))
@@ -1287,6 +1298,7 @@ impl McpHttpClient {
     fn build_http_client(
         workspace_endpoint: Option<&str>,
         anonymous: bool,
+        setup_redirect: Option<SetupRedirect>,
     ) -> Result<reqwest::Client, crate::tools::mcp::McpError> {
         let mut builder = reqwest::Client::builder()
             .pool_max_idle_per_host(1)
@@ -1306,6 +1318,10 @@ impl McpHttpClient {
                     } else if !workspace_redirect_allowed(&origin, attempt.url(), anonymous) {
                         attempt.error("Workspace MCP redirect destination is not permitted")
                     } else {
+                        if let Some(redirect) = &setup_redirect {
+                            *redirect.lock().expect("MCP setup redirect") =
+                                Some(attempt.url().clone());
+                        }
                         attempt.follow()
                     }
                 }));
@@ -1320,19 +1336,101 @@ impl McpHttpClient {
     fn route(&self, session: bool, auth: bool, headers: &CustomHeaders) -> &reqwest::Client {
         // The anonymous client is only built for a source with no configured
         // headers. The SDK adds these routing fields after that decision.
-        let protocol_only = headers.iter().all(|(name, value)| {
-            !value.is_sensitive()
-                && (matches!(
-                    name.as_str(),
-                    "mcp-protocol-version" | "mcp-method" | "mcp-name"
-                ) || name.as_str().starts_with("mcp-param-"))
-        });
-        if !session && !auth && protocol_only {
+        if !session && !auth && Self::protocol_only(headers) {
             self.anonymous_inner.as_ref().unwrap_or(&self.inner)
         } else {
             &self.inner
         }
     }
+
+    fn protocol_only(headers: &CustomHeaders) -> bool {
+        headers.iter().all(|(name, value)| {
+            !value.is_sensitive()
+                && (matches!(
+                    name.as_str(),
+                    "mcp-protocol-version" | "mcp-method" | "mcp-name"
+                ) || name.as_str().starts_with("mcp-param-"))
+        })
+    }
+
+    fn destination(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<&str>,
+        continuation: bool,
+        auth: bool,
+        headers: &CustomHeaders,
+    ) -> Result<(&reqwest::Client, Arc<str>), StreamableHttpError<reqwest::Error>> {
+        if let (Some(id), Some(bound)) = (session_id, self.redirected_session.get()) {
+            if id != bound.id || auth || !Self::protocol_only(headers) {
+                return Err(StreamableHttpError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Workspace MCP request cannot use the redirected session",
+                )));
+            }
+            return Ok((&bound.client, bound.endpoint.clone()));
+        }
+        Ok((
+            self.route(session_id.is_some() || continuation, auth, headers),
+            uri,
+        ))
+    }
+
+    async fn initialize_workspace_session(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        headers: CustomHeaders,
+        max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<reqwest::Error>> {
+        if self.redirected_session.get().is_some() {
+            return Err(StreamableHttpError::Io(std::io::Error::other(
+                "Workspace MCP session is already bound to its redirect destination",
+            )));
+        }
+        // This client is used only for this POST. Its accepted redirect hops
+        // therefore identify the issuer of a session ID in the response.
+        let redirect = Arc::new(Mutex::new(None));
+        let client = Self::build_http_client(Some(&uri), true, Some(redirect.clone()))
+            .map_err(setup_client_error)?;
+        let response = client
+            .post_message_with_max_sse_event_size(
+                uri,
+                message,
+                None,
+                None,
+                headers,
+                max_sse_event_size,
+            )
+            .await?;
+        let session = match &response {
+            StreamableHttpPostResponse::Json(_, session)
+            | StreamableHttpPostResponse::Sse(_, session) => session.as_ref(),
+            _ => None,
+        };
+        let target = redirect.lock().expect("MCP setup redirect").take();
+        if let (Some(id), Some(target)) = (session, target) {
+            let endpoint: Arc<str> = Arc::from(target.as_str());
+            let client = Self::build_http_client(Some(&endpoint), false, None)
+                .map_err(setup_client_error)?;
+            self.redirected_session
+                .set(RedirectedSession {
+                    id: id.clone(),
+                    endpoint,
+                    client,
+                })
+                .map_err(|_| {
+                    StreamableHttpError::Io(std::io::Error::other(
+                        "Workspace MCP redirect issued a second session for this connection",
+                    ))
+                })?;
+        }
+        Ok(response)
+    }
+}
+
+fn setup_client_error(error: crate::tools::mcp::McpError) -> StreamableHttpError<reqwest::Error> {
+    StreamableHttpError::Io(std::io::Error::other(error))
 }
 
 /// The JSON-RPC request id one outbound message correlates to, when it has
@@ -1478,16 +1576,13 @@ impl StreamableHttpClient for McpHttpClient {
         auth_header: Option<String>,
         custom_headers: CustomHeaders,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.owned_post(
-            &message,
-            self.route(session_id.is_some(), auth_header.is_some(), &custom_headers)
-                .post_message(
-                    uri,
-                    message.clone(),
-                    session_id,
-                    auth_header,
-                    custom_headers,
-                ),
+        self.post_message_with_max_sse_event_size(
+            uri,
+            message,
+            session_id,
+            auth_header,
+            custom_headers,
+            StreamableHttpClientTransportConfig::default().max_sse_event_size,
         )
         .await
     }
@@ -1501,19 +1596,38 @@ impl StreamableHttpClient for McpHttpClient {
         custom_headers: CustomHeaders,
         max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.owned_post(
-            &message,
-            self.route(session_id.is_some(), auth_header.is_some(), &custom_headers)
+        let outbound = message.clone();
+        let post = async move {
+            if self.anonymous_inner.is_some()
+                && session_id.is_none()
+                && auth_header.is_none()
+                && Self::protocol_only(&custom_headers)
+                && matches!(&outbound, ClientJsonRpcMessage::Request(request)
+                    if matches!(&request.request, ClientRequest::InitializeRequest(_)))
+            {
+                return self
+                    .initialize_workspace_session(uri, outbound, custom_headers, max_sse_event_size)
+                    .await;
+            }
+            let (client, uri) = self.destination(
+                uri,
+                session_id.as_deref(),
+                false,
+                auth_header.is_some(),
+                &custom_headers,
+            )?;
+            client
                 .post_message_with_max_sse_event_size(
                     uri,
-                    message.clone(),
+                    outbound,
                     session_id,
                     auth_header,
                     custom_headers,
                     max_sse_event_size,
-                ),
-        )
-        .await
+                )
+                .await
+        };
+        self.owned_post(&message, post).await
     }
 
     async fn delete_session(
@@ -1523,13 +1637,19 @@ impl StreamableHttpClient for McpHttpClient {
         auth_header: Option<String>,
         custom_headers: CustomHeaders,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
+        let (client, uri) = self.destination(
+            uri,
+            Some(&session_id),
+            false,
+            auth_header.is_some(),
+            &custom_headers,
+        )?;
         // rmcp has already stopped its POSTs/streams before this callback.
         // A slow remote DELETE must not hold the old Conversation's local
         // shutdown open for the SDK's full five-second cleanup allowance.
         match tokio::time::timeout(
             REMOTE_SESSION_CLEANUP_TIMEOUT,
-            self.inner
-                .delete_session(uri, session_id, auth_header, custom_headers),
+            client.delete_session(uri, session_id, auth_header, custom_headers),
         )
         .await
         {
@@ -1549,12 +1669,14 @@ impl StreamableHttpClient for McpHttpClient {
         auth_header: Option<String>,
         custom_headers: CustomHeaders,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
-        let stream = self
-            .route(
-                session_id.is_some() || last_event_id.is_some(),
-                auth_header.is_some(),
-                &custom_headers,
-            )
+        let (client, uri) = self.destination(
+            uri,
+            session_id.as_deref(),
+            last_event_id.is_some(),
+            auth_header.is_some(),
+            &custom_headers,
+        )?;
+        let stream = client
             .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
             .await
             .map_err(without_request_url)?;
@@ -1570,12 +1692,14 @@ impl StreamableHttpClient for McpHttpClient {
         custom_headers: CustomHeaders,
         max_sse_event_size: usize,
     ) -> Result<SseStream, StreamableHttpError<Self::Error>> {
-        let stream = self
-            .route(
-                session_id.is_some() || last_event_id.is_some(),
-                auth_header.is_some(),
-                &custom_headers,
-            )
+        let (client, uri) = self.destination(
+            uri,
+            session_id.as_deref(),
+            last_event_id.is_some(),
+            auth_header.is_some(),
+            &custom_headers,
+        )?;
+        let stream = client
             .get_stream_with_max_sse_event_size(
                 uri,
                 session_id,
@@ -1922,7 +2046,8 @@ mod tests {
         let (listener, guard) = super::WorkspaceFixtureGuard::bind().await;
         let app = axum::Router::new().route(
             "/mcp",
-            axum::routing::any(move || async move {
+            axum::routing::any(move |headers: http::HeaderMap| async move {
+                assert!(!headers.contains_key("mcp-session-id"));
                 (
                     http::StatusCode::TEMPORARY_REDIRECT,
                     [(http::header::LOCATION, location)],
@@ -1979,18 +2104,47 @@ mod tests {
     }
 
     #[cfg(feature = "mcp-fixture")]
-    #[tokio::test]
-    async fn redirected_workspace_sdk_discovers_and_calls_a_routed_tool() {
+    async fn connect_redirected_workspace(
+        endpoint: String,
+        workspace: &std::path::Path,
+    ) -> Arc<crate::tools::mcp::McpServerRuntime> {
         use crate::runtime::identity::McpServerId;
         use crate::tools::mcp::{
             McpInvalidationState, McpServerBinding, McpServerRuntime, McpTransportConfig,
-            fixture::{FixtureServer, ROUTED_TOOL},
         };
+        use std::collections::BTreeMap;
+
+        let binding = McpServerBinding {
+            credentials: crate::credentials::SourceCredentials {
+                client_owned: true,
+                ..Default::default()
+            },
+            transport: McpTransportConfig::StreamableHttp {
+                endpoint,
+                headers: BTreeMap::new(),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: BTreeMap::new(),
+        };
+        McpServerRuntime::connect_fixture(
+            &McpServerId::new("redirected"),
+            &binding,
+            &crate::tools::Workspace::new(workspace).unwrap(),
+            Arc::new(McpInvalidationState::new()),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test]
+    async fn redirected_workspace_sdk_discovers_and_calls_a_routed_tool() {
+        use crate::tools::mcp::fixture::{FixtureServer, ROUTED_TOOL};
         use rmcp::model::{CallToolRequestParams, ProtocolVersion};
         use rmcp::transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         };
-        use std::collections::BTreeMap;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
@@ -2030,27 +2184,7 @@ mod tests {
             tokio::spawn(async move { axum::serve(landing, landing_app).await.unwrap() });
         let (entry_guard, entry_server) = redirect_fixture(landing_guard.url("/mcp")).await;
         let workspace = tempfile::tempdir().unwrap();
-        let binding = McpServerBinding {
-            credentials: crate::credentials::SourceCredentials {
-                client_owned: true,
-                ..Default::default()
-            },
-            transport: McpTransportConfig::StreamableHttp {
-                endpoint: entry_guard.url("/mcp"),
-                headers: BTreeMap::new(),
-            },
-            policy: crate::tools::types::ToolInvocationPolicy::default(),
-            permissions: None,
-            tool_permissions: BTreeMap::new(),
-        };
-        let runtime = McpServerRuntime::connect_fixture(
-            &McpServerId::new("redirected"),
-            &binding,
-            &crate::tools::Workspace::new(workspace.path()).unwrap(),
-            Arc::new(McpInvalidationState::new()),
-        )
-        .await
-        .unwrap();
+        let runtime = connect_redirected_workspace(entry_guard.url("/mcp"), workspace.path()).await;
         let tools = runtime.list_tools().await.unwrap();
         assert!(tools.iter().any(|tool| tool.name == ROUTED_TOOL));
         let response = runtime
@@ -2071,6 +2205,95 @@ mod tests {
         );
         runtime.close().await.unwrap();
         entry_server.abort();
+        landing_server.abort();
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test]
+    async fn redirected_stateful_workspace_session_discovers_tools_and_cleans_up_at_the_issuer() {
+        use crate::tools::mcp::fixture::FixtureServer;
+        use axum::response::IntoResponse as _;
+        use rmcp::model::{
+            DiscoverRequestMethod, ErrorData, ProtocolVersion, ServerJsonRpcMessage,
+        };
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use std::sync::Mutex;
+
+        type ObservedSessions = Arc<Mutex<Vec<(http::Method, http::HeaderValue)>>>;
+        let observed: ObservedSessions = Arc::default();
+        let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
+        let fixture = FixtureServer {
+            supported_versions: Some(vec![ProtocolVersion::V_2025_11_25]),
+            ..Default::default()
+        };
+        let mut config = StreamableHttpServerConfig::default();
+        config.allowed_hosts = vec![landing_guard.authority()];
+        let service = StreamableHttpService::<FixtureServer, LocalSessionManager>::new(
+            move || Ok(fixture.clone()),
+            Arc::default(),
+            config,
+        );
+        let app = axum::Router::new().nest_service("/issuer", service).layer(
+            axum::middleware::from_fn_with_state(
+                observed.clone(),
+                |axum::extract::State(observed): axum::extract::State<ObservedSessions>,
+                 request: axum::extract::Request,
+                 next: axum::middleware::Next| async move {
+                    // The fixture implements Discover even with only a legacy
+                    // revision configured. Emulate an older server that
+                    // requires the SDK to fall back to Initialize.
+                    if request
+                        .headers()
+                        .get("mcp-method")
+                        .is_some_and(|method| method == "server/discover")
+                    {
+                        let body = axum::body::to_bytes(request.into_body(), 64 * 1024)
+                            .await
+                            .unwrap();
+                        let message = serde_json::from_slice(&body).unwrap();
+                        let id = super::request_id(&message).expect("Discover request ID");
+                        return axum::Json(ServerJsonRpcMessage::error(
+                            ErrorData::method_not_found::<DiscoverRequestMethod>(),
+                            Some(id),
+                        ))
+                        .into_response();
+                    }
+                    if let Some(id) = request.headers().get("mcp-session-id") {
+                        observed
+                            .lock()
+                            .unwrap()
+                            .push((request.method().clone(), id.clone()));
+                    }
+                    next.run(request).await
+                },
+            ),
+        );
+        let landing_server = tokio::spawn(async move { axum::serve(landing, app).await.unwrap() });
+        let (entry, redirect_server) = redirect_fixture(landing_guard.url("/issuer")).await;
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = connect_redirected_workspace(entry.url("/mcp"), workspace.path()).await;
+        assert_eq!(runtime.protocol_version(), &ProtocolVersion::V_2025_11_25);
+        assert!(
+            runtime
+                .list_tools()
+                .await
+                .unwrap()
+                .iter()
+                .any(|tool| tool.name == "echo")
+        );
+        runtime.close().await.unwrap();
+        let seen = observed.lock().unwrap();
+        let (_, id) = seen
+            .iter()
+            .find(|(method, _)| *method == http::Method::DELETE)
+            .expect("SDK cleanup reached the session issuer");
+        assert!(
+            seen.iter()
+                .any(|(method, seen_id)| *method == http::Method::POST && seen_id == id)
+        );
+        redirect_server.abort();
         landing_server.abort();
     }
 

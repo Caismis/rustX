@@ -1164,8 +1164,10 @@ metadata destinations are rejected. Private network addresses can be valid.
 The metadata exclusions include the documented [EC2 IPv6 endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html)
 and [Alibaba ECS endpoint](https://www.alibabacloud.com/help/en/ecs/user-guide/view-instance-metadata/).
 Requests carrying service headers, credentials, session IDs or SSE continuation
-IDs remain within their granted origin across redirects. Shadowing a User
-service selects the Workspace service's credentials.
+IDs remain within their granted origin across redirects. When an anonymous
+legacy Initialize request establishes a session after a redirect, subsequent
+session requests and cleanup start at the endpoint that issued the session ID.
+Shadowing a User service selects the Workspace service's credentials.
 
 Workspace stdio resolves path operands against the configuration directory
 and checks the executable, cwd and path arguments on the Client before launch.
