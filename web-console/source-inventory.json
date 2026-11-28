@@ -6532,7 +6532,7 @@
           "treatment": "Role tag geometry/colors, turn label, active-turn rail, request dot and detail header/tab/overview geometry adapted; native seats keep their measured heights."
         }
       ],
-      "local_sha256": "12bbf265ab8481f542f4f1f7d834393887641e97def276178478e91dac441733"
+      "local_sha256": "56b674c002a543417c4d6e149fbac33fe972cc576f500facbac230798b689e02"
     }
   ],
   "inspected_only": [
