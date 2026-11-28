@@ -100,7 +100,7 @@ function Fixture() {
   const [cache, setCache] = useState(() => workflowRefresh?.cache ?? (params.has('workflows') ? workflowTraceFixture().cache : replaceTrace(snapshot)));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
-    <header style={{ padding: '8px 12px', display: 'flex', flexWrap: workflowRefresh ? 'wrap' : undefined, gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11, lineHeight: '19px' }}><strong>rustX / Workspace review</strong>
+    <header style={{ padding: '8px 12px', display: 'flex', flexWrap: workflowRefresh ? 'wrap' : undefined, gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
       <button onClick={() => setCache(current => refreshTrace(current, { records: [...current.page.records, traceRecord(Number(current.page.records.at(-1)!.id.split(':')[1]) + 1)], next_cursor: current.page.next_cursor }))}>Append</button>
       <button onClick={() => setCache(current => ({ ...current, page: { ...current.page, records: current.page.records.map(record => ({ ...record, preview: text('Lifecycle updated') })) } }))}>Update</button>
       {workflowRefresh && <button onClick={() => setCache(current => workflowRefresh.refresh(current))}>Refresh workflow snapshot</button>}
