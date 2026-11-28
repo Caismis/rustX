@@ -132,6 +132,7 @@ fn resolve_stdio_paths(
     let replacements =
         rustx_execution_protocol::mcp::stdio_argument_paths(Path::new(program), &definition.args)
             .map(|arg| {
+                let arg = arg.map_err(|_| "stdio interpreter script requires an explicit path")?;
                 let resolved = resolve(Path::new(arg.value))?
                     .into_os_string()
                     .into_string()
@@ -353,6 +354,28 @@ args = ["--input", "https://example.test/feed", "--input=https://example.test/tw
                 "--input=https://example.test/two"
             ]
         );
+    }
+
+    #[test]
+    fn unqualified_interpreter_scripts_are_refused_before_resolution() {
+        let workspace = Path::new("/work/project");
+        for args in [
+            vec!["server.py"],
+            vec!["--", "server.py"],
+            vec!["-W", "ignore", "server.py"],
+        ] {
+            let mut definition: McpAuthoring = toml::from_str("command = 'python3'").unwrap();
+            definition.args = args.into_iter().map(str::to_owned).collect();
+            assert_eq!(
+                resolve_stdio_paths(&mut definition, workspace, Some(workspace)),
+                Err("stdio interpreter script requires an explicit path")
+            );
+        }
+        let mut ambiguous: McpAuthoring = toml::from_str("command = 'python3'").unwrap();
+        ambiguous.args = vec!["--unknown".into(), "opaque".into(), "server.py".into()];
+        let original = ambiguous.args.clone();
+        resolve_stdio_paths(&mut ambiguous, workspace, Some(workspace)).unwrap();
+        assert_eq!(ambiguous.args, original);
     }
 
     #[test]

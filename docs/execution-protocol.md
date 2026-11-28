@@ -1172,7 +1172,8 @@ and checks the executable, cwd and path arguments on the Client before launch.
 Use an absolute path or a relative path starting with `./` or `../` for
 generic file arguments, including values written as `--option=PATH`.
 Interpreter scripts must be explicitly path-qualified, and their files must
-exist. Options that identify input files also accept bare relative paths and
+exist. Unqualified operands in known script positions are rejected before
+launch; bare operands following an unknown option remain opaque. Options that identify input files also accept bare relative paths and
 require them to exist. Other bare arguments, Node loader specifiers, URLs,
 literal option values and inline interpreter programs are passed unchanged.
 Path-qualified Node preloads also allow CommonJS file extension lookup. The

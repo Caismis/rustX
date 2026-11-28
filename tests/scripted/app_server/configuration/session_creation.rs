@@ -1275,6 +1275,77 @@ args = ["--check-hash-based-pycs", "always", "../server.py"]
         )
         .unwrap();
         let mut client = fixture.start_execution(0).await;
+        // The Host must reject the same existing bare script before it opens
+        // a Client process, even when the Client cwd contains that script.
+        let invalid_document = br#"
+[mcp_servers.inspect]
+command = "python3"
+cwd = ".."
+args = ["--", "server.py"]
+"#;
+        std::fs::write(agents.join("mcp.toml"), invalid_document).unwrap();
+        let host_result = fixture
+            .manager
+            .inspect_mcp_source(
+                SourceTarget::Workspace {
+                    directory: directory.clone(),
+                },
+                crate::local_runtime::session_runtime_manager::SourceCatalogExecution::Session(
+                    Some(fixture.sessions[0].id.clone()),
+                ),
+                crate::runtime::identity::McpServerId::new("inspect"),
+                crate::local_runtime::settings::revision(Some(invalid_document)),
+                None,
+                (),
+            )
+            .await;
+        assert!(matches!(
+            host_result,
+            Err(crate::local_runtime::configuration::settings::SettingsError::Invalid)
+        ));
+        assert!(
+            !directory.join("observed").exists(),
+            "Host must refuse before launch"
+        );
+        std::fs::write(agents.join("mcp.toml"), document).unwrap();
+        // Exercise the admitted Client directly as well as the Host. A real
+        // script exists in the Client cwd, so a bypass would run it.
+        let scope = fixture.manager.execution_scope(&fixture.sessions[0].id);
+        let binding = scope.bind_stdio_mcp(directory).unwrap();
+        let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let reply = binding
+            .exchange(
+                rustx_execution_protocol::mcp::Request::Open {
+                    key: binding.key.clone(),
+                    source_id: "direct-test".into(),
+                    launch: rustx_execution_protocol::mcp::Launch {
+                        program: "/usr/bin/python3".into(),
+                        args: vec!["--".into(), "server.py".into()],
+                        cwd: Default::default(),
+                        environment: Default::default(),
+                        versions: vec!["2025-03-26".into()],
+                        legacy_version: None,
+                        python_source: None,
+                    },
+                },
+                std::time::Instant::now() + std::time::Duration::from_secs(10),
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            reply,
+            rustx_execution_protocol::mcp::Reply::Failed(
+                rustx_execution_protocol::mcp::Failure::Invalid
+            )
+        ));
+        assert!(
+            !directory.join("observed").exists(),
+            "Client must refuse before spawning the interpreter"
+        );
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
         let request = || Method::McpProbe {

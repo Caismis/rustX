@@ -1319,13 +1319,13 @@ impl McpHttpClient {
 
     fn route(&self, session: bool, auth: bool, headers: &CustomHeaders) -> &reqwest::Client {
         // The anonymous client is only built for a source with no configured
-        // headers. The SDK adds these fixed routing fields after that decision.
+        // headers. The SDK adds these routing fields after that decision.
         let protocol_only = headers.iter().all(|(name, value)| {
             !value.is_sensitive()
-                && matches!(
+                && (matches!(
                     name.as_str(),
                     "mcp-protocol-version" | "mcp-method" | "mcp-name"
-                )
+                ) || name.as_str().starts_with("mcp-param-"))
         });
         if !session && !auth && protocol_only {
             self.anonymous_inner.as_ref().unwrap_or(&self.inner)
@@ -1968,6 +1968,113 @@ mod tests {
                 .await
                 .is_err()
         );
+        entry_server.abort();
+        landing_server.abort();
+    }
+
+    #[cfg(feature = "mcp-fixture")]
+    #[tokio::test]
+    async fn redirected_workspace_sdk_discovers_and_calls_a_routed_tool() {
+        use crate::runtime::identity::McpServerId;
+        use crate::tools::mcp::{
+            McpInvalidationState, McpServerBinding, McpServerRuntime, McpTransportConfig,
+            fixture::{FixtureServer, ROUTED_TOOL},
+        };
+        use rmcp::model::{CallToolRequestParams, ProtocolVersion};
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (landing, landing_guard) = super::WorkspaceFixtureGuard::bind().await;
+        let fixture = FixtureServer {
+            supported_versions: Some(vec![ProtocolVersion::V_2026_07_28]),
+            modern_conformance_tools: true,
+            ..Default::default()
+        };
+        let mut config = StreamableHttpServerConfig::default();
+        config.allowed_hosts = vec![landing_guard.authority()];
+        let service = StreamableHttpService::<FixtureServer, LocalSessionManager>::new(
+            move || Ok(fixture.clone()),
+            Arc::default(),
+            config,
+        );
+        let routed = Arc::new(AtomicBool::new(false));
+        let landing_app = axum::Router::new().nest_service("/mcp", service).layer(
+            axum::middleware::from_fn_with_state(
+                Arc::clone(&routed),
+                |axum::extract::State(routed): axum::extract::State<Arc<AtomicBool>>,
+                 request: axum::extract::Request,
+                 next: axum::middleware::Next| async move {
+                    if request
+                        .headers()
+                        .get("mcp-method")
+                        .is_some_and(|value| value == "tools/call")
+                    {
+                        assert_eq!(request.headers()["mcp-param-region"], "us-west1");
+                        assert!(!request.headers().contains_key(http::header::AUTHORIZATION));
+                        routed.store(true, Ordering::Relaxed);
+                    }
+                    next.run(request).await
+                },
+            ),
+        );
+        let landing_server =
+            tokio::spawn(async move { axum::serve(landing, landing_app).await.unwrap() });
+        let location = landing_guard.url("/mcp");
+        let (entry, entry_guard) = super::WorkspaceFixtureGuard::bind().await;
+        let entry_app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::any(move || async move {
+                (
+                    http::StatusCode::TEMPORARY_REDIRECT,
+                    [(http::header::LOCATION, location)],
+                )
+            }),
+        );
+        let entry_server =
+            tokio::spawn(async move { axum::serve(entry, entry_app).await.unwrap() });
+        let workspace = tempfile::tempdir().unwrap();
+        let binding = McpServerBinding {
+            credentials: crate::credentials::SourceCredentials {
+                client_owned: true,
+                ..Default::default()
+            },
+            transport: McpTransportConfig::StreamableHttp {
+                endpoint: entry_guard.url("/mcp"),
+                headers: Default::default(),
+            },
+            policy: Default::default(),
+            permissions: None,
+            tool_permissions: Default::default(),
+        };
+        let runtime = McpServerRuntime::connect_fixture(
+            &McpServerId::new("redirected"),
+            &binding,
+            &crate::tools::Workspace::new(workspace.path()).unwrap(),
+            Arc::new(McpInvalidationState::new()),
+        )
+        .await
+        .unwrap();
+        let tools = runtime.list_tools().await.unwrap();
+        assert!(tools.iter().any(|tool| tool.name == ROUTED_TOOL));
+        let response = runtime
+            .peer
+            .call_tool(CallToolRequestParams::new(ROUTED_TOOL).with_arguments(
+                serde_json::from_value(serde_json::json!({"region": "us-west1"})).unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            serde_json::to_string(&response)
+                .unwrap()
+                .contains("us-west1")
+        );
+        assert!(
+            routed.load(Ordering::Relaxed),
+            "the SDK's routed call reached the redirect target"
+        );
+        runtime.close().await.unwrap();
         entry_server.abort();
         landing_server.abort();
     }

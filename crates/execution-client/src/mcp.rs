@@ -481,6 +481,7 @@ fn client_arguments(
     use rustx_execution_protocol::{EntryKind, mcp::StdioPathKind};
 
     for arg in rustx_execution_protocol::mcp::stdio_argument_paths(program, &args) {
+        let arg = arg.ok()?;
         let path = Path::new(arg.value);
         let kind = existing_argument(root, workspace, path).ok()?;
         let admitted = match arg.kind {
@@ -879,6 +880,18 @@ mod launch_tests {
         assert_eq!(
             client_arguments(&root, &workspace, Path::new("python3"), python_args.clone()),
             Some(python_args)
+        );
+        for args in [
+            vec!["server.py".into()],
+            vec!["--".into(), "server.py".into()],
+            vec!["-u".into(), "server.py".into()],
+        ] {
+            assert!(client_arguments(&root, &workspace, Path::new("python3"), args).is_none());
+        }
+        let ambiguous = vec!["--unknown".into(), "opaque".into(), "server.py".into()];
+        assert_eq!(
+            client_arguments(&root, &workspace, Path::new("python3"), ambiguous.clone()),
+            Some(ambiguous)
         );
         let urls = vec![
             "--input".into(),

@@ -82,6 +82,47 @@ fn interpreter_operand(name: &str, option: &str) -> Option<Operand> {
     }
 }
 
+// Recognize only switches whose arity is certain. Unknown switches leave the
+// following operands ambiguous; they must not be guessed to be scripts.
+fn interpreter_switch(name: &str, option: &str) -> bool {
+    if name.starts_with("python") {
+        matches!(
+            option,
+            "-b" | "-bb"
+                | "-B"
+                | "-d"
+                | "-E"
+                | "-i"
+                | "-I"
+                | "-O"
+                | "-OO"
+                | "-P"
+                | "-q"
+                | "-s"
+                | "-S"
+                | "-u"
+                | "-v"
+                | "-x"
+        )
+    } else if matches!(name, "sh" | "bash" | "dash" | "zsh") {
+        option
+            .strip_prefix('-')
+            .or_else(|| option.strip_prefix('+'))
+            .is_some_and(|flags| {
+                !flags.is_empty()
+                    && flags
+                        .bytes()
+                        .all(|flag| b"abefhkmnptuvxBCEHPT".contains(&flag))
+            })
+    } else {
+        false
+    }
+}
+
+/// An unqualified interpreter script in an unambiguous script position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnqualifiedStdioScript;
+
 fn stdio_input_option(name: &str) -> bool {
     matches!(
         name,
@@ -208,11 +249,12 @@ fn env_paths(args: &[String]) -> (usize, Option<&Path>, Vec<StdioArgumentPath<'_
 }
 
 /// Walk argv using the same path roles before and after Host resolution.
-/// Ambiguous arguments need an explicit absolute or dot-relative path.
+/// Ambiguous arguments remain opaque. An unambiguous interpreter script must
+/// use an explicit absolute or dot-relative path.
 pub fn stdio_argument_paths<'a>(
     program: &'a Path,
     args: &'a [String],
-) -> impl Iterator<Item = StdioArgumentPath<'a>> {
+) -> impl Iterator<Item = Result<StdioArgumentPath<'a>, UnqualifiedStdioScript>> {
     let (start, interpreter, wrapper_paths) =
         if program.file_name().is_some_and(|name| name == "env") {
             env_paths(args)
@@ -228,15 +270,17 @@ pub fn stdio_argument_paths<'a>(
         shell || matches!(name, "node" | "nodejs") || name.starts_with("python");
     let mut options = true;
     let mut next = None;
+    let mut script_position_known = true;
     wrapper_paths
         .into_iter()
+        .map(Ok)
         .chain(
             args.iter()
                 .enumerate()
                 .skip(start)
                 .filter_map(move |(index, arg)| {
                     if let Some(role) = next.take() {
-                        return argument_path(index, "", arg, role);
+                        return argument_path(index, "", arg, role).map(Ok);
                     }
                     if options && arg == "--" {
                         options = false;
@@ -253,6 +297,9 @@ pub fn stdio_argument_paths<'a>(
                             None
                         }
                         .or_else(|| stdio_input_option(flag).then_some(Operand::Input));
+                        if before_script && role.is_none() && !interpreter_switch(name, flag) {
+                            script_position_known = false;
+                        }
                         if role == Some(Operand::Inline) {
                             before_script = false;
                         }
@@ -262,10 +309,26 @@ pub fn stdio_argument_paths<'a>(
                                 prefix,
                                 value,
                                 role.unwrap_or(Operand::Value),
-                            );
+                            )
+                            .map(Ok);
                         }
                         next = role;
                         return None;
+                    }
+                    if before_script && script_position_known && arg == "-" {
+                        before_script = false;
+                        options = true;
+                        return None;
+                    }
+                    if before_script
+                        && script_position_known
+                        && !explicit_stdio_path(arg)
+                        && !arg.is_empty()
+                        && arg != "-"
+                        && !arg.contains("://")
+                    {
+                        before_script = false;
+                        return Some(Err(UnqualifiedStdioScript));
                     }
                     let role = if before_script && explicit_stdio_path(arg) {
                         // A bare operand may be an unknown option's value. Require an
@@ -276,7 +339,7 @@ pub fn stdio_argument_paths<'a>(
                     } else {
                         Operand::Value
                     };
-                    argument_path(index, "", arg, role)
+                    argument_path(index, "", arg, role).map(Ok)
                 }),
         )
 }
@@ -291,7 +354,10 @@ mod stdio_path_tests {
     fn path_values(program: &str, args: &[&str]) -> Vec<(usize, StdioPathKind)> {
         let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
         stdio_argument_paths(Path::new(program), &args)
-            .map(|arg| (arg.index, arg.kind))
+            .map(|arg| {
+                let arg = arg.unwrap();
+                (arg.index, arg.kind)
+            })
             .collect()
     }
 
@@ -399,6 +465,34 @@ mod stdio_path_tests {
             path_values("server", &["--input=https://example.test/feed"]),
             NO_PATHS
         );
+    }
+
+    #[test]
+    fn unqualified_scripts_are_rejected_only_in_known_positions() {
+        for args in [
+            vec!["server.py"],
+            vec!["--", "server.py"],
+            vec!["-u", "server.py"],
+            vec!["-W", "ignore", "server.py"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(
+                stdio_argument_paths(Path::new("python3"), &args)
+                    .any(|arg| arg == Err(UnqualifiedStdioScript))
+            );
+        }
+        let shell = ["-e", "server.sh"].map(str::to_owned);
+        assert!(
+            stdio_argument_paths(Path::new("bash"), &shell)
+                .any(|arg| arg == Err(UnqualifiedStdioScript))
+        );
+        let stdin = ["-", "value"].map(str::to_owned);
+        assert_eq!(
+            stdio_argument_paths(Path::new("python3"), &stdin).count(),
+            0
+        );
+        let args = ["--unknown", "opaque", "server.py"].map(str::to_owned);
+        assert_eq!(stdio_argument_paths(Path::new("python3"), &args).count(), 0);
     }
 
     #[test]
