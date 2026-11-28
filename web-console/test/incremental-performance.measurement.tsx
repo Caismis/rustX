@@ -77,7 +77,9 @@ it('fixed 420 long response measurement', async () => {
     await act(async () => { for (let n = 0; n < 10; n++) resize(); flush(); });
     const row = ui.container.querySelector('[data-chat-anchor-key="message:answer"]');
     if (seat && row !== seat) replacements++; seat = row;
-    if (i === 99) { top = 210; fireEvent.scroll(el); }
+    // Settle the scroll gesture explicitly; otherwise the viewport's real 500 ms
+    // sample lands on a timing-dependent streaming iteration.
+    if (i === 99) { top = 210; fireEvent.scroll(el); fireEvent(el, new Event('scrollend')); }
   }
   await emit({ type: 'tool_call_started', position: 2, foreground_position: 0, attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash' } });
   let rawPrefix = '';

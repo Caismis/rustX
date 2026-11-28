@@ -14,6 +14,98 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
+// Scan reads repeat the same large SQLite schema initialization. Keep ordinary
+// scan reads on one stable OS thread for allocator and cache locality; a backup
+// thread preserves progress when a native read remains physically active after
+// its scan budget expires. If both lane threads still own physical tails, the
+// final fallback is the ordinary blocking pool: losing cache locality in that
+// degenerate state is preferable to starving every healthy source.
+type ScanReadJob = Box<dyn FnOnce(Option<&std::sync::atomic::AtomicBool>) + Send>;
+
+struct ScanReadWorker {
+    sender: Option<std::sync::mpsc::Sender<ScanReadJob>>,
+    active: Arc<std::sync::atomic::AtomicBool>,
+}
+impl ScanReadWorker {
+    fn spawn(index: usize) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<ScanReadJob>();
+        let active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_active = active.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("rustx-scan-read-{index}"))
+            .spawn(move || {
+                while let Ok(job) = receiver.recv() {
+                    job(Some(&worker_active));
+                    // Do not clear the flag here: publishing a reply can overlap
+                    // with a newer submit that has already claimed this worker.
+                }
+            })
+            .is_ok();
+        Self {
+            sender: spawned.then_some(sender),
+            active,
+        }
+    }
+
+    fn claim(&self) -> bool {
+        self.sender.is_some() && !self.active.swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ScheduleScanReadLane {
+    primary: Arc<ScanReadWorker>,
+    backup: Arc<ScanReadWorker>,
+}
+impl ScheduleScanReadLane {
+    pub(super) fn new() -> Self {
+        Self {
+            primary: Arc::new(ScanReadWorker::spawn(0)),
+            backup: Arc::new(ScanReadWorker::spawn(1)),
+        }
+    }
+
+    fn submit<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, RuntimeManagerError> + Send + 'static,
+    ) -> tokio::sync::oneshot::Receiver<Result<T, RuntimeManagerError>>
+    where
+        T: Send + 'static,
+    {
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        let job: ScanReadJob = Box::new(move |lane_active| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                .unwrap_or_else(|_| Err(error("Scheduler scan read worker panicked")));
+            if let Some(active) = lane_active {
+                active.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            let _ = reply.send(outcome);
+        });
+        let mut overflow = job;
+        for worker in [&self.primary, &self.backup] {
+            if !worker.claim() {
+                continue;
+            }
+            match worker
+                .sender
+                .as_ref()
+                .expect("claimed scan read worker")
+                .send(overflow)
+            {
+                Ok(()) => return receiver,
+                Err(returned) => {
+                    // The receiver is gone. Keeping the claim set makes this
+                    // dead worker permanently unavailable instead of retrying it
+                    // on every later scan read.
+                    overflow = returned.0;
+                }
+            }
+        }
+        tokio::task::spawn_blocking(move || overflow(None));
+        receiver
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct StorageFlight {
     pub(super) binding: ScheduleBinding,
@@ -209,6 +301,7 @@ impl SessionRuntimeManager {
         session: &SessionId,
         node: &SessionNodeId,
         operation: ScheduleOperation,
+        scan_lane: bool,
     ) -> Result<ScheduleOperationResult, RuntimeManagerError> {
         let permit = {
             let mut state = self.registry.0.lock().expect("registry mutex");
@@ -243,6 +336,8 @@ impl SessionRuntimeManager {
             };
             let clock = self.schedule_clock.clone();
             #[cfg(test)]
+            let runtime_handle = tokio::runtime::Handle::current();
+            #[cfg(test)]
             // Only explicitly registered read hooks belong in this path. Creating
             // the full per-target fixture here distorts native scale measurements.
             let probe = self
@@ -253,11 +348,11 @@ impl SessionRuntimeManager {
                 .probes
                 .get(&binding.conversation_id)
                 .cloned();
-            tokio::task::spawn_blocking(move || {
+            let work = move || {
                 let _permit = permit;
                 #[cfg(test)]
                 if let Some(probe) = &probe {
-                    tokio::runtime::Handle::current().block_on(probe.schedule_native_read.park());
+                    runtime_handle.block_on(probe.schedule_native_read.park());
                 }
                 scope.check().map_err(error)?;
                 let access = plan.open().map_err(error)?;
@@ -278,12 +373,18 @@ impl SessionRuntimeManager {
                         .pause_schedule_read_return
                         .swap(false, Ordering::SeqCst)
                 {
-                    tokio::runtime::Handle::current().block_on(probe.schedule_read_return.park());
+                    runtime_handle.block_on(probe.schedule_read_return.park());
                 }
                 result
-            })
-            .await
-            .map_err(error)?
+            };
+            if scan_lane {
+                self.schedule_scan_read_lane
+                    .submit(work)
+                    .await
+                    .map_err(error)?
+            } else {
+                tokio::task::spawn_blocking(work).await.map_err(error)?
+            }
         };
         tokio::select! {biased;
             ()=self.schedule_stop.cancelled()=>Err(error("Scheduler admission is closed")),
@@ -340,6 +441,14 @@ impl SessionRuntimeManager {
         self.schedule_stop.cancel();
         self.schedule_changed.notify_one();
     }
+    pub(crate) async fn schedule_scan_summary(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<ScheduleOperationResult, RuntimeManagerError> {
+        self.schedule_read(session, node, ScheduleOperation::Summary, true)
+            .await
+    }
     fn schedule_commit_permit(
         &self,
         binding: &ScheduleBinding,
@@ -377,7 +486,7 @@ impl SessionRuntimeManager {
                 | ScheduleOperation::Summary
                 | ScheduleOperation::DuePage { .. }
         ) {
-            return self.schedule_read(session, node, operation).await;
+            return self.schedule_read(session, node, operation, false).await;
         }
         loop {
             let target = self
@@ -765,5 +874,86 @@ impl Drop for StorageTerminal {
         };
         self.flight.result.send_replace(Some(Err(e)));
         self.flight.retirement.result.send_replace(Some(retirement));
+    }
+}
+
+#[cfg(test)]
+mod scan_read_lane_tests {
+    use super::{RuntimeManagerError, ScanReadWorker, ScheduleScanReadLane};
+    use std::sync::Arc;
+
+    fn unavailable_worker() -> ScanReadWorker {
+        ScanReadWorker {
+            sender: None,
+            active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_scan_workers_fall_back_to_blocking_pool() {
+        let lane = ScheduleScanReadLane {
+            primary: Arc::new(unavailable_worker()),
+            backup: Arc::new(unavailable_worker()),
+        };
+        let receiver = lane.submit(|| Ok::<_, RuntimeManagerError>(7));
+        assert_eq!(receiver.await.unwrap().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn dead_primary_scan_worker_falls_back_to_backup_and_is_not_reclaimed() {
+        let (dead_sender, dead_receiver) = std::sync::mpsc::channel();
+        drop(dead_receiver);
+        let lane = ScheduleScanReadLane {
+            primary: Arc::new(ScanReadWorker {
+                sender: Some(dead_sender),
+                active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
+            backup: Arc::new(ScanReadWorker::spawn(1)),
+        };
+        let first = lane.submit(|| {
+            Ok::<_, RuntimeManagerError>(std::thread::current().name().unwrap_or("").to_owned())
+        });
+        let first_name = first.await.unwrap().unwrap();
+        assert_eq!(first_name, "rustx-scan-read-1");
+        assert!(
+            lane.primary
+                .active
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        let second = lane.submit(|| {
+            Ok::<_, RuntimeManagerError>(std::thread::current().name().unwrap_or("").to_owned())
+        });
+        let second_name = second.await.unwrap().unwrap();
+        assert_eq!(second_name, "rustx-scan-read-1");
+    }
+
+    #[tokio::test]
+    async fn two_stalled_scan_workers_do_not_starve_a_later_read() {
+        let lane = ScheduleScanReadLane::new();
+        let (release_primary, wait_primary) = std::sync::mpsc::channel();
+        let (release_backup, wait_backup) = std::sync::mpsc::channel();
+        let primary = lane.submit(move || {
+            wait_primary.recv().unwrap();
+            Ok::<_, RuntimeManagerError>(())
+        });
+        let backup = lane.submit(move || {
+            wait_backup.recv().unwrap();
+            Ok::<_, RuntimeManagerError>(())
+        });
+        let (thread_name, thread_name_rx) = tokio::sync::oneshot::channel();
+        let overflow = lane.submit(move || {
+            let _ = thread_name.send(std::thread::current().name().unwrap_or("").to_owned());
+            Ok::<_, RuntimeManagerError>(())
+        });
+        let name = tokio::time::timeout(std::time::Duration::from_secs(5), thread_name_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!name.starts_with("rustx-scan-read"));
+        release_primary.send(()).unwrap();
+        release_backup.send(()).unwrap();
+        primary.await.unwrap().unwrap();
+        backup.await.unwrap().unwrap();
+        overflow.await.unwrap().unwrap();
     }
 }

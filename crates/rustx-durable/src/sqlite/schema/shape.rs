@@ -17,67 +17,81 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 // fingerprint is complete shape evidence; a mismatch falls through to the
 // detailed verifier so accepted noncanonical-but-valid layouts and precise
 // corruption diagnostics are unchanged.
-pub(super) const CANONICAL_SCHEMA_SHAPE_SHA256: &str =
-    "2a46d71cc7df17397a52ceefb0fa26c4915a3f73082b4f0b84d935df311eca0b";
+pub(super) const CANONICAL_SCHEMA_SHAPE_BLAKE3: &str =
+    "30d9eda82faf2c6fba5c79d97f7cbc773ea540d75a6d8e9cba81fbdcaf2e2107";
 
-fn hash_schema_field(hasher: &mut sha2::Sha256, value: Option<String>) {
-    use sha2::Digest as _;
+fn validate_schema_text(bytes: &[u8], column: usize) -> Result<(), ConversationStoreError> {
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "sqlite_schema column {column} is not valid UTF-8"
+        )));
+    }
+    Ok(())
+}
+
+fn hash_schema_field(hasher: &mut blake3::Hasher, value: Option<&[u8]>) {
     if let Some(value) = value {
-        hasher.update([1]);
-        hasher.update((value.len() as u64).to_le_bytes());
-        hasher.update(value.as_bytes());
+        hasher.update(&[1]);
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value);
     } else {
-        hasher.update([0]);
+        hasher.update(&[0]);
     }
 }
 
 pub(super) fn schema_shape_fingerprint(
     connection: &Connection,
 ) -> Result<String, ConversationStoreError> {
-    use sha2::Digest as _;
     let mut statement = connection
         .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY rowid")
         .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut rows = statement
         .query([])
         .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
-    let mut hasher = sha2::Sha256::new();
+    let mut hasher = blake3::Hasher::new();
     while let Some(row) = rows
         .next()
         .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?
     {
-        hash_schema_field(
-            &mut hasher,
-            Some(
-                row.get::<_, String>(0)
-                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-            ),
-        );
-        hash_schema_field(
-            &mut hasher,
-            Some(
-                row.get::<_, String>(1)
-                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-            ),
-        );
-        hash_schema_field(
-            &mut hasher,
-            Some(
-                row.get::<_, String>(2)
-                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-            ),
-        );
-        hash_schema_field(
-            &mut hasher,
-            row.get::<_, Option<String>>(3)
-                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?,
-        );
+        for column in 0..3 {
+            let value = row
+                .get_ref(column)
+                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+            let rusqlite::types::ValueRef::Text(bytes) = value else {
+                let error = rusqlite::Error::InvalidColumnType(
+                    column,
+                    "sqlite_schema text".into(),
+                    value.data_type(),
+                );
+                return Err(crate::sqlite::sqlite_error(&error, error.to_string()));
+            };
+            validate_schema_text(bytes, column)?;
+            hash_schema_field(&mut hasher, Some(bytes));
+        }
+        let sql = row
+            .get_ref(3)
+            .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        match sql {
+            rusqlite::types::ValueRef::Null => hash_schema_field(&mut hasher, None),
+            rusqlite::types::ValueRef::Text(bytes) => {
+                validate_schema_text(bytes, 3)?;
+                hash_schema_field(&mut hasher, Some(bytes));
+            }
+            value => {
+                let error = rusqlite::Error::InvalidColumnType(
+                    3,
+                    "sqlite_schema sql".into(),
+                    value.data_type(),
+                );
+                return Err(crate::sqlite::sqlite_error(&error, error.to_string()));
+            }
+        }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 fn canonical_schema_shape(connection: &Connection) -> Result<bool, ConversationStoreError> {
-    Ok(schema_shape_fingerprint(connection)? == CANONICAL_SCHEMA_SHAPE_SHA256)
+    Ok(schema_shape_fingerprint(connection)? == CANONICAL_SCHEMA_SHAPE_BLAKE3)
 }
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.

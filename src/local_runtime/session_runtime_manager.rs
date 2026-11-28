@@ -638,6 +638,7 @@ pub struct SessionRuntimeManager {
         Arc<Mutex<std::collections::BTreeMap<ConversationId, crate::scheduler::ScheduleBinding>>>,
     schedule_stop: tokio_util::sync::CancellationToken,
     schedule_diagnostics: Arc<Mutex<crate::scheduler::ScheduleDriverDiagnostics>>,
+    schedule_scan_read_lane: schedule::ScheduleScanReadLane,
 }
 impl std::fmt::Debug for SessionRuntimeManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -878,6 +879,7 @@ impl SessionRuntimeManager {
             schedule_dirty: Arc::default(),
             schedule_stop: tokio_util::sync::CancellationToken::new(),
             schedule_diagnostics: Arc::default(),
+            schedule_scan_read_lane: schedule::ScheduleScanReadLane::new(),
         })
     }
 

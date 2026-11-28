@@ -1,0 +1,12 @@
+{
+  "schema": 116,
+  "optimized": true,
+  "iterations": 1000,
+  "full_native_read_ms_per_open": 1.744641705,
+  "initialization_ms_per_open": 1.231705278,
+  "complete_schema_ms_per_open": 0.293996085,
+  "identity_ms_per_open": 0.012053427,
+  "owner_summary_close_ms_per_open": 0.240168743,
+  "schema_select_compilations_per_open": 4,
+  "method": "fresh read-only connections to one warm native historical database; authorizer counts SELECT compilation only in split schema validation; diagnostic excludes manager/allocation/driver and is not the scale gate"
+}
