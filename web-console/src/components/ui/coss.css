@@ -304,6 +304,18 @@ body[data-ds-dark-theme] {
     border: 0;
     background: transparent;
   }
+  /* Tailwind Preflight's button reset, layered so utilities and CSS Modules
+     always win: without preflight the UA `buttonface` gray shows through on
+     ghost/link buttons, tab triggers and autocomplete controls. */
+  button,
+  [type="button"],
+  [type="reset"],
+  [type="submit"] {
+    background-color: transparent;
+    background-image: none;
+    border: 0 solid;
+    padding: 0;
+  }
   /* Without preflight the UA `[hidden] { display: none }` loses to display
      utilities (flex/grid/block) on the same element; the HTML semantics must
      win or `hidden` buttons and rows keep rendering. */
