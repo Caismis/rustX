@@ -166,6 +166,15 @@ the decoder only after final source validation. Cancellation retires all started
 physical reads before acknowledging the operation's close. The public authority/protocol contract is
 unchanged. See [preview workspace invariants](preview-workspace.md).
 
+Native STEP previews require successful transfer of every declared shape and
+assembly child. Surface declarations must transfer faces and every admitted
+face must produce triangles. Nonempty wire and point geometry may transfer
+without triangles. A product with neither a shape declaration nor assembly
+children may be metadata only. An empty declared transfer fails the whole
+preview. Product Host retires the temporary output and revalidates source
+identity, version and workspace authority before acknowledging successful
+settlement. See [geometry previews](geometry-previews.md#linux-workbench-native-step-preview-602).
+
 A `present` delivery exists only in the typed `deliveries` of a successfully
 committed canonical Tool-result message (#431/#454). Arguments, Tool output text,
 generic JSON, prose and foreground settlements never become deliveries in any

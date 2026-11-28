@@ -225,23 +225,26 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('requires real OCCT
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-detail bounds and triangle counts against the pinned WASM STEP path', async () => {
+it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves geometry and assembly color assignments against the pinned WASM STEP path', async () => {
   const { importCad } = await import('../src/app/components/documents/geometry/cad');
   const module = await WebAssembly.compile(await readFile(new URL('../node_modules/occt-import-js/dist/occt-import-js.wasm', import.meta.url)));
   const root = await mkdtemp(join(tmpdir(), 'rustx-step-parity-'));
   const compareScene = (scene: Object3D, meters: number) => {
-    const occurrences: string[] = [], palette = new Set<string>();
+    const occurrences: string[] = [], colorAssignments: string[] = [];
     let triangles = 0;
     scene.updateMatrixWorld(true);
     scene.traverse(item => {
       if (!(item instanceof Mesh)) return;
       triangles += (item.geometry.index?.count ?? item.geometry.getAttribute('position').count) / 3;
       const bounds = item.geometry.boundingBox!.clone().applyMatrix4(item.matrixWorld);
-      occurrences.push([...bounds.min.toArray(), ...bounds.max.toArray()].map(value => Math.round(value * meters * 1e6)).join(','));
-      for (const material of Array.isArray(item.material) ? item.material : [item.material]) if (material instanceof MeshStandardMaterial)
-        palette.add(material.color.toArray().map(value => Math.round(value * 1000)).join(','));
+      const placement = [...bounds.min.toArray(), ...bounds.max.toArray()].map(value => Math.round(value * meters * 1e6)).join(',');
+      occurrences.push(placement);
+      const colors = (Array.isArray(item.material) ? item.material : [item.material])
+        .filter(material => material instanceof MeshStandardMaterial)
+        .map(material => material.color.toArray().map(value => Math.round(value * 1000)).join(','));
+      colorAssignments.push(`${placement}: ${colors.sort().join(' | ')}`);
     });
-    return { triangles, occurrences: occurrences.sort(), palette: [...palette].sort() };
+    return { triangles, occurrences: occurrences.sort(), colorAssignments: colorAssignments.sort() };
   };
   try {
     for (const name of ['cube.step', 'cube-inch.step', 'pole-sphere.step', 'mounting-bracket.step', 'bracket-array.step']) {
@@ -263,7 +266,7 @@ it.runIf(process.platform === 'linux' && !!nativeExecutable)('preserves full-det
             expect(actual.triangles, `${name} triangles, ${threads} threads`).toBe(expected.triangles);
             expect(actual.occurrences, `${name} occurrence bounds, ${threads} threads`).toEqual(expected.occurrences);
             if (name === 'mounting-bracket.step' || name === 'bracket-array.step')
-              expect(actual.palette, `${name} authored colors, ${threads} threads`).toEqual(expected.palette);
+              expect(actual.colorAssignments, `${name} colors by occurrence, ${threads} threads`).toEqual(expected.colorAssignments);
             if (name === 'bracket-array.step') {
               expect(actual.occurrences).toHaveLength(96);
               expect(new Set(actual.occurrences).size).toBe(96);
